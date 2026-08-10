@@ -4,4 +4,4 @@ steps:
   - push:
       - {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
       - {{.Run.Registry}}/kavach-backend:latest
-  - cmd: az containerapp update --name kavach-backend --resource-group kavach-prod-rg --image {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
+  - cmd: az login --identity --output none && az containerapp update --name kavach-backend --resource-group kavach-prod-rg --image {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
