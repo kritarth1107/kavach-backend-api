@@ -8,8 +8,6 @@ on:
 env:
   ACR_NAME: kavachprodacr
   IMAGE_NAME: kavach-backend
-  RESOURCE_GROUP: kavach-prod-rg
-  CONTAINER_APP: kavach-backend
 
 jobs:
   build-and-deploy:
@@ -34,12 +32,6 @@ jobs:
             ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
-      - name: Deploy to Azure Container Apps
-        uses: azure/container-apps-deploy-action@v2
-        with:
-          acrName: ${{ env.ACR_NAME }}
-          acrUsername: ${{ secrets.ACR_USERNAME }}
-          acrPassword: ${{ secrets.ACR_PASSWORD }}
-          containerAppName: ${{ env.CONTAINER_APP }}
-          resourceGroup: ${{ env.RESOURCE_GROUP }}
-          imageToDeploy: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Deploy note
+        run: |
+          echo "Image pushed to ACR. Azure task 'kavach-backend-redeploy' updates the Container App when :latest changes."
