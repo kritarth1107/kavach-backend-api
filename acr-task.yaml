@@ -1,0 +1,7 @@
+version: v1.1.0
+steps:
+  - build: -t {{.Run.Registry}}/kavach-backend:{{.Run.ID}} -t {{.Run.Registry}}/kavach-backend:latest .
+  - push:
+      - {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
+      - {{.Run.Registry}}/kavach-backend:latest
+  - cmd: az containerapp update --name kavach-backend --resource-group kavach-prod-rg --image {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
