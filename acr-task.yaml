@@ -4,5 +4,5 @@ steps:
   - push:
       - {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
       - {{.Run.Registry}}/kavach-backend:latest
-  - cmd: az login --identity --output none && az containerapp update --name kavach-backend --resource-group kavach-prod-rg --image {{.Run.Registry}}/kavach-backend:{{.Run.ID}}
+  - cmd: bash -c "az login --identity --output none && az containerapp update --name kavach-backend --resource-group kavach-prod-rg --image {{.Run.Registry}}/kavach-backend:{{.Run.ID}}"
     image: mcr.microsoft.com/azure-cli:cbl-mariner2.0
