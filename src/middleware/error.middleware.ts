@@ -15,9 +15,20 @@ export const errorHandler = (
   res: Response,
   _next: NextFunction,
 ): void => {
-  const statusCode = err instanceof AppError ? err.statusCode : 500;
-  const message =
+  let statusCode = err instanceof AppError ? err.statusCode : 500;
+  let message =
     err instanceof AppError ? err.message : "Internal Server Error";
+
+  if (
+    !(err instanceof AppError) &&
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: number }).code === 11000
+  ) {
+    statusCode = 409;
+    message = "This email or mobile number is already registered";
+  }
 
   console.error("API Error:", err.message, err.stack);
 

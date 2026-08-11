@@ -291,53 +291,156 @@ export async function createInvitedUser(
     phoneCountryCode?: string,
 ) {
     const normalizedEmail = email.toLowerCase().trim();
-    let user = await User.findOne({ email: normalizedEmail });
+    const normalizedPhone =
+        phone && phoneCountryCode
+            ? normalizePhoneInput(phoneCountryCode, phone)
+            : null;
+
+    const userByEmail = await User.findOne({ email: normalizedEmail });
+    const userByPhone = normalizedPhone
+        ? await User.findByPhone(normalizedPhone.countryCode, normalizedPhone.number)
+        : null;
+
+    if (
+        userByEmail &&
+        userByPhone &&
+        userByEmail.userId !== userByPhone.userId
+    ) {
+        throw new AppError(
+            "This email and mobile number belong to different accounts. Use one contact method or matching details.",
+            409,
+        );
+    }
 
     const { namePrefix: resolvedPrefix, name } = namePrefix?.trim()
         ? { namePrefix: namePrefix.trim(), name: memberName.trim() }
         : splitNamePrefix(memberName);
     const [firstName, ...rest] = name.split(/\s+/).filter(Boolean);
 
+    let user = userByEmail ?? userByPhone ?? null;
+
     if (user) {
-        await User.updateOne(
-            { userId: user.userId },
-            {
-                emailVerified: false,
-                ...(firstName
-                    ? {
-                          firstName,
-                          lastName: rest.join(" ") || undefined,
-                      }
-                    : {}),
-            },
-        );
+        const updates: Record<string, unknown> = {};
+
+        if (firstName) {
+            updates.firstName = firstName;
+            updates.lastName = rest.join(" ") || undefined;
+        }
+
+        if (
+            normalizedEmail &&
+            !normalizedEmail.endsWith("@pending.kavach") &&
+            (user.email.endsWith("@pending.kavach") || user.email === normalizedEmail)
+        ) {
+            const emailOwner = await User.findOne({
+                email: normalizedEmail,
+                userId: { $ne: user.userId },
+            });
+            if (emailOwner) {
+                throw new AppError(
+                    "This email is already registered to another account",
+                    409,
+                );
+            }
+            if (user.email !== normalizedEmail) {
+                updates.email = normalizedEmail;
+            }
+        }
+
+        if (normalizedPhone) {
+            if (!user.phone) {
+                updates.phone = {
+                    countryCode: normalizedPhone.countryCode,
+                    number: normalizedPhone.number,
+                };
+            } else if (
+                user.phone.countryCode !== normalizedPhone.countryCode ||
+                user.phone.number !== normalizedPhone.number
+            ) {
+                throw new AppError(
+                    "This account already has a different mobile number on file",
+                    409,
+                );
+            }
+        }
+
+        if (Object.keys(updates).length > 0) {
+            try {
+                await User.updateOne({ userId: user.userId }, updates);
+            } catch (error) {
+                if (isDuplicateKeyError(error)) {
+                    throw new AppError(
+                        "This email or mobile number is already registered",
+                        409,
+                    );
+                }
+                throw error;
+            }
+        }
+
         return (await User.findOne({ userId: user.userId })) ?? user;
+    }
+
+    if (normalizedPhone) {
+        const phoneTaken = await User.findByPhone(
+            normalizedPhone.countryCode,
+            normalizedPhone.number,
+        );
+        if (phoneTaken) {
+            throw new AppError(
+                "This mobile number is already registered. Use that number to sign in or choose a different one.",
+                409,
+            );
+        }
+    }
+
+    const emailTaken = await User.findOne({ email: normalizedEmail });
+    if (emailTaken) {
+        throw new AppError("This email is already registered", 409);
     }
 
     const raw = randomBytes(24).toString("hex");
     const passwordHash = await bcrypt.hash(raw, config.security.bcryptSaltRounds);
 
-    const phoneData =
-        phone && phoneCountryCode
-            ? {
-                  phone: {
-                      countryCode: phoneCountryCode,
-                      number: phone.replace(/\D/g, ""),
-                  },
-              }
-            : {};
+    const phoneData = normalizedPhone
+        ? {
+              phone: {
+                  countryCode: normalizedPhone.countryCode,
+                  number: normalizedPhone.number,
+              },
+          }
+        : {};
 
-    user = await User.create({
-        email: normalizedEmail,
-        firstName,
-        lastName: rest.join(" ") || undefined,
-        passwordHash,
-        primaryAuthProvider: AuthProvider.EMAIL,
-        emailVerified: false,
-        ...phoneData,
-    });
+    try {
+        user = await User.create({
+            email: normalizedEmail,
+            firstName,
+            lastName: rest.join(" ") || undefined,
+            passwordHash,
+            primaryAuthProvider: AuthProvider.EMAIL,
+            emailVerified: false,
+            ...phoneData,
+        });
+    } catch (error) {
+        if (isDuplicateKeyError(error)) {
+            throw new AppError(
+                "This email or mobile number is already registered",
+                409,
+            );
+        }
+        throw error;
+    }
 
     return user;
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+    return (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code?: number }).code === 11000
+    );
 }
 
 export async function syncPendingInviteMembershipsForUser(user: IUserDocument) {
