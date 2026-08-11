@@ -4,6 +4,7 @@ import { AppError } from "../middleware/error.middleware";
 import { getUserInitials } from "./family.service";
 import { AuthProvider, IUserPreferences } from "../types/user.types";
 import { SessionStatus } from "../types/session.types";
+import { sortByLastActiveAtDesc } from "../utils/cosmos-safe-sort.util";
 
 const defaultPreferences: IUserPreferences = {
     emailAlerts: true,
@@ -100,13 +101,13 @@ export async function updateUserProfile(
 }
 
 export async function listUserSessions(userId: string, currentSessionId?: string) {
-    const sessions = await Session.find({
-        userId,
-        status: SessionStatus.ACTIVE,
-        expiresAt: { $gt: new Date() },
-    })
-        .sort({ lastActiveAt: -1 })
-        .lean();
+    const sessions = sortByLastActiveAtDesc(
+        await Session.find({
+            userId,
+            status: SessionStatus.ACTIVE,
+            expiresAt: { $gt: new Date() },
+        }).lean(),
+    );
 
     return sessions.map((session) => ({
         sessionId: session.sessionId,

@@ -15,6 +15,7 @@ import {
     createDefaultFamilyForUser,
     reconcileUserAfterFamilyRemoval,
 } from "./family.service";
+import { sortByUpdatedAtDesc } from "../utils/cosmos-safe-sort.util";
 import {
     FamilyInvitationStatus,
     FamilyMemberStatus,
@@ -137,13 +138,15 @@ async function loadInviteMetaByUserId(
         return new Map();
     }
 
-    const invitations = await FamilyInvitation.find({
-        familyId,
-        userId: { $in: userIds },
-        status: {
-            $in: [FamilyInvitationStatus.PENDING, FamilyInvitationStatus.ACCEPTED],
-        },
-    }).sort({ updatedAt: -1 });
+    const invitations = sortByUpdatedAtDesc(
+        await FamilyInvitation.find({
+            familyId,
+            userId: { $in: userIds },
+            status: {
+                $in: [FamilyInvitationStatus.PENDING, FamilyInvitationStatus.ACCEPTED],
+            },
+        }),
+    );
 
     const inviteMetaByUser = new Map<string, InviteMemberMeta>();
     for (const inv of invitations) {

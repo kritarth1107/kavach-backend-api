@@ -6,6 +6,7 @@ import {
     FamilyStatus,
     IFamilyMember,
 } from "../types/family.types";
+import { sortByCreatedAtAsc } from "../utils/cosmos-safe-sort.util";
 
 const ROLE_LABELS: Record<FamilyRole, { label: string; badge: string }> = {
     [FamilyRole.PRIMARY_CAREGIVER]: {
@@ -218,7 +219,8 @@ export async function ensureDefaultFamily(user: IUserDocument): Promise<IFamilyD
 }
 
 export async function getFamiliesForUser(userId: string) {
-    return Family.findByUserId(userId).sort({ createdAt: 1 });
+    const families = await Family.findByUserId(userId);
+    return sortByCreatedAtAsc(families);
 }
 
 export function getJoinedMember(

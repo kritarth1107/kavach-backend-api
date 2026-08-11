@@ -4,6 +4,7 @@ import CareSchedule from "../models/careSchedule.model";
 import { AppError } from "../middleware/error.middleware";
 import { CareScheduleType } from "../types/careSchedule.types";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
+import { sortCareSchedules } from "../utils/cosmos-safe-sort.util";
 
 const MANAGER_ROLES = new Set([FamilyRole.PRIMARY_CAREGIVER, FamilyRole.CO_CAREGIVER]);
 
@@ -92,10 +93,12 @@ export async function listCareSchedules(
     const family = await getFamilyAndRecipient(familyId, recipientUserId);
     assertFamilyAccess(family, actorUserId);
 
-    const items = await CareSchedule.find({
-        familyId,
-        recipientUserId,
-    }).sort({ time: 1, title: 1 });
+    const items = sortCareSchedules(
+        await CareSchedule.find({
+            familyId,
+            recipientUserId,
+        }),
+    );
 
     const role = family.getMemberRole(actorUserId);
 

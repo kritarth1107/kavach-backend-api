@@ -5,6 +5,7 @@ import {
     FamilyRole,
     IFamilyInvitation,
 } from "../types/family.types";
+import { sortByCreatedAtDesc } from "../utils/cosmos-safe-sort.util";
 
 export interface IFamilyInvitationDocument extends IFamilyInvitation, Document {}
 
@@ -79,30 +80,30 @@ export function generateInviteToken(): string {
 }
 
 interface IFamilyInvitationModel extends Model<IFamilyInvitationDocument> {
-    findPendingByFamily(familyId: string): mongoose.Query<
-        IFamilyInvitationDocument[],
-        IFamilyInvitationDocument
-    >;
-    findPendingByEmail(email: string): mongoose.Query<
-        IFamilyInvitationDocument[],
-        IFamilyInvitationDocument
-    >;
+    findPendingByFamily(familyId: string): Promise<IFamilyInvitationDocument[]>;
+    findPendingByEmail(email: string): Promise<IFamilyInvitationDocument[]>;
 }
 
-familyInvitationSchema.statics.findPendingByFamily = function (familyId: string) {
-    return this.find({
+familyInvitationSchema.statics.findPendingByFamily = async function (
+    familyId: string,
+) {
+    const docs = await this.find({
         familyId,
         status: FamilyInvitationStatus.PENDING,
         expiresAt: { $gt: new Date() },
-    }).sort({ createdAt: -1 });
+    });
+    return sortByCreatedAtDesc(docs);
 };
 
-familyInvitationSchema.statics.findPendingByEmail = function (email: string) {
-    return this.find({
+familyInvitationSchema.statics.findPendingByEmail = async function (
+    email: string,
+) {
+    const docs = await this.find({
         email: email.toLowerCase().trim(),
         status: FamilyInvitationStatus.PENDING,
         expiresAt: { $gt: new Date() },
-    }).sort({ createdAt: -1 });
+    });
+    return sortByCreatedAtDesc(docs);
 };
 
 const FamilyInvitation: IFamilyInvitationModel =
