@@ -27,7 +27,7 @@ import { sendFamilyInviteEmail } from "./email.service";
 import { AuthProvider } from "../types/user.types";
 import { FamilyStatus } from "../types/family.types";
 import bcrypt from "bcryptjs";
-import { randomBytes } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 
 const INVITE_EXPIRY_DAYS = 7;
 
@@ -386,38 +386,121 @@ export async function createInvitedUser(
     const raw = randomBytes(24).toString("hex");
     const passwordHash = await bcrypt.hash(raw, config.security.bcryptSaltRounds);
 
-    const phoneFields = phoneForUser
-        ? phoneFieldsFromNormalized(phoneForUser)
-        : phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder());
+    return insertInvitedUserDocument(
+        normalizedEmail,
+        firstName,
+        rest.join(" ") || undefined,
+        passwordHash,
+        phoneForUser,
+    );
+}
 
-    try {
-        user = await User.create({
-            email: normalizedEmail,
-            firstName,
-            lastName: rest.join(" ") || undefined,
-            passwordHash,
-            primaryAuthProvider: AuthProvider.EMAIL,
-            emailVerified: false,
-            ...phoneFields,
-        });
-    } catch (error) {
-        if (isDuplicateKeyError(error)) {
-            const existing =
-                (await User.findOne({ email: normalizedEmail })) ??
-                (phoneForUser
-                    ? await User.findByPhone(
-                          phoneForUser.countryCode,
-                          phoneForUser.number,
-                      )
-                    : null);
-            if (existing) {
-                return existing;
-            }
-        }
-        throw duplicateContactError(error);
+function getDuplicateKeyPattern(
+    error: unknown,
+): Record<string, number> | null {
+    if (
+        typeof error === "object" &&
+        error !== null &&
+        "keyPattern" in error &&
+        typeof (error as { keyPattern?: Record<string, number> }).keyPattern ===
+            "object"
+    ) {
+        return (error as { keyPattern: Record<string, number> }).keyPattern;
+    }
+    return null;
+}
+
+function isPhoneRelatedDuplicateError(error: unknown): boolean {
+    const keyPattern = getDuplicateKeyPattern(error);
+    if (!keyPattern) {
+        // Cosmos DB often omits keyPattern for legacy phone indexes.
+        return true;
     }
 
-    return user;
+    return Boolean(
+        keyPattern.phoneKey ||
+            keyPattern["phone.number"] ||
+            keyPattern["phone.countryCode"],
+    );
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function insertInvitedUserDocument(
+    normalizedEmail: string,
+    firstName: string,
+    lastName: string | undefined,
+    passwordHash: string,
+    phoneForUser: ReturnType<typeof normalizePhoneInput> | null,
+) {
+    const profileUpdate =
+        firstName.length > 0
+            ? { firstName, lastName: lastName || undefined }
+            : null;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+        const phoneFields = phoneForUser
+            ? phoneFieldsFromNormalized(phoneForUser)
+            : phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder());
+
+        try {
+            const user = await User.findOneAndUpdate(
+                { email: normalizedEmail },
+                {
+                    ...(profileUpdate ? { $set: profileUpdate } : {}),
+                    $setOnInsert: {
+                        userId: randomUUID(),
+                        email: normalizedEmail,
+                        passwordHash,
+                        primaryAuthProvider: AuthProvider.EMAIL,
+                        emailVerified: false,
+                        ...phoneFields,
+                    },
+                },
+                {
+                    upsert: true,
+                    new: true,
+                    runValidators: true,
+                    setDefaultsOnInsert: true,
+                },
+            );
+
+            if (!user) {
+                throw new AppError("Could not create member account", 500);
+            }
+
+            return user;
+        } catch (error) {
+            if (!isDuplicateKeyError(error)) {
+                throw error;
+            }
+
+            await sleep(150 * (attempt + 1));
+
+            const existing = await User.findOne({ email: normalizedEmail });
+            if (existing) {
+                if (profileUpdate) {
+                    await User.updateOne({ userId: existing.userId }, profileUpdate);
+                    return (
+                        (await User.findOne({ userId: existing.userId })) ??
+                        existing
+                    );
+                }
+                return existing;
+            }
+
+            if (!isPhoneRelatedDuplicateError(error)) {
+                throw duplicateContactError(error);
+            }
+        }
+    }
+
+    throw new AppError(
+        "Could not create this member account. Please try again in a moment.",
+        409,
+    );
 }
 
 function isDuplicateKeyError(error: unknown): boolean {
@@ -431,16 +514,13 @@ function isDuplicateKeyError(error: unknown): boolean {
 
 function duplicateContactError(error: unknown): never {
     if (isDuplicateKeyError(error)) {
-        const keyPattern =
-            typeof error === "object" &&
-            error !== null &&
-            "keyPattern" in error &&
-            typeof (error as { keyPattern?: Record<string, number> }).keyPattern ===
-                "object"
-                ? (error as { keyPattern: Record<string, number> }).keyPattern
-                : null;
+        const keyPattern = getDuplicateKeyPattern(error);
 
-        if (keyPattern?.phoneKey || keyPattern?.["phone.number"]) {
+        if (
+            keyPattern?.phoneKey ||
+            keyPattern?.["phone.number"] ||
+            keyPattern?.["phone.countryCode"]
+        ) {
             throw new AppError("This mobile number is already registered", 409);
         }
 
@@ -449,7 +529,7 @@ function duplicateContactError(error: unknown): never {
         }
 
         throw new AppError(
-            "Could not create this member account. Please try again or use a different contact.",
+            "Could not create this member account. Please try again in a moment.",
             409,
         );
     }
@@ -473,10 +553,15 @@ async function upsertCareRecipientMetadata(
         userId: string;
     },
 ) {
-    const existing = await FamilyInvitation.findOne({
-        familyId: metadata.familyId,
-        userId: metadata.userId,
-    });
+    const existing =
+        (await FamilyInvitation.findOne({
+            familyId: metadata.familyId,
+            userId: metadata.userId,
+        })) ??
+        (await FamilyInvitation.findOne({
+            familyId: metadata.familyId,
+            email: metadata.email,
+        }));
 
     if (existing) {
         Object.assign(existing, metadata, {
@@ -486,11 +571,28 @@ async function upsertCareRecipientMetadata(
         return existing;
     }
 
-    return FamilyInvitation.create({
-        ...metadata,
-        status: FamilyInvitationStatus.ACCEPTED,
-        tokenHash: hashInviteToken(randomBytes(32).toString("hex")),
-    });
+    try {
+        return await FamilyInvitation.create({
+            ...metadata,
+            status: FamilyInvitationStatus.ACCEPTED,
+            tokenHash: hashInviteToken(randomBytes(32).toString("hex")),
+        });
+    } catch (error) {
+        if (isDuplicateKeyError(error)) {
+            const retry = await FamilyInvitation.findOne({
+                familyId: metadata.familyId,
+                email: metadata.email,
+            });
+            if (retry) {
+                Object.assign(retry, metadata, {
+                    status: FamilyInvitationStatus.ACCEPTED,
+                });
+                await retry.save();
+                return retry;
+            }
+        }
+        throw error;
+    }
 }
 
 export async function syncPendingInviteMembershipsForUser(user: IUserDocument) {
