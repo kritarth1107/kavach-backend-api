@@ -171,33 +171,25 @@ export const registerWithOtp = async (
       throw new AppError("Your name is required to register", 400);
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      const session = await createAuthSession(
-        existingUser,
-        AuthProvider.EMAIL,
-        req,
-      );
-      res.json({
-        success: true,
-        message: "Signed in successfully",
-        data: { registered: true, ...session },
-      });
-      return;
+    let user = await User.findOne({ email });
+    let isNewUser = false;
+
+    if (!user) {
+      const result = await verifyOtpToken(email, code, otpToken, { consume: true });
+
+      if (!result.valid) {
+        throw new AppError(otpErrorMessages[result.reason], 400);
+      }
+
+      user = await findOrCreateEmailUser(email, fullName);
+      isNewUser = true;
     }
 
-    const result = await verifyOtpToken(email, code, otpToken, { consume: true });
-
-    if (!result.valid) {
-      throw new AppError(otpErrorMessages[result.reason], 400);
-    }
-
-    const user = await findOrCreateEmailUser(email, fullName);
     const session = await createAuthSession(user, AuthProvider.EMAIL, req);
 
-    res.status(201).json({
+    res.status(isNewUser ? 201 : 200).json({
       success: true,
-      message: "Account created successfully",
+      message: isNewUser ? "Account created successfully" : "Signed in successfully",
       data: {
         registered: true,
         ...session,

@@ -259,11 +259,6 @@ export async function findOrCreateEmailUser(email: string, fullName: string) {
     emailVerified: true,
   });
 
-  const pending = await getPendingMembershipsForUser(user.userId, user.email);
-  if (pending.length === 0) {
-    await createDefaultFamilyForUser(user);
-  }
-
   return user;
 }
 

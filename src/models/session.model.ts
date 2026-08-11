@@ -159,7 +159,9 @@ sessionSchema.statics.revokeAllForUser = function (userId: string) {
 };
 
 sessionSchema.index({ userId: 1, status: 1 });
-sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+// Cosmos DB MongoDB API does not reliably support TTL indexes — session expiry
+// is enforced via JWT validity and active-session queries instead.
 
 interface ISessionModel extends Model<ISessionDocument> {
     hashToken(token: string): string;

@@ -19,7 +19,7 @@ export const errorHandler = (
   const message =
     err instanceof AppError ? err.message : "Internal Server Error";
 
-  console.error("API Error:", err.message);
+  console.error("API Error:", err.message, err.stack);
 
   res.status(statusCode).json({
     success: false,
