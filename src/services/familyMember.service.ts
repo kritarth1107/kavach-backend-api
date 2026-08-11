@@ -547,6 +547,77 @@ function duplicateContactError(error: unknown): never {
     throw error;
 }
 
+async function addCareRecipientMember(
+    family: IFamilyDocument,
+    inviter: IUserDocument,
+    params: {
+        contactEmail?: string;
+        memberName: string;
+        namePrefix?: string;
+        relationship?: string;
+        phone?: string;
+        phoneCountryCode?: string;
+        location?: string;
+    },
+) {
+    const invitationEmail =
+        params.contactEmail?.toLowerCase().trim() ??
+        buildPlaceholderMemberEmail();
+
+    const existingInvite = await FamilyInvitation.findOne({
+        familyId: family.familyId,
+        email: invitationEmail,
+        status: {
+            $in: [
+                FamilyInvitationStatus.ACCEPTED,
+                FamilyInvitationStatus.PENDING,
+            ],
+        },
+    });
+
+    const memberUserId = existingInvite?.userId ?? randomUUID();
+
+    const existingMember = family.members.find(
+        (m) =>
+            m.userId === memberUserId &&
+            m.status !== FamilyMemberStatus.REMOVED &&
+            m.status !== FamilyMemberStatus.REJECTED,
+    );
+
+    if (existingMember) {
+        if (existingMember.status === FamilyMemberStatus.BLOCKED) {
+            throw new AppError("This member is blocked. Unblock them first.", 400);
+        }
+        throw new AppError("This person is already in the family", 400);
+    }
+
+    if (memberUserId === inviter.userId) {
+        throw new AppError("You are already in this family", 400);
+    }
+
+    const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+
+    await family.addMember(memberUserId, FamilyRole.CARE_RECIPIENT, {
+        invitedBy: inviter.userId,
+        status: FamilyMemberStatus.JOINED,
+    });
+
+    await upsertCareRecipientMetadata({
+        familyId: family.familyId,
+        email: invitationEmail,
+        role: FamilyRole.CARE_RECIPIENT,
+        invitedBy: inviter.userId,
+        expiresAt,
+        inviteeName: params.memberName,
+        namePrefix: params.namePrefix,
+        relationship: params.relationship,
+        phone: params.phone,
+        phoneCountryCode: params.phoneCountryCode,
+        location: params.location,
+        userId: memberUserId,
+    });
+}
+
 async function upsertCareRecipientMetadata(
     metadata: {
         familyId: string;
@@ -769,7 +840,11 @@ export async function formatMemberWithMeta(
         name: resolvedName.name,
         email: resolveMemberContactEmail(user?.email, extras?.contactEmail),
         avatarUrl: user?.avatarUrl,
-        initials: getUserInitials(user?.firstName, user?.lastName, user?.email),
+        initials: getUserInitials(
+            user?.firstName ?? extras?.inviteeName?.split(/\s+/)[0],
+            user?.lastName ?? extras?.inviteeName?.split(/\s+/).slice(1).join(" "),
+            extras?.contactEmail ?? user?.email,
+        ),
         role: member.role,
         roleLabel: getRoleLabel(member.role),
         roleBadge: getRoleLabel(member.role, "badge"),
@@ -926,19 +1001,32 @@ export async function inviteFamilyMember(
     }
 
     const contactEmail = hasEmail ? emailInput : undefined;
-    const userAccountEmail = requiresAcceptance
-        ? emailInput
-        : buildPlaceholderMemberEmail();
-
-    if (requiresAcceptance && !userAccountEmail) {
-        throw new AppError("Email is required so the member can sign in and accept", 400);
-    }
 
     if (!payload.name?.trim()) {
         throw new AppError("Name is required", 400);
     }
 
     const { namePrefix, name: memberName } = normalizeMemberNameInput(payload);
+
+    if (!requiresAcceptance) {
+        await addCareRecipientMember(family, inviter, {
+            contactEmail,
+            memberName,
+            namePrefix,
+            relationship: payload.relationship?.trim(),
+            phone: payload.phone?.trim(),
+            phoneCountryCode: payload.phoneCountryCode?.trim(),
+            location: payload.location?.trim(),
+        });
+
+        return getFamilyMembersList(familyId, inviter.userId);
+    }
+
+    const userAccountEmail = emailInput;
+    if (!userAccountEmail) {
+        throw new AppError("Email is required so the member can sign in and accept", 400);
+    }
+
     const attachPhoneToUser = hasPhone && !hasEmail;
 
     const invitedUser = await createInvitedUser(
@@ -967,7 +1055,7 @@ export async function inviteFamilyMember(
     }
 
     const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-    const invitationEmail = contactEmail ?? userAccountEmail;
+    const invitationEmail = userAccountEmail;
     const inviteMetadata = {
         familyId,
         email: invitationEmail,
@@ -982,19 +1070,6 @@ export async function inviteFamilyMember(
         location: payload.location?.trim(),
         userId: invitedUser.userId,
     };
-
-    if (!requiresAcceptance) {
-        await family.addMember(invitedUser.userId, role, {
-            invitedBy: inviter.userId,
-            status: FamilyMemberStatus.JOINED,
-        });
-
-        await upsertCareRecipientMetadata({
-            ...inviteMetadata,
-        });
-
-        return getFamilyMembersList(familyId, inviter.userId);
-    }
 
     const pendingInvite = await FamilyInvitation.findOne({
         familyId,
