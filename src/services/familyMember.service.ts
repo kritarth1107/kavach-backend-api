@@ -289,16 +289,19 @@ export async function createInvitedUser(
     namePrefix?: string,
     phone?: string,
     phoneCountryCode?: string,
+    options: { attachPhoneToUser?: boolean } = {},
 ) {
+    const attachPhoneToUser = options.attachPhoneToUser ?? true;
     const normalizedEmail = email.toLowerCase().trim();
     const normalizedPhone =
         phone && phoneCountryCode
             ? normalizePhoneInput(phoneCountryCode, phone)
             : null;
+    const phoneForUser = attachPhoneToUser ? normalizedPhone : null;
 
     const userByEmail = await User.findOne({ email: normalizedEmail });
-    const userByPhone = normalizedPhone
-        ? await User.findByPhone(normalizedPhone.countryCode, normalizedPhone.number)
+    const userByPhone = phoneForUser
+        ? await User.findByPhone(phoneForUser.countryCode, phoneForUser.number)
         : null;
 
     if (
@@ -312,10 +315,10 @@ export async function createInvitedUser(
         );
     }
 
-    const { namePrefix: resolvedPrefix, name } = namePrefix?.trim()
-        ? { namePrefix: namePrefix.trim(), name: memberName.trim() }
+    const { name: parsedName } = namePrefix?.trim()
+        ? { name: memberName.trim() }
         : splitNamePrefix(memberName);
-    const [firstName, ...rest] = name.split(/\s+/).filter(Boolean);
+    const [firstName, ...rest] = parsedName.split(/\s+/).filter(Boolean);
 
     let user = userByEmail ?? userByPhone ?? null;
 
@@ -332,30 +335,21 @@ export async function createInvitedUser(
             !normalizedEmail.endsWith("@pending.kavach") &&
             (user.email.endsWith("@pending.kavach") || user.email === normalizedEmail)
         ) {
-            const emailOwner = await User.findOne({
-                email: normalizedEmail,
-                userId: { $ne: user.userId },
-            });
-            if (emailOwner) {
-                throw new AppError(
-                    "This email is already registered to another account",
-                    409,
-                );
-            }
             if (user.email !== normalizedEmail) {
                 updates.email = normalizedEmail;
             }
         }
 
-        if (normalizedPhone) {
+        if (phoneForUser) {
             if (!user.phone) {
                 updates.phone = {
-                    countryCode: normalizedPhone.countryCode,
-                    number: normalizedPhone.number,
+                    countryCode: phoneForUser.countryCode,
+                    number: phoneForUser.number,
                 };
+                updates.phoneKey = phoneForUser.key;
             } else if (
-                user.phone.countryCode !== normalizedPhone.countryCode ||
-                user.phone.number !== normalizedPhone.number
+                user.phone.countryCode !== phoneForUser.countryCode ||
+                user.phone.number !== phoneForUser.number
             ) {
                 throw new AppError(
                     "This account already has a different mobile number on file",
@@ -368,46 +362,33 @@ export async function createInvitedUser(
             try {
                 await User.updateOne({ userId: user.userId }, updates);
             } catch (error) {
-                if (isDuplicateKeyError(error)) {
-                    throw new AppError(
-                        "This email or mobile number is already registered",
-                        409,
-                    );
-                }
-                throw error;
+                throw duplicateContactError(error);
             }
         }
 
         return (await User.findOne({ userId: user.userId })) ?? user;
     }
 
-    if (normalizedPhone) {
+    if (phoneForUser) {
         const phoneTaken = await User.findByPhone(
-            normalizedPhone.countryCode,
-            normalizedPhone.number,
+            phoneForUser.countryCode,
+            phoneForUser.number,
         );
         if (phoneTaken) {
-            throw new AppError(
-                "This mobile number is already registered. Use that number to sign in or choose a different one.",
-                409,
-            );
+            return phoneTaken;
         }
-    }
-
-    const emailTaken = await User.findOne({ email: normalizedEmail });
-    if (emailTaken) {
-        throw new AppError("This email is already registered", 409);
     }
 
     const raw = randomBytes(24).toString("hex");
     const passwordHash = await bcrypt.hash(raw, config.security.bcryptSaltRounds);
 
-    const phoneData = normalizedPhone
+    const phoneData = phoneForUser
         ? {
               phone: {
-                  countryCode: normalizedPhone.countryCode,
-                  number: normalizedPhone.number,
+                  countryCode: phoneForUser.countryCode,
+                  number: phoneForUser.number,
               },
+              phoneKey: phoneForUser.key,
           }
         : {};
 
@@ -423,12 +404,19 @@ export async function createInvitedUser(
         });
     } catch (error) {
         if (isDuplicateKeyError(error)) {
-            throw new AppError(
-                "This email or mobile number is already registered",
-                409,
-            );
+            const existing =
+                (await User.findOne({ email: normalizedEmail })) ??
+                (phoneForUser
+                    ? await User.findByPhone(
+                          phoneForUser.countryCode,
+                          phoneForUser.number,
+                      )
+                    : null);
+            if (existing) {
+                return existing;
+            }
         }
-        throw error;
+        throw duplicateContactError(error);
     }
 
     return user;
@@ -441,6 +429,58 @@ function isDuplicateKeyError(error: unknown): boolean {
         "code" in error &&
         (error as { code?: number }).code === 11000
     );
+}
+
+function duplicateContactError(error: unknown): never {
+    if (isDuplicateKeyError(error)) {
+        const message =
+            typeof error === "object" &&
+            error !== null &&
+            "message" in error &&
+            typeof (error as { message?: string }).message === "string" &&
+            (error as { message: string }).message.includes("phoneKey")
+                ? "This mobile number is already registered"
+                : "This email is already registered";
+        throw new AppError(message, 409);
+    }
+
+    throw error;
+}
+
+async function upsertCareRecipientMetadata(
+    metadata: {
+        familyId: string;
+        email: string;
+        role: FamilyRole;
+        invitedBy: string;
+        expiresAt: Date;
+        inviteeName: string;
+        namePrefix?: string;
+        relationship?: string;
+        phone?: string;
+        phoneCountryCode?: string;
+        location?: string;
+        userId: string;
+    },
+) {
+    const existing = await FamilyInvitation.findOne({
+        familyId: metadata.familyId,
+        userId: metadata.userId,
+    });
+
+    if (existing) {
+        Object.assign(existing, metadata, {
+            status: FamilyInvitationStatus.ACCEPTED,
+        });
+        await existing.save();
+        return existing;
+    }
+
+    return FamilyInvitation.create({
+        ...metadata,
+        status: FamilyInvitationStatus.ACCEPTED,
+        tokenHash: hashInviteToken(randomBytes(32).toString("hex")),
+    });
 }
 
 export async function syncPendingInviteMembershipsForUser(user: IUserDocument) {
@@ -777,6 +817,7 @@ export async function inviteFamilyMember(
     }
 
     const { namePrefix, name: memberName } = normalizeMemberNameInput(payload);
+    const attachPhoneToUser = hasPhone && !hasEmail;
 
     const invitedUser = await createInvitedUser(
         email,
@@ -784,6 +825,7 @@ export async function inviteFamilyMember(
         namePrefix,
         payload.phone,
         payload.phoneCountryCode,
+        { attachPhoneToUser },
     );
 
     const existingMember = family.members.find((m) => m.userId === invitedUser.userId);
@@ -824,10 +866,8 @@ export async function inviteFamilyMember(
             status: FamilyMemberStatus.JOINED,
         });
 
-        await FamilyInvitation.create({
+        await upsertCareRecipientMetadata({
             ...inviteMetadata,
-            status: FamilyInvitationStatus.ACCEPTED,
-            tokenHash: hashInviteToken(randomBytes(32).toString("hex")),
         });
 
         return getFamilyMembersList(familyId, inviter.userId);

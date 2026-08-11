@@ -48,6 +48,7 @@ export interface IUser {
     userId: string;
     email: string;
     phone?: IPhone;
+    phoneKey?: string;
     firstName?: string;
     lastName?: string;
     avatarUrl?: string;

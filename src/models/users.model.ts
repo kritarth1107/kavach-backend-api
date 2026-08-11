@@ -92,6 +92,11 @@ const userSchema = new Schema<IUserDocument>(
             type: phoneSchema,
             required: false,
         },
+        phoneKey: {
+            type: String,
+            trim: true,
+            sparse: true,
+        },
         firstName: {
             type: String,
             trim: true,
@@ -186,6 +191,13 @@ userSchema.pre("save", function (next) {
     if (!this.userId) {
         this.userId = randomUUID();
     }
+
+    if (this.phone?.countryCode && this.phone?.number) {
+        this.phoneKey = `${this.phone.countryCode}${this.phone.number}`;
+    } else if (!this.isModified("phone") || !this.phone) {
+        this.phoneKey = undefined;
+    }
+
     next();
 });
 
@@ -322,23 +334,18 @@ userSchema.statics.findByPhone = function (
     countryCode: string,
     number: string,
 ) {
+    const digits = number.replace(/\D/g, "");
+    const phoneKey = `${countryCode}${digits}`;
+
     return this.findOne({
-        "phone.countryCode": countryCode,
-        "phone.number": number,
+        $or: [
+            { phoneKey },
+            { "phone.countryCode": countryCode, "phone.number": digits },
+        ],
     });
 };
 
-userSchema.index(
-    { "phone.countryCode": 1, "phone.number": 1 },
-    {
-        unique: true,
-        sparse: true,
-        partialFilterExpression: {
-            "phone.countryCode": { $exists: true },
-            "phone.number": { $exists: true },
-        },
-    },
-);
+userSchema.index({ phoneKey: 1 }, { unique: true, sparse: true });
 
 userSchema.index(
     { "socialAccounts.provider": 1, "socialAccounts.providerId": 1 },
