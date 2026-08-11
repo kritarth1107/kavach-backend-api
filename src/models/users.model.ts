@@ -318,6 +318,16 @@ userSchema.statics.findByEmailOrSocial = function (
     return this.findOne(query);
 };
 
+userSchema.statics.findByPhone = function (
+    countryCode: string,
+    number: string,
+) {
+    return this.findOne({
+        "phone.countryCode": countryCode,
+        "phone.number": number,
+    });
+};
+
 userSchema.index(
     { "phone.countryCode": 1, "phone.number": 1 },
     {
@@ -344,6 +354,10 @@ interface IUserModel extends Model<IUserDocument> {
         email: string,
         provider?: AuthProvider,
         providerId?: string,
+    ): mongoose.Query<IUserDocument | null, IUserDocument>;
+    findByPhone(
+        countryCode: string,
+        number: string,
     ): mongoose.Query<IUserDocument | null, IUserDocument>;
 }
 

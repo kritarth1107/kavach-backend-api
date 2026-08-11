@@ -16,6 +16,7 @@ import {
     reconcileUserAfterFamilyRemoval,
 } from "./family.service";
 import { sortByUpdatedAtDesc } from "../utils/cosmos-safe-sort.util";
+import { normalizePhoneInput } from "../utils/phone.util";
 import {
     FamilyInvitationStatus,
     FamilyMemberStatus,
@@ -642,9 +643,27 @@ export async function inviteFamilyMember(
 
     const requiresAcceptance = roleRequiresInvitationAcceptance(role);
     const emailInput = String(payload.email ?? "").trim().toLowerCase();
+    const phoneCountryCode = payload.phoneCountryCode?.trim();
+    const phoneNumber = String(payload.phone ?? "").replace(/\D/g, "").trim();
+    const hasPhone = Boolean(phoneCountryCode && phoneNumber);
+    const hasEmail = Boolean(emailInput);
+
+    if (!requiresAcceptance && !hasEmail && !hasPhone) {
+        throw new AppError(
+            "Email or mobile number is required for care recipients",
+            400,
+        );
+    }
+
+    if (hasPhone && phoneCountryCode) {
+        normalizePhoneInput(phoneCountryCode, phoneNumber);
+    }
+
     const email = requiresAcceptance
         ? emailInput
-        : emailInput || buildPlaceholderMemberEmail();
+        : hasEmail
+          ? emailInput
+          : buildPlaceholderMemberEmail();
 
     if (requiresAcceptance && !email) {
         throw new AppError("Email is required so the member can sign in and accept", 400);

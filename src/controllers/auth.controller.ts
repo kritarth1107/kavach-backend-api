@@ -5,12 +5,18 @@ import { sendOtpEmail } from "../services/email.service";
 import {
   createOtpToken,
   generateOtpCode,
+  OtpChannel,
   verifyOtpToken,
 } from "../services/otp.service";
+import {
+  generatePhoneOtpCode,
+  sendOtpSms,
+} from "../services/sms.service";
 import {
   createAuthSession,
   findOrCreateEmailUser,
   findOrCreateGoogleUser,
+  findOrCreatePhoneUser,
   revokeSessionFromToken,
   sanitizeUser,
   verifyGoogleIdToken,
@@ -22,8 +28,26 @@ import {
   getUserInitials,
   ensureValidActiveFamily,
 } from "../services/family.service";
-import { getPendingMembershipsForUser, syncPendingInviteMembershipsForUser, userNeedsInvitationAction, requiresBlockingInvitationScreen } from "../services/familyMember.service";
+import {
+  getPendingMembershipsForUser,
+  syncPendingInviteMembershipsForUser,
+  userNeedsInvitationAction,
+  requiresBlockingInvitationScreen,
+} from "../services/familyMember.service";
 import { AuthProvider } from "../types/user.types";
+import { NormalizedPhone, normalizePhoneInput } from "../utils/phone.util";
+
+type EmailOtpContext = {
+  channel: "email";
+  email: string;
+};
+
+type PhoneOtpContext = {
+  channel: "phone";
+  phone: NormalizedPhone;
+};
+
+type OtpContext = EmailOtpContext | PhoneOtpContext;
 
 function getEmail(body: Request["body"]) {
   const email = String(body?.email ?? "")
@@ -49,6 +73,39 @@ function getOtpToken(body: Request["body"]) {
     throw new AppError("OTP token is required", 400);
   }
   return otpToken;
+}
+
+function getOtpContext(body: Request["body"]): OtpContext {
+  const channel = String(body?.channel ?? "").trim().toLowerCase();
+  const hasPhone =
+    String(body?.phone ?? "").trim().length > 0 ||
+    String(body?.phoneCountryCode ?? "").trim().length > 0;
+
+  if (channel === "phone" || (!channel && hasPhone && !body?.email)) {
+    const phone = normalizePhoneInput(
+      String(body?.phoneCountryCode ?? "+91"),
+      String(body?.phone ?? ""),
+    );
+    return { channel: "phone", phone };
+  }
+
+  return { channel: "email", email: getEmail(body) };
+}
+
+async function findExistingUser(context: OtpContext) {
+  if (context.channel === "email") {
+    return User.findOne({ email: context.email });
+  }
+
+  return User.findByPhone(context.phone.countryCode, context.phone.number);
+}
+
+function otpIdentifier(context: OtpContext): { channel: OtpChannel; identifier: string } {
+  if (context.channel === "email") {
+    return { channel: "email", identifier: context.email };
+  }
+
+  return { channel: "phone", identifier: context.phone.key };
 }
 
 const otpErrorMessages = {
@@ -90,15 +147,38 @@ export const sendOtp = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const email = getEmail(req.body);
-    const code = generateOtpCode();
-    const otpToken = createOtpToken(email, code);
-    await sendOtpEmail(email, code);
+    const context = getOtpContext(req.body);
+
+    if (context.channel === "email") {
+      const code = generateOtpCode();
+      const otpToken = createOtpToken("email", context.email, code);
+      await sendOtpEmail(context.email, code);
+
+      res.json({
+        success: true,
+        message: "Verification code sent to your email",
+        data: {
+          channel: "email" as const,
+          email: context.email,
+          otpToken,
+        },
+      });
+      return;
+    }
+
+    const code = generatePhoneOtpCode();
+    const otpToken = createOtpToken("phone", context.phone.key, code);
+    await sendOtpSms(context.phone.countryCode, context.phone.number, code);
 
     res.json({
       success: true,
-      message: "Verification code sent to your email",
-      data: { email, otpToken },
+      message: "Verification code sent to your mobile",
+      data: {
+        channel: "phone" as const,
+        phone: context.phone.number,
+        phoneCountryCode: context.phone.countryCode,
+        otpToken,
+      },
     });
   } catch (error) {
     next(error);
@@ -111,13 +191,14 @@ export const verifyOtp = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const email = getEmail(req.body);
+    const context = getOtpContext(req.body);
     const code = getOtpCode(req.body);
     const otpToken = getOtpToken(req.body);
+    const { channel, identifier } = otpIdentifier(context);
 
-    const existingUser = await User.findOne({ email });
+    const existingUser = await findExistingUser(context);
 
-    const result = await verifyOtpToken(email, code, otpToken, {
+    const result = await verifyOtpToken(channel, identifier, code, otpToken, {
       consume: Boolean(existingUser),
     });
 
@@ -129,10 +210,19 @@ export const verifyOtp = async (
       res.json({
         success: true,
         message: "Code verified. Complete your registration.",
-        data: {
-          registered: false,
-          email,
-        },
+        data:
+          context.channel === "email"
+            ? {
+                channel: "email" as const,
+                registered: false,
+                email: context.email,
+              }
+            : {
+                channel: "phone" as const,
+                registered: false,
+                phone: context.phone.number,
+                phoneCountryCode: context.phone.countryCode,
+              },
       });
       return;
     }
@@ -147,6 +237,7 @@ export const verifyOtp = async (
       success: true,
       message: "Signed in successfully",
       data: {
+        channel: context.channel,
         registered: true,
         ...session,
       },
@@ -162,26 +253,37 @@ export const registerWithOtp = async (
   next: NextFunction,
 ): Promise<void> => {
   try {
-    const email = getEmail(req.body);
+    const context = getOtpContext(req.body);
     const code = getOtpCode(req.body);
     const otpToken = getOtpToken(req.body);
     const fullName = String(req.body?.name ?? req.body?.firstName ?? "").trim();
+    const { channel, identifier } = otpIdentifier(context);
 
     if (!fullName || fullName.length < 2) {
       throw new AppError("Your name is required to register", 400);
     }
 
-    let user = await User.findOne({ email });
+    let user = await findExistingUser(context);
     let isNewUser = false;
 
     if (!user) {
-      const result = await verifyOtpToken(email, code, otpToken, { consume: true });
+      const result = await verifyOtpToken(channel, identifier, code, otpToken, {
+        consume: true,
+      });
 
       if (!result.valid) {
         throw new AppError(otpErrorMessages[result.reason], 400);
       }
 
-      user = await findOrCreateEmailUser(email, fullName);
+      if (context.channel === "email") {
+        user = await findOrCreateEmailUser(context.email, fullName);
+      } else {
+        user = await findOrCreatePhoneUser(
+          context.phone.countryCode,
+          context.phone.number,
+          fullName,
+        );
+      }
       isNewUser = true;
     }
 
@@ -191,6 +293,7 @@ export const registerWithOtp = async (
       success: true,
       message: isNewUser ? "Account created successfully" : "Signed in successfully",
       data: {
+        channel: context.channel,
         registered: true,
         ...session,
       },

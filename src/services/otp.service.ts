@@ -14,9 +14,14 @@ const OTP_EXPIRY = "10m";
 const OTP_EXPIRY_SECONDS = 10 * 60;
 const MAX_ATTEMPTS = 5;
 
+export type OtpChannel = "email" | "phone";
+
 interface IOtpJwtPayload extends jwt.JwtPayload {
   sub: "otp";
-  email: string;
+  channel?: OtpChannel;
+  identifier?: string;
+  /** @deprecated legacy email-only tokens */
+  email?: string;
   enc: string;
   jti: string;
 }
@@ -62,15 +67,37 @@ function codesMatch(expected: string, submitted: string): boolean {
   return timingSafeEqual(a, b);
 }
 
+function resolvePayloadIdentity(payload: IOtpJwtPayload): {
+  channel: OtpChannel;
+  identifier: string;
+} | null {
+  if (payload.channel && payload.identifier) {
+    return { channel: payload.channel, identifier: payload.identifier };
+  }
+
+  if (payload.email) {
+    return { channel: "email", identifier: payload.email.toLowerCase().trim() };
+  }
+
+  return null;
+}
+
 export function generateOtpCode(): string {
   return String(randomInt(100000, 999999));
 }
 
-export function createOtpToken(email: string, code: string): string {
-  const normalized = email.toLowerCase().trim();
+export function createOtpToken(
+  channel: OtpChannel,
+  identifier: string,
+  code: string,
+): string {
+  const normalized =
+    channel === "email" ? identifier.toLowerCase().trim() : identifier.trim();
+
   const payload: IOtpJwtPayload = {
     sub: "otp",
-    email: normalized,
+    channel,
+    identifier: normalized,
     enc: encryptOtp(code),
     jti: randomBytes(16).toString("hex"),
   };
@@ -83,12 +110,14 @@ export type OtpVerifyResult =
   | { valid: false; reason: "expired" | "invalid" | "max_attempts" | "consumed" };
 
 export async function verifyOtpToken(
-  email: string,
+  channel: OtpChannel,
+  identifier: string,
   code: string,
   otpToken: string,
   options: { consume?: boolean } = { consume: true },
 ): Promise<OtpVerifyResult> {
-  const normalized = email.toLowerCase().trim();
+  const normalized =
+    channel === "email" ? identifier.toLowerCase().trim() : identifier.trim();
 
   if (await TokenBlacklist.isBlacklisted(otpToken)) {
     return { valid: false, reason: "consumed" };
@@ -104,7 +133,14 @@ export async function verifyOtpToken(
     return { valid: false, reason: "invalid" };
   }
 
-  if (payload.sub !== "otp" || payload.email !== normalized || !payload.enc || !payload.jti) {
+  const identity = resolvePayloadIdentity(payload);
+  if (
+    !identity ||
+    identity.channel !== channel ||
+    identity.identifier !== normalized ||
+    !payload.enc ||
+    !payload.jti
+  ) {
     return { valid: false, reason: "invalid" };
   }
 

@@ -262,6 +262,35 @@ export async function findOrCreateEmailUser(email: string, fullName: string) {
   return user;
 }
 
+export async function findOrCreatePhoneUser(
+  countryCode: string,
+  number: string,
+  fullName: string,
+) {
+  let user = await User.findByPhone(countryCode, number);
+
+  if (user) {
+    await ensureInternalPassword(user.userId);
+    return user;
+  }
+
+  const [firstName, ...rest] = fullName.trim().split(/\s+/);
+  const passwordHash = await generatePasswordHash();
+  const placeholderEmail = `${randomBytes(16).toString("hex")}@pending.kavach`;
+
+  user = await User.create({
+    email: placeholderEmail,
+    firstName,
+    lastName: rest.join(" ") || undefined,
+    phone: { countryCode, number },
+    passwordHash,
+    primaryAuthProvider: AuthProvider.EMAIL,
+    emailVerified: false,
+  });
+
+  return user;
+}
+
 export async function revokeSessionFromToken(token: string) {
   try {
     const decoded = jwt.verify(token, config.jwt.secret) as IJwtPayload;
