@@ -18,6 +18,9 @@ import {
 import { sortByUpdatedAtDesc } from "../utils/cosmos-safe-sort.util";
 import { normalizePhoneInput, buildCosmosSafePhonePlaceholder, phoneFieldsFromNormalized, isInternalPhone } from "../utils/phone.util";
 import {
+    resolveMemberContactEmail,
+} from "./userContact.service";
+import {
     FamilyInvitationStatus,
     FamilyMemberStatus,
     FamilyRole,
@@ -122,6 +125,7 @@ function resolveMemberName(
 }
 
 type InviteMemberMeta = {
+    contactEmail?: string;
     relationship?: string;
     phone?: string;
     phoneCountryCode?: string;
@@ -156,6 +160,7 @@ async function loadInviteMetaByUserId(
         }
 
         inviteMetaByUser.set(inv.userId, {
+            contactEmail: inv.email,
             relationship: inv.relationship,
             phone: inv.phone,
             phoneCountryCode: inv.phoneCountryCode,
@@ -190,6 +195,11 @@ export function canManageMembers(role: FamilyRole | null): boolean {
 export function roleRequiresInvitationAcceptance(role: FamilyRole): boolean {
     return role !== FamilyRole.CARE_RECIPIENT;
 }
+
+export {
+    findUserByContactEmail,
+    isPlaceholderAccountEmail,
+} from "./userContact.service";
 
 function buildPlaceholderMemberEmail(): string {
     return `${randomBytes(16).toString("hex")}@pending.kavach`;
@@ -757,7 +767,7 @@ export async function formatMemberWithMeta(
         namePrefix: resolvedName.namePrefix || undefined,
         fullName: resolvedName.fullName,
         name: resolvedName.name,
-        email: user?.email ?? null,
+        email: resolveMemberContactEmail(user?.email, extras?.contactEmail),
         avatarUrl: user?.avatarUrl,
         initials: getUserInitials(user?.firstName, user?.lastName, user?.email),
         role: member.role,
@@ -837,6 +847,7 @@ export async function getFamilyMembersList(familyId: string, userId: string) {
         }
 
         inviteMetaByUser.set(inv.userId, {
+            contactEmail: inv.email,
             relationship: inv.relationship,
             phone: inv.phone,
             phoneCountryCode: inv.phoneCountryCode,
@@ -914,13 +925,12 @@ export async function inviteFamilyMember(
         normalizePhoneInput(phoneCountryCode, phoneNumber);
     }
 
-    const email = requiresAcceptance
+    const contactEmail = hasEmail ? emailInput : undefined;
+    const userAccountEmail = requiresAcceptance
         ? emailInput
-        : hasEmail
-          ? emailInput
-          : buildPlaceholderMemberEmail();
+        : buildPlaceholderMemberEmail();
 
-    if (requiresAcceptance && !email) {
+    if (requiresAcceptance && !userAccountEmail) {
         throw new AppError("Email is required so the member can sign in and accept", 400);
     }
 
@@ -932,7 +942,7 @@ export async function inviteFamilyMember(
     const attachPhoneToUser = hasPhone && !hasEmail;
 
     const invitedUser = await createInvitedUser(
-        email,
+        userAccountEmail,
         memberName,
         namePrefix,
         payload.phone,
@@ -957,9 +967,10 @@ export async function inviteFamilyMember(
     }
 
     const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const invitationEmail = contactEmail ?? userAccountEmail;
     const inviteMetadata = {
         familyId,
-        email,
+        email: invitationEmail,
         role,
         invitedBy: inviter.userId,
         expiresAt,
@@ -987,7 +998,7 @@ export async function inviteFamilyMember(
 
     const pendingInvite = await FamilyInvitation.findOne({
         familyId,
-        email,
+        email: invitationEmail,
         status: FamilyInvitationStatus.PENDING,
         expiresAt: { $gt: new Date() },
     });
@@ -1002,7 +1013,7 @@ export async function inviteFamilyMember(
         tokenHash: "pending",
     });
 
-    const jwtToken = createInviteJwt(invitation.inviteId, familyId, email);
+    const jwtToken = createInviteJwt(invitation.inviteId, familyId, invitationEmail);
     invitation.tokenHash = hashInviteToken(jwtToken);
     await invitation.save();
 
@@ -1016,11 +1027,11 @@ export async function inviteFamilyMember(
         inviter.email;
 
     await sendFamilyInviteEmail({
-        to: email,
+        to: invitationEmail,
         inviterName,
         familyName: family.name,
         roleLabel: getRoleLabel(role),
-        acceptUrl: `${config.server.liveFrontendUrl}/auth/login?email=${encodeURIComponent(email)}`,
+        acceptUrl: `${config.server.liveFrontendUrl}/auth/login?email=${encodeURIComponent(invitationEmail)}`,
     });
 
     return getFamilyMembersList(familyId, inviter.userId);

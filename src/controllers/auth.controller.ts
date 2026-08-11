@@ -33,6 +33,7 @@ import {
   syncPendingInviteMembershipsForUser,
   userNeedsInvitationAction,
   requiresBlockingInvitationScreen,
+  findUserByContactEmail,
 } from "../services/familyMember.service";
 import { AuthProvider } from "../types/user.types";
 import { NormalizedPhone, normalizePhoneInput } from "../utils/phone.util";
@@ -94,7 +95,7 @@ function getOtpContext(body: Request["body"]): OtpContext {
 
 async function findExistingUser(context: OtpContext) {
   if (context.channel === "email") {
-    return User.findOne({ email: context.email });
+    return findUserByContactEmail(context.email);
   }
 
   return User.findByPhone(context.phone.countryCode, context.phone.number);

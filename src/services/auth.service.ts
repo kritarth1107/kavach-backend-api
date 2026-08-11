@@ -20,6 +20,7 @@ import {
   syncPendingInviteMembershipsForUser,
   userNeedsInvitationAction,
   requiresBlockingInvitationScreen,
+  findUserByContactEmail,
   type PendingInvitationSummary,
 } from "./familyMember.service";
 import {
@@ -246,7 +247,8 @@ export async function findOrCreateGoogleUser(profile: {
 }
 
 export async function findOrCreateEmailUser(email: string, fullName: string) {
-  let user = await User.findOne({ email: email.toLowerCase() });
+  const normalizedEmail = email.toLowerCase();
+  let user = await findUserByContactEmail(normalizedEmail);
 
   if (user) {
     await ensureInternalPassword(user.userId);
