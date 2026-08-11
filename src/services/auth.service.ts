@@ -22,6 +22,11 @@ import {
   requiresBlockingInvitationScreen,
   type PendingInvitationSummary,
 } from "./familyMember.service";
+import {
+  buildCosmosSafePhonePlaceholder,
+  phoneFieldsFromNormalized,
+  normalizePhoneInput,
+} from "../utils/phone.util";
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -231,6 +236,7 @@ export async function findOrCreateGoogleUser(profile: {
           lastUsedAt: new Date(),
         },
       ],
+      ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
     });
 
     await createDefaultFamilyForUser(user);
@@ -257,6 +263,7 @@ export async function findOrCreateEmailUser(email: string, fullName: string) {
     passwordHash,
     primaryAuthProvider: AuthProvider.EMAIL,
     emailVerified: true,
+    ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
   });
 
   return user;
@@ -274,6 +281,7 @@ export async function findOrCreatePhoneUser(
     return user;
   }
 
+  const normalizedPhone = normalizePhoneInput(countryCode, number);
   const [firstName, ...rest] = fullName.trim().split(/\s+/);
   const passwordHash = await generatePasswordHash();
   const placeholderEmail = `${randomBytes(16).toString("hex")}@pending.kavach`;
@@ -282,10 +290,10 @@ export async function findOrCreatePhoneUser(
     email: placeholderEmail,
     firstName,
     lastName: rest.join(" ") || undefined,
-    phone: { countryCode, number },
     passwordHash,
     primaryAuthProvider: AuthProvider.EMAIL,
     emailVerified: false,
+    ...phoneFieldsFromNormalized(normalizedPhone),
   });
 
   return user;

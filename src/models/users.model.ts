@@ -194,8 +194,6 @@ userSchema.pre("save", function (next) {
 
     if (this.phone?.countryCode && this.phone?.number) {
         this.phoneKey = `${this.phone.countryCode}${this.phone.number}`;
-    } else if (!this.isModified("phone") || !this.phone) {
-        this.phoneKey = undefined;
     }
 
     next();

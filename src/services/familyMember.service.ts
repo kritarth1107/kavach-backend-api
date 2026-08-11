@@ -16,7 +16,7 @@ import {
     reconcileUserAfterFamilyRemoval,
 } from "./family.service";
 import { sortByUpdatedAtDesc } from "../utils/cosmos-safe-sort.util";
-import { normalizePhoneInput } from "../utils/phone.util";
+import { normalizePhoneInput, buildCosmosSafePhonePlaceholder, phoneFieldsFromNormalized, isInternalPhone } from "../utils/phone.util";
 import {
     FamilyInvitationStatus,
     FamilyMemberStatus,
@@ -277,6 +277,10 @@ function resolveMemberPhoneFields(
         return { phone: userPhone.trim(), phoneCountryCode: inviteCountryCode?.trim() };
     }
 
+    if (isInternalPhone(userPhone.countryCode)) {
+        return {};
+    }
+
     return {
         phone: userPhone.number?.trim(),
         phoneCountryCode: userPhone.countryCode?.trim() ?? inviteCountryCode?.trim(),
@@ -382,15 +386,9 @@ export async function createInvitedUser(
     const raw = randomBytes(24).toString("hex");
     const passwordHash = await bcrypt.hash(raw, config.security.bcryptSaltRounds);
 
-    const phoneData = phoneForUser
-        ? {
-              phone: {
-                  countryCode: phoneForUser.countryCode,
-                  number: phoneForUser.number,
-              },
-              phoneKey: phoneForUser.key,
-          }
-        : {};
+    const phoneFields = phoneForUser
+        ? phoneFieldsFromNormalized(phoneForUser)
+        : phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder());
 
     try {
         user = await User.create({
@@ -400,7 +398,7 @@ export async function createInvitedUser(
             passwordHash,
             primaryAuthProvider: AuthProvider.EMAIL,
             emailVerified: false,
-            ...phoneData,
+            ...phoneFields,
         });
     } catch (error) {
         if (isDuplicateKeyError(error)) {
@@ -433,15 +431,27 @@ function isDuplicateKeyError(error: unknown): boolean {
 
 function duplicateContactError(error: unknown): never {
     if (isDuplicateKeyError(error)) {
-        const message =
+        const keyPattern =
             typeof error === "object" &&
             error !== null &&
-            "message" in error &&
-            typeof (error as { message?: string }).message === "string" &&
-            (error as { message: string }).message.includes("phoneKey")
-                ? "This mobile number is already registered"
-                : "This email is already registered";
-        throw new AppError(message, 409);
+            "keyPattern" in error &&
+            typeof (error as { keyPattern?: Record<string, number> }).keyPattern ===
+                "object"
+                ? (error as { keyPattern: Record<string, number> }).keyPattern
+                : null;
+
+        if (keyPattern?.phoneKey || keyPattern?.["phone.number"]) {
+            throw new AppError("This mobile number is already registered", 409);
+        }
+
+        if (keyPattern?.email) {
+            throw new AppError("This email is already registered", 409);
+        }
+
+        throw new AppError(
+            "Could not create this member account. Please try again or use a different contact.",
+            409,
+        );
     }
 
     throw error;
