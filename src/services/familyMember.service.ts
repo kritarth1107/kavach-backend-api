@@ -186,6 +186,14 @@ export function canManageMembers(role: FamilyRole | null): boolean {
     return role !== null && MANAGER_ROLES.has(role);
 }
 
+export function roleRequiresInvitationAcceptance(role: FamilyRole): boolean {
+    return role !== FamilyRole.CARE_RECIPIENT;
+}
+
+function buildPlaceholderMemberEmail(): string {
+    return `${randomBytes(16).toString("hex")}@pending.kavach`;
+}
+
 export function mapUiRoleToFamilyRole(role: string): FamilyRole {
     const map: Record<string, FamilyRole> = {
         care_recipient: FamilyRole.CARE_RECIPIENT,
@@ -632,21 +640,18 @@ export async function inviteFamilyMember(
         throw new AppError("Cannot invite someone as primary caregiver", 400);
     }
 
-    const isCareRecipient = role === FamilyRole.CARE_RECIPIENT;
-    const email = String(payload.email ?? "")
-        .trim()
-        .toLowerCase();
+    const requiresAcceptance = roleRequiresInvitationAcceptance(role);
+    const emailInput = String(payload.email ?? "").trim().toLowerCase();
+    const email = requiresAcceptance
+        ? emailInput
+        : emailInput || buildPlaceholderMemberEmail();
 
-    if (!isCareRecipient && !email) {
-        throw new AppError("Email is required for this role", 400);
+    if (requiresAcceptance && !email) {
+        throw new AppError("Email is required so the member can sign in and accept", 400);
     }
 
     if (!payload.name?.trim()) {
         throw new AppError("Name is required", 400);
-    }
-
-    if (!email) {
-        throw new AppError("Email is required so the member can sign in and accept", 400);
     }
 
     const { namePrefix, name: memberName } = normalizeMemberNameInput(payload);
@@ -675,6 +680,37 @@ export async function inviteFamilyMember(
         throw new AppError("You are already in this family", 400);
     }
 
+    const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    const inviteMetadata = {
+        familyId,
+        email,
+        role,
+        invitedBy: inviter.userId,
+        expiresAt,
+        inviteeName: memberName,
+        namePrefix: namePrefix || undefined,
+        relationship: payload.relationship?.trim(),
+        phone: payload.phone?.trim(),
+        phoneCountryCode: payload.phoneCountryCode?.trim(),
+        location: payload.location?.trim(),
+        userId: invitedUser.userId,
+    };
+
+    if (!requiresAcceptance) {
+        await family.addMember(invitedUser.userId, role, {
+            invitedBy: inviter.userId,
+            status: FamilyMemberStatus.JOINED,
+        });
+
+        await FamilyInvitation.create({
+            ...inviteMetadata,
+            status: FamilyInvitationStatus.ACCEPTED,
+            tokenHash: hashInviteToken(randomBytes(32).toString("hex")),
+        });
+
+        return getFamilyMembersList(familyId, inviter.userId);
+    }
+
     const pendingInvite = await FamilyInvitation.findOne({
         familyId,
         email,
@@ -686,23 +722,10 @@ export async function inviteFamilyMember(
         throw new AppError("An invitation is already pending for this email", 400);
     }
 
-    const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
-
     const invitation = await FamilyInvitation.create({
-        familyId,
-        email,
-        role,
-        invitedBy: inviter.userId,
+        ...inviteMetadata,
         status: FamilyInvitationStatus.PENDING,
         tokenHash: "pending",
-        expiresAt,
-        inviteeName: memberName,
-        namePrefix: namePrefix || undefined,
-        relationship: payload.relationship?.trim(),
-        phone: payload.phone?.trim(),
-        phoneCountryCode: payload.phoneCountryCode?.trim(),
-        location: payload.location?.trim(),
-        userId: invitedUser.userId,
     });
 
     const jwtToken = createInviteJwt(invitation.inviteId, familyId, email);
