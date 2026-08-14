@@ -25,6 +25,17 @@ import {
     postRecipientCareSchedule,
     removeRecipientCareSchedule,
 } from "../controllers/careSchedule.controller";
+import {
+    getActivity,
+    getBriefing,
+    getCaregiverSaheliChat,
+    getOverview,
+    getSaheliChat,
+    postCaregiverSaheliChat,
+    postSaheliChat,
+    postSaheliCheckIn,
+} from "../controllers/saheli.controller";
+import { getRecipientLabs, postRecipientLab } from "../controllers/memoryDocument.controller";
 import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
@@ -38,6 +49,28 @@ router.post("/invitations/respond/accept", protect, acceptInvitationByIdHandler)
 router.post("/invitations/respond/reject", protect, rejectInvitationByIdHandler);
 router.get("/", protect, listFamilies);
 router.post("/", protect, createFamily);
+router.get("/:familyId/overview", protect, getOverview);
+router.get("/:familyId/activity", protect, getActivity);
+router.get("/:familyId/recipients/:recipientUserId/saheli/chat", protect, getSaheliChat);
+router.post("/:familyId/recipients/:recipientUserId/saheli/chat", protect, postSaheliChat);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat",
+    protect,
+    getCaregiverSaheliChat,
+);
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat",
+    protect,
+    postCaregiverSaheliChat,
+);
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/check-in",
+    protect,
+    postSaheliCheckIn,
+);
+router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
+router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);
+router.post("/:familyId/recipients/:recipientUserId/labs", protect, postRecipientLab);
 router.get("/:familyId/members", protect, listFamilyMembers);
 router.get("/:familyId/recipients/:recipientUserId/care-schedule", protect, getRecipientCareSchedule);
 router.post("/:familyId/recipients/:recipientUserId/care-schedule", protect, postRecipientCareSchedule);

@@ -95,6 +95,11 @@ export interface R2Config {
 }
 
 
+export interface AiEngineConfig {
+    baseUrl: string;
+    apiSecret: string;
+}
+
 /**
  * Main application configuration interface
  * Combines all configuration interfaces into a single configuration object
@@ -109,4 +114,5 @@ export interface AppConfig {
     encryption: EncryptionConfig;    // Encryption settings
     email: EmailConfig;              // Email settings
     r2: R2Config;                    // Cloudflare R2 settings
+    aiEngine: AiEngineConfig;        // Kawach AI engine (Saheli / RAG)
 }

@@ -107,6 +107,11 @@ const config: AppConfig = {
         publicUrl: process.env.R2_PUBLIC_URL || "https://cdn.rupeeotc.com/",
     },
 
+    aiEngine: {
+        baseUrl: process.env.AI_ENGINE_URL || "http://localhost:8000",
+        apiSecret: process.env.KAWACH_API_SECRET || "dev-secret",
+    },
+
 };
 
 // ==================================================
