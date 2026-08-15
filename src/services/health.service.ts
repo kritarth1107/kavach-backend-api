@@ -65,7 +65,10 @@ function getBuildMetadata() {
         gitCommit,
         gitCommitShort: gitCommit === "unknown" ? "unknown" : gitCommit.slice(0, 7),
         gitBranch: process.env.GIT_BRANCH ?? buildInfoFile.gitBranch ?? "unknown",
-        buildTime: process.env.BUILD_TIME ?? buildInfoFile.buildTime ?? "unknown",
+        buildTime:
+            process.env.BUILD_TIME ||
+            buildInfoFile.buildTime ||
+            "unknown",
         imageTag: process.env.IMAGE_TAG ?? buildInfoFile.imageTag ?? "unknown",
     };
 }

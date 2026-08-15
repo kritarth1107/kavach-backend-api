@@ -22,8 +22,9 @@ ENV NODE_ENV=production \
 
 COPY package.json package-lock.json* ./
 RUN APP_VERSION=$(node -p "require('./package.json').version") && \
+    BUILD_TS="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     printf '{"gitCommit":"%s","gitBranch":"%s","buildTime":"%s","imageTag":"%s","appVersion":"%s"}\n' \
-    "$GIT_COMMIT_SHA" "$GIT_BRANCH" "$BUILD_TIME" "$IMAGE_TAG" "$APP_VERSION" > /app/build-info.json
+    "$GIT_COMMIT_SHA" "$GIT_BRANCH" "$BUILD_TS" "$IMAGE_TAG" "$APP_VERSION" > /app/build-info.json
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 EXPOSE 5000
