@@ -10,6 +10,7 @@ import familyRoutes from "./routes/family.routes";
 import documentRoutes from "./routes/document.routes";
 import linkRoutes from "./routes/link.routes";
 import analyticsRoutes from "./routes/analytics.routes";
+import healthRoutes from "./routes/health.routes";
 import { errorHandler } from "./middleware/error.middleware";
 
 dotenv.config();
@@ -36,9 +37,7 @@ app.use("/api/documents", documentRoutes);
 app.use("/api/links", linkRoutes);
 app.use("/api/analytics", analyticsRoutes);
 
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", message: "Kavach Backend is running" });
-});
+app.use("/api/health", healthRoutes);
 
 app.use(errorHandler);
 
