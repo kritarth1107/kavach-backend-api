@@ -112,6 +112,10 @@ const config: AppConfig = {
         apiSecret: process.env.KAWACH_API_SECRET || "dev-secret",
     },
 
+    health: {
+        secret: process.env.HEALTH_SECRET || "",
+    },
+
 };
 
 // ==================================================

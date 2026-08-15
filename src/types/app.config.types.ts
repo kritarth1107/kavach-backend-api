@@ -100,6 +100,10 @@ export interface AiEngineConfig {
     apiSecret: string;
 }
 
+export interface HealthConfig {
+    secret: string;
+}
+
 /**
  * Main application configuration interface
  * Combines all configuration interfaces into a single configuration object
@@ -115,4 +119,5 @@ export interface AppConfig {
     email: EmailConfig;              // Email settings
     r2: R2Config;                    // Cloudflare R2 settings
     aiEngine: AiEngineConfig;        // Kawach AI engine (Saheli / RAG)
+    health: HealthConfig;              // Protected health endpoint settings
 }

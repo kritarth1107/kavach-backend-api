@@ -166,6 +166,31 @@ async function getMongoHealth() {
     }
 }
 
+export async function buildBasicHealthReport() {
+    const mongo = await getMongoHealth();
+    const overallOk = mongo.status === "connected" && mongo.ping.ok;
+
+    return {
+        status: overallOk ? "ok" : "degraded",
+        message: overallOk
+            ? "Kavach Backend is running"
+            : "Kavach Backend is running with dependency issues",
+        checkedAt: new Date().toISOString(),
+        service: {
+            name: "kavach-backend",
+            version: getAppVersion(),
+            environment: process.env.NODE_ENV ?? "development",
+            uptimeSeconds: Math.round(process.uptime()),
+        },
+        dependencies: {
+            mongodb: {
+                status: mongo.status,
+                ping: mongo.ping.ok,
+            },
+        },
+    };
+}
+
 export async function buildHealthReport() {
     const mem = process.memoryUsage();
     const totalMem = os.totalmem();
