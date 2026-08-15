@@ -7,6 +7,7 @@ import {
     IUser,
     UserStatus,
 } from "../types/user.types";
+import { ensureCosmosPhoneFields } from "../utils/phone.util";
 
 export interface IUserDocument extends IUser, Document {
     fullName: string;
@@ -95,7 +96,7 @@ const userSchema = new Schema<IUserDocument>(
         phoneKey: {
             type: String,
             trim: true,
-            sparse: true,
+            required: true,
         },
         firstName: {
             type: String,
@@ -191,15 +192,12 @@ userSchema.pre("save", function (next) {
     if (!this.userId) {
         this.userId = randomUUID();
     }
-
-    if (this.phone?.countryCode && this.phone?.number) {
-        this.phoneKey = `${this.phone.countryCode}${this.phone.number}`;
-    }
-
     next();
 });
 
 userSchema.pre("validate", function (next) {
+    ensureCosmosPhoneFields(this);
+
     if (!this.isNew) {
         return next();
     }
@@ -343,12 +341,10 @@ userSchema.statics.findByPhone = function (
     });
 };
 
-userSchema.index({ phoneKey: 1 }, { unique: true, sparse: true });
+userSchema.index({ phoneKey: 1 }, { unique: true, name: "phoneKey_unique" });
 
-userSchema.index(
-    { "socialAccounts.provider": 1, "socialAccounts.providerId": 1 },
-    { unique: true, sparse: true },
-);
+// Cosmos DB does not reliably support compound unique indexes on array fields.
+// Social account uniqueness is enforced in schema validation + application logic.
 
 interface IUserModel extends Model<IUserDocument> {
     findBySocialAccount(

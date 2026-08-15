@@ -65,6 +65,36 @@ export function buildCosmosSafePhonePlaceholder(): NormalizedPhone {
     };
 }
 
+/** Ensure every user document has a unique top-level phoneKey (Cosmos DB requirement). */
+export function ensureCosmosPhoneFields(doc: {
+    isNew?: boolean;
+    phone?: { countryCode?: string; number?: string };
+    phoneKey?: string;
+}): void {
+    const cc = doc.phone?.countryCode;
+    const num = doc.phone?.number?.replace(/\D/g, "") ?? "";
+
+    if (cc && num && !isInternalPhone(cc)) {
+        doc.phoneKey = `${cc}${num}`;
+        return;
+    }
+
+    if (doc.phoneKey && cc && num) {
+        return;
+    }
+
+    if (!doc.isNew && doc.phoneKey) {
+        return;
+    }
+
+    const placeholder = buildCosmosSafePhonePlaceholder();
+    doc.phone = {
+        countryCode: placeholder.countryCode,
+        number: placeholder.number,
+    };
+    doc.phoneKey = placeholder.key;
+}
+
 export function phoneFieldsFromNormalized(phone: NormalizedPhone) {
     return {
         phone: {

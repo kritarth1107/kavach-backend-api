@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/app.ts",
     "build": "tsc",
-    "start": "node dist/app.js"
+    "start": "node dist/app.js",
+    "db:reset": "tsx scripts/reset-cosmos-db.ts --yes"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

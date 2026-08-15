@@ -7,6 +7,7 @@ import { AuthProvider } from "../types/user.types";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import config from "../config/app.config";
+import { phoneFieldsFromNormalized, buildCosmosSafePhonePlaceholder } from "../utils/phone.util";
 
 function buildPlaceholderMemberEmail(): string {
     return `${randomBytes(16).toString("hex")}@pending.kavach`;
@@ -93,6 +94,7 @@ export async function ensureUserAccountForInvitation(
             passwordHash,
             primaryAuthProvider: AuthProvider.EMAIL,
             emailVerified: false,
+            ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
         });
     } catch (error) {
         if (
