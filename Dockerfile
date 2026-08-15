@@ -21,6 +21,9 @@ ENV NODE_ENV=production \
     IMAGE_TAG=$IMAGE_TAG
 
 COPY package.json package-lock.json* ./
+RUN APP_VERSION=$(node -p "require('./package.json').version") && \
+    printf '{"gitCommit":"%s","gitBranch":"%s","buildTime":"%s","imageTag":"%s","appVersion":"%s"}\n' \
+    "$GIT_COMMIT_SHA" "$GIT_BRANCH" "$BUILD_TIME" "$IMAGE_TAG" "$APP_VERSION" > /app/build-info.json
 RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 EXPOSE 5000

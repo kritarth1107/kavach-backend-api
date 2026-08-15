@@ -15,15 +15,59 @@ let prevCpu = process.cpuUsage();
 let prevCpuTime = process.hrtime.bigint();
 const startedAt = Date.now();
 
+interface BuildInfoFile {
+    gitCommit?: string;
+    gitBranch?: string;
+    buildTime?: string;
+    imageTag?: string;
+    appVersion?: string;
+}
+
+function loadBuildInfoFile(): BuildInfoFile {
+    const candidates = [
+        join(__dirname, "../../build-info.json"),
+        join(__dirname, "../build-info.json"),
+    ];
+
+    for (const filePath of candidates) {
+        try {
+            return JSON.parse(readFileSync(filePath, "utf8")) as BuildInfoFile;
+        } catch {
+            // try next path
+        }
+    }
+
+    return {};
+}
+
+const buildInfoFile = loadBuildInfoFile();
+
 function getAppVersion(): string {
+    if (buildInfoFile.appVersion) {
+        return buildInfoFile.appVersion;
+    }
+
     try {
         const pkg = JSON.parse(
-            readFileSync(join(__dirname, "../package.json"), "utf8"),
+            readFileSync(join(__dirname, "../../package.json"), "utf8"),
         ) as { version?: string };
         return pkg.version ?? "unknown";
     } catch {
         return "unknown";
     }
+}
+
+function getBuildMetadata() {
+    const gitCommit =
+        process.env.GIT_COMMIT_SHA ?? buildInfoFile.gitCommit ?? "unknown";
+
+    return {
+        gitCommit,
+        gitCommitShort: gitCommit === "unknown" ? "unknown" : gitCommit.slice(0, 7),
+        gitBranch: process.env.GIT_BRANCH ?? buildInfoFile.gitBranch ?? "unknown",
+        buildTime: process.env.BUILD_TIME ?? buildInfoFile.buildTime ?? "unknown",
+        imageTag: process.env.IMAGE_TAG ?? buildInfoFile.imageTag ?? "unknown",
+    };
 }
 
 function parseMongoTarget(uri: string): { scheme: string; host: string; database: string } {
@@ -124,7 +168,6 @@ export async function buildHealthReport() {
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const mongo = await getMongoHealth();
-    const gitCommit = process.env.GIT_COMMIT_SHA ?? "unknown";
     const overallOk = mongo.status === "connected" && mongo.ping.ok;
 
     return {
@@ -140,13 +183,7 @@ export async function buildHealthReport() {
             uptimeSeconds: Math.round(process.uptime()),
             startedAt: new Date(startedAt - process.uptime() * 1000).toISOString(),
         },
-        build: {
-            gitCommit,
-            gitCommitShort: gitCommit === "unknown" ? "unknown" : gitCommit.slice(0, 7),
-            gitBranch: process.env.GIT_BRANCH ?? "unknown",
-            buildTime: process.env.BUILD_TIME ?? "unknown",
-            imageTag: process.env.IMAGE_TAG ?? "unknown",
-        },
+        build: getBuildMetadata(),
         runtime: {
             nodeVersion: process.version,
             platform: process.platform,
