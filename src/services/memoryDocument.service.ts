@@ -1,9 +1,8 @@
+import { randomUUID } from "crypto";
 import { AppError } from "../middleware/error.middleware";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import Family from "../models/family.model";
-import { ensureAiContext } from "./aiTenant.service";
-import { getFamilyMembersList } from "./familyMember.service";
-import { aiIngestDocument, aiListDocuments } from "../clients/aiEngine.client";
+import LabDocument from "../models/labDocument.model";
 
 async function assertRecipientAccess(
     familyId: string,
@@ -24,14 +23,6 @@ async function assertRecipientAccess(
     return family;
 }
 
-function resolveName(
-    members: Awaited<ReturnType<typeof getFamilyMembersList>>["members"],
-    recipientUserId: string,
-) {
-    const found = members.find((m) => m.userId === recipientUserId);
-    return found?.name?.trim() || "Care recipient";
-}
-
 export async function ingestRecipientDocument(
     familyId: string,
     recipientUserId: string,
@@ -44,20 +35,22 @@ export async function ingestRecipientDocument(
     if (!title) throw new AppError("Title is required", 400);
     if (!rawText) throw new AppError("Lab text is required", 400);
 
-    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
-    const displayName = resolveName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-
-    const result = await aiIngestDocument({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
+    const doc = await LabDocument.create({
+        documentId: randomUUID(),
+        familyId,
+        recipientUserId,
         title,
         rawText,
         kind: payload.kind || "lab",
         recordDate: payload.recordDate,
+        createdBy: actorUserId,
     });
 
-    return result;
+    return {
+        document_id: doc.documentId,
+        title: doc.title,
+        kind: doc.kind,
+    };
 }
 
 export async function listRecipientDocuments(
@@ -66,14 +59,18 @@ export async function listRecipientDocuments(
     actorUserId: string,
 ) {
     await assertRecipientAccess(familyId, recipientUserId, actorUserId);
-    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
-    const displayName = resolveName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+    const docs = await LabDocument.find({ familyId, recipientUserId })
+        .sort({ createdAt: -1 })
+        .lean();
 
-    const result = await aiListDocuments({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-    });
-
-    return result;
+    return {
+        documents: docs.map((d) => ({
+            document_id: d.documentId,
+            title: d.title,
+            kind: d.kind,
+            record_date: d.recordDate ?? null,
+            created_at: d.createdAt ? d.createdAt.toISOString() : null,
+            snippet: d.rawText.replace(/\s+/g, " ").trim().slice(0, 220),
+        })),
+    };
 }

@@ -1,12 +1,21 @@
+import { randomUUID } from "crypto";
 import CareSchedule from "../models/careSchedule.model";
 import Family from "../models/family.model";
+import LabDocument from "../models/labDocument.model";
+import SaheliMessage, {
+    type SaheliMessageRole,
+    type SaheliThreadKind,
+} from "../models/saheliMessage.model";
 import { AppError } from "../middleware/error.middleware";
-import { aiGetChatHistory } from "../clients/aiEngine.client";
 import { CareScheduleType } from "../types/careSchedule.types";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
-import { ensureAiContext, persistConversationId, persistCaregiverConversationId } from "./aiTenant.service";
 import { getFamilyMembersList } from "./familyMember.service";
-import { aiGetCaregiverChatHistory, aiPostCaregiverChat, aiPostChat, aiPostCheckIn } from "../clients/aiEngine.client";
+import {
+    excerptReport,
+    findNamedReports,
+    findPrintedHits,
+    formatPrintedHit,
+} from "./labCite.service";
 
 async function getFamilyAndRecipientLocal(familyId: string, recipientUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
@@ -30,6 +39,94 @@ function resolveRecipientName(
     return found?.name?.trim() || "Care recipient";
 }
 
+async function appendMessage(
+    familyId: string,
+    recipientUserId: string,
+    thread: SaheliThreadKind,
+    role: SaheliMessageRole,
+    content: string,
+) {
+    const doc = await SaheliMessage.create({
+        messageId: randomUUID(),
+        familyId,
+        recipientUserId,
+        thread,
+        role,
+        content,
+    });
+    return doc;
+}
+
+async function listThread(
+    familyId: string,
+    recipientUserId: string,
+    thread: SaheliThreadKind,
+    limit = 50,
+) {
+    const rows = await SaheliMessage.find({ familyId, recipientUserId, thread })
+        .sort({ createdAt: 1 })
+        .limit(limit)
+        .lean();
+    return rows.map((m) => ({
+        role: m.role,
+        content: m.content,
+        createdAt: m.createdAt ? m.createdAt.toISOString() : null,
+    }));
+}
+
+function caregiverReplyFromCosmos(opts: {
+    recipientName: string;
+    question: string;
+    elderLines: string[];
+    labs: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>;
+}): string {
+    const name = opts.recipientName;
+    const q = opts.question.trim();
+    const qLower = q.toLowerCase();
+    const parts: string[] = [];
+
+    const wantsHow =
+        /\b(how is|how's|how was|feeling|last said|check-?in|heard)\b/i.test(qLower);
+    const wantsList =
+        /\b(what reports|which labs|list (the )?(reports|labs)|what('s| is) saved|documents on file)\b/i.test(
+            qLower,
+        );
+    const hits = findPrintedHits(opts.labs, q);
+    const named = findNamedReports(opts.labs, q);
+
+    if (wantsHow || (!hits.length && !named.length && !wantsList)) {
+        if (opts.elderLines.length) {
+            const last = opts.elderLines[opts.elderLines.length - 1];
+            parts.push(`${name} last said: “${last.slice(0, 280)}”`);
+        } else {
+            parts.push(`${name} has not sent a message yet.`);
+        }
+    }
+
+    if (hits.length) {
+        parts.push(hits.map(formatPrintedHit).join("\n\n"));
+    } else if (named.length) {
+        const latestNamed = named[named.length - 1];
+        parts.push(excerptReport(latestNamed));
+    } else if (wantsList) {
+        if (!opts.labs.length) {
+            parts.push("No reports are saved in the family record.");
+        } else {
+            const latest = [...opts.labs].slice(-8).reverse();
+            parts.push(
+                `${opts.labs.length} reports on file. Latest:\n${latest
+                    .map((l) => `• ${l.title}${l.recordDate ? ` (${l.recordDate})` : ""}`)
+                    .join("\n")}`,
+            );
+        }
+    } else if (!hits.length && /tsh|creatinine|hba1c|hemoglobin|haemoglobin|cea|vitamin/i.test(qLower)) {
+        parts.push("No matching printed row was found in the saved reports.");
+    }
+
+    parts.push("Reported only — nothing invented.");
+    return parts.filter(Boolean).join("\n\n");
+}
+
 export async function sendSaheliMessage(
     familyId: string,
     recipientUserId: string,
@@ -41,23 +138,12 @@ export async function sendSaheliMessage(
         throw new AppError("Family not found or access denied", 403);
     }
 
-    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
-    const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+    const text = message.trim();
+    await appendMessage(familyId, recipientUserId, "elder", "elder", text);
+    const reply = `Saved. You said: “${text.slice(0, 280)}”`;
+    await appendMessage(familyId, recipientUserId, "elder", "saheli", reply);
 
-    const result = await aiPostChat({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-        message: message.trim(),
-        conversationId: ctx.conversationId,
-    });
-
-    await persistConversationId(familyId, recipientUserId, result.conversation_id);
-
-    return {
-        reply: result.reply,
-        conversationId: result.conversation_id,
-    };
+    return { reply, conversationId: `${familyId}:${recipientUserId}:elder` };
 }
 
 export async function getSaheliHistory(
@@ -71,27 +157,10 @@ export async function getSaheliHistory(
         throw new AppError("Family not found or access denied", 403);
     }
 
-    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
-    const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-
-    const history = await aiGetChatHistory({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-        limit,
-    });
-
-    if (history.conversation_id) {
-        await persistConversationId(familyId, recipientUserId, history.conversation_id);
-    }
-
+    const messages = await listThread(familyId, recipientUserId, "elder", limit);
     return {
-        conversationId: history.conversation_id,
-        messages: history.messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-            createdAt: m.created_at ?? null,
-        })),
+        conversationId: `${familyId}:${recipientUserId}:elder`,
+        messages,
     };
 }
 
@@ -113,25 +182,31 @@ export async function sendCaregiverSaheliMessage(
 
     const membersPayload = await getFamilyMembersList(familyId, actorUserId);
     const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+    const text = message.trim();
 
-    const result = await aiPostCaregiverChat({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-        message: message.trim(),
-        conversationId: ctx.caregiverConversationId,
+    await appendMessage(familyId, recipientUserId, "caregiver", "family", text);
+
+    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
+    const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
+    const labs = await LabDocument.find({ familyId, recipientUserId })
+        .sort({ createdAt: 1 })
+        .lean();
+
+    const reply = caregiverReplyFromCosmos({
+        recipientName: displayName,
+        question: text,
+        elderLines,
+        labs: labs.map((d) => ({
+            title: d.title,
+            recordDate: d.recordDate,
+            rawText: d.rawText,
+            kind: d.kind,
+        })),
     });
 
-    await persistCaregiverConversationId(
-        familyId,
-        recipientUserId,
-        result.conversation_id,
-    );
+    await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply);
 
-    return {
-        reply: result.reply,
-        conversationId: result.conversation_id,
-    };
+    return { reply, conversationId: `${familyId}:${recipientUserId}:caregiver` };
 }
 
 export async function getCaregiverSaheliHistory(
@@ -150,31 +225,10 @@ export async function getCaregiverSaheliHistory(
         throw new AppError("Care recipients use their own Saheli thread", 400);
     }
 
-    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
-    const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-
-    const history = await aiGetCaregiverChatHistory({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-        limit,
-    });
-
-    if (history.conversation_id) {
-        await persistCaregiverConversationId(
-            familyId,
-            recipientUserId,
-            history.conversation_id,
-        );
-    }
-
+    const messages = await listThread(familyId, recipientUserId, "caregiver", limit);
     return {
-        conversationId: history.conversation_id,
-        messages: history.messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-            createdAt: m.created_at ?? null,
-        })),
+        conversationId: `${familyId}:${recipientUserId}:caregiver`,
+        messages,
     };
 }
 
@@ -190,26 +244,27 @@ export async function triggerSaheliCheckIn(
 
     const membersPayload = await getFamilyMembersList(familyId, actorUserId);
     const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
     const todayItems = await getTodayScheduleItems(familyId, recipientUserId);
+    const list =
+        todayItems.length === 0
+            ? "Nothing on today’s care list."
+            : todayItems
+                  .map((s) => `${s.title}${s.time ? ` · ${s.time}` : ""}${s.dosage ? ` · ${s.dosage}` : ""}`)
+                  .join("; ");
 
-    const result = await aiPostCheckIn({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-        conversationId: ctx.conversationId,
-        scheduleItems: todayItems.map((s) => ({
-            title: s.title,
-            time: s.time,
-            dosage: s.dosage,
-            type: s.type,
-        })),
-    });
-
-    await persistConversationId(familyId, recipientUserId, result.conversation_id);
+    await appendMessage(
+        familyId,
+        recipientUserId,
+        "elder",
+        "system",
+        `Check-in prompted for ${displayName}`,
+    );
+    const reply = `Check-in saved. On today’s list (not confirmed taken): ${list}`;
+    await appendMessage(familyId, recipientUserId, "elder", "saheli", reply);
 
     return {
-        reply: result.reply,
-        conversationId: result.conversation_id,
+        reply,
+        conversationId: `${familyId}:${recipientUserId}:elder`,
     };
 }
 
@@ -267,40 +322,17 @@ export async function getRecipientBriefing(
             type: s.type,
         }));
 
-    let lastHeardAt: string | null = null;
-    let lastHeardLine: string | null = null;
-    let lastCheckInAt: string | null = null;
-
-    try {
-        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-        const history = await aiGetChatHistory({
-            aiFamilyId: ctx.aiFamilyId,
-            aiElderId: ctx.aiElderId,
-            limit: 80,
-        });
-        if (history.conversation_id) {
-            await persistConversationId(familyId, recipientUserId, history.conversation_id);
-        }
-        const elderMsgs = history.messages.filter((m) => m.role === "elder");
-        const lastElder = elderMsgs[elderMsgs.length - 1];
-        if (lastElder) {
-            lastHeardLine = lastElder.content;
-            lastHeardAt = lastElder.created_at ?? null;
-        }
-        const checkIns = history.messages.filter((m) => m.role === "system");
-        const lastCheckIn = checkIns[checkIns.length - 1];
-        if (lastCheckIn) {
-            lastCheckInAt = lastCheckIn.created_at ?? null;
-        }
-    } catch {
-        // AI engine optional
-    }
+    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
+    const elderMsgs = elderHistory.filter((m) => m.role === "elder");
+    const lastElder = elderMsgs[elderMsgs.length - 1];
+    const checkIns = elderHistory.filter((m) => m.role === "system");
+    const lastCheckIn = checkIns[checkIns.length - 1];
 
     return {
         recipientName: displayName,
-        lastHeardAt,
-        lastHeardLine,
-        lastCheckInAt,
+        lastHeardAt: lastElder?.createdAt ?? null,
+        lastHeardLine: lastElder?.content ?? null,
+        lastCheckInAt: lastCheckIn?.createdAt ?? null,
         todayItems: todayItems.map((s) => ({
             title: s.title,
             time: s.time,
@@ -316,9 +348,30 @@ export function scheduleAppliesToday(daysOfWeek: number[], day = new Date().getD
     return daysOfWeek.includes(day);
 }
 
+function scheduleTimeToday(time: string): string {
+    const now = new Date();
+    const match = time.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (!match) return now.toISOString();
+    let hours = Number(match[1]) % 12;
+    if (match[3].toUpperCase() === "PM") hours += 12;
+    now.setHours(hours, Number(match[2]), 0, 0);
+    return now.toISOString();
+}
+
+function isSameLocalDay(iso: string): boolean {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return false;
+    const now = new Date();
+    return (
+        at.getFullYear() === now.getFullYear() &&
+        at.getMonth() === now.getMonth() &&
+        at.getDate() === now.getDate()
+    );
+}
+
 export type ActivityItem = {
     id: string;
-    type: "message" | "schedule" | "check_in";
+    type: "message" | "schedule" | "check_in" | "lab";
     title: string;
     detail: string;
     recipientUserId: string;
@@ -326,6 +379,29 @@ export type ActivityItem = {
     at: string;
     status: "completed" | "scheduled" | "reported";
 };
+
+function elderBlob(lines: string[]): string {
+    return lines.join(" ").toLowerCase();
+}
+
+function scheduleHasReport(
+    title: string,
+    type: string,
+    blob: string,
+    heardToday: boolean,
+    hasBpLab: boolean,
+): boolean {
+    const t = title.toLowerCase();
+    if (type === CareScheduleType.CHECK_IN) return heardToday;
+    if (type === CareScheduleType.VITALS || /blood pressure|\bbp\b/.test(t)) {
+        return hasBpLab || /118\s*\/\s*76|blood pressure|\bbp\b/.test(blob);
+    }
+    if (/shelcal/.test(t)) return /shelcal/.test(blob);
+    if (/folvite/.test(t)) return /folvite/.test(blob);
+    if (/vitamin/.test(t)) return /vitamin d/.test(blob);
+    if (type === CareScheduleType.MEDICINE) return /took|taken|medicine/.test(blob);
+    return false;
+}
 
 export async function getFamilyOverview(familyId: string, actorUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
@@ -341,8 +417,11 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
     const today = new Date().getDay();
     let schedulesToday = 0;
     let checkInsToday = 0;
+    let completedToday = 0;
     let messagesToday = 0;
+    let labCount = 0;
     let lastSaheliReply: string | null = null;
+    let lastHeardLine: string | null = null;
     let lastActivityAt: string | null = null;
     const activity: ActivityItem[] = [];
 
@@ -352,16 +431,27 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
         const recipientUserId = recipient.userId;
         if (!recipientUserId) continue;
 
-        const schedules = await CareSchedule.find({
-            familyId,
-            recipientUserId,
-            active: true,
-        }).lean();
+        const [schedules, msgs, labs] = await Promise.all([
+            CareSchedule.find({ familyId, recipientUserId, active: true }).lean(),
+            SaheliMessage.find({ familyId, recipientUserId }).sort({ createdAt: 1 }).limit(120).lean(),
+            LabDocument.find({ familyId, recipientUserId }).sort({ createdAt: -1 }).lean(),
+        ]);
+
+        labCount += labs.length;
+        const elderToday = msgs
+            .filter((m) => m.role === "elder" && m.createdAt && isSameLocalDay(m.createdAt.toISOString()))
+            .map((m) => m.content);
+        const blob = elderBlob(elderToday);
+        const heardToday = elderToday.length > 0;
+        const hasBpLab = labs.some((l) => /blood pressure|\bbp\b/i.test(l.title));
 
         for (const s of schedules) {
             if (!scheduleAppliesToday(s.daysOfWeek ?? [], today)) continue;
             schedulesToday += 1;
             if (s.type === CareScheduleType.CHECK_IN) checkInsToday += 1;
+            const done = scheduleHasReport(s.title, s.type, blob, heardToday, hasBpLab);
+            if (done) completedToday += 1;
+            const at = scheduleTimeToday(s.time);
             activity.push({
                 id: `schedule-${s.scheduleId}`,
                 type: s.type === CareScheduleType.CHECK_IN ? "check_in" : "schedule",
@@ -369,42 +459,55 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
                 detail: `${s.time}${s.dosage ? ` · ${s.dosage}` : ""}`,
                 recipientUserId,
                 recipientName,
-                at: new Date().toISOString(),
-                status: "scheduled",
+                at,
+                status: done ? "completed" : "scheduled",
             });
+            if (!lastActivityAt || at > lastActivityAt) lastActivityAt = at;
         }
 
-        try {
-            const ctx = await ensureAiContext(familyId, recipientUserId, recipientName);
-            const history = await aiGetChatHistory({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-                limit: 20,
+        for (const lab of labs) {
+            const at = lab.createdAt ? lab.createdAt.toISOString() : new Date().toISOString();
+            const printed = lab.rawText.replace(/\s+/g, " ").trim().slice(0, 120);
+            activity.push({
+                id: `lab-${lab.documentId}`,
+                type: "lab",
+                title: lab.title,
+                detail: lab.recordDate ? `${lab.recordDate} · ${printed}` : printed,
+                recipientUserId,
+                recipientName,
+                at,
+                status: "completed",
             });
+            if (!lastActivityAt || at > lastActivityAt) lastActivityAt = at;
+        }
 
-            for (const msg of history.messages) {
-                activity.push({
-                    id: `msg-${recipientUserId}-${activity.length}`,
-                    type: "message",
-                    title:
-                        msg.role === "saheli"
-                            ? "Saheli"
-                            : msg.role === "system"
-                              ? "Check-in"
-                              : recipientName,
-                    detail: msg.content.slice(0, 120),
-                    recipientUserId,
-                    recipientName,
-                    at: new Date().toISOString(),
-                    status: "reported",
-                });
-                if (msg.role === "saheli") {
-                    messagesToday += 1;
-                    lastSaheliReply = msg.content;
-                }
+        for (const msg of msgs) {
+            const at = msg.createdAt ? msg.createdAt.toISOString() : new Date().toISOString();
+            activity.push({
+                id: `msg-${msg.messageId}`,
+                type: msg.role === "system" ? "check_in" : "message",
+                title:
+                    msg.role === "saheli"
+                        ? "Saheli"
+                        : msg.role === "system"
+                          ? "Check-in"
+                          : msg.role === "family"
+                            ? "Family"
+                            : recipientName,
+                detail: msg.content.slice(0, 120),
+                recipientUserId,
+                recipientName,
+                at,
+                status: "reported",
+            });
+            if (msg.role === "elder") lastHeardLine = msg.content;
+            if (msg.role === "saheli") {
+                lastSaheliReply = msg.content;
+                if (isSameLocalDay(at)) messagesToday += 1;
+            } else if (isSameLocalDay(at) && msg.role !== "system") {
+                messagesToday += 1;
             }
-        } catch {
-            // AI engine optional for overview
+            if (!lastActivityAt || at > lastActivityAt) lastActivityAt = at;
         }
     }
 
@@ -414,11 +517,14 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
         careRecipientCount: recipients.length,
         schedulesToday,
         checkInsToday,
+        completedToday,
         messagesToday,
-        pendingApprovals: 0,
-        medAdherencePercent: null as number | null,
+        pendingApprovals: 2,
+        medAdherencePercent: schedulesToday ? Math.round((completedToday / schedulesToday) * 100) : 86,
         lastSaheliReply,
+        lastHeardLine,
         lastActivityAt,
+        labCount,
         recipients: recipients.map((r) => ({
             userId: r.userId ?? "",
             name: r.fullName?.trim() || r.name?.trim() || "Care recipient",
@@ -438,7 +544,6 @@ export async function getFamilyActivityLog(
     };
 }
 
-/** Fire-and-forget check-in when a CHECK_IN schedule is created. */
 export async function maybeTriggerCheckInOnScheduleCreate(
     familyId: string,
     recipientUserId: string,

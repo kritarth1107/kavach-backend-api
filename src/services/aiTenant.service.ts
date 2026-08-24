@@ -16,6 +16,22 @@ export type AiContext = {
     caregiverConversationId?: string;
 };
 
+export async function getExistingAiContext(
+    familyId: string,
+    recipientUserId: string,
+): Promise<AiContext | null> {
+    const link = await AiTenant.findOne({ familyId }).lean();
+    if (!link) return null;
+    const elderLink = link.elders.find((e) => e.recipientUserId === recipientUserId);
+    if (!elderLink) return null;
+    return {
+        aiFamilyId: link.aiFamilyId,
+        aiElderId: elderLink.aiElderId,
+        conversationId: elderLink.conversationId,
+        caregiverConversationId: elderLink.caregiverConversationId,
+    };
+}
+
 export async function ensureAiContext(
     familyId: string,
     recipientUserId: string,

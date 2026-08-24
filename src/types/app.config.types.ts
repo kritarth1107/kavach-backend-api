@@ -98,6 +98,8 @@ export interface R2Config {
 export interface AiEngineConfig {
     baseUrl: string;
     apiSecret: string;
+    timeoutMs: number;
+    writeTimeoutMs: number;
 }
 
 export interface HealthConfig {

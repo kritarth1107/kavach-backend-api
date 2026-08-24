@@ -110,6 +110,8 @@ const config: AppConfig = {
     aiEngine: {
         baseUrl: process.env.AI_ENGINE_URL || "http://localhost:8000",
         apiSecret: process.env.KAWACH_API_SECRET || "dev-secret",
+        timeoutMs: Number(process.env.AI_ENGINE_TIMEOUT_MS) || 8000,
+        writeTimeoutMs: Number(process.env.AI_ENGINE_WRITE_TIMEOUT_MS) || 20000,
     },
 
     health: {

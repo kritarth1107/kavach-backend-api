@@ -38,15 +38,39 @@ async function parseAiJson<T>(res: Response): Promise<T> {
     }
 }
 
-async function aiFetch(path: string, init?: RequestInit): Promise<Response> {
+async function aiFetch(
+    path: string,
+    init?: RequestInit,
+    timeoutMs = config.aiEngine.timeoutMs,
+): Promise<Response> {
     const base = config.aiEngine.baseUrl.replace(/\/$/, "");
+    const timedOut = new AppError("Saheli timed out. Memory is offline right now.", 503);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const controller = new AbortController();
     try {
-        return await fetch(`${base}${path}`, init);
-    } catch {
+        const request = fetch(`${base}${path}`, {
+            ...init,
+            signal: controller.signal,
+        });
+        const timeout = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+                controller.abort();
+                reject(timedOut);
+            }, timeoutMs);
+        });
+        return await Promise.race([request, timeout]);
+    } catch (err) {
+        if (err instanceof AppError) throw err;
+        if (err instanceof Error && err.name === "AbortError") {
+            throw timedOut;
+        }
         throw new AppError(
             "Cannot reach the AI engine. Start kawach-ai-engine on port 8000.",
             503,
         );
+    } finally {
+        if (timer) clearTimeout(timer);
     }
 }
 
@@ -56,16 +80,20 @@ export async function aiCreateFamily(payload: {
     ownerEmail?: string;
     ownerName?: string;
 }): Promise<string> {
-    const res = await aiFetch("/v1/families", {
-        method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            name: payload.name,
-            owner_external_id: payload.ownerExternalId,
-            owner_email: payload.ownerEmail,
-            owner_name: payload.ownerName,
-        }),
-    });
+    const res = await aiFetch(
+        "/v1/families",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                name: payload.name,
+                owner_external_id: payload.ownerExternalId,
+                owner_email: payload.ownerEmail,
+                owner_name: payload.ownerName,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
 
     if (!res.ok) {
         const body = await res.text();
@@ -81,15 +109,19 @@ export async function aiCreateElder(payload: {
     displayName: string;
     slug: string;
 }): Promise<{ elderId: string }> {
-    const res = await aiFetch(`/v1/families/${payload.aiFamilyId}/elders`, {
-        method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            display_name: payload.displayName,
-            slug: payload.slug,
-            preferred_language: "hinglish",
-        }),
-    });
+    const res = await aiFetch(
+        `/v1/families/${payload.aiFamilyId}/elders`,
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                display_name: payload.displayName,
+                slug: payload.slug,
+                preferred_language: "hinglish",
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
 
     if (!res.ok) {
         const body = await res.text();
@@ -106,16 +138,20 @@ export async function aiPostChat(payload: {
     message: string;
     conversationId?: string;
 }): Promise<AiChatResponse> {
-    const res = await aiFetch("/v1/chat", {
-        method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            family_id: payload.aiFamilyId,
-            elder_id: payload.aiElderId,
-            message: payload.message,
-            conversation_id: payload.conversationId ?? null,
-        }),
-    });
+    const res = await aiFetch(
+        "/v1/chat",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                message: payload.message,
+                conversation_id: payload.conversationId ?? null,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
 
     if (!res.ok) {
         const body = await res.text();
@@ -131,16 +167,20 @@ export async function aiPostCaregiverChat(payload: {
     message: string;
     conversationId?: string;
 }): Promise<AiChatResponse> {
-    const res = await aiFetch("/v1/chat/caregiver", {
-        method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            family_id: payload.aiFamilyId,
-            elder_id: payload.aiElderId,
-            message: payload.message,
-            conversation_id: payload.conversationId ?? null,
-        }),
-    });
+    const res = await aiFetch(
+        "/v1/chat/caregiver",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                message: payload.message,
+                conversation_id: payload.conversationId ?? null,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
 
     if (!res.ok) {
         const body = await res.text();
@@ -209,16 +249,20 @@ export async function aiPostCheckIn(payload: {
         type?: string;
     }>;
 }): Promise<AiChatResponse> {
-    const res = await aiFetch("/v1/chat/check-in", {
-        method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            family_id: payload.aiFamilyId,
-            elder_id: payload.aiElderId,
-            conversation_id: payload.conversationId ?? null,
-            schedule_items: payload.scheduleItems ?? [],
-        }),
-    });
+    const res = await aiFetch(
+        "/v1/chat/check-in",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                conversation_id: payload.conversationId ?? null,
+                schedule_items: payload.scheduleItems ?? [],
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
 
     if (!res.ok) {
         const body = await res.text();
@@ -236,19 +280,23 @@ export async function aiIngestDocument(payload: {
     kind?: string;
     recordDate?: string;
 }): Promise<{ document_id: string; title: string; kind: string }> {
-    const res = await aiFetch("/v1/documents/ingest", {
-        method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            family_id: payload.aiFamilyId,
-            elder_id: payload.aiElderId ?? null,
-            title: payload.title,
-            raw_text: payload.rawText,
-            kind: payload.kind ?? "lab",
-            source: "upload",
-            record_date: payload.recordDate ?? null,
-        }),
-    });
+    const res = await aiFetch(
+        "/v1/documents/ingest",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId ?? null,
+                title: payload.title,
+                raw_text: payload.rawText,
+                kind: payload.kind ?? "lab",
+                source: "upload",
+                record_date: payload.recordDate ?? null,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
 
     if (!res.ok) {
         const body = await res.text();
