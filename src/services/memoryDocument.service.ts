@@ -74,3 +74,35 @@ export async function listRecipientDocuments(
         })),
     };
 }
+
+export async function getRecipientDocument(
+    familyId: string,
+    recipientUserId: string,
+    documentId: string,
+    actorUserId: string,
+) {
+    await assertRecipientAccess(familyId, recipientUserId, actorUserId);
+    const doc = await LabDocument.findOne({ familyId, recipientUserId, documentId }).lean();
+    if (!doc) throw new AppError("Health record not found", 404);
+
+    return {
+        document_id: doc.documentId,
+        title: doc.title,
+        kind: doc.kind,
+        record_date: doc.recordDate ?? null,
+        created_at: doc.createdAt ? doc.createdAt.toISOString() : null,
+        raw_text: doc.rawText,
+    };
+}
+
+export async function deleteRecipientDocument(
+    familyId: string,
+    recipientUserId: string,
+    documentId: string,
+    actorUserId: string,
+) {
+    await assertRecipientAccess(familyId, recipientUserId, actorUserId);
+    const result = await LabDocument.deleteOne({ familyId, recipientUserId, documentId });
+    if (result.deletedCount === 0) throw new AppError("Health record not found", 404);
+    return { deleted: true };
+}

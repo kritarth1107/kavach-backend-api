@@ -35,7 +35,12 @@ import {
     postSaheliChat,
     postSaheliCheckIn,
 } from "../controllers/saheli.controller";
-import { getRecipientLabs, postRecipientLab } from "../controllers/memoryDocument.controller";
+import {
+    deleteRecipientLab,
+    getRecipientLabDetail,
+    getRecipientLabs,
+    postRecipientLab,
+} from "../controllers/memoryDocument.controller";
 import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
@@ -71,6 +76,16 @@ router.post(
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);
 router.post("/:familyId/recipients/:recipientUserId/labs", protect, postRecipientLab);
+router.get(
+    "/:familyId/recipients/:recipientUserId/labs/:documentId",
+    protect,
+    getRecipientLabDetail,
+);
+router.delete(
+    "/:familyId/recipients/:recipientUserId/labs/:documentId",
+    protect,
+    deleteRecipientLab,
+);
 router.get("/:familyId/members", protect, listFamilyMembers);
 router.get("/:familyId/recipients/:recipientUserId/care-schedule", protect, getRecipientCareSchedule);
 router.post("/:familyId/recipients/:recipientUserId/care-schedule", protect, postRecipientCareSchedule);
