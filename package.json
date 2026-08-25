@@ -10,6 +10,7 @@
     "db:reset": "tsx scripts/reset-cosmos-db.ts --yes"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1118.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -21,6 +22,7 @@
     "mongoose": "^8.4.1",
     "multer": "^2.1.1",
     "pdf-lib": "^1.17.1",
+    "pdf-parse": "^2.4.5",
     "resend": "^6.18.1",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
@@ -33,6 +35,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/multer": "^2.0.0",
     "@types/node": "^20.14.2",
+    "@types/pdf-parse": "^1.1.5",
     "tsx": "^4.22.4",
     "typescript": "^5.4.5"
   }

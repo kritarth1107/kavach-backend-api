@@ -40,7 +40,9 @@ import {
     getRecipientLabDetail,
     getRecipientLabs,
     postRecipientLab,
+    postRecipientLabUpload,
 } from "../controllers/memoryDocument.controller";
+import { familyDocumentUpload } from "../middleware/upload.middleware";
 import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
@@ -76,6 +78,12 @@ router.post(
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);
 router.post("/:familyId/recipients/:recipientUserId/labs", protect, postRecipientLab);
+router.post(
+    "/:familyId/recipients/:recipientUserId/labs/upload",
+    protect,
+    familyDocumentUpload.single("file"),
+    postRecipientLabUpload,
+);
 router.get(
     "/:familyId/recipients/:recipientUserId/labs/:documentId",
     protect,

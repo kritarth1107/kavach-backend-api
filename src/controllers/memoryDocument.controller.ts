@@ -4,6 +4,7 @@ import {
     deleteRecipientDocument,
     getRecipientDocument,
     ingestRecipientDocument,
+    ingestRecipientFile,
     listRecipientDocuments,
 } from "../services/memoryDocument.service";
 
@@ -41,6 +42,36 @@ export const postRecipientLab = async (
             {
                 title: String(req.body?.title ?? ""),
                 rawText: String(req.body?.rawText ?? req.body?.raw_text ?? ""),
+                kind: req.body?.kind ? String(req.body.kind) : "lab",
+                recordDate: req.body?.recordDate
+                    ? String(req.body.recordDate)
+                    : undefined,
+            },
+        );
+        res.json({ success: true, data });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const postRecipientLabUpload = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const file = req.file;
+        if (!file) throw new AppError("File is required", 400);
+
+        const data = await ingestRecipientFile(
+            familyId,
+            recipientUserId,
+            req.user.userId,
+            file,
+            {
+                title: req.body?.title ? String(req.body.title) : undefined,
                 kind: req.body?.kind ? String(req.body.kind) : "lab",
                 recordDate: req.body?.recordDate
                     ? String(req.body.recordDate)

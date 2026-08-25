@@ -10,6 +10,12 @@ export interface ILabDocument {
     kind: string;
     recordDate?: string;
     createdBy: string;
+    source?: "text" | "file";
+    storageKey?: string;
+    fileUrl?: string;
+    fileName?: string;
+    mimeType?: string;
+    fileSize?: number;
     createdAt?: Date;
 }
 
@@ -21,10 +27,16 @@ const labDocumentSchema = new Schema<ILabDocumentRecord>(
         familyId: { type: String, required: true, index: true },
         recipientUserId: { type: String, required: true, index: true },
         title: { type: String, required: true, trim: true, maxlength: 200 },
-        rawText: { type: String, required: true, maxlength: 50000 },
+        rawText: { type: String, default: "", maxlength: 50000 },
         kind: { type: String, default: "lab", maxlength: 40 },
         recordDate: { type: String, trim: true, maxlength: 80 },
         createdBy: { type: String, required: true },
+        source: { type: String, enum: ["text", "file"], default: "text" },
+        storageKey: { type: String, trim: true },
+        fileUrl: { type: String, trim: true },
+        fileName: { type: String, trim: true },
+        mimeType: { type: String, trim: true },
+        fileSize: { type: Number },
     },
     {
         timestamps: true,
