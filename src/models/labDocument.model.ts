@@ -16,6 +16,11 @@ export interface ILabDocument {
     fileName?: string;
     mimeType?: string;
     fileSize?: number;
+    aiSummary?: string;
+    tags?: string[];
+    highlights?: string[];
+    aiMemoryDocumentId?: string;
+    analysisStatus?: "pending" | "ready" | "failed";
     createdAt?: Date;
 }
 
@@ -37,6 +42,15 @@ const labDocumentSchema = new Schema<ILabDocumentRecord>(
         fileName: { type: String, trim: true },
         mimeType: { type: String, trim: true },
         fileSize: { type: Number },
+        aiSummary: { type: String, trim: true, maxlength: 500 },
+        tags: { type: [String], default: [] },
+        highlights: { type: [String], default: [] },
+        aiMemoryDocumentId: { type: String, trim: true },
+        analysisStatus: {
+            type: String,
+            enum: ["pending", "ready", "failed"],
+            default: "pending",
+        },
     },
     {
         timestamps: true,

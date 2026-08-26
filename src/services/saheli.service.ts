@@ -9,6 +9,16 @@ import SaheliMessage, {
 import { AppError } from "../middleware/error.middleware";
 import { CareScheduleType } from "../types/careSchedule.types";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
+import {
+    aiPostCaregiverChat,
+    aiPostChat,
+    aiPostCheckIn,
+} from "../clients/aiEngine.client";
+import {
+    ensureAiContext,
+    persistCaregiverConversationId,
+    persistConversationId,
+} from "./aiTenant.service";
 import { getFamilyMembersList } from "./familyMember.service";
 import {
     excerptReport,
@@ -127,6 +137,71 @@ function caregiverReplyFromCosmos(opts: {
     return parts.filter(Boolean).join("\n\n");
 }
 
+async function elderReplyWithAi(
+    familyId: string,
+    recipientUserId: string,
+    displayName: string,
+    message: string,
+): Promise<{ reply: string; conversationId: string }> {
+    try {
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const result = await aiPostChat({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            message,
+            conversationId: ctx.conversationId,
+        });
+        if (result.conversation_id) {
+            await persistConversationId(familyId, recipientUserId, result.conversation_id);
+        }
+        return {
+            reply: result.reply.trim() || "I'm here. Tell me more when you're ready.",
+            conversationId: result.conversation_id || `${familyId}:${recipientUserId}:elder`,
+        };
+    } catch (err) {
+        console.warn("Saheli AI elder reply fallback:", err);
+        return {
+            reply: `Namaste. I saved what you said: “${message.slice(0, 280)}”`,
+            conversationId: `${familyId}:${recipientUserId}:elder`,
+        };
+    }
+}
+
+async function caregiverReplyWithAi(
+    familyId: string,
+    recipientUserId: string,
+    displayName: string,
+    message: string,
+    fallback: string,
+): Promise<{ reply: string; conversationId: string }> {
+    try {
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const result = await aiPostCaregiverChat({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            message,
+            conversationId: ctx.caregiverConversationId,
+        });
+        if (result.conversation_id) {
+            await persistCaregiverConversationId(
+                familyId,
+                recipientUserId,
+                result.conversation_id,
+            );
+        }
+        return {
+            reply: result.reply.trim() || fallback,
+            conversationId: result.conversation_id || `${familyId}:${recipientUserId}:caregiver`,
+        };
+    } catch (err) {
+        console.warn("Saheli AI caregiver reply fallback:", err);
+        return {
+            reply: fallback,
+            conversationId: `${familyId}:${recipientUserId}:caregiver`,
+        };
+    }
+}
+
 export async function sendSaheliMessage(
     familyId: string,
     recipientUserId: string,
@@ -138,12 +213,29 @@ export async function sendSaheliMessage(
         throw new AppError("Family not found or access denied", 403);
     }
 
+    const actor = family.members.find((m) => m.userId === actorUserId);
+    if (actor?.role !== FamilyRole.CARE_RECIPIENT) {
+        throw new AppError("Caregivers use Ask Saheli for their own thread", 400);
+    }
+    if (actorUserId !== recipientUserId) {
+        throw new AppError("You can only message Saheli for your own profile", 403);
+    }
+
+    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
+    const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
     const text = message.trim();
+    if (!text) throw new AppError("Message is required", 400);
+
     await appendMessage(familyId, recipientUserId, "elder", "elder", text);
-    const reply = `Saved. You said: “${text.slice(0, 280)}”`;
+    const { reply, conversationId } = await elderReplyWithAi(
+        familyId,
+        recipientUserId,
+        displayName,
+        text,
+    );
     await appendMessage(familyId, recipientUserId, "elder", "saheli", reply);
 
-    return { reply, conversationId: `${familyId}:${recipientUserId}:elder` };
+    return { reply, conversationId };
 }
 
 export async function getSaheliHistory(
@@ -183,6 +275,7 @@ export async function sendCaregiverSaheliMessage(
     const membersPayload = await getFamilyMembersList(familyId, actorUserId);
     const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
     const text = message.trim();
+    if (!text) throw new AppError("Message is required", 400);
 
     await appendMessage(familyId, recipientUserId, "caregiver", "family", text);
 
@@ -192,7 +285,7 @@ export async function sendCaregiverSaheliMessage(
         .sort({ createdAt: 1 })
         .lean();
 
-    const reply = caregiverReplyFromCosmos({
+    const fallback = caregiverReplyFromCosmos({
         recipientName: displayName,
         question: text,
         elderLines,
@@ -204,9 +297,17 @@ export async function sendCaregiverSaheliMessage(
         })),
     });
 
+    const { reply, conversationId } = await caregiverReplyWithAi(
+        familyId,
+        recipientUserId,
+        displayName,
+        text,
+        fallback,
+    );
+
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply);
 
-    return { reply, conversationId: `${familyId}:${recipientUserId}:caregiver` };
+    return { reply, conversationId };
 }
 
 export async function getCaregiverSaheliHistory(
@@ -259,13 +360,35 @@ export async function triggerSaheliCheckIn(
         "system",
         `Check-in prompted for ${displayName}`,
     );
-    const reply = `Check-in saved. On today’s list (not confirmed taken): ${list}`;
+
+    let reply = `Check-in saved. On today’s list (not confirmed taken): ${list}`;
+    let conversationId = `${familyId}:${recipientUserId}:elder`;
+
+    try {
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const result = await aiPostCheckIn({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            conversationId: ctx.conversationId,
+            scheduleItems: todayItems.map((s) => ({
+                title: s.title,
+                time: s.time,
+                dosage: s.dosage,
+                type: s.type,
+            })),
+        });
+        if (result.reply?.trim()) reply = result.reply.trim();
+        if (result.conversation_id) {
+            conversationId = result.conversation_id;
+            await persistConversationId(familyId, recipientUserId, result.conversation_id);
+        }
+    } catch (err) {
+        console.warn("Saheli AI check-in fallback:", err);
+    }
+
     await appendMessage(familyId, recipientUserId, "elder", "saheli", reply);
 
-    return {
-        reply,
-        conversationId: `${familyId}:${recipientUserId}:elder`,
-    };
+    return { reply, conversationId };
 }
 
 function parseTimeToMinutes(time: string): number | null {

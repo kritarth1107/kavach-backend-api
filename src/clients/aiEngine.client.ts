@@ -272,6 +272,40 @@ export async function aiPostCheckIn(payload: {
     return parseAiJson<AiChatResponse>(res);
 }
 
+export async function aiAnalyzeDocument(payload: {
+    title: string;
+    rawText: string;
+    fileName?: string;
+}): Promise<{
+    title: string;
+    kind: string;
+    tags: string[];
+    summary: string;
+    record_date: string | null;
+    highlights: string[];
+}> {
+    const res = await aiFetch(
+        "/v1/documents/analyze",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                title: payload.title,
+                raw_text: payload.rawText,
+                file_name: payload.fileName ?? null,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Document analysis failed", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
 export async function aiIngestDocument(payload: {
     aiFamilyId: string;
     aiElderId?: string;
@@ -279,6 +313,8 @@ export async function aiIngestDocument(payload: {
     rawText: string;
     kind?: string;
     recordDate?: string;
+    summary?: string;
+    highlights?: { tags?: string[]; items?: string[] };
 }): Promise<{ document_id: string; title: string; kind: string }> {
     const res = await aiFetch(
         "/v1/documents/ingest",
@@ -293,6 +329,8 @@ export async function aiIngestDocument(payload: {
                 kind: payload.kind ?? "lab",
                 source: "upload",
                 record_date: payload.recordDate ?? null,
+                summary: payload.summary ?? null,
+                highlights: payload.highlights ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,

@@ -7,7 +7,8 @@
     "dev": "tsx watch src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
-    "db:reset": "tsx scripts/reset-cosmos-db.ts --yes"
+    "db:reset": "tsx scripts/reset-cosmos-db.ts --yes",
+    "seed:vish": "tsx scripts/seed-vish-demo.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",
@@ -19,13 +20,15 @@
     "fastify": "^5.11.3",
     "google-auth-library": "^11.0.0",
     "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.12.1",
     "mongoose": "^8.4.1",
     "multer": "^2.1.1",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "resend": "^6.18.1",
     "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0"
+    "winston-daily-rotate-file": "^5.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

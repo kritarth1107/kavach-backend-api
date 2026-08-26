@@ -37,6 +37,7 @@ import {
 } from "../controllers/saheli.controller";
 import {
     deleteRecipientLab,
+    downloadRecipientLab,
     getRecipientLabDetail,
     getRecipientLabs,
     postRecipientLab,
@@ -81,13 +82,21 @@ router.post("/:familyId/recipients/:recipientUserId/labs", protect, postRecipien
 router.post(
     "/:familyId/recipients/:recipientUserId/labs/upload",
     protect,
-    familyDocumentUpload.single("file"),
+    familyDocumentUpload.fields([
+        { name: "files", maxCount: 25 },
+        { name: "file", maxCount: 1 },
+    ]),
     postRecipientLabUpload,
 );
 router.get(
     "/:familyId/recipients/:recipientUserId/labs/:documentId",
     protect,
     getRecipientLabDetail,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/labs/:documentId/download",
+    protect,
+    downloadRecipientLab,
 );
 router.delete(
     "/:familyId/recipients/:recipientUserId/labs/:documentId",
