@@ -19,6 +19,14 @@ import {
     persistCaregiverConversationId,
     persistConversationId,
 } from "./aiTenant.service";
+import { getCareRecordContextForSaheli, appendCareRecordEvent } from "./careRecord.service";
+import {
+    CareRecordEventType,
+    CareRecordSource,
+    ChannelType,
+} from "../types/careRecord.types";
+import Order from "../models/order.model";
+import { OrderStatus } from "../types/careRecord.types";
 import { getFamilyMembersList } from "./familyMember.service";
 import {
     excerptReport,
@@ -145,10 +153,12 @@ async function elderReplyWithAi(
 ): Promise<{ reply: string; conversationId: string }> {
     try {
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 30);
+        const enrichedMessage = `[Care Record context]\n${careContext}\n\n[Current message]\n${message}`;
         const result = await aiPostChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
-            message,
+            message: enrichedMessage,
             conversationId: ctx.conversationId,
         });
         if (result.conversation_id) {
@@ -176,10 +186,12 @@ async function caregiverReplyWithAi(
 ): Promise<{ reply: string; conversationId: string }> {
     try {
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 30);
+        const enrichedMessage = `[Care Record context]\n${careContext}\n\n[Caregiver question]\n${message}`;
         const result = await aiPostCaregiverChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
-            message,
+            message: enrichedMessage,
             conversationId: ctx.caregiverConversationId,
         });
         if (result.conversation_id) {
@@ -207,6 +219,7 @@ export async function sendSaheliMessage(
     recipientUserId: string,
     actorUserId: string,
     message: string,
+    opts?: { skipInboundCareRecord?: boolean; channel?: ChannelType; source?: CareRecordSource },
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -227,6 +240,19 @@ export async function sendSaheliMessage(
     if (!text) throw new AppError("Message is required", 400);
 
     await appendMessage(familyId, recipientUserId, "elder", "elder", text);
+    if (!opts?.skipInboundCareRecord) {
+        await appendCareRecordEvent({
+            familyId,
+            subjectUserId: recipientUserId,
+            actorUserId,
+            type: CareRecordEventType.MESSAGE,
+            source: opts?.source ?? CareRecordSource.DASHBOARD,
+            channel: opts?.channel ?? ChannelType.DASHBOARD,
+            title: displayName,
+            detail: text,
+            status: "reported",
+        });
+    }
     const { reply, conversationId } = await elderReplyWithAi(
         familyId,
         recipientUserId,
@@ -234,6 +260,17 @@ export async function sendSaheliMessage(
         text,
     );
     await appendMessage(familyId, recipientUserId, "elder", "saheli", reply);
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        type: CareRecordEventType.MESSAGE,
+        source: CareRecordSource.SAHELI,
+        channel: opts?.channel ?? ChannelType.DASHBOARD,
+        title: "Saheli",
+        detail: reply,
+        status: "reported",
+        skipSignalCheck: true,
+    });
 
     return { reply, conversationId };
 }
@@ -261,6 +298,7 @@ export async function sendCaregiverSaheliMessage(
     recipientUserId: string,
     actorUserId: string,
     message: string,
+    opts?: { skipInboundCareRecord?: boolean; channel?: ChannelType; source?: CareRecordSource },
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -278,6 +316,19 @@ export async function sendCaregiverSaheliMessage(
     if (!text) throw new AppError("Message is required", 400);
 
     await appendMessage(familyId, recipientUserId, "caregiver", "family", text);
+    if (!opts?.skipInboundCareRecord) {
+        await appendCareRecordEvent({
+            familyId,
+            subjectUserId: recipientUserId,
+            actorUserId,
+            type: CareRecordEventType.MESSAGE,
+            source: opts?.source ?? CareRecordSource.DASHBOARD,
+            channel: opts?.channel ?? ChannelType.DASHBOARD,
+            title: "Caregiver",
+            detail: text,
+            status: "reported",
+        });
+    }
 
     const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
     const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
@@ -306,6 +357,17 @@ export async function sendCaregiverSaheliMessage(
     );
 
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply);
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        type: CareRecordEventType.MESSAGE,
+        source: CareRecordSource.SAHELI,
+        channel: opts?.channel ?? ChannelType.DASHBOARD,
+        title: "Saheli",
+        detail: reply,
+        status: "reported",
+        skipSignalCheck: true,
+    });
 
     return { reply, conversationId };
 }
@@ -366,6 +428,7 @@ export async function triggerSaheliCheckIn(
 
     try {
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 25);
         const result = await aiPostCheckIn({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
@@ -376,6 +439,7 @@ export async function triggerSaheliCheckIn(
                 dosage: s.dosage,
                 type: s.type,
             })),
+            careRecordContext: careContext,
         });
         if (result.reply?.trim()) reply = result.reply.trim();
         if (result.conversation_id) {
@@ -636,14 +700,21 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
 
     activity.sort((a, b) => (a.at < b.at ? 1 : -1));
 
+    const pendingApprovals = await Order.countDocuments({
+        familyId,
+        status: { $in: [OrderStatus.AWAITING_APPROVAL, OrderStatus.APPROVED] },
+    });
+
     return {
         careRecipientCount: recipients.length,
         schedulesToday,
         checkInsToday,
         completedToday,
         messagesToday,
-        pendingApprovals: 2,
-        medAdherencePercent: schedulesToday ? Math.round((completedToday / schedulesToday) * 100) : 86,
+        pendingApprovals,
+        medAdherencePercent: schedulesToday
+            ? Math.round((completedToday / schedulesToday) * 100)
+            : 0,
         lastSaheliReply,
         lastHeardLine,
         lastActivityAt,

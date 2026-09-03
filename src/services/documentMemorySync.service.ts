@@ -14,8 +14,9 @@ type AnalysisResult = {
 };
 
 function mapKindForAiEngine(kind: string): string {
-    if (kind === "vitals") return "note";
-    if (["lab", "scan", "prescription", "note", "chat_export"].includes(kind)) return kind;
+    if (["lab", "scan", "prescription", "note", "chat_export", "vitals", "symptom", "pharmacy"].includes(kind)) {
+        return kind;
+    }
     return "lab";
 }
 

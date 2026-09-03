@@ -242,6 +242,7 @@ export async function aiPostCheckIn(payload: {
     aiFamilyId: string;
     aiElderId: string;
     conversationId?: string;
+    careRecordContext?: string;
     scheduleItems?: Array<{
         title: string;
         time?: string;
@@ -259,6 +260,7 @@ export async function aiPostCheckIn(payload: {
                 elder_id: payload.aiElderId,
                 conversation_id: payload.conversationId ?? null,
                 schedule_items: payload.scheduleItems ?? [],
+                care_record_context: payload.careRecordContext ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -370,4 +372,29 @@ export async function aiListDocuments(payload: {
     }
 
     return parseAiJson(res);
+}
+
+export async function aiPostCareBrief(payload: {
+    subjectName: string;
+    timeline: string;
+}): Promise<{ brief: string }> {
+    const res = await aiFetch(
+        "/v1/care-brief/generate",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                subject_name: payload.subjectName,
+                timeline: payload.timeline,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Care Brief generation failed", res.status);
+    }
+
+    return parseAiJson<{ brief: string }>(res);
 }

@@ -1,8 +1,6 @@
 import { randomUUID } from "crypto";
 import path from "path";
 import { AppError } from "../middleware/error.middleware";
-import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
-import Family from "../models/family.model";
 import LabDocument from "../models/labDocument.model";
 import {
     buildFamilyObjectKey,
@@ -17,24 +15,54 @@ import {
     analyzeUploadedDocument,
     syncDocumentToFamilyMemory,
 } from "./documentMemorySync.service";
+import { appendCareRecordEvent } from "./careRecord.service";
+import {
+    CareRecordEventType,
+    CareRecordSource,
+    ChannelType,
+} from "../types/careRecord.types";
+import { getFamilyForActor, requirePermission, requireCareRecipient } from "./careRecordAuth.service";
 
 async function assertRecipientAccess(
     familyId: string,
     recipientUserId: string,
     actorUserId: string,
 ) {
-    const family = await Family.findOne({ familyId, status: "ACTIVE" });
-    if (!family || !family.hasJoinedMember(actorUserId)) {
-        throw new AppError("Family not found or access denied", 403);
-    }
-    const member = family.members.find((m) => m.userId === recipientUserId);
-    if (!member || member.status !== FamilyMemberStatus.JOINED) {
-        throw new AppError("Care recipient not found", 404);
-    }
-    if (member.role !== FamilyRole.CARE_RECIPIENT) {
-        throw new AppError("Member is not a care recipient", 400);
-    }
+    const family = await getFamilyForActor(familyId, actorUserId);
+    requireCareRecipient(family, recipientUserId);
+    requirePermission(family, actorUserId, "upload_document");
     return family;
+}
+
+async function recordDocumentEvent(
+    familyId: string,
+    recipientUserId: string,
+    actorUserId: string,
+    doc: { documentId: string; title: string; kind: string; rawText: string },
+) {
+    const eventType =
+        doc.kind === "vitals"
+            ? CareRecordEventType.VITAL
+            : doc.kind === "symptom"
+              ? CareRecordEventType.SYMPTOM
+              : CareRecordEventType.DOCUMENT;
+
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        actorUserId,
+        type: eventType,
+        source: CareRecordSource.DASHBOARD,
+        channel: ChannelType.DASHBOARD,
+        title: doc.title,
+        detail: doc.rawText.slice(0, 500),
+        payload: {
+            documentId: doc.documentId,
+            rawText: doc.rawText,
+            kind: doc.kind,
+        },
+        status: "logged",
+    });
 }
 
 function serializeDocument(doc: {
@@ -139,6 +167,13 @@ export async function ingestRecipientDocument(
 
     const updated = await LabDocument.findOne({ documentId: doc.documentId }).lean();
 
+    await recordDocumentEvent(familyId, recipientUserId, actorUserId, {
+        documentId: doc.documentId,
+        title: updated?.title ?? provisionalTitle,
+        kind: analysis?.kind ?? doc.kind,
+        rawText,
+    });
+
     return {
         document_id: doc.documentId,
         title: updated?.title ?? provisionalTitle,
@@ -213,6 +248,13 @@ export async function ingestRecipientFile(
     });
 
     const updated = await LabDocument.findOne({ documentId: doc.documentId }).lean();
+
+    await recordDocumentEvent(familyId, recipientUserId, actorUserId, {
+        documentId: doc.documentId,
+        title: updated?.title ?? title,
+        kind: analysis?.kind ?? doc.kind,
+        rawText,
+    });
 
     return {
         document_id: doc.documentId,

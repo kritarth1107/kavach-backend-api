@@ -20,6 +20,7 @@ import { normalizePhoneInput, buildCosmosSafePhonePlaceholder, phoneFieldsFromNo
 import {
     resolveMemberContactEmail,
 } from "./userContact.service";
+import { validateInviteRole } from "./careRecordAuth.service";
 import {
     FamilyInvitationStatus,
     FamilyMemberStatus,
@@ -978,6 +979,7 @@ export async function inviteFamilyMember(
     await assertCanManage(family, inviter.userId);
 
     const role = mapUiRoleToFamilyRole(payload.role);
+    validateInviteRole(role);
     if (role === FamilyRole.PRIMARY_CAREGIVER) {
         throw new AppError("Cannot invite someone as primary caregiver", 400);
     }

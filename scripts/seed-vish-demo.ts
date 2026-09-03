@@ -17,6 +17,18 @@ import CareSchedule from "../src/models/careSchedule.model";
 import FamilyInvitation, { hashInviteToken } from "../src/models/familyInvitation.model";
 import LabDocument from "../src/models/labDocument.model";
 import SaheliMessage from "../src/models/saheliMessage.model";
+import ChannelIdentity from "../src/models/channelIdentity.model";
+import Order from "../src/models/order.model";
+import CareRecordEvent from "../src/models/careRecordEvent.model";
+import { appendCareRecordEvent } from "../src/services/careRecord.service";
+import { upsertChannelIdentity } from "../src/services/identityResolver.service";
+import {
+    CareRecordEventType,
+    CareRecordSource,
+    ChannelType,
+    OrderPartner,
+    OrderStatus,
+} from "../src/types/careRecord.types";
 import { AuthProvider } from "../src/types/user.types";
 import {
     FamilyInvitationStatus,
@@ -648,6 +660,201 @@ async function seedLabsAndMessages(
     return { labs: LABS.length, messages: MESSAGES.length };
 }
 
+const SUDHA_WHATSAPP = "919880576589";
+const VISH_WHATSAPP = "919901234567";
+
+async function seedChannelIdentities(
+    familyId: string,
+    recipientUserId: string,
+    caregiverUserId: string,
+) {
+    await ChannelIdentity.deleteMany({ familyId });
+    await upsertChannelIdentity({
+        channelType: ChannelType.WHATSAPP,
+        channelIdentifier: SUDHA_WHATSAPP,
+        familyId,
+        userId: recipientUserId,
+        role: FamilyRole.CARE_RECIPIENT,
+        label: "Sudha · WhatsApp",
+    });
+    await upsertChannelIdentity({
+        channelType: ChannelType.WHATSAPP,
+        channelIdentifier: VISH_WHATSAPP,
+        familyId,
+        userId: caregiverUserId,
+        role: FamilyRole.PRIMARY_CAREGIVER,
+        label: "Vish · WhatsApp",
+    });
+    await upsertChannelIdentity({
+        channelType: ChannelType.PHONE,
+        channelIdentifier: SUDHA_WHATSAPP,
+        familyId,
+        userId: recipientUserId,
+        role: FamilyRole.CARE_RECIPIENT,
+        label: "Sudha · phone mock",
+    });
+    await upsertChannelIdentity({
+        channelType: ChannelType.SMART_SPEAKER,
+        channelIdentifier: `speaker-${familyId.slice(0, 8)}`,
+        familyId,
+        userId: recipientUserId,
+        role: FamilyRole.CARE_RECIPIENT,
+        label: "Living room speaker mock",
+    });
+    return 4;
+}
+
+async function seedPilotCareRecord(
+    familyId: string,
+    recipientUserId: string,
+    caregiverUserId: string,
+) {
+    const existing = await CareRecordEvent.countDocuments({ familyId });
+    if (existing > 0) {
+        return { skipped: true, existing };
+    }
+
+    const messages = await SaheliMessage.find({ familyId, recipientUserId })
+        .sort({ createdAt: 1 })
+        .lean();
+    for (const msg of messages) {
+        const type =
+            msg.role === "system"
+                ? CareRecordEventType.CHECK_IN
+                : CareRecordEventType.MESSAGE;
+        await appendCareRecordEvent({
+            familyId,
+            subjectUserId: recipientUserId,
+            type,
+            source:
+                msg.thread === "whatsapp" ? CareRecordSource.WHATSAPP : CareRecordSource.SAHELI,
+            channel:
+                msg.thread === "whatsapp" ? ChannelType.WHATSAPP : ChannelType.DASHBOARD,
+            title: msg.role === "saheli" ? "Saheli" : msg.role,
+            detail: msg.content,
+            status: msg.role === "system" ? "sent" : undefined,
+            createdAt: msg.createdAt,
+            skipSignalCheck: true,
+        });
+    }
+
+    const labs = await LabDocument.find({ familyId, recipientUserId }).lean();
+    for (const lab of labs) {
+        await appendCareRecordEvent({
+            familyId,
+            subjectUserId: recipientUserId,
+            actorUserId: caregiverUserId,
+            type: CareRecordEventType.DOCUMENT,
+            source: CareRecordSource.DASHBOARD,
+            channel: ChannelType.DASHBOARD,
+            title: lab.title,
+            detail: lab.rawText?.slice(0, 500) ?? lab.title,
+            payload: {
+                documentId: lab.documentId,
+                kind: lab.kind,
+                rawText: lab.rawText,
+            },
+            createdAt: lab.createdAt,
+            skipSignalCheck: false,
+        });
+    }
+
+    const doseDays = [6, 5, 4, 3, 2, 1, 0];
+    const doseCounts = [3, 3, 2, 3, 2, 3, 2];
+    for (let i = 0; i < doseDays.length; i++) {
+        for (let d = 0; d < doseCounts[i]; d++) {
+            await appendCareRecordEvent({
+                familyId,
+                subjectUserId: recipientUserId,
+                type: CareRecordEventType.DOSE,
+                source: CareRecordSource.WHATSAPP,
+                channel: ChannelType.WHATSAPP,
+                title: "Morning medicines",
+                detail: "Folvite · Pantodac · Perinorm confirmed",
+                status: "confirmed",
+                createdAt: at(doseDays[i], 8, 15 + d * 5),
+                skipSignalCheck: true,
+            });
+        }
+    }
+
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        type: CareRecordEventType.MESSAGE,
+        source: CareRecordSource.WHATSAPP,
+        channel: ChannelType.WHATSAPP,
+        title: "Sudha voice note",
+        detail: "Saheli, I took my morning tablets. Feeling a little tired today.",
+        createdAt: at(0, 9, 42),
+        skipSignalCheck: true,
+    });
+
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        type: CareRecordEventType.CONTEXT_SIGNAL,
+        source: CareRecordSource.SYSTEM,
+        channel: ChannelType.DASHBOARD,
+        title: "Creatinine trend",
+        detail:
+            "Creatinine 1.4 mg/dL on latest renal panel — slightly above prior 1.2. Quiet context for Saheli and Care Brief only.",
+        status: "active",
+        createdAt: at(1, 14, 20),
+        skipSignalCheck: true,
+    });
+
+    return { skipped: false, events: await CareRecordEvent.countDocuments({ familyId }) };
+}
+
+async function seedPendingZeptoOrder(
+    familyId: string,
+    recipientUserId: string,
+    caregiverUserId: string,
+) {
+    await Order.deleteMany({ familyId, status: OrderStatus.AWAITING_APPROVAL });
+
+    const items = [
+        { name: "Tab Folvite 5mg", quantity: 1, unitPricePaise: 4500 },
+        { name: "Tab Pantodac 40mg", quantity: 1, unitPricePaise: 8900 },
+        { name: "Syp Cremaffin", quantity: 1, unitPricePaise: 12500 },
+    ];
+    const totalPaise = items.reduce((s, i) => s + i.quantity * i.unitPricePaise, 0);
+    const orderId = randomUUID();
+
+    await Order.create({
+        orderId,
+        familyId,
+        subjectUserId: recipientUserId,
+        suggestedBy: caregiverUserId,
+        partner: OrderPartner.ZEPTO,
+        status: OrderStatus.AWAITING_APPROVAL,
+        items,
+        totalPaise,
+        deliveryAddress: "Sudha · Bangalore",
+        deepLink: "https://www.zeptonow.com/",
+        partnerRef: `mock-${SEED_TAG}`,
+        notes: "Saheli suggested refill from open medicine list",
+    });
+
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        actorUserId: caregiverUserId,
+        type: CareRecordEventType.ORDER_SUGGESTED,
+        source: CareRecordSource.SAHELI,
+        channel: ChannelType.WHATSAPP,
+        title: `Zepto basket suggested — ₹${(totalPaise / 100).toFixed(0)}`,
+        detail: items.map((i) => `${i.name} x${i.quantity}`).join(" · "),
+        payload: { orderId, items, deepLink: "https://www.zeptonow.com/" },
+        status: "awaiting_approval",
+        createdAt: at(0, 11, 5),
+        skipSignalCheck: true,
+    });
+
+    return orderId;
+}
+
 async function main() {
     if (!process.env.MONGODB_URI) throw new Error("MONGODB_URI missing");
     await mongoose.connect(process.env.MONGODB_URI);
@@ -657,6 +864,21 @@ async function main() {
     const recipientUserId = await ensureSudha(family.familyId, vish.userId);
     const scheduleCount = await ensureSchedules(family.familyId, recipientUserId, vish.userId);
     const content = await seedLabsAndMessages(family.familyId, recipientUserId, vish.userId);
+    const channelCount = await seedChannelIdentities(
+        family.familyId,
+        recipientUserId,
+        vish.userId,
+    );
+    const careRecord = await seedPilotCareRecord(
+        family.familyId,
+        recipientUserId,
+        vish.userId,
+    );
+    const pendingOrderId = await seedPendingZeptoOrder(
+        family.familyId,
+        recipientUserId,
+        vish.userId,
+    );
 
     const payload = {
         seed: SEED_TAG,
@@ -669,6 +891,7 @@ async function main() {
             name: "Vish BR",
             loginHint: "Sign in with Google using vish2030@gmail.com, or email + demo password",
             demoPassword: DEMO_PASSWORD,
+            whatsappMock: VISH_WHATSAPP,
         },
         careRecipient: {
             userId: recipientUserId,
@@ -676,9 +899,18 @@ async function main() {
             age: 63,
             location: "Bangalore",
             phone: "+91 98805 76589",
+            whatsappMock: SUDHA_WHATSAPP,
         },
+        channelIdentities: channelCount,
+        careRecord,
+        pendingOrderId,
         schedules: scheduleCount,
         ...content,
+        webhookHints: {
+            whatsappMock: "POST /api/webhooks/whatsapp/mock",
+            phoneMock: "POST /api/webhooks/phone/mock",
+            speakerMock: "POST /api/webhooks/speaker/mock",
+        },
     };
 
     const jsonPath = path.join(os.homedir(), "Desktop", "kavach-dashboard-data.json");
