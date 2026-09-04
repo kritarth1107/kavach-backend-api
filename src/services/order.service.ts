@@ -13,7 +13,7 @@ import {
     requireCareRecipient,
     requirePermission,
 } from "./careRecordAuth.service";
-import { createZeptoOrder, payZeptoOrder } from "../partners/zepto.adapter";
+import { createCommerceOrder, payCommerceOrder } from "../partners/commerce.adapter";
 
 export async function suggestOrder(input: {
     familyId: string;
@@ -26,7 +26,8 @@ export async function suggestOrder(input: {
     const family = await getFamilyForActor(input.familyId, input.actorUserId);
     requireCareRecipient(family, input.subjectUserId);
 
-    const partnerResult = await createZeptoOrder({
+    const partnerResult = await createCommerceOrder({
+        partner: OrderPartner.ZEPTO,
         familyId: input.familyId,
         actorUserId: input.actorUserId,
         items: input.items,
@@ -127,13 +128,14 @@ export async function payOrder(familyId: string, orderId: string, actorUserId: s
         throw new AppError("Order must be approved before payment", 400);
     }
 
-    const payment = await payZeptoOrder({
+    const payment = await payCommerceOrder({
+        partner: order.partner,
         orderId: order.orderId,
         amountPaise: order.totalPaise,
         payerUserId: actorUserId,
         familyId,
         items: order.items.map((i) => ({ name: i.name, quantity: i.quantity })),
-        paymentMethod: "cod",
+        paymentMethod: "COD",
     });
 
     order.status = OrderStatus.PAID;

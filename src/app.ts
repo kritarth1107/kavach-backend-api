@@ -14,6 +14,7 @@ import healthRoutes from "./routes/health.routes";
 import careRecordRoutes from "./routes/careRecord.routes";
 import webhookRoutes from "./routes/webhook.routes";
 import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.routes";
+import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
 
 dotenv.config();
@@ -38,8 +39,10 @@ app.use("/api/users", userRoutes);
 app.use("/api/families", familyRoutes);
 app.use("/api/families", careRecordRoutes);
 app.use("/api/families", familyZeptoRouter);
+app.use("/api/families", familyMcpRouter);
 app.use("/api/webhooks", webhookRoutes);
 app.use("/api/integrations", zeptoPublicRoutes);
+app.use("/api/integrations", mcpPublicRoutes);
 app.use("/api/documents", documentRoutes);
 app.use("/api/links", linkRoutes);
 app.use("/api/analytics", analyticsRoutes);

@@ -42,6 +42,8 @@ export enum OrderStatus {
 
 export enum OrderPartner {
     ZEPTO = "zepto",
+    SWIGGY = "swiggy",
+    INSTAMART = "instamart",
 }
 
 /** Phase 1 inviteable roles (Family Doctor shelved in UI). */

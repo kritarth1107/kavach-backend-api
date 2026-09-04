@@ -2,21 +2,52 @@ import Order from "../models/order.model";
 import { OrderStatus } from "../types/careRecord.types";
 import { getFamilyForActor, requirePermission } from "./careRecordAuth.service";
 import { listChannelIdentities } from "./identityResolver.service";
-import { getZeptoConnectionStatus } from "../partners/zepto/mcpClient.service";
-import { getZeptoRedirectUri } from "../partners/zepto/config";
+import { getMcpConnectionStatus } from "../partners/mcp/mcpClient.service";
+import { MCP_PARTNERS } from "../partners/mcp/partners";
+import type { McpPartnerKey } from "../partners/mcp/types";
+
+async function enrichMcpBlock(
+    partner: McpPartnerKey,
+    familyId: string,
+    actorUserId: string,
+    pendingCount: number,
+) {
+    const config = MCP_PARTNERS[partner];
+    const status = await getMcpConnectionStatus(partner, familyId, actorUserId);
+    return {
+        status: status.connected ? ("connected_mcp" as const) : ("mock_or_disconnected" as const),
+        mode: status.connected ? (`${partner}_mcp_live` as const) : ("deep_link_handoff" as const),
+        description: status.connected
+            ? config.connectedDescription
+            : config.disconnectedDescription,
+        connected: status.connected,
+        connectedAt: status.connectedAt,
+        redirectUri: config.getRedirectUri(),
+        mcpUrl: config.mcpUrl,
+        pendingApprovals: pendingCount,
+        partnerTrack: config.partnerTrack,
+        paymentNote: config.paymentNote,
+        label: config.label,
+    };
+}
 
 export async function getFamilyIntegrations(familyId: string, actorUserId: string) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "read");
 
-    const [identities, pendingCount, recentOrders, zeptoStatus] = await Promise.all([
+    const [identities, pendingCount, recentOrders] = await Promise.all([
         listChannelIdentities(familyId),
         Order.countDocuments({
             familyId,
             status: { $in: [OrderStatus.AWAITING_APPROVAL, OrderStatus.APPROVED] },
         }),
         Order.find({ familyId }).sort({ createdAt: -1 }).limit(5).lean(),
-        getZeptoConnectionStatus(familyId, actorUserId),
+    ]);
+
+    const [zepto, swiggy, instamart] = await Promise.all([
+        enrichMcpBlock("zepto", familyId, actorUserId, pendingCount),
+        enrichMcpBlock("swiggy", familyId, actorUserId, pendingCount),
+        enrichMcpBlock("instamart", familyId, actorUserId, pendingCount),
     ]);
 
     const whatsappLinks = identities.filter((i) => i.channelType === "whatsapp");
@@ -24,19 +55,9 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
     const speakerLinks = identities.filter((i) => i.channelType === "smart_speaker");
 
     return {
-        zepto: {
-            status: zeptoStatus.connected ? "connected_mcp" : "mock_or_disconnected",
-            mode: zeptoStatus.connected ? "zepto_mcp_live" : "deep_link_handoff",
-            description: zeptoStatus.connected
-                ? "Your Zepto account is linked via official MCP. Approved orders are placed through Zepto."
-                : "Connect your Zepto account to place real orders. Until then, mock fulfillment + deep link.",
-            connected: zeptoStatus.connected,
-            connectedAt: zeptoStatus.connectedAt,
-            redirectUri: getZeptoRedirectUri(),
-            pendingApprovals: pendingCount,
-            partnerTrack: "https://github.com/zeptonow/mcp/issues",
-            paymentNote: "Payment via Zepto MCP (COD, UPI link, wallet). Razorpay not required for Zepto orders.",
-        },
+        zepto,
+        swiggy,
+        instamart,
         whatsapp: {
             status: "mock_adapter",
             description: "Mock webhook at POST /api/webhooks/whatsapp/mock until Meta numbers are live.",
@@ -60,6 +81,7 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
         recentOrders: recentOrders.map((o) => ({
             order_id: o.orderId,
             status: o.status,
+            partner: o.partner,
             total_paise: o.totalPaise,
             created_at: o.createdAt?.toISOString() ?? null,
         })),
