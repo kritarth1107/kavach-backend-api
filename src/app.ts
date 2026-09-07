@@ -16,6 +16,7 @@ import webhookRoutes from "./routes/webhook.routes";
 import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.routes";
 import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
+import { startOutreachScheduler } from "./workers/outreachScheduler";
 
 dotenv.config();
 
@@ -53,4 +54,5 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`Kavach Backend running on port ${PORT}`);
+  startOutreachScheduler();
 });

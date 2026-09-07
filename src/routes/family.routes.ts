@@ -26,6 +26,12 @@ import {
     removeRecipientCareSchedule,
 } from "../controllers/careSchedule.controller";
 import {
+    getCompanionSettings,
+    patchCompanionSettings,
+    triggerOutreach,
+    getFamilyMemories,
+} from "../controllers/saheliCompanion.controller";
+import {
     getActivity,
     getBriefing,
     getCaregiverSaheliChat,
@@ -75,6 +81,26 @@ router.post(
     "/:familyId/recipients/:recipientUserId/saheli/check-in",
     protect,
     postSaheliCheckIn,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/companion",
+    protect,
+    getCompanionSettings,
+);
+router.patch(
+    "/:familyId/recipients/:recipientUserId/saheli/companion",
+    protect,
+    patchCompanionSettings,
+);
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/outreach",
+    protect,
+    triggerOutreach,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/memories",
+    protect,
+    getFamilyMemories,
 );
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);

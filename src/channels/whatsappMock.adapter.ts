@@ -93,7 +93,18 @@ export class ChannelMockAdapter implements ChannelAdapter {
     }
 
     async send(outbound: OutboundMessage): Promise<void> {
-        void outbound;
+        const { default: OutboundMessageModel } = await import("../models/outboundMessage.model");
+        const { randomUUID } = await import("crypto");
+        await OutboundMessageModel.create({
+            messageId: randomUUID(),
+            familyId: "mock",
+            recipientUserId: "mock",
+            channel: this.channelType === ChannelType.PHONE ? "phone" : "whatsapp",
+            channelIdentifier: outbound.channelIdentifier,
+            content: outbound.content,
+            direction: "outbound",
+            deliveredAt: new Date(),
+        });
     }
 
     private mapSource(): CareRecordSource {

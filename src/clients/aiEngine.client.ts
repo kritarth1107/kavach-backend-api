@@ -137,6 +137,8 @@ export async function aiPostChat(payload: {
     aiElderId: string;
     message: string;
     conversationId?: string;
+    careRecordContext?: string;
+    companionProfile?: Record<string, unknown>;
 }): Promise<AiChatResponse> {
     const res = await aiFetch(
         "/v1/chat",
@@ -148,6 +150,8 @@ export async function aiPostChat(payload: {
                 elder_id: payload.aiElderId,
                 message: payload.message,
                 conversation_id: payload.conversationId ?? null,
+                care_record_context: payload.careRecordContext ?? null,
+                companion_profile: payload.companionProfile ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -243,6 +247,7 @@ export async function aiPostCheckIn(payload: {
     aiElderId: string;
     conversationId?: string;
     careRecordContext?: string;
+    companionProfile?: Record<string, unknown>;
     scheduleItems?: Array<{
         title: string;
         time?: string;
@@ -261,6 +266,7 @@ export async function aiPostCheckIn(payload: {
                 conversation_id: payload.conversationId ?? null,
                 schedule_items: payload.scheduleItems ?? [],
                 care_record_context: payload.careRecordContext ?? null,
+                companion_profile: payload.companionProfile ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -397,4 +403,119 @@ export async function aiPostCareBrief(payload: {
     }
 
     return parseAiJson<{ brief: string }>(res);
+}
+
+type AiOutreachResponse = AiChatResponse & {
+    topic_bucket: string;
+    topic_hint: string;
+    outreach_kind: string;
+};
+
+export async function aiPostOutreach(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    conversationId?: string;
+    outreachKind?: string;
+    topicBucket?: string;
+    topicHint?: string;
+    careRecordContext?: string;
+    companionProfile?: Record<string, unknown>;
+    scheduleItems?: Array<{
+        title: string;
+        time?: string;
+        dosage?: string;
+        type?: string;
+    }>;
+}): Promise<AiOutreachResponse> {
+    const res = await aiFetch(
+        "/v1/chat/outreach",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                conversation_id: payload.conversationId ?? null,
+                outreach_kind: payload.outreachKind ?? "casual",
+                topic_bucket: payload.topicBucket ?? null,
+                topic_hint: payload.topicHint ?? null,
+                care_record_context: payload.careRecordContext ?? null,
+                companion_profile: payload.companionProfile ?? null,
+                schedule_items: payload.scheduleItems ?? [],
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Saheli outreach failed", res.status);
+    }
+
+    return parseAiJson<AiOutreachResponse>(res);
+}
+
+export async function aiPostFamilyShare(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    shareSummary: string;
+    memoryIds?: string[];
+}): Promise<AiChatResponse> {
+    const res = await aiFetch(
+        "/v1/chat/family-share",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                share_summary: payload.shareSummary,
+                memory_ids: payload.memoryIds ?? [],
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Family share failed", res.status);
+    }
+
+    return parseAiJson<AiChatResponse>(res);
+}
+
+export async function aiListFamilyMemories(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    limit?: number;
+    shareableOnly?: boolean;
+}): Promise<{
+    memories: Array<{
+        id: string;
+        category: string;
+        topic: string;
+        content: string;
+        share_with_family: boolean;
+        importance: number;
+        created_at: string | null;
+    }>;
+}> {
+    const params = new URLSearchParams({
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+        limit: String(payload.limit ?? 50),
+        shareable_only: payload.shareableOnly ? "true" : "false",
+    });
+
+    const res = await aiFetch(`/v1/memory/list?${params.toString()}`, {
+        method: "GET",
+        headers: aiHeaders(),
+    });
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to list family memories", res.status);
+    }
+
+    return parseAiJson(res);
 }

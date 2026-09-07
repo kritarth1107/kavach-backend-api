@@ -29,6 +29,10 @@ import Order from "../models/order.model";
 import { OrderStatus } from "../types/careRecord.types";
 import { getFamilyMembersList } from "./familyMember.service";
 import {
+    companionProfilePayload,
+    getCompanionProfile,
+} from "./saheliCompanion.service";
+import {
     excerptReport,
     findNamedReports,
     findPrintedHits,
@@ -154,12 +158,15 @@ async function elderReplyWithAi(
     try {
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
         const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 30);
-        const enrichedMessage = `[Care Record context]\n${careContext}\n\n[Current message]\n${message}`;
+        const companion = await getCompanionProfile(familyId, recipientUserId);
+        const profile = companionProfilePayload(companion);
         const result = await aiPostChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
-            message: enrichedMessage,
+            message,
             conversationId: ctx.conversationId,
+            careRecordContext: careContext,
+            companionProfile: profile,
         });
         if (result.conversation_id) {
             await persistConversationId(familyId, recipientUserId, result.conversation_id);
@@ -272,7 +279,33 @@ export async function sendSaheliMessage(
         skipSignalCheck: true,
     });
 
+    void maybeShareWithFamily(familyId, recipientUserId, text, displayName).catch((err) => {
+        console.warn("Family share after elder message failed:", err);
+    });
+
     return { reply, conversationId };
+}
+
+async function maybeShareWithFamily(
+    familyId: string,
+    recipientUserId: string,
+    elderMessage: string,
+    displayName: string,
+) {
+    const companion = await getCompanionProfile(familyId, recipientUserId);
+    if (!companion.shareWithFamily) return;
+
+    const shareable =
+        elderMessage.length >= 20 &&
+        !/\b(bp|blood pressure|creatinine|tsh|medicine|tablet|dose|mg)\b/i.test(elderMessage);
+    if (!shareable) return;
+
+    const { shareElderUpdateWithFamily } = await import("./saheliOutreach.service");
+    await shareElderUpdateWithFamily({
+        familyId,
+        recipientUserId,
+        shareSummary: `${displayName} told Saheli: "${elderMessage.slice(0, 400)}"`,
+    });
 }
 
 export async function getSaheliHistory(
@@ -408,6 +441,8 @@ export async function triggerSaheliCheckIn(
     const membersPayload = await getFamilyMembersList(familyId, actorUserId);
     const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
     const todayItems = await getTodayScheduleItems(familyId, recipientUserId);
+    const companion = await getCompanionProfile(familyId, recipientUserId);
+    const profile = companionProfilePayload(companion);
     const list =
         todayItems.length === 0
             ? "Nothing on today’s care list."
@@ -440,6 +475,7 @@ export async function triggerSaheliCheckIn(
                 type: s.type,
             })),
             careRecordContext: careContext,
+            companionProfile: profile,
         });
         if (result.reply?.trim()) reply = result.reply.trim();
         if (result.conversation_id) {
