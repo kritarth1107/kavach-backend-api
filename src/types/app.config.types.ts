@@ -106,6 +106,14 @@ export interface HealthConfig {
     secret: string;
 }
 
+export type WhatsAppProvider = "mock" | "baileys";
+
+export interface WhatsAppConfig {
+    provider: WhatsAppProvider;
+    bridgeUrl: string;
+    bridgeSecret: string;
+}
+
 /**
  * Main application configuration interface
  * Combines all configuration interfaces into a single configuration object
@@ -122,4 +130,5 @@ export interface AppConfig {
     r2: R2Config;                    // Cloudflare R2 settings
     aiEngine: AiEngineConfig;        // Kawach AI engine (Saheli / RAG)
     health: HealthConfig;              // Protected health endpoint settings
+    whatsapp: WhatsAppConfig;          // WhatsApp transport (mock | Baileys bridge)
 }

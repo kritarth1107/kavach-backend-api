@@ -230,12 +230,18 @@ export async function completeMcpConnect(code: string, state: string) {
 
     await McpOAuthSession.deleteOne({ _id: session._id });
 
-    return {
+    const result = {
         partner: session.partner as McpPartnerKey,
         familyId: session.familyId,
         userId: session.userId,
         connected: true,
     };
+
+    void import("../../services/partnerAddress.service").then(({ refreshPartnerAddressesInBackground }) =>
+        refreshPartnerAddressesInBackground(result.partner, result.familyId, result.userId),
+    );
+
+    return result;
 }
 
 export async function disconnectMcp(partner: McpPartnerKey, familyId: string, userId: string) {
@@ -302,12 +308,37 @@ export async function searchMcpProduct(
     });
 }
 
+export type ParsedPartnerAddress = {
+    partnerAddressId: string;
+    label?: string;
+    line1: string;
+    line2?: string;
+    city?: string;
+    pincode?: string;
+};
+
+export async function syncPartnerAddressesFromMcp(
+    partner: McpPartnerKey,
+    familyId: string,
+    userId: string,
+): Promise<ParsedPartnerAddress[]> {
+    return withMcpClient(partner, familyId, userId, async (client) => {
+        const tools = (await client.listTools()).tools;
+        const addressTool = tools.find((t) => /get_addresses|list_addresses|saved_addresses/i.test(t.name))?.name;
+        if (!addressTool) return [];
+
+        const result = await client.callTool({ name: addressTool, arguments: {} });
+        return parsePartnerAddresses(extractToolText(result));
+    });
+}
+
 export async function placeMcpOrder(input: {
     partner: McpPartnerKey;
     familyId: string;
     userId: string;
     items: Array<{ name: string; quantity: number }>;
     paymentMethod?: string;
+    addressId?: string;
 }): Promise<{
     partnerRef: string;
     deepLink?: string;
@@ -322,10 +353,15 @@ export async function placeMcpOrder(input: {
         const checkoutTool = pickToolFromNeedles(tools, config.checkoutToolNeedles);
 
         const summaries: string[] = [];
-        let addressId: string | undefined;
+        let addressId: string | undefined = input.addressId;
 
-        const addressTool = tools.find((t) => /get_addresses/i.test(t.name))?.name;
-        if (addressTool) {
+        if (!addressId) {
+            const { getDefaultPartnerAddressId } = await import("../../services/partnerAddress.service");
+            addressId = await getDefaultPartnerAddressId(input.familyId, input.partner, input.userId);
+        }
+
+        const addressTool = tools.find((t) => /get_addresses|list_addresses|saved_addresses/i.test(t.name))?.name;
+        if (!addressId && addressTool) {
             const addresses = await client.callTool({ name: addressTool, arguments: {} });
             summaries.push(extractToolText(addresses));
             addressId = extractFirstId(extractToolText(addresses));
@@ -406,6 +442,83 @@ function extractUrl(text: string): string | undefined {
 function extractFirstId(text: string): string | undefined {
     const match = text.match(/"id"\s*:\s*"([^"]+)"/i) ?? text.match(/addr_[A-Za-z0-9]+/);
     return match?.[1] ?? match?.[0];
+}
+
+function parsePartnerAddresses(text: string): ParsedPartnerAddress[] {
+    if (!text.trim()) return [];
+
+    try {
+        const json = JSON.parse(text) as unknown;
+        if (Array.isArray(json)) {
+            return json
+                .map((row) => normalizeAddressRow(row))
+                .filter((row): row is ParsedPartnerAddress => Boolean(row));
+        }
+        if (json && typeof json === "object") {
+            const obj = json as { addresses?: unknown[]; data?: unknown[] };
+            const list = obj.addresses ?? obj.data ?? [];
+            if (Array.isArray(list)) {
+                return list
+                    .map((row) => normalizeAddressRow(row))
+                    .filter((row): row is ParsedPartnerAddress => Boolean(row));
+            }
+        }
+    } catch {
+        // fall through to regex parsing
+    }
+
+    const blocks = text.split(/\n(?=\d+\.|\*|-)/).filter(Boolean);
+    const parsed: ParsedPartnerAddress[] = [];
+    for (const block of blocks) {
+        const id = extractFirstId(block);
+        const line = block.replace(/\s+/g, " ").trim();
+        if (!id || line.length < 8) continue;
+        parsed.push({
+            partnerAddressId: id,
+            label: line.slice(0, 80),
+            line1: line.slice(0, 300),
+        });
+    }
+
+    if (!parsed.length) {
+        const id = extractFirstId(text);
+        if (id) {
+            parsed.push({
+                partnerAddressId: id,
+                line1: text.replace(/\s+/g, " ").trim().slice(0, 300),
+            });
+        }
+    }
+
+    return parsed;
+}
+
+function normalizeAddressRow(row: unknown): ParsedPartnerAddress | null {
+    if (!row || typeof row !== "object") return null;
+    const obj = row as Record<string, unknown>;
+    const partnerAddressId = String(
+        obj.id ?? obj.addressId ?? obj.address_id ?? obj.partnerAddressId ?? "",
+    ).trim();
+    if (!partnerAddressId) return null;
+
+    const line1 = String(
+        obj.line1 ??
+            obj.addressLine1 ??
+            obj.address ??
+            obj.formattedAddress ??
+            obj.fullAddress ??
+            obj.label ??
+            "Saved address",
+    ).trim();
+
+    return {
+        partnerAddressId,
+        label: obj.label ? String(obj.label) : obj.name ? String(obj.name) : undefined,
+        line1,
+        line2: obj.line2 ? String(obj.line2) : obj.addressLine2 ? String(obj.addressLine2) : undefined,
+        city: obj.city ? String(obj.city) : undefined,
+        pincode: obj.pincode ? String(obj.pincode) : obj.postalCode ? String(obj.postalCode) : undefined,
+    };
 }
 
 function parseSearchResults(

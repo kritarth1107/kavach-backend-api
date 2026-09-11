@@ -38,10 +38,14 @@ export class ChannelMockAdapter implements ChannelAdapter {
     constructor(public readonly channelType: ChannelType) {}
 
     async receive(inbound: InboundMessage): Promise<{ reply: OutboundMessage }> {
-        const identity = await resolveChannelIdentity(
-            this.channelType,
-            inbound.channelIdentifier,
-        );
+        const identity = inbound._routing
+            ? {
+                  familyId: inbound._routing.familyId,
+                  userId: inbound._routing.userId,
+                  role: inbound._routing.role,
+                  channelIdentifier: inbound.channelIdentifier,
+              }
+            : await resolveChannelIdentity(this.channelType, inbound.channelIdentifier);
 
         let text = inbound.content;
         if (inbound.modality === "voice") {
@@ -52,9 +56,10 @@ export class ChannelMockAdapter implements ChannelAdapter {
         }
 
         const subjectUserId =
-            identity.role === FamilyRole.CARE_RECIPIENT
+            inbound._routing?.subjectUserId ??
+            (identity.role === FamilyRole.CARE_RECIPIENT
                 ? identity.userId
-                : await this.resolveSubjectForCaregiver(identity.familyId);
+                : await this.resolveSubjectForCaregiver(identity.familyId));
 
         await appendCareRecordEvent({
             familyId: identity.familyId,

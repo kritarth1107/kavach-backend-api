@@ -15,21 +15,32 @@ import {
 } from "./careRecordAuth.service";
 import { createCommerceOrder, payCommerceOrder } from "../partners/commerce.adapter";
 
+function orderPartnerTitle(partner: OrderPartner, totalPaise: number): string {
+    const amount = `₹${(totalPaise / 100).toFixed(0)}`;
+    if (partner === OrderPartner.SWIGGY) return `Swiggy order suggested — ${amount}`;
+    if (partner === OrderPartner.INSTAMART) return `Instamart basket suggested — ${amount}`;
+    return `Zepto basket suggested — ${amount}`;
+}
+
 export async function suggestOrder(input: {
     familyId: string;
     subjectUserId: string;
     actorUserId: string;
+    commerceUserId?: string;
     items: Array<{ name: string; quantity: number; unitPricePaise: number }>;
+    partner?: OrderPartner;
     notes?: string;
     deliveryAddress?: string;
 }) {
     const family = await getFamilyForActor(input.familyId, input.actorUserId);
     requireCareRecipient(family, input.subjectUserId);
 
+    const partner = input.partner ?? OrderPartner.ZEPTO;
+
     const partnerResult = await createCommerceOrder({
-        partner: OrderPartner.ZEPTO,
+        partner,
         familyId: input.familyId,
-        actorUserId: input.actorUserId,
+        actorUserId: input.commerceUserId ?? input.actorUserId,
         items: input.items,
         deliveryAddress: input.deliveryAddress,
     });
@@ -44,7 +55,7 @@ export async function suggestOrder(input: {
         familyId: input.familyId,
         subjectUserId: input.subjectUserId,
         suggestedBy: input.actorUserId,
-        partner: OrderPartner.ZEPTO,
+        partner,
         status: OrderStatus.AWAITING_APPROVAL,
         items: orderItems,
         totalPaise,
@@ -62,10 +73,11 @@ export async function suggestOrder(input: {
         type: CareRecordEventType.ORDER_SUGGESTED,
         source: CareRecordSource.SAHELI,
         channel: ChannelType.DASHBOARD,
-        title: `Zepto basket suggested — ₹${(totalPaise / 100).toFixed(0)}`,
+        title: orderPartnerTitle(partner, totalPaise),
         detail,
         payload: {
             orderId: order.orderId,
+            partner,
             items: orderItems,
             deepLink: partnerResult.deepLink,
             source: partnerResult.source,
@@ -109,8 +121,8 @@ export async function approveOrder(familyId: string, orderId: string, actorUserI
         type: CareRecordEventType.ORDER_APPROVED,
         source: CareRecordSource.DASHBOARD,
         channel: ChannelType.DASHBOARD,
-        title: "Grocery order approved",
-        detail: `Zepto basket ₹${(order.totalPaise / 100).toFixed(0)} approved`,
+        title: "Order approved",
+        detail: `${order.partner} basket ₹${(order.totalPaise / 100).toFixed(0)} approved`,
         payload: { orderId: order.orderId },
         status: "approved",
     });

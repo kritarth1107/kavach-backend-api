@@ -147,6 +147,7 @@ export async function postSuggestOrderHandler(req: Request, res: Response) {
         subjectUserId,
         actorUserId: req.user!.userId,
         items,
+        partner: req.body?.partner,
         notes: req.body?.notes,
         deliveryAddress: req.body?.deliveryAddress,
     });
@@ -188,16 +189,32 @@ export async function getChannelIdentitiesHandler(req: Request, res: Response) {
 }
 
 export async function postWhatsAppMockWebhook(req: Request, res: Response) {
-    const adapter = whatsAppMockAdapter;
-    const { reply } = await adapter.receive({
-        channelType: ChannelType.WHATSAPP,
-        channelIdentifier: req.body.from,
-        modality: req.body.modality ?? "text",
-        content: req.body.text ?? "",
-        audioBase64: req.body.audioBase64,
-        timestamp: new Date(),
-    });
+    const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
+    const reply = await handleWhatsAppInbound(req.body);
     res.json({ success: true, data: { reply } });
+}
+
+export async function postWhatsAppBaileysWebhook(req: Request, res: Response) {
+    const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
+    try {
+        const reply = await handleWhatsAppInbound(req.body);
+        res.json({ success: true, data: { reply } });
+    } catch (err) {
+        console.error("WhatsApp inbound failed:", err);
+        const fallback =
+            "Saheli is having a small hiccup. Please try again in a moment, or ask your caregiver to check the Kavach dashboard.";
+        res.json({
+            success: true,
+            data: {
+                reply: {
+                    channelType: "whatsapp",
+                    channelIdentifier: String(req.body?.from ?? ""),
+                    modality: "text",
+                    content: fallback,
+                },
+            },
+        });
+    }
 }
 
 export async function postPhoneMockWebhook(req: Request, res: Response) {

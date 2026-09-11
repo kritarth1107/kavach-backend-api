@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import OutboundMessage from "../models/outboundMessage.model";
 import ChannelIdentity from "../models/channelIdentity.model";
 import { ChannelType } from "../types/careRecord.types";
+import { sendViaBaileysBridge, isBaileysWhatsAppEnabled } from "../clients/baileysBridge.client";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { phoneMockAdapter } from "../channels/whatsappMock.adapter";
 
@@ -66,17 +67,20 @@ export async function deliverOutboundMessage(payload: {
         };
     }
 
-    const adapter =
-        payload.channel === "phone" ? phoneMockAdapter : whatsAppMockAdapter;
-
     try {
-        await adapter.send({
-            channelType:
-                payload.channel === "phone" ? ChannelType.PHONE : ChannelType.WHATSAPP,
-            channelIdentifier: payload.channelIdentifier,
-            modality: "text",
-            content: payload.content,
-        });
+        if (payload.channel === "whatsapp" && isBaileysWhatsAppEnabled()) {
+            await sendViaBaileysBridge(payload.channelIdentifier, payload.content);
+        } else {
+            const adapter =
+                payload.channel === "phone" ? phoneMockAdapter : whatsAppMockAdapter;
+            await adapter.send({
+                channelType:
+                    payload.channel === "phone" ? ChannelType.PHONE : ChannelType.WHATSAPP,
+                channelIdentifier: payload.channelIdentifier,
+                modality: "text",
+                content: payload.content,
+            });
+        }
         await OutboundMessage.create(record);
         return {
             channel: payload.channel,

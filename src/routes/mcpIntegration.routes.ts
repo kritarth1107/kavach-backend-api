@@ -6,6 +6,7 @@ import {
     getMcpOAuthCallbackHandler,
     getMcpStatusHandler,
     postMcpOAuthCallbackHandler,
+    postMcpSyncAddressesHandler,
 } from "../controllers/mcpIntegration.controller";
 
 const router = Router();
@@ -30,4 +31,9 @@ familyMcpRouter.delete(
     "/:familyId/integrations/:partner",
     protect,
     deleteMcpConnectHandler,
+);
+familyMcpRouter.post(
+    "/:familyId/integrations/:partner/sync-addresses",
+    protect,
+    postMcpSyncAddressesHandler,
 );

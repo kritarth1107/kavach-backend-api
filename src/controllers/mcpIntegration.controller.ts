@@ -8,6 +8,7 @@ import {
     getMcpConnectionStatus,
     startMcpConnect,
 } from "../partners/mcp/mcpClient.service";
+import { syncPartnerAddresses } from "../services/partnerAddress.service";
 import { getMcpPartner } from "../partners/mcp/partners";
 import { isMcpPartnerKey, type McpPartnerKey } from "../partners/mcp/types";
 
@@ -45,6 +46,17 @@ export async function getMcpStatusHandler(req: Request, res: Response) {
             label: partnerConfig.label,
         },
     });
+}
+
+export async function postMcpSyncAddressesHandler(req: Request, res: Response) {
+    const partner = parsePartner(req.params.partner);
+    const { familyId } = req.params;
+    const actorUserId = req.user!.userId;
+    const family = await getFamilyForActor(familyId, actorUserId);
+    requirePermission(family, actorUserId, "approve_order");
+
+    const synced = await syncPartnerAddresses(partner, familyId, actorUserId);
+    res.json({ success: true, data: { synced } });
 }
 
 export async function deleteMcpConnectHandler(req: Request, res: Response) {

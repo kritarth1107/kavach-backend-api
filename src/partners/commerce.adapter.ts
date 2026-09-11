@@ -5,6 +5,8 @@ import type { McpPartnerKey } from "./mcp/types";
 import { getMcpConnectionStatus, placeMcpOrder, searchMcpProduct } from "./mcp/mcpClient.service";
 import { getMcpPartner } from "./mcp/partners";
 import { OrderPartner } from "../types/careRecord.types";
+import { resolveFamilyMcpUserId } from "../services/commerceConnection.service";
+import { getDefaultPartnerAddressId } from "../services/partnerAddress.service";
 
 export type CommerceLineItem = {
     name: string;
@@ -32,18 +34,21 @@ export async function createCommerceOrder(input: CommerceOrderContext) {
     const partnerConfig = mcpPartner ? getMcpPartner(mcpPartner) : null;
 
     if (input.familyId && input.actorUserId && mcpPartner) {
-        const status = await getMcpConnectionStatus(
-            mcpPartner,
+        const mcpUserId = await resolveFamilyMcpUserId(
             input.familyId,
+            mcpPartner,
             input.actorUserId,
         );
-        if (status.connected) {
+        const status = mcpUserId
+            ? await getMcpConnectionStatus(mcpPartner, input.familyId, mcpUserId)
+            : { connected: false };
+        if (status.connected && mcpUserId) {
             const pricedItems = [];
             for (const item of input.items) {
                 const search = await searchMcpProduct(
                     mcpPartner,
                     input.familyId,
-                    input.actorUserId,
+                    mcpUserId,
                     item.name,
                 );
                 const hit = search.items[0];
@@ -84,18 +89,27 @@ export async function payCommerceOrder(input: {
     const mcpPartner = orderPartnerToMcp(input.partner);
 
     if (input.familyId && mcpPartner) {
-        const status = await getMcpConnectionStatus(
-            mcpPartner,
+        const mcpUserId = await resolveFamilyMcpUserId(
             input.familyId,
+            mcpPartner,
             input.payerUserId,
         );
-        if (status.connected && input.items?.length) {
+        const status = mcpUserId
+            ? await getMcpConnectionStatus(mcpPartner, input.familyId, mcpUserId)
+            : { connected: false };
+        if (status.connected && mcpUserId && input.items?.length) {
+            const addressId = await getDefaultPartnerAddressId(
+                input.familyId,
+                mcpPartner,
+                mcpUserId,
+            );
             const placed = await placeMcpOrder({
                 partner: mcpPartner,
                 familyId: input.familyId,
-                userId: input.payerUserId,
+                userId: mcpUserId,
                 items: input.items,
                 paymentMethod: input.paymentMethod ?? "COD",
+                addressId,
             });
             return {
                 paymentId: placed.partnerRef,

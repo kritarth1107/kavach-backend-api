@@ -116,7 +116,7 @@ export function dueOutreachSlot(
 
     for (const slot of companion.outreachSlots) {
         const target = OUTREACH_SLOT_HOURS[slot];
-        if (hour === target) return slot;
+        if (hour >= target && hour < target + 2) return slot;
     }
     return null;
 }

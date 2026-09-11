@@ -118,6 +118,14 @@ const config: AppConfig = {
         secret: process.env.HEALTH_SECRET || "",
     },
 
+    whatsapp: {
+        provider: (process.env.WHATSAPP_PROVIDER === "baileys" ? "baileys" : "mock") as
+            | "mock"
+            | "baileys",
+        bridgeUrl: process.env.WHATSAPP_BRIDGE_URL || "http://localhost:3100",
+        bridgeSecret: process.env.WHATSAPP_BRIDGE_SECRET || "",
+    },
+
 };
 
 // ==================================================

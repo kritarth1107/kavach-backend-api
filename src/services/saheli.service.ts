@@ -38,6 +38,7 @@ import {
     findPrintedHits,
     formatPrintedHit,
 } from "./labCite.service";
+import { maybeSuggestOrderFromChat } from "./saheliOrder.service";
 
 async function getFamilyAndRecipientLocal(familyId: string, recipientUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
@@ -266,7 +267,26 @@ export async function sendSaheliMessage(
         displayName,
         text,
     );
-    await appendMessage(familyId, recipientUserId, "elder", "saheli", reply);
+
+    let order: Awaited<ReturnType<typeof maybeSuggestOrderFromChat>> = null;
+    try {
+        order = await maybeSuggestOrderFromChat({
+            familyId,
+            subjectUserId: recipientUserId,
+            actorUserId,
+            message: text,
+        });
+    } catch (err) {
+        console.warn("Order suggest from elder chat failed:", err);
+    }
+
+    let finalReply = reply;
+    if (order) {
+        const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
+        finalReply = `${reply}\n\nI've sent this ${order.partnerLabel} basket to your family for approval:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}.`;
+    }
+
+    await appendMessage(familyId, recipientUserId, "elder", "saheli", finalReply);
     await appendCareRecordEvent({
         familyId,
         subjectUserId: recipientUserId,
@@ -274,7 +294,7 @@ export async function sendSaheliMessage(
         source: CareRecordSource.SAHELI,
         channel: opts?.channel ?? ChannelType.DASHBOARD,
         title: "Saheli",
-        detail: reply,
+        detail: finalReply,
         status: "reported",
         skipSignalCheck: true,
     });
@@ -283,7 +303,7 @@ export async function sendSaheliMessage(
         console.warn("Family share after elder message failed:", err);
     });
 
-    return { reply, conversationId };
+    return { reply: finalReply, conversationId, order: order ?? undefined };
 }
 
 async function maybeShareWithFamily(
@@ -389,7 +409,25 @@ export async function sendCaregiverSaheliMessage(
         fallback,
     );
 
-    await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply);
+    let finalReply = reply;
+    let order: Awaited<ReturnType<typeof maybeSuggestOrderFromChat>> = null;
+    try {
+        order = await maybeSuggestOrderFromChat({
+            familyId,
+            subjectUserId: recipientUserId,
+            actorUserId,
+            message: text,
+        });
+    } catch (err) {
+        console.warn("Order suggest from caregiver chat failed:", err);
+    }
+
+    if (order) {
+        const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
+        finalReply = `${reply}\n\nI've prepared a ${order.partnerLabel} basket for ${displayName}:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}. Approve it here in the dashboard or reply *approve* on WhatsApp.`;
+    }
+
+    await appendMessage(familyId, recipientUserId, "caregiver", "saheli", finalReply);
     await appendCareRecordEvent({
         familyId,
         subjectUserId: recipientUserId,
@@ -397,12 +435,12 @@ export async function sendCaregiverSaheliMessage(
         source: CareRecordSource.SAHELI,
         channel: opts?.channel ?? ChannelType.DASHBOARD,
         title: "Saheli",
-        detail: reply,
+        detail: finalReply,
         status: "reported",
         skipSignalCheck: true,
     });
 
-    return { reply, conversationId };
+    return { reply: finalReply, conversationId, order: order ?? undefined };
 }
 
 export async function getCaregiverSaheliHistory(
