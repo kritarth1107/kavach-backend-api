@@ -112,6 +112,8 @@ export interface WhatsAppConfig {
     provider: WhatsAppProvider;
     bridgeUrl: string;
     bridgeSecret: string;
+    /** Single Kavach WhatsApp line (Baileys pilot). Users message this number. */
+    kavachNumber: string;
 }
 
 /**

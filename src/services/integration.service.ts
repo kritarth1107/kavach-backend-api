@@ -61,12 +61,13 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
     const baileysStatus =
         config.whatsapp.provider === "baileys" ? await getBaileysBridgeStatus() : null;
 
+    const kavachNumber = config.whatsapp.kavachNumber;
     const whatsappDescription =
         config.whatsapp.provider === "baileys"
             ? baileysStatus?.connected
-                ? "Pilot WhatsApp via Baileys bridge — linked numbers can chat with Saheli."
+                ? `Message Saheli on WhatsApp at ${kavachNumber}. We recognize you by the phone number on your Kavach profile.`
                 : "Baileys bridge configured but not connected — scan QR on the bridge service."
-            : "Dashboard chat is live. WhatsApp pilot starts when Baileys bridge is enabled.";
+            : "Dashboard chat is live. WhatsApp starts when the Baileys bridge is enabled.";
 
     return {
         zepto,
@@ -80,12 +81,9 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
                         : "baileys_disconnected"
                     : "mock_adapter",
             description: whatsappDescription,
+            kavachNumber,
             linkedIdentities: whatsappLinks.length,
-            identities: whatsappLinks.map((i) => ({
-                label: i.label,
-                role: i.role,
-                identifier: i.channelIdentifier,
-            })),
+            identities: [],
         },
         phone: {
             status: "mock_adapter",

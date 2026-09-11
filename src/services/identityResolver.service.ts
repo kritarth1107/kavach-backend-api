@@ -1,8 +1,11 @@
 import { randomUUID } from "crypto";
 import ChannelIdentity from "../models/channelIdentity.model";
+import Family from "../models/family.model";
+import User from "../models/users.model";
 import { AppError } from "../middleware/error.middleware";
 import { ChannelType } from "../types/careRecord.types";
-import { FamilyRole } from "../types/family.types";
+import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
+import { isInternalPhone } from "../utils/phone.util";
 
 export function normalizeChannelIdentifier(channelType: ChannelType, raw: string): string {
     const trimmed = raw.trim();
@@ -15,10 +18,104 @@ export function normalizeChannelIdentifier(channelType: ChannelType, raw: string
     return trimmed.toLowerCase();
 }
 
+export type ResolvedChannelIdentity = {
+    familyId: string;
+    userId: string;
+    role: FamilyRole;
+    channelIdentifier: string;
+};
+
+async function findUserByWhatsAppPhone(normalized: string) {
+    const digits = normalized.replace(/\D/g, "");
+    const last10 = digits.slice(-10);
+
+    return User.findOne({
+        $or: [
+            { phoneKey: normalized },
+            { phoneKey: `+${digits}` },
+            ...(last10.length === 10
+                ? [{ "phone.countryCode": "+91", "phone.number": last10 }]
+                : []),
+        ],
+    }).lean();
+}
+
+async function resolveFamilyMembership(userId: string) {
+    const families = await Family.find({
+        status: "ACTIVE",
+        members: {
+            $elemMatch: { userId, status: FamilyMemberStatus.JOINED },
+        },
+    }).lean();
+
+    if (!families.length) return null;
+
+    const family = families[0]!;
+    const member = family.members.find(
+        (m) => m.userId === userId && m.status === FamilyMemberStatus.JOINED,
+    );
+    if (!member) return null;
+
+    return {
+        familyId: family.familyId,
+        userId,
+        role: member.role as FamilyRole,
+    };
+}
+
+/** Recognize a WhatsApp sender by profile phone (single Kavach line model). */
+export async function resolveWhatsAppSender(senderPhone: string): Promise<ResolvedChannelIdentity> {
+    const normalized = normalizeChannelIdentifier(ChannelType.WHATSAPP, senderPhone);
+
+    const manual = await ChannelIdentity.findOne({
+        channelType: ChannelType.WHATSAPP,
+        channelIdentifier: normalized,
+        active: true,
+    }).lean();
+
+    if (manual) {
+        return {
+            familyId: manual.familyId,
+            userId: manual.userId,
+            role: manual.role as FamilyRole,
+            channelIdentifier: normalized,
+        };
+    }
+
+    const user = await findUserByWhatsAppPhone(normalized);
+    if (!user) {
+        throw new AppError("Phone not recognized — add this number to your Kavach profile", 404);
+    }
+
+    const membership = await resolveFamilyMembership(user.userId);
+    if (!membership) {
+        throw new AppError("No active Kavach family found for this phone", 404);
+    }
+
+    return {
+        ...membership,
+        channelIdentifier: normalized,
+    };
+}
+
+export async function resolveUserWhatsAppPhone(userId: string): Promise<string | null> {
+    const user = await User.findOne({ userId }).lean();
+    if (!user?.phone?.countryCode || !user.phone.number) return null;
+    if (isInternalPhone(user.phone.countryCode)) return null;
+    return normalizeChannelIdentifier(
+        ChannelType.WHATSAPP,
+        `${user.phone.countryCode}${user.phone.number}`,
+    );
+}
+
 export async function resolveChannelIdentity(
     channelType: ChannelType,
     channelIdentifier: string,
-) {
+): Promise<ResolvedChannelIdentity> {
+    if (channelType === ChannelType.WHATSAPP) {
+        return resolveWhatsAppSender(channelIdentifier);
+    }
+
     const normalized = normalizeChannelIdentifier(channelType, channelIdentifier);
     const row = await ChannelIdentity.findOne({
         channelType,

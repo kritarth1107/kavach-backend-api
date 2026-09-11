@@ -1,10 +1,10 @@
 import { randomUUID } from "crypto";
 import OutboundMessage from "../models/outboundMessage.model";
-import ChannelIdentity from "../models/channelIdentity.model";
 import { ChannelType } from "../types/careRecord.types";
 import { sendViaBaileysBridge, isBaileysWhatsAppEnabled } from "../clients/baileysBridge.client";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { phoneMockAdapter } from "../channels/whatsappMock.adapter";
+import { resolveUserWhatsAppPhone } from "./identityResolver.service";
 
 export type OutboundDelivery = {
     channel: "whatsapp" | "phone" | "dashboard";
@@ -21,23 +21,18 @@ export async function resolveRecipientChannel(
         return { channel: "dashboard", channelIdentifier: "dashboard", delivered: true };
     }
 
-    const channelType = preferred === "phone" ? ChannelType.PHONE : ChannelType.WHATSAPP;
-    const identity = await ChannelIdentity.findOne({
-        familyId,
-        userId: recipientUserId,
-        channelType,
-        active: true,
-    }).lean();
-
-    if (!identity?.channelIdentifier) {
-        return { channel: "dashboard", channelIdentifier: "dashboard", delivered: true };
+    if (preferred === "whatsapp") {
+        const recipientPhone = await resolveUserWhatsAppPhone(recipientUserId);
+        if (recipientPhone) {
+            return {
+                channel: "whatsapp",
+                channelIdentifier: recipientPhone,
+                delivered: false,
+            };
+        }
     }
 
-    return {
-        channel: preferred,
-        channelIdentifier: identity.channelIdentifier,
-        delivered: false,
-    };
+    return { channel: "dashboard", channelIdentifier: "dashboard", delivered: true };
 }
 
 export async function deliverOutboundMessage(payload: {

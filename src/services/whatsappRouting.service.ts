@@ -5,31 +5,38 @@ import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import WhatsappSession from "../models/whatsappSession.model";
 import {
     normalizeChannelIdentifier,
-    resolveChannelIdentity,
+    resolveWhatsAppSender,
 } from "./identityResolver.service";
+import config from "../config/app.config";
 import { tryHandleCaregiverWhatsAppOrderCommand } from "./whatsappOrder.service";
 import { getFamilyMembersList } from "./familyMember.service";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
+function kavachWhatsAppLine(): string {
+    return config.whatsapp.kavachNumber;
+}
+
 const GUEST_WELCOME = `Namaste! 🙏 I'm *Saheli* — Kavach's caring companion on WhatsApp.
 
-*Kavach* helps families look after their loved ones — gentle check-ins, reminders, family memories, and ordering groceries or food through Swiggy, Instamart, or Zepto when your caregiver connects them.
+*Kavach* helps families look after their loved ones — gentle check-ins, reminders, family memories, and ordering groceries or food through Swiggy, Instamart, or Zepto.
 
 *What Saheli does:*
 • Talks with care recipients like a warm, respectful companion
 • Helps caregivers stay updated on mood, meals, and daily life
 • Suggests orders that your family approves before checkout
 
-If you're already on Kavach, ask your family caregiver to link this WhatsApp number in the dashboard under *Integrations → WhatsApp*.
+Save Kavach's WhatsApp: *${kavachWhatsAppLine()}*
+
+If you already have a Kavach account, make sure the *same mobile number* is on your profile at app.kavach.care — we recognize you automatically when you message this line.
 
 How can I help you today?`;
 
-const GUEST_FOLLOWUP = `Thanks for reaching out! If you're part of a Kavach family, your caregiver can link this number at app.kavach.care → Integrations.
+const GUEST_FOLLOWUP = `Thanks for messaging Saheli on ${kavachWhatsAppLine()}.
 
-If you're exploring Kavach for your family, visit kavach.care or ask your caregiver to invite you.
+If you're on Kavach, add this phone number to your profile (Settings) and join your family circle — then message again and I'll know who you are.
 
-I'm here whenever your number is linked — Saheli will remember your family and chat naturally.`;
+New to Kavach? Visit kavach.care or ask your caregiver to invite you.`;
 
 function isCaregiver(role: FamilyRole): boolean {
     return role === FamilyRole.PRIMARY_CAREGIVER || role === FamilyRole.CO_CAREGIVER;
@@ -163,9 +170,9 @@ export async function handleWhatsAppInbound(body: {
     const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
     const text = String(body.text ?? "").trim();
 
-    let identity: Awaited<ReturnType<typeof resolveChannelIdentity>> | null = null;
+    let identity: Awaited<ReturnType<typeof resolveWhatsAppSender>> | null = null;
     try {
-        identity = await resolveChannelIdentity(ChannelType.WHATSAPP, phone);
+        identity = await resolveWhatsAppSender(phone);
     } catch {
         return handleGuestMessage(phone);
     }

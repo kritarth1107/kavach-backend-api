@@ -124,6 +124,7 @@ const config: AppConfig = {
             | "baileys",
         bridgeUrl: process.env.WHATSAPP_BRIDGE_URL || "http://localhost:3100",
         bridgeSecret: process.env.WHATSAPP_BRIDGE_SECRET || "",
+        kavachNumber: process.env.KAVACH_WHATSAPP_NUMBER || "+918310905372",
     },
 
 };
