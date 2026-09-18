@@ -57,14 +57,23 @@ jobs:
         run: |
           TOKEN=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_ACCESS_TOKEN'), ''))")
           PHONE_ID=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_PHONE_NUMBER_ID'), ''))")
+          WABA_ID=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_WABA_ID'), ''))")
           if [ -z "$TOKEN" ] || [ -z "$PHONE_ID" ]; then
             echo "ERROR: Missing token or phone number id on Cloud Run"
             exit 1
           fi
-          HTTP=$(curl -s -o /tmp/graph.json -w "%{http_code}" "https://graph.facebook.com/v21.0/${PHONE_ID}?fields=display_phone_number,verified_name,quality_rating&access_token=${TOKEN}")
+          HTTP=$(curl -s -o /tmp/graph.json -w "%{http_code}" "https://graph.facebook.com/v21.0/${PHONE_ID}?fields=display_phone_number,verified_name,quality_rating,status,platform_type,webhook_configuration&access_token=${TOKEN}")
           echo "Graph API phone lookup HTTP: $HTTP"
           cat /tmp/graph.json
           if [ "$HTTP" != "200" ]; then exit 1; fi
+          echo "--- WABA phone_numbers list ---"
+          curl -sS "https://graph.facebook.com/v21.0/${WABA_ID}/phone_numbers?fields=id,display_phone_number,verified_name,webhook_configuration&access_token=${TOKEN}" | python3 -m json.tool
+          echo "--- WABA subscribed_apps ---"
+          curl -sS "https://graph.facebook.com/v21.0/${WABA_ID}/subscribed_apps?access_token=${TOKEN}" | python3 -m json.tool
+          echo "--- debug_token granular scopes ---"
+          APP_ID=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_APP_ID'), ''))")
+          APP_SECRET=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_APP_SECRET'), ''))")
+          curl -sS "https://graph.facebook.com/v21.0/debug_token?input_token=${TOKEN}&access_token=${APP_ID}%7C${APP_SECRET}" | python3 -m json.tool
 
       - name: POST synthetic Meta webhook to production
         run: |
