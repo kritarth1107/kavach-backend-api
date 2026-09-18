@@ -251,7 +251,7 @@ export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
     const limit = Math.min(Number(req.query.limit) || 50, 100);
     const snapshot = getWhatsAppWebhookDebugSnapshot();
     const events = listWhatsAppWebhookEvents(limit);
-    const realEvents = events.filter((e) => !e.likelySynthetic);
+    const realEvents = events.filter((e) => !e.likelySynthetic && !e.metaConsoleTest);
 
     res.json({
         success: true,
