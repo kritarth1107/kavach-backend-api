@@ -402,12 +402,15 @@ export async function* streamCaregiverSaheliChat(payload: {
     labsContext?: string;
     sessionContext?: string;
     orderContext?: string;
+    useAgent?: boolean;
     actorUserId?: string;
     kavachFamilyId?: string;
     kavachRecipientUserId?: string;
 }): AsyncGenerator<AiStreamEvent> {
     const base = aiEngineAudience();
-    const body = JSON.stringify(caregiverChatBody({ ...payload, useAgent: true }));
+    const body = JSON.stringify(
+        caregiverChatBody({ ...payload, useAgent: payload.useAgent ?? true }),
+    );
     const headers = await aiRequestHeaders();
     const res = await fetch(`${base}/v1/chat/caregiver/stream`, {
         method: "POST",

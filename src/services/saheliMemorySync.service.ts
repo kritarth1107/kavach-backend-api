@@ -27,7 +27,7 @@ export async function syncSessionHistoryToAiEngine(input: {
         sessionId: input.sessionId,
     })
         .sort({ createdAt: 1 })
-        .limit(input.limit ?? 20)
+        .limit(input.limit ?? 40)
         .lean();
 
     if (!rows.length) return ctx;
@@ -45,5 +45,37 @@ export async function syncSessionHistoryToAiEngine(input: {
         })),
     });
 
+    return ctx;
+}
+
+export async function refreshRecipientMemoryToAiEngine(input: {
+    familyId: string;
+    recipientUserId: string;
+    displayName: string;
+    sessionId?: string;
+}) {
+    const ctx = await ensureAiContext(input.familyId, input.recipientUserId, input.displayName);
+    const threads: SaheliThreadKind[] = ["elder", "caregiver"];
+    for (const thread of threads) {
+        const query: Record<string, unknown> = {
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            thread,
+        };
+        if (input.sessionId) query.sessionId = input.sessionId;
+        const rows = await SaheliMessage.find(query).sort({ createdAt: 1 }).limit(40).lean();
+        if (!rows.length) continue;
+        await aiSyncConversationHistory({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            thread,
+            messages: rows.map((row) => ({
+                external_id: row.messageId,
+                role: mapRole(thread, row.role),
+                content: row.content,
+                created_at: row.createdAt?.toISOString?.() ?? null,
+            })),
+        });
+    }
     return ctx;
 }

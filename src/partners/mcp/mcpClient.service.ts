@@ -763,6 +763,46 @@ export async function searchMcpProduct(
     });
 }
 
+export async function getMcpRestaurantMenu(
+    partner: McpPartnerKey,
+    familyId: string,
+    userId: string,
+    restaurantId: string,
+    opts?: { addressId?: string; query?: string },
+): Promise<{ items: McpCatalogHit[] }> {
+    if (partner !== "swiggy") return { items: [] };
+    return withMcpClient(partner, familyId, userId, async (client) => {
+        const tools = (await client.listTools()).tools;
+        const menuTool =
+            tools.find((t) => t.name === "get_restaurant_menu")?.name ??
+            pickToolName(tools, "restaurant", "menu");
+        if (!menuTool) return { items: [] };
+
+        const result = await client.callTool({
+            name: menuTool,
+            arguments: { restaurantId },
+        });
+        const menuItems = flattenMenuItems(extractToolJson(result));
+        const query = opts?.query?.trim() ?? "";
+        const filtered = query
+            ? menuItems.filter(
+                  (row) => fuzzyMatch(row.name, query) || fuzzyMatch(row.name, normalizeCatalogQuery(query)),
+              )
+            : menuItems;
+
+        return {
+            items: filtered.slice(0, 30).map((item) => ({
+                kind: "dish" as const,
+                name: item.name,
+                itemId: item.id,
+                productId: item.id,
+                restaurantId,
+                pricePaise: parsePricePaise(item.price),
+            })),
+        };
+    });
+}
+
 export type ParsedPartnerAddress = {
     partnerAddressId: string;
     label?: string;

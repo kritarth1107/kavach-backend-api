@@ -11,6 +11,8 @@ import {
     deliverSaheliOutreach,
     listFamilyMemoriesForRecipient,
 } from "../services/saheliOutreach.service";
+import { refreshRecipientMemoryToAiEngine } from "../services/saheliMemorySync.service";
+import { getFamilyMembersList } from "../services/familyMember.service";
 
 function assertCaregiverAccess(
     family: InstanceType<typeof Family> | null,
@@ -102,6 +104,33 @@ export async function getFamilyMemories(
             actorUserId,
         );
         res.json({ data });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function postSaheliMemoryRefreshHandler(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const { familyId, recipientUserId } = req.params;
+        const actorUserId = req.user!.userId;
+        await ensureRecipientInFamily(familyId, recipientUserId);
+        const membersPayload = await getFamilyMembersList(familyId, actorUserId);
+        const displayName =
+            membersPayload.members.find((m) => m.userId === recipientUserId)?.fullName?.trim() ||
+            membersPayload.members.find((m) => m.userId === recipientUserId)?.name?.trim() ||
+            "Care recipient";
+        const sessionId = req.body?.sessionId ? String(req.body.sessionId) : undefined;
+        await refreshRecipientMemoryToAiEngine({
+            familyId,
+            recipientUserId,
+            displayName,
+            sessionId,
+        });
+        res.json({ success: true });
     } catch (err) {
         next(err);
     }

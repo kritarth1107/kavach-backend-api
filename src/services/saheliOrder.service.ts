@@ -10,10 +10,16 @@ import {
 } from "./partnerAddress.service";
 
 const GROCERY_KEYWORDS =
-    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|dal|sabzi|vegetable|fruit|maggi|oil|ghee|paneer|curd|dahi|eggs|bread|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri)\b/i;
+    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri)\b/i;
+
+const GROCERY_WITH_UNIT =
+    /\b(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\s*(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\b|\b(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\s+(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\b/i;
 
 const FOOD_KEYWORDS =
-    /\b(food|khana|lunch|dinner|breakfast|restaurant|biryani|pizza|pasta|burger|sandwich|noodles|momos|wrap|swiggy|order food|hungry|khana mangao|thali|dosa|idli|paratha|chinese|north indian|south indian)\b/i;
+    /\b(food|khana|lunch|dinner|breakfast|restaurant|biryani|pizza|pasta|burger|sandwich|noodles|momos|wrap|swiggy|order food|hungry|khana mangao|thali|dosa|idli|paratha|chinese|north indian|south indian|makhani|tikka|curry|roll|chaat|kebab|tandoori|fried rice|manchurian)\b/i;
+
+const EXPLICIT_PARTNER =
+    /\b(?:from|on|via|using|through)\s+(swiggy(?:\s+food)?|instamart|zepto)\b|\b(swiggy(?:\s+food)?|instamart|zepto)\s+(?:food|groceries|grocery|se|pe)\b/i;
 
 const ORDER_INTENT =
     /\b(order|mangao|manga|bhej|deliver|delivery|lana|la do|chahiye|need|want|get me|bring)\b/i;
@@ -164,24 +170,71 @@ function extractItems(text: string): ParsedOrderLine[] {
     return items.slice(0, 8);
 }
 
+export function parseExplicitPartner(message: string): OrderPartner | null {
+    const match = message.match(EXPLICIT_PARTNER);
+    if (!match) return null;
+    const token = (match[1] ?? match[2] ?? "").toLowerCase();
+    if (token.includes("swiggy")) return OrderPartner.SWIGGY;
+    if (token.includes("instamart")) return OrderPartner.INSTAMART;
+    if (token.includes("zepto")) return OrderPartner.ZEPTO;
+    return null;
+}
+
+export function classifyOrderIntent(message: string): "food" | "grocery" {
+    const explicit = parseExplicitPartner(message);
+    if (explicit === OrderPartner.SWIGGY) return "food";
+    if (explicit === OrderPartner.INSTAMART || explicit === OrderPartner.ZEPTO) return "grocery";
+
+    const hasGroceryUnit = GROCERY_WITH_UNIT.test(message);
+    const hasGroceryKeyword = GROCERY_KEYWORDS.test(message);
+    const hasFoodKeyword = FOOD_KEYWORDS.test(message);
+
+    if (hasFoodKeyword && !hasGroceryKeyword && !hasGroceryUnit) return "food";
+    if ((hasGroceryKeyword || hasGroceryUnit) && !hasFoodKeyword) return "grocery";
+    if (hasFoodKeyword && (hasGroceryKeyword || hasGroceryUnit)) return "food";
+    if (/\b(swiggy|restaurant|lunch|dinner|breakfast|biryani|pizza)\b/i.test(message)) return "food";
+    return "grocery";
+}
+
+export function extractOrderQuery(message: string): string {
+    const items = extractItems(message);
+    if (items.length) return items.map((i) => i.name).join(", ");
+    const cleaned = message
+        .replace(PARTNER_NOISE, " ")
+        .replace(ORDER_INTENT, " ")
+        .replace(FOOD_KEYWORDS, " ")
+        .replace(GROCERY_KEYWORDS, " ")
+        .replace(/\b(for|lunch|dinner|breakfast|please|mujhe)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    return cleaned.slice(0, 120) || message.trim().slice(0, 120);
+}
+
 export async function pickOrderPartner(
     message: string,
     familyId: string,
     actorUserId: string,
 ): Promise<OrderPartner> {
-    const wantsFood = FOOD_KEYWORDS.test(message) && !GROCERY_KEYWORDS.test(message);
-    const wantsGrocery = GROCERY_KEYWORDS.test(message) || !wantsFood;
-
+    const explicit = parseExplicitPartner(message);
+    const intent = classifyOrderIntent(message);
     const connected = await listFamilyConnectedPartners(familyId, actorUserId);
 
-    if (wantsGrocery && connected.instamart) return OrderPartner.INSTAMART;
-    if (wantsFood && connected.swiggy) return OrderPartner.SWIGGY;
-    if (connected.instamart && wantsGrocery) return OrderPartner.INSTAMART;
-    if (connected.swiggy) return OrderPartner.SWIGGY;
+    if (explicit) {
+        if (explicit === OrderPartner.SWIGGY && connected.swiggy) return OrderPartner.SWIGGY;
+        if (explicit === OrderPartner.INSTAMART && connected.instamart) return OrderPartner.INSTAMART;
+        if (explicit === OrderPartner.ZEPTO && connected.zepto) return OrderPartner.ZEPTO;
+        return explicit;
+    }
+
+    if (intent === "food" && connected.swiggy) return OrderPartner.SWIGGY;
+    if (intent === "grocery" && connected.instamart) return OrderPartner.INSTAMART;
+    if (intent === "food" && connected.swiggy) return OrderPartner.SWIGGY;
+    if (connected.swiggy && intent === "food") return OrderPartner.SWIGGY;
     if (connected.instamart) return OrderPartner.INSTAMART;
+    if (connected.swiggy) return OrderPartner.SWIGGY;
     if (connected.zepto) return OrderPartner.ZEPTO;
-    if (wantsGrocery) return OrderPartner.INSTAMART;
-    if (wantsFood) return OrderPartner.SWIGGY;
+    if (intent === "grocery") return OrderPartner.INSTAMART;
+    if (intent === "food") return OrderPartner.SWIGGY;
     return OrderPartner.ZEPTO;
 }
 

@@ -5,6 +5,7 @@ import LabDocument from "../models/labDocument.model";
 import SaheliMessage, {
     type SaheliMessageConnectPayload,
     type SaheliMessageOrderPayload,
+    type SaheliOrderFlowPayload,
     type SaheliMessageRole,
     type SaheliThreadKind,
 } from "../models/saheliMessage.model";
@@ -19,7 +20,10 @@ import {
     streamCaregiverSaheliChat,
     type AiStreamEvent,
 } from "../clients/aiEngine.client";
-import { syncSessionHistoryToAiEngine } from "./saheliMemorySync.service";
+import {
+    refreshRecipientMemoryToAiEngine,
+    syncSessionHistoryToAiEngine,
+} from "./saheliMemorySync.service";
 import { aiConversationId } from "../utils/uuid.util";
 import type { AiContext } from "./aiTenant.service";
 import {
@@ -46,6 +50,12 @@ import {
     findPrintedHits,
     formatPrintedHit,
 } from "./labCite.service";
+import {
+    handleOrderFlowChatMessage,
+    orderFlowContextForAi,
+    orderFlowReply,
+    type OrderFlowPayload,
+} from "./orderOrchestrator.service";
 import {
     maybeSuggestOrderFromChat,
     messageLooksLikeOrder,
@@ -90,6 +100,7 @@ async function appendMessage(
     sessionId?: string,
     extras?: {
         orderPayload?: SaheliMessageOrderPayload;
+        orderFlowPayload?: SaheliOrderFlowPayload;
         connectPayload?: SaheliMessageConnectPayload;
     },
 ) {
@@ -102,6 +113,7 @@ async function appendMessage(
         role,
         content,
         orderPayload: extras?.orderPayload,
+        orderFlowPayload: extras?.orderFlowPayload,
         connectPayload: extras?.connectPayload,
     });
     return doc;
@@ -172,8 +184,26 @@ async function listThread(
         content: m.content,
         createdAt: m.createdAt ? m.createdAt.toISOString() : null,
         order: m.orderPayload ?? undefined,
+        orderFlow: m.orderFlowPayload ?? undefined,
         connect: m.connectPayload ?? undefined,
     }));
+}
+
+function serializeOrderFlow(flow: OrderFlowPayload | null | undefined): SaheliOrderFlowPayload | undefined {
+    if (!flow) return undefined;
+    return {
+        sessionId: flow.sessionId,
+        phase: flow.phase,
+        partner: flow.partner,
+        partnerLabel: flow.partnerLabel,
+        query: flow.query,
+        selectedAddressId: flow.selectedAddressId,
+        addresses: flow.addresses,
+        catalog: flow.catalog,
+        cartItems: flow.cartItems,
+        orderId: flow.orderId,
+        message: flow.message,
+    };
 }
 
 function caregiverReplyFromCosmos(opts: {
@@ -399,7 +429,12 @@ async function caregiverReplyWithAi(
         sessionLines: string[];
     },
     conversationIdOverride?: string,
-    opts?: { sessionId?: string; orderContext?: string; actorUserId?: string },
+    opts?: {
+        sessionId?: string;
+        orderContext?: string;
+        actorUserId?: string;
+        useAgent?: boolean;
+    },
 ): Promise<{ reply: string; conversationId: string; orderFromAgent?: OrderChatResult | null }> {
     const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
 
@@ -437,7 +472,7 @@ async function caregiverReplyWithAi(
             labsContext,
             sessionContext: context.sessionLines.slice(-8).join("\n"),
             orderContext: opts?.orderContext,
-            useAgent: true,
+            useAgent: opts?.useAgent ?? true,
             actorUserId: opts?.actorUserId,
             kavachFamilyId: familyId,
             kavachRecipientUserId: recipientUserId,
@@ -770,6 +805,20 @@ export async function sendCaregiverSaheliMessage(
         .lean();
 
     let order: OrderChatResult | null = null;
+    let orderFlow: OrderFlowPayload | null = null;
+    try {
+        orderFlow = await handleOrderFlowChatMessage({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            message: text,
+            saheliSessionId: sessionId,
+        });
+    } catch (err) {
+        console.warn("Order flow from caregiver chat failed:", err);
+    }
+
+    const flowReply = orderFlowReply(orderFlow);
     let reply = "";
     const ai = await caregiverReplyWithAi(
         familyId,
@@ -787,11 +836,16 @@ export async function sendCaregiverSaheliMessage(
             })),
         },
         aiConversationId(session.aiConversationId),
-        { sessionId, actorUserId },
+        {
+            sessionId,
+            actorUserId,
+            useAgent: !orderFlow?.sessionId,
+            orderContext: orderFlowContextForAi(orderFlow),
+        },
     );
     let conversationId = ai.conversationId;
-    reply = ai.reply;
-    if (ai.orderFromAgent) {
+    reply = flowReply || ai.reply;
+    if (!flowReply && ai.orderFromAgent) {
         order = ai.orderFromAgent;
     }
 
@@ -809,9 +863,11 @@ export async function sendCaregiverSaheliMessage(
 
     const finalReply = reply;
     const chatExtras = saheliChatExtras(order);
+    const orderFlowPayload = serializeOrderFlow(orderFlow);
 
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", finalReply, sessionId, {
         orderPayload: chatExtras.orderPayload,
+        orderFlowPayload,
         connectPayload: chatExtras.connectPayload,
     });
     await appendCareRecordEvent({
@@ -830,6 +886,7 @@ export async function sendCaregiverSaheliMessage(
         reply: finalReply,
         conversationId,
         sessionId,
+        orderFlow: orderFlowPayload,
         ...chatExtras.clientPayload,
     };
 }
@@ -859,7 +916,16 @@ export async function* streamCaregiverSaheliMessage(
         sessionId?: string;
     },
 ): AsyncGenerator<
-    AiStreamEvent | { type: "done"; sessionId: string; conversationId: string; reply: string; order?: unknown; connect?: unknown }
+    | AiStreamEvent
+    | {
+          type: "done";
+          sessionId: string;
+          conversationId: string;
+          reply: string;
+          order?: unknown;
+          connect?: unknown;
+          orderFlow?: SaheliOrderFlowPayload;
+      }
 > {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -946,13 +1012,11 @@ export async function* streamCaregiverSaheliMessage(
         conversationForAi ?? `${familyId}:${recipientUserId}:caregiver`;
     const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
 
-    await syncSessionHistoryToAiEngine({
+    await refreshRecipientMemoryToAiEngine({
         familyId,
         recipientUserId,
         displayName,
         sessionId,
-        thread: "caregiver",
-        conversationId: conversationForAi,
     });
 
     const elderThreadContext = elderLines
@@ -966,8 +1030,30 @@ export async function* streamCaregiverSaheliMessage(
 
     let replyBuffer = "";
     let order: OrderChatResult | null = null;
+    let orderFlow: OrderFlowPayload | null = null;
 
     try {
+        orderFlow = await handleOrderFlowChatMessage({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            message: text,
+            saheliSessionId: sessionId,
+        });
+    } catch (err) {
+        console.warn("Order flow from caregiver stream failed:", err);
+    }
+
+    const flowReply = orderFlowReply(orderFlow);
+    if (flowReply) {
+        replyBuffer = flowReply;
+        for (const chunk of flowReply.match(/.{1,24}/gs) ?? [flowReply]) {
+            yield { type: "token", delta: chunk };
+        }
+    }
+
+    try {
+        if (!orderFlow?.sessionId) {
         for await (const event of streamCaregiverSaheliChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
@@ -977,6 +1063,8 @@ export async function* streamCaregiverSaheliMessage(
             elderThreadContext,
             labsContext,
             sessionContext: sessionLines.slice(-8).join("\n"),
+            orderContext: orderFlowContextForAi(orderFlow),
+            useAgent: true,
             actorUserId,
             kavachFamilyId: familyId,
             kavachRecipientUserId: recipientUserId,
@@ -1002,6 +1090,7 @@ export async function* streamCaregiverSaheliMessage(
             } else {
                 yield event;
             }
+        }
         }
 
         if (aiConversationId(conversationId)) {
@@ -1039,8 +1128,10 @@ export async function* streamCaregiverSaheliMessage(
     });
 
     const chatExtras = saheliChatExtras(order);
+    const orderFlowPayload = serializeOrderFlow(orderFlow);
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply, sessionId, {
         orderPayload: chatExtras.orderPayload,
+        orderFlowPayload,
         connectPayload: chatExtras.connectPayload,
     });
     await appendCareRecordEvent({
@@ -1060,6 +1151,7 @@ export async function* streamCaregiverSaheliMessage(
         sessionId,
         conversationId,
         reply,
+        orderFlow: orderFlowPayload,
         ...chatExtras.clientPayload,
     };
 }

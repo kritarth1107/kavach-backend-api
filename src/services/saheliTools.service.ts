@@ -179,14 +179,15 @@ export async function executeSaheliTool(input: {
         }
         case "suggest_order": {
             const message = String(input.args.message ?? input.args.query ?? "");
-            const result = await maybeSuggestOrderFromChat({
+            const { startOrderFlow } = await import("./orderOrchestrator.service");
+            const flow = await startOrderFlow({
                 familyId: input.familyId,
-                subjectUserId: input.recipientUserId,
+                recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 message,
             });
-            if (!result) return { status: "no_order_intent" };
-            return { status: result.kind, result: result as OrderChatResult };
+            if (!flow) return { status: "no_order_intent" };
+            return { status: "order_flow", kind: "order_flow", orderFlow: flow, message: flow.message };
         }
         case "recall_memories": {
             const { aiListFamilyMemories } = await import("../clients/aiEngine.client");
@@ -209,62 +210,3 @@ export async function executeSaheliTool(input: {
     }
 }
 
-export async function getSaheliInsights(
-    familyId: string,
-    recipientUserId: string,
-    actorUserId: string,
-): Promise<Array<{ kind: string; title: string; detail: string }>> {
-    await getFamilyForActor(familyId, actorUserId);
-    const insights: Array<{ kind: string; title: string; detail: string }> = [];
-
-    const pendingOrders = await Order.find({
-        familyId,
-        subjectUserId: recipientUserId,
-        status: { $in: [OrderStatus.AWAITING_APPROVAL, OrderStatus.APPROVED] },
-    })
-        .sort({ createdAt: -1 })
-        .limit(3)
-        .lean();
-    for (const order of pendingOrders) {
-        insights.push({
-            kind: "order",
-            title: "Order awaiting approval",
-            detail: `${order.partner} basket ₹${(order.totalPaise / 100).toFixed(0)} needs family approval.`,
-        });
-    }
-
-    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
-    const recentLabs = await LabDocument.find({
-        familyId,
-        recipientUserId,
-        createdAt: { $gte: cutoff },
-    })
-        .sort({ createdAt: -1 })
-        .limit(3)
-        .lean();
-    for (const lab of recentLabs) {
-        insights.push({
-            kind: "lab",
-            title: "New report uploaded",
-            detail: `${lab.title}${lab.recordDate ? ` (${lab.recordDate})` : ""} — review in Saheli or Reports.`,
-        });
-    }
-
-    const lastElder = await SaheliMessage.findOne({
-        familyId,
-        recipientUserId,
-        thread: "elder",
-        role: "elder",
-    })
-        .sort({ createdAt: -1 })
-        .lean();
-    if (lastElder?.createdAt && lastElder.createdAt < new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)) {
-        insights.push({
-            kind: "checkin",
-            title: "No recent check-in",
-            detail: `${recipientUserId} has not messaged Saheli in a few days.`,
-        });
-    }
-
-    return insights.slice(0, 5);
-}

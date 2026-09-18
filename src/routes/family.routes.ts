@@ -32,6 +32,17 @@ import {
     getFamilyMemories,
 } from "../controllers/saheliCompanion.controller";
 import {
+    getActiveOrderSessionHandler,
+    getOrderSessionCatalogHandler,
+    getOrderSessionHandler,
+    getOrderSessionMenuHandler,
+    patchOrderSessionAddressHandler,
+    patchOrderSessionCartItemHandler,
+    postOrderSessionCartItemHandler,
+    postOrderSessionSubmitHandler,
+    postStartOrderSessionHandler,
+} from "../controllers/orderOrchestrator.controller";
+import {
     createCaregiverSaheliChatSessionHandler,
     createSaheliChatSessionHandler,
     getActivity,
@@ -51,9 +62,18 @@ import {
     downloadRecipientLab,
     getRecipientLabDetail,
     getRecipientLabs,
+    getRecipientLabTrends,
     postRecipientLab,
     postRecipientLabUpload,
 } from "../controllers/memoryDocument.controller";
+import {
+    getCommandCenterHandler,
+    getFamilySearchHandler,
+    getNotificationsHandler,
+    patchNotificationReadHandler,
+    postNotificationsReadAllHandler,
+} from "../controllers/dashboard.controller";
+import { postSaheliMemoryRefreshHandler } from "../controllers/saheliCompanion.controller";
 import { familyDocumentUpload } from "../middleware/upload.middleware";
 import { protect } from "../middleware/auth.middleware";
 
@@ -70,6 +90,11 @@ router.get("/", protect, listFamilies);
 router.post("/", protect, createFamily);
 router.get("/:familyId/overview", protect, getOverview);
 router.get("/:familyId/activity", protect, getActivity);
+router.get("/:familyId/dashboard/command-center", protect, getCommandCenterHandler);
+router.get("/:familyId/search", protect, getFamilySearchHandler);
+router.get("/:familyId/notifications", protect, getNotificationsHandler);
+router.patch("/:familyId/notifications/:notificationId/read", protect, patchNotificationReadHandler);
+router.post("/:familyId/notifications/read-all", protect, postNotificationsReadAllHandler);
 router.get("/:familyId/recipients/:recipientUserId/saheli/chat/sessions", protect, listSaheliChatSessionsHandler);
 router.post("/:familyId/recipients/:recipientUserId/saheli/chat/sessions", protect, createSaheliChatSessionHandler);
 router.get("/:familyId/recipients/:recipientUserId/saheli/chat", protect, getSaheliChat);
@@ -119,13 +144,60 @@ router.get(
     protect,
     getFamilyMemories,
 );
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/memory/refresh",
+    protect,
+    postSaheliMemoryRefreshHandler,
+);
 router.get(
     "/:familyId/recipients/:recipientUserId/saheli/insights",
     protect,
     getSaheliInsightsHandler,
 );
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/order-sessions",
+    protect,
+    postStartOrderSessionHandler,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/order-sessions/active",
+    protect,
+    getActiveOrderSessionHandler,
+);
+router.get("/:familyId/saheli/order-sessions/:sessionId", protect, getOrderSessionHandler);
+router.patch(
+    "/:familyId/saheli/order-sessions/:sessionId/address",
+    protect,
+    patchOrderSessionAddressHandler,
+);
+router.get(
+    "/:familyId/saheli/order-sessions/:sessionId/catalog",
+    protect,
+    getOrderSessionCatalogHandler,
+);
+router.get(
+    "/:familyId/saheli/order-sessions/:sessionId/menu/:restaurantId",
+    protect,
+    getOrderSessionMenuHandler,
+);
+router.post(
+    "/:familyId/saheli/order-sessions/:sessionId/cart/items",
+    protect,
+    postOrderSessionCartItemHandler,
+);
+router.patch(
+    "/:familyId/saheli/order-sessions/:sessionId/cart/items",
+    protect,
+    patchOrderSessionCartItemHandler,
+);
+router.post(
+    "/:familyId/saheli/order-sessions/:sessionId/submit",
+    protect,
+    postOrderSessionSubmitHandler,
+);
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);
+router.get("/:familyId/recipients/:recipientUserId/labs/trends", protect, getRecipientLabTrends);
 router.post("/:familyId/recipients/:recipientUserId/labs", protect, postRecipientLab);
 router.post(
     "/:familyId/recipients/:recipientUserId/labs/upload",

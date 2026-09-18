@@ -1,0 +1,45 @@
+name: Set WhatsApp secrets on Cloud Run (GCP only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_secret:
+        description: WHATSAPP_META_APP_SECRET
+        required: true
+        type: string
+      access_token:
+        description: WHATSAPP_META_ACCESS_TOKEN
+        required: true
+        type: string
+
+concurrency:
+  group: set-whatsapp-gcp-env
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  GCP_REGION: asia-south1
+  SERVICE: kavach-backend
+
+jobs:
+  set-env:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Update Cloud Run env vars
+        run: |
+          gcloud run services update ${{ env.SERVICE }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --region=${{ env.GCP_REGION }} \
+            --update-env-vars="WHATSAPP_META_APP_SECRET=${{ inputs.app_secret }},WHATSAPP_META_ACCESS_TOKEN=${{ inputs.access_token }}" \
+            --quiet

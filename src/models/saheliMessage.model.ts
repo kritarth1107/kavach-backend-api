@@ -4,6 +4,46 @@ import mongoose, { Document, Model, Schema } from "mongoose";
 export type SaheliThreadKind = "elder" | "caregiver";
 export type SaheliMessageRole = "elder" | "saheli" | "family" | "system";
 
+export type SaheliOrderFlowPayload = {
+    sessionId: string;
+    phase: "select_address" | "browse" | "review_cart" | "submitted" | "expired";
+    partner: string;
+    partnerLabel: string;
+    query: string;
+    selectedAddressId?: string;
+    addresses?: Array<{ id: string; label: string; line1: string; city?: string; pincode?: string; isDefault?: boolean }>;
+    catalog?: {
+        restaurants: Array<{
+            id?: string;
+            itemId?: string;
+            name: string;
+            pricePaise?: number;
+            kind?: "restaurant" | "dish" | "product";
+            restaurantId?: string;
+            restaurantName?: string;
+        }>;
+        dishes: Array<{
+            id?: string;
+            itemId?: string;
+            name: string;
+            pricePaise?: number;
+            kind?: "restaurant" | "dish" | "product";
+            restaurantId?: string;
+            restaurantName?: string;
+        }>;
+    };
+    cartItems?: Array<{
+        itemId?: string;
+        name: string;
+        quantity: number;
+        pricePaise: number;
+        restaurantId?: string;
+        restaurantName?: string;
+    }>;
+    orderId?: string;
+    message?: string;
+};
+
 export type SaheliMessageOrderPayload = {
     orderId: string;
     partner: string;
@@ -41,6 +81,7 @@ export interface ISaheliMessage {
     role: SaheliMessageRole;
     content: string;
     orderPayload?: SaheliMessageOrderPayload;
+    orderFlowPayload?: SaheliOrderFlowPayload;
     connectPayload?: SaheliMessageConnectPayload;
     createdAt?: Date;
 }
@@ -57,6 +98,7 @@ const saheliMessageSchema = new Schema<ISaheliMessageDocument>(
         role: { type: String, enum: ["elder", "saheli", "family", "system"], required: true },
         content: { type: String, required: true, maxlength: 8000 },
         orderPayload: { type: Schema.Types.Mixed },
+        orderFlowPayload: { type: Schema.Types.Mixed },
         connectPayload: { type: Schema.Types.Mixed },
     },
     {

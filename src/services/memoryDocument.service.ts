@@ -15,6 +15,8 @@ import {
     analyzeUploadedDocument,
     syncDocumentToFamilyMemory,
 } from "./documentMemorySync.service";
+import { enrichLabStructuredValues } from "./labTrends.service";
+import { createFamilyNotification } from "./notification.service";
 import { appendCareRecordEvent } from "./careRecord.service";
 import {
     CareRecordEventType,
@@ -172,6 +174,16 @@ export async function ingestRecipientDocument(
         title: updated?.title ?? provisionalTitle,
         kind: analysis?.kind ?? doc.kind,
         rawText,
+    });
+
+    void enrichLabStructuredValues(doc.documentId);
+    void createFamilyNotification(familyId, {
+        kind: "lab_new",
+        title: "New report uploaded",
+        body: updated?.title ?? provisionalTitle,
+        actionUrl: "/dashboard/reports",
+        recipientUserId,
+        dedupeKey: `lab:${doc.documentId}`,
     });
 
     return {

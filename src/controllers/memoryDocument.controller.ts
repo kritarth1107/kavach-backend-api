@@ -9,6 +9,7 @@ import {
     ingestRecipientFiles,
     listRecipientDocuments,
 } from "../services/memoryDocument.service";
+import { getLabTrends } from "../services/labTrends.service";
 
 export const getRecipientLabs = async (
     req: Request,
@@ -172,6 +173,23 @@ export const downloadRecipientLab = async (
             `attachment; filename="${encodeURIComponent(file.fileName).replace(/%22/g, "")}"`,
         );
         res.send(file.buffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getRecipientLabTrends = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const marker = String(req.query.marker ?? "TSH");
+        const limit = Number(req.query.limit ?? 12);
+        const data = await getLabTrends(familyId, recipientUserId, req.user.userId, marker, limit);
+        res.json({ success: true, data });
     } catch (error) {
         next(error);
     }
