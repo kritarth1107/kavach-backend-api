@@ -3,9 +3,14 @@ import PartnerAddress from "../models/partnerAddress.model";
 import { listMcpTools, syncPartnerAddressesFromMcp } from "../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../partners/mcp/types";
 
-export async function listPartnerAddresses(familyId: string, partner?: McpPartnerKey) {
+export async function listPartnerAddresses(
+    familyId: string,
+    partner?: McpPartnerKey,
+    userId?: string,
+) {
     const query: Record<string, string> = { familyId };
     if (partner) query.partner = partner;
+    if (userId) query.userId = userId;
     const rows = await PartnerAddress.find(query).sort({ isDefault: -1, syncedAt: -1 }).lean();
     return rows.map((row) => ({
         address_id: row.addressId,

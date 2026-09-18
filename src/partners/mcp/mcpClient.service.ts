@@ -780,10 +780,54 @@ export async function syncPartnerAddressesFromMcp(
     return withMcpClient(partner, familyId, userId, async (client) => {
         const tools = (await client.listTools()).tools;
         const addressTool = tools.find((t) => /get_addresses|list_addresses|saved_addresses/i.test(t.name))?.name;
-        if (!addressTool) return [];
+        if (!addressTool) {
+            console.warn(`${partner} MCP: no get_addresses tool for family ${familyId}`);
+            return [];
+        }
 
-        const result = await client.callTool({ name: addressTool, arguments: {} });
-        return parsePartnerAddresses(extractToolJson(result));
+        const collected = new Map<string, ParsedPartnerAddress>();
+        let page = 1;
+        const pageSize = 10;
+
+        for (let guard = 0; guard < 20; guard += 1) {
+            const result = await client.callTool({
+                name: addressTool,
+                arguments: { page, pageSize },
+            });
+            const parsed = extractToolJson(result);
+            if (
+                parsed &&
+                typeof parsed === "object" &&
+                (parsed as Record<string, unknown>).success === false
+            ) {
+                const err = (parsed as Record<string, unknown>).error;
+                console.warn(`${partner} get_addresses failed for family ${familyId}:`, err);
+                break;
+            }
+
+            const batch = parsePartnerAddresses(parsed);
+            for (const row of batch) {
+                if (!collected.has(row.partnerAddressId)) collected.set(row.partnerAddressId, row);
+            }
+
+            if (!batch.length && guard === 0) {
+                const fallback = await client.callTool({ name: addressTool, arguments: {} });
+                for (const row of parsePartnerAddresses(extractToolJson(fallback))) {
+                    if (!collected.has(row.partnerAddressId)) collected.set(row.partnerAddressId, row);
+                }
+            }
+
+            const pagination = extractAddressPagination(parsed);
+            if (!pagination?.hasMore) break;
+            if (pagination.totalPages != null && page >= pagination.totalPages) break;
+            page += 1;
+        }
+
+        if (!collected.size) {
+            console.warn(`${partner} get_addresses returned no parseable addresses for family ${familyId}`);
+        }
+
+        return [...collected.values()];
     });
 }
 
@@ -1008,15 +1052,39 @@ function extractFirstId(text: string): string | undefined {
     return match?.[1] ?? match?.[0];
 }
 
+function extractAddressPagination(parsed: unknown): {
+    page?: number;
+    totalPages?: number;
+    hasMore?: boolean;
+} | null {
+    if (!parsed || typeof parsed !== "object") return null;
+    const root = parsed as Record<string, unknown>;
+    const data = digData(parsed);
+    const pagination =
+        (data?.pagination as Record<string, unknown> | undefined) ??
+        (root.pagination as Record<string, unknown> | undefined);
+    if (!pagination || typeof pagination !== "object") return null;
+    return {
+        page: typeof pagination.page === "number" ? pagination.page : undefined,
+        totalPages:
+            typeof pagination.totalPages === "number" ? pagination.totalPages : undefined,
+        hasMore: typeof pagination.hasMore === "boolean" ? pagination.hasMore : undefined,
+    };
+}
+
 function extractAddressList(parsed: unknown): unknown[] {
     if (Array.isArray(parsed)) return parsed;
     if (!parsed || typeof parsed !== "object") return [];
     const root = parsed as Record<string, unknown>;
     if (Array.isArray(root.addresses)) return root.addresses;
+    // Swiggy recipe: callTool result is { data: Address[] } (data is the array itself).
+    if (Array.isArray(root.data)) return root.data;
     const data = digData(parsed);
     if (!data) return [];
     if (Array.isArray(data)) return data;
     if (Array.isArray(data.addresses)) return data.addresses;
+    if (Array.isArray(data.results)) return data.results;
+    if (Array.isArray(data.savedAddresses)) return data.savedAddresses;
     return [];
 }
 
@@ -1079,7 +1147,9 @@ function normalizeAddressRow(row: unknown): ParsedPartnerAddress | null {
 
     const line1 = String(
         obj.line1 ??
+            obj.addressLine ??
             obj.addressLine1 ??
+            obj.displayText ??
             obj.address ??
             obj.formattedAddress ??
             obj.fullAddress ??
@@ -1089,7 +1159,15 @@ function normalizeAddressRow(row: unknown): ParsedPartnerAddress | null {
 
     return {
         partnerAddressId,
-        label: obj.label ? String(obj.label) : obj.name ? String(obj.name) : undefined,
+        label: obj.label
+            ? String(obj.label)
+            : obj.addressTag
+              ? String(obj.addressTag)
+              : obj.addressCategory
+                ? String(obj.addressCategory)
+                : obj.name
+                  ? String(obj.name)
+                  : undefined,
         line1,
         line2: obj.line2 ? String(obj.line2) : obj.addressLine2 ? String(obj.addressLine2) : undefined,
         city: obj.city ? String(obj.city) : undefined,

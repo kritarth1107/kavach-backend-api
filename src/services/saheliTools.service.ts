@@ -137,7 +137,7 @@ export async function executeSaheliTool(input: {
                 (await resolveFamilyMcpUserId(input.familyId, partner, input.actorUserId)) ??
                 input.actorUserId;
             await ensurePartnerAddressesSynced(partner, input.familyId, commerceUserId);
-            const rows = await listPartnerAddresses(input.familyId, partner);
+            const rows = await listPartnerAddresses(input.familyId, partner, commerceUserId);
             return {
                 addresses: rows
                     .filter((r) => r.partner === partner)

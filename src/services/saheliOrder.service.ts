@@ -336,7 +336,7 @@ async function loadPartnerAddresses(
     commerceUserId: string,
 ) {
     await ensurePartnerAddressesSynced(mcpPartner, familyId, commerceUserId);
-    const rows = await listPartnerAddresses(familyId, mcpPartner);
+    const rows = await listPartnerAddresses(familyId, mcpPartner, commerceUserId);
     return rows
         .filter((row) => row.partner === mcpPartner)
         .map((row) => ({
