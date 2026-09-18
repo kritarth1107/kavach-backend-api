@@ -3,6 +3,8 @@ import CareSchedule from "../models/careSchedule.model";
 import Family from "../models/family.model";
 import LabDocument from "../models/labDocument.model";
 import SaheliMessage, {
+    type SaheliMessageConnectPayload,
+    type SaheliMessageOrderPayload,
     type SaheliMessageRole,
     type SaheliThreadKind,
 } from "../models/saheliMessage.model";
@@ -38,7 +40,18 @@ import {
     findPrintedHits,
     formatPrintedHit,
 } from "./labCite.service";
-import { maybeSuggestOrderFromChat } from "./saheliOrder.service";
+import {
+    maybeSuggestOrderFromChat,
+    messageLooksLikeOrder,
+    serializeOrderChatForClient,
+    type OrderChatResult,
+} from "./saheliOrder.service";
+import {
+    createSaheliChatSession,
+    getSaheliChatSession,
+    maybeSetSessionTitle,
+    touchSaheliChatSession,
+} from "./saheliSession.service";
 
 async function getFamilyAndRecipientLocal(familyId: string, recipientUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
@@ -68,16 +81,58 @@ async function appendMessage(
     thread: SaheliThreadKind,
     role: SaheliMessageRole,
     content: string,
+    sessionId?: string,
+    extras?: {
+        orderPayload?: SaheliMessageOrderPayload;
+        connectPayload?: SaheliMessageConnectPayload;
+    },
 ) {
     const doc = await SaheliMessage.create({
         messageId: randomUUID(),
         familyId,
         recipientUserId,
         thread,
+        sessionId,
         role,
         content,
+        orderPayload: extras?.orderPayload,
+        connectPayload: extras?.connectPayload,
     });
     return doc;
+}
+
+function orderPayloadFromChat(order: Extract<OrderChatResult, { kind: "order" }>): SaheliMessageOrderPayload {
+    return {
+        orderId: order.orderId,
+        partner: order.partner,
+        partnerLabel: order.partnerLabel,
+        totalPaise: order.totalPaise,
+        items: order.items,
+        status: order.status,
+        source: order.source,
+        searchResults: order.searchResults,
+        addresses: order.addresses,
+    };
+}
+
+function connectPayloadFromChat(
+    connect: Extract<OrderChatResult, { kind: "connect_required" }>,
+): SaheliMessageConnectPayload {
+    return {
+        partner: connect.partner,
+        partnerLabel: connect.partnerLabel,
+        connectPartner: connect.connectPartner,
+        connectUrl: connect.connectUrl,
+    };
+}
+
+function saheliChatExtras(order: OrderChatResult | null) {
+    const serialized = serializeOrderChatForClient(order);
+    return {
+        orderPayload: serialized.order ? orderPayloadFromChat(serialized.order) : undefined,
+        connectPayload: serialized.connect ? connectPayloadFromChat(serialized.connect) : undefined,
+        clientPayload: serialized,
+    };
 }
 
 async function listThread(
@@ -85,8 +140,12 @@ async function listThread(
     recipientUserId: string,
     thread: SaheliThreadKind,
     limit = 50,
+    sessionId?: string,
 ) {
-    const rows = await SaheliMessage.find({ familyId, recipientUserId, thread })
+    const filter: Record<string, unknown> = { familyId, recipientUserId, thread };
+    if (sessionId) filter.sessionId = sessionId;
+
+    const rows = await SaheliMessage.find(filter)
         .sort({ createdAt: 1 })
         .limit(limit)
         .lean();
@@ -94,6 +153,8 @@ async function listThread(
         role: m.role,
         content: m.content,
         createdAt: m.createdAt ? m.createdAt.toISOString() : null,
+        order: m.orderPayload ?? undefined,
+        connect: m.connectPayload ?? undefined,
     }));
 }
 
@@ -114,10 +175,11 @@ function caregiverReplyFromCosmos(opts: {
         /\b(what reports|which labs|list (the )?(reports|labs)|what('s| is) saved|documents on file)\b/i.test(
             qLower,
         );
+    const wantsOrder = messageLooksLikeOrder(q);
     const hits = findPrintedHits(opts.labs, q);
     const named = findNamedReports(opts.labs, q);
 
-    if (wantsHow || (!hits.length && !named.length && !wantsList)) {
+    if (!wantsOrder && (wantsHow || (!hits.length && !named.length && !wantsList))) {
         if (opts.elderLines.length) {
             const last = opts.elderLines[opts.elderLines.length - 1];
             parts.push(`${name} last said: “${last.slice(0, 280)}”`);
@@ -150,11 +212,22 @@ function caregiverReplyFromCosmos(opts: {
     return parts.filter(Boolean).join("\n\n");
 }
 
+function applyOrderChatResult(reply: string, order: OrderChatResult | null): string {
+    if (!order) return reply;
+    if (order.kind === "connect_required" || order.kind === "prompt") {
+        return order.message;
+    }
+    const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
+    const basket = `I've prepared a ${order.partnerLabel} basket:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}. Your family can approve it in the dashboard or on WhatsApp.`;
+    return reply.trim() ? `${reply.trim()}\n\n${basket}` : basket;
+}
+
 async function elderReplyWithAi(
     familyId: string,
     recipientUserId: string,
     displayName: string,
     message: string,
+    conversationIdOverride?: string,
 ): Promise<{ reply: string; conversationId: string }> {
     try {
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
@@ -165,16 +238,18 @@ async function elderReplyWithAi(
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             message,
-            conversationId: ctx.conversationId,
+            conversationId: conversationIdOverride ?? ctx.conversationId,
             careRecordContext: careContext,
             companionProfile: profile,
         });
-        if (result.conversation_id) {
+        const conversationId =
+            result.conversation_id || conversationIdOverride || `${familyId}:${recipientUserId}:elder`;
+        if (result.conversation_id && !conversationIdOverride) {
             await persistConversationId(familyId, recipientUserId, result.conversation_id);
         }
         return {
             reply: result.reply.trim() || "I'm here. Tell me more when you're ready.",
-            conversationId: result.conversation_id || `${familyId}:${recipientUserId}:elder`,
+            conversationId,
         };
     } catch (err) {
         console.warn("Saheli AI elder reply fallback:", err);
@@ -185,24 +260,50 @@ async function elderReplyWithAi(
     }
 }
 
+function caregiverAiFallback(
+    question: string,
+    recipientName: string,
+    elderLines: string[],
+    labs: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>,
+): string {
+    const qLower = question.toLowerCase();
+    const wantsLabOrReport =
+        /\b(tsh|creatinine|hba1c|hemoglobin|lab|report|vitamin|cea)\b/i.test(qLower) ||
+        /\b(how is|how's|how was|feeling|check-?in|last said)\b/i.test(qLower);
+
+    if (wantsLabOrReport) {
+        return caregiverReplyFromCosmos({
+            recipientName,
+            question,
+            elderLines,
+            labs,
+        });
+    }
+
+    return "Saheli is briefly unavailable. Please try again in a moment.";
+}
+
 async function caregiverReplyWithAi(
     familyId: string,
     recipientUserId: string,
     displayName: string,
     message: string,
     fallback: string,
+    conversationIdOverride?: string,
 ): Promise<{ reply: string; conversationId: string }> {
     try {
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-        const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 30);
-        const enrichedMessage = `[Care Record context]\n${careContext}\n\n[Caregiver question]\n${message}`;
         const result = await aiPostCaregiverChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
-            message: enrichedMessage,
-            conversationId: ctx.caregiverConversationId,
+            message,
+            conversationId: conversationIdOverride || undefined,
         });
-        if (result.conversation_id) {
+        const conversationId =
+            result.conversation_id ||
+            conversationIdOverride ||
+            `${familyId}:${recipientUserId}:caregiver`;
+        if (result.conversation_id && !conversationIdOverride) {
             await persistCaregiverConversationId(
                 familyId,
                 recipientUserId,
@@ -210,14 +311,14 @@ async function caregiverReplyWithAi(
             );
         }
         return {
-            reply: result.reply.trim() || fallback,
-            conversationId: result.conversation_id || `${familyId}:${recipientUserId}:caregiver`,
+            reply: result.reply.trim() || "Could you say that another way? I'm here to help.",
+            conversationId,
         };
     } catch (err) {
         console.warn("Saheli AI caregiver reply fallback:", err);
         return {
             reply: fallback,
-            conversationId: `${familyId}:${recipientUserId}:caregiver`,
+            conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
         };
     }
 }
@@ -227,7 +328,12 @@ export async function sendSaheliMessage(
     recipientUserId: string,
     actorUserId: string,
     message: string,
-    opts?: { skipInboundCareRecord?: boolean; channel?: ChannelType; source?: CareRecordSource },
+    opts?: {
+        skipInboundCareRecord?: boolean;
+        channel?: ChannelType;
+        source?: CareRecordSource;
+        sessionId?: string;
+    },
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -247,7 +353,27 @@ export async function sendSaheliMessage(
     const text = message.trim();
     if (!text) throw new AppError("Message is required", 400);
 
-    await appendMessage(familyId, recipientUserId, "elder", "elder", text);
+    let sessionId = opts?.sessionId;
+    if (sessionId) {
+        await getSaheliChatSession({
+            sessionId,
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "elder",
+        });
+    } else {
+        const created = await createSaheliChatSession({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "elder",
+        });
+        sessionId = created.sessionId;
+    }
+
+    await maybeSetSessionTitle(sessionId, text);
+    await appendMessage(familyId, recipientUserId, "elder", "elder", text, sessionId);
     if (!opts?.skipInboundCareRecord) {
         await appendCareRecordEvent({
             familyId,
@@ -261,14 +387,15 @@ export async function sendSaheliMessage(
             status: "reported",
         });
     }
-    const { reply, conversationId } = await elderReplyWithAi(
+    const session = await getSaheliChatSession({
+        sessionId,
         familyId,
         recipientUserId,
-        displayName,
-        text,
-    );
+        actorUserId,
+        thread: "elder",
+    });
 
-    let order: Awaited<ReturnType<typeof maybeSuggestOrderFromChat>> = null;
+    let order: OrderChatResult | null = null;
     try {
         order = await maybeSuggestOrderFromChat({
             familyId,
@@ -280,13 +407,38 @@ export async function sendSaheliMessage(
         console.warn("Order suggest from elder chat failed:", err);
     }
 
-    let finalReply = reply;
-    if (order) {
-        const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
-        finalReply = `${reply}\n\nI've sent this ${order.partnerLabel} basket to your family for approval:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}.`;
+    let reply = "";
+    let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
+
+    if (order?.kind === "connect_required") {
+        reply = order.message;
+    } else if (order?.kind === "prompt") {
+        reply = order.message;
+    } else if (order?.kind === "order") {
+        reply = applyOrderChatResult("", order).trim();
+    } else {
+        const ai = await elderReplyWithAi(
+            familyId,
+            recipientUserId,
+            displayName,
+            text,
+            session.aiConversationId,
+        );
+        reply = ai.reply;
+        conversationId = ai.conversationId;
     }
 
-    await appendMessage(familyId, recipientUserId, "elder", "saheli", finalReply);
+    await touchSaheliChatSession(sessionId, {
+        aiConversationId: conversationId,
+    });
+
+    const finalReply = reply;
+    const chatExtras = saheliChatExtras(order);
+
+    await appendMessage(familyId, recipientUserId, "elder", "saheli", finalReply, sessionId, {
+        orderPayload: chatExtras.orderPayload,
+        connectPayload: chatExtras.connectPayload,
+    });
     await appendCareRecordEvent({
         familyId,
         subjectUserId: recipientUserId,
@@ -303,7 +455,12 @@ export async function sendSaheliMessage(
         console.warn("Family share after elder message failed:", err);
     });
 
-    return { reply: finalReply, conversationId, order: order ?? undefined };
+    return {
+        reply: finalReply,
+        conversationId,
+        sessionId,
+        ...chatExtras.clientPayload,
+    };
 }
 
 async function maybeShareWithFamily(
@@ -333,16 +490,33 @@ export async function getSaheliHistory(
     recipientUserId: string,
     actorUserId: string,
     limit = 50,
+    sessionId?: string,
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
         throw new AppError("Family not found or access denied", 403);
     }
 
-    const messages = await listThread(familyId, recipientUserId, "elder", limit);
+    if (sessionId) {
+        const session = await getSaheliChatSession({
+            sessionId,
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "elder",
+        });
+        const messages = await listThread(familyId, recipientUserId, "elder", limit, sessionId);
+        return {
+            sessionId,
+            conversationId: session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`,
+            messages,
+        };
+    }
+
     return {
+        sessionId: null,
         conversationId: `${familyId}:${recipientUserId}:elder`,
-        messages,
+        messages: [],
     };
 }
 
@@ -351,7 +525,12 @@ export async function sendCaregiverSaheliMessage(
     recipientUserId: string,
     actorUserId: string,
     message: string,
-    opts?: { skipInboundCareRecord?: boolean; channel?: ChannelType; source?: CareRecordSource },
+    opts?: {
+        skipInboundCareRecord?: boolean;
+        channel?: ChannelType;
+        source?: CareRecordSource;
+        sessionId?: string;
+    },
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -368,7 +547,27 @@ export async function sendCaregiverSaheliMessage(
     const text = message.trim();
     if (!text) throw new AppError("Message is required", 400);
 
-    await appendMessage(familyId, recipientUserId, "caregiver", "family", text);
+    let sessionId = opts?.sessionId;
+    if (sessionId) {
+        await getSaheliChatSession({
+            sessionId,
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "caregiver",
+        });
+    } else {
+        const created = await createSaheliChatSession({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "caregiver",
+        });
+        sessionId = created.sessionId;
+    }
+
+    await maybeSetSessionTitle(sessionId, text);
+    await appendMessage(familyId, recipientUserId, "caregiver", "family", text, sessionId);
     if (!opts?.skipInboundCareRecord) {
         await appendCareRecordEvent({
             familyId,
@@ -383,34 +582,15 @@ export async function sendCaregiverSaheliMessage(
         });
     }
 
-    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
-    const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
-    const labs = await LabDocument.find({ familyId, recipientUserId })
-        .sort({ createdAt: 1 })
-        .lean();
-
-    const fallback = caregiverReplyFromCosmos({
-        recipientName: displayName,
-        question: text,
-        elderLines,
-        labs: labs.map((d) => ({
-            title: d.title,
-            recordDate: d.recordDate,
-            rawText: d.rawText,
-            kind: d.kind,
-        })),
-    });
-
-    const { reply, conversationId } = await caregiverReplyWithAi(
+    const session = await getSaheliChatSession({
+        sessionId,
         familyId,
         recipientUserId,
-        displayName,
-        text,
-        fallback,
-    );
+        actorUserId,
+        thread: "caregiver",
+    });
 
-    let finalReply = reply;
-    let order: Awaited<ReturnType<typeof maybeSuggestOrderFromChat>> = null;
+    let order: OrderChatResult | null = null;
     try {
         order = await maybeSuggestOrderFromChat({
             familyId,
@@ -422,12 +602,60 @@ export async function sendCaregiverSaheliMessage(
         console.warn("Order suggest from caregiver chat failed:", err);
     }
 
-    if (order) {
+    let reply = "";
+    let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
+
+    if (order?.kind === "connect_required") {
+        reply = order.message;
+    } else if (order?.kind === "prompt") {
+        reply = order.message;
+    } else if (order?.kind === "order") {
         const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
-        finalReply = `${reply}\n\nI've prepared a ${order.partnerLabel} basket for ${displayName}:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}. Approve it here in the dashboard or reply *approve* on WhatsApp.`;
+        const live =
+            order.source !== "mock"
+                ? " Prices are from your linked account."
+                : " Connect the partner in Integrations for live catalog pricing.";
+        reply = `I've prepared a ${order.partnerLabel} basket for ${displayName}:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}.${live} Pick an address below and approve to place the order.`;
+    } else {
+        const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
+        const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
+        const labs = await LabDocument.find({ familyId, recipientUserId })
+            .sort({ createdAt: 1 })
+            .lean();
+        const fallback = caregiverAiFallback(
+            text,
+            displayName,
+            elderLines,
+            labs.map((d) => ({
+                title: d.title,
+                recordDate: d.recordDate,
+                rawText: d.rawText,
+                kind: d.kind,
+            })),
+        );
+        const ai = await caregiverReplyWithAi(
+            familyId,
+            recipientUserId,
+            displayName,
+            text,
+            fallback,
+            session.aiConversationId,
+        );
+        reply = ai.reply;
+        conversationId = ai.conversationId;
     }
 
-    await appendMessage(familyId, recipientUserId, "caregiver", "saheli", finalReply);
+    await touchSaheliChatSession(sessionId, {
+        aiConversationId: conversationId,
+    });
+
+    const finalReply = reply;
+    const chatExtras = saheliChatExtras(order);
+
+    await appendMessage(familyId, recipientUserId, "caregiver", "saheli", finalReply, sessionId, {
+        orderPayload: chatExtras.orderPayload,
+        connectPayload: chatExtras.connectPayload,
+    });
     await appendCareRecordEvent({
         familyId,
         subjectUserId: recipientUserId,
@@ -440,7 +668,12 @@ export async function sendCaregiverSaheliMessage(
         skipSignalCheck: true,
     });
 
-    return { reply: finalReply, conversationId, order: order ?? undefined };
+    return {
+        reply: finalReply,
+        conversationId,
+        sessionId,
+        ...chatExtras.clientPayload,
+    };
 }
 
 export async function getCaregiverSaheliHistory(
@@ -448,6 +681,7 @@ export async function getCaregiverSaheliHistory(
     recipientUserId: string,
     actorUserId: string,
     limit = 50,
+    sessionId?: string,
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -459,10 +693,26 @@ export async function getCaregiverSaheliHistory(
         throw new AppError("Care recipients use their own Saheli thread", 400);
     }
 
-    const messages = await listThread(familyId, recipientUserId, "caregiver", limit);
+    if (sessionId) {
+        const session = await getSaheliChatSession({
+            sessionId,
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "caregiver",
+        });
+        const messages = await listThread(familyId, recipientUserId, "caregiver", limit, sessionId);
+        return {
+            sessionId,
+            conversationId: session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`,
+            messages,
+        };
+    }
+
     return {
+        sessionId: null,
         conversationId: `${familyId}:${recipientUserId}:caregiver`,
-        messages,
+        messages: [],
     };
 }
 

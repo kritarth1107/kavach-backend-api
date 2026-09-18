@@ -8,6 +8,7 @@ export interface IWhatsappSession {
     awaitingRecipientPick?: boolean;
     recipientOptions?: Array<{ userId: string; name: string }>;
     guestTurns?: number;
+    saheliSessionId?: string;
     expiresAt: Date;
 }
 
@@ -27,6 +28,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
             },
         ],
         guestTurns: { type: Number, default: 0 },
+        saheliSessionId: { type: String },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

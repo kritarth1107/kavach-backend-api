@@ -29,7 +29,14 @@ export async function tryHandleCaregiverWhatsAppOrderCommand(input: {
         .lean();
 
     if (!pending.length) return null;
-    if (!ORDER_CONTEXT_RE.test(input.text) && !APPROVE_RE.test(input.text) && !REJECT_RE.test(input.text)) {
+
+    const wantsApproveReject =
+        APPROVE_RE.test(input.text) || REJECT_RE.test(input.text);
+    const wantsPendingStatus =
+        /\b(pending|status|basket|approve|reject)\b/i.test(input.text) &&
+        ORDER_CONTEXT_RE.test(input.text);
+
+    if (!wantsApproveReject && !wantsPendingStatus) {
         return null;
     }
 

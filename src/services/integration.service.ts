@@ -62,24 +62,34 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
         config.whatsapp.provider === "baileys" ? await getBaileysBridgeStatus() : null;
 
     const kavachNumber = config.whatsapp.kavachNumber;
+    const bridgeState = baileysStatus?.state ?? "unknown";
     const whatsappDescription =
         config.whatsapp.provider === "baileys"
             ? baileysStatus?.connected
-                ? `Message Saheli on WhatsApp at ${kavachNumber}. We recognize you by the phone number on your Kavach profile.`
-                : "Baileys bridge configured but not connected — scan QR on the bridge service."
+                ? `Message Saheli on WhatsApp at ${kavachNumber}. One shared Kavach line for all families — no per-family WhatsApp setup.`
+                : bridgeState === "connecting"
+                  ? "WhatsApp bridge is reconnecting — scan QR at the bridge /logs page if needed."
+                  : "Baileys bridge offline — open /logs on the bridge VM to scan QR."
             : "Dashboard chat is live. WhatsApp starts when the Baileys bridge is enabled.";
+
+    const whatsappStatus =
+        config.whatsapp.provider === "baileys"
+            ? baileysStatus?.connected
+                ? "baileys_connected"
+                : bridgeState === "connecting"
+                  ? "baileys_connecting"
+                  : "baileys_disconnected"
+            : "mock_adapter";
 
     return {
         zepto,
         swiggy,
         instamart,
         whatsapp: {
-            status:
-                config.whatsapp.provider === "baileys"
-                    ? baileysStatus?.connected
-                        ? "baileys_connected"
-                        : "baileys_disconnected"
-                    : "mock_adapter",
+            status: whatsappStatus,
+            bridgeState,
+            hasQr: baileysStatus?.hasQr ?? false,
+            lastDisconnectReason: baileysStatus?.lastDisconnectReason ?? null,
             description: whatsappDescription,
             kavachNumber,
             linkedIdentities: whatsappLinks.length,

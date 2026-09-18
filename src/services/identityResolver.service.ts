@@ -84,7 +84,7 @@ export async function resolveWhatsAppSender(senderPhone: string): Promise<Resolv
 
     const user = await findUserByWhatsAppPhone(normalized);
     if (!user) {
-        throw new AppError("Phone not recognized — add this number to your Kavach profile", 404);
+        throw new AppError("Phone not recognized — sign up at Kavach or ask your caregiver to invite you", 404);
     }
 
     const membership = await resolveFamilyMembership(user.userId);

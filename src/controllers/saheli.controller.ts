@@ -10,6 +10,10 @@ import {
     sendSaheliMessage,
     triggerSaheliCheckIn,
 } from "../services/saheli.service";
+import {
+    createSaheliChatSession,
+    listSaheliChatSessions,
+} from "../services/saheliSession.service";
 
 export const getOverview = async (
     req: Request,
@@ -49,7 +53,14 @@ export const getSaheliChat = async (
     try {
         if (!req.user) throw new AppError("Not authenticated", 401);
         const { familyId, recipientUserId } = req.params;
-        const data = await getSaheliHistory(familyId, recipientUserId, req.user.userId);
+        const sessionId = String(req.query.sessionId ?? "").trim() || undefined;
+        const data = await getSaheliHistory(
+            familyId,
+            recipientUserId,
+            req.user.userId,
+            50,
+            sessionId,
+        );
         res.json({ success: true, data });
     } catch (error) {
         next(error);
@@ -67,13 +78,55 @@ export const postSaheliChat = async (
         const message = String(req.body?.message ?? "").trim();
         if (!message) throw new AppError("Message is required", 400);
 
+        const sessionId = String(req.body?.sessionId ?? "").trim() || undefined;
         const data = await sendSaheliMessage(
             familyId,
             recipientUserId,
             req.user.userId,
             message,
+            { sessionId },
         );
         res.json({ success: true, data });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const listSaheliChatSessionsHandler = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const sessions = await listSaheliChatSessions({
+            familyId,
+            recipientUserId,
+            actorUserId: req.user.userId,
+            thread: "elder",
+        });
+        res.json({ success: true, data: { sessions } });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const createSaheliChatSessionHandler = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const session = await createSaheliChatSession({
+            familyId,
+            recipientUserId,
+            actorUserId: req.user.userId,
+            thread: "elder",
+        });
+        res.json({ success: true, data: session });
     } catch (error) {
         next(error);
     }
@@ -106,10 +159,13 @@ export const getCaregiverSaheliChat = async (
     try {
         if (!req.user) throw new AppError("Not authenticated", 401);
         const { familyId, recipientUserId } = req.params;
+        const sessionId = String(req.query.sessionId ?? "").trim() || undefined;
         const data = await getCaregiverSaheliHistory(
             familyId,
             recipientUserId,
             req.user.userId,
+            50,
+            sessionId,
         );
         res.json({ success: true, data });
     } catch (error) {
@@ -128,13 +184,55 @@ export const postCaregiverSaheliChat = async (
         const message = String(req.body?.message ?? "").trim();
         if (!message) throw new AppError("Message is required", 400);
 
+        const sessionId = String(req.body?.sessionId ?? "").trim() || undefined;
         const data = await sendCaregiverSaheliMessage(
             familyId,
             recipientUserId,
             req.user.userId,
             message,
+            { sessionId },
         );
         res.json({ success: true, data });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const listCaregiverSaheliChatSessionsHandler = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const sessions = await listSaheliChatSessions({
+            familyId,
+            recipientUserId,
+            actorUserId: req.user.userId,
+            thread: "caregiver",
+        });
+        res.json({ success: true, data: { sessions } });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const createCaregiverSaheliChatSessionHandler = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const session = await createSaheliChatSession({
+            familyId,
+            recipientUserId,
+            actorUserId: req.user.userId,
+            thread: "caregiver",
+        });
+        res.json({ success: true, data: session });
     } catch (error) {
         next(error);
     }

@@ -85,6 +85,7 @@ export async function payCommerceOrder(input: {
     familyId?: string;
     items?: Array<{ name: string; quantity: number }>;
     paymentMethod?: string;
+    addressId?: string;
 }) {
     const mcpPartner = orderPartnerToMcp(input.partner);
 
@@ -98,11 +99,9 @@ export async function payCommerceOrder(input: {
             ? await getMcpConnectionStatus(mcpPartner, input.familyId, mcpUserId)
             : { connected: false };
         if (status.connected && mcpUserId && input.items?.length) {
-            const addressId = await getDefaultPartnerAddressId(
-                input.familyId,
-                mcpPartner,
-                mcpUserId,
-            );
+            const addressId =
+                input.addressId ??
+                (await getDefaultPartnerAddressId(input.familyId, mcpPartner, mcpUserId));
             const placed = await placeMcpOrder({
                 partner: mcpPartner,
                 familyId: input.familyId,

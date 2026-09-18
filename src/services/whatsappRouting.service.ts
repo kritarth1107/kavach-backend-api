@@ -26,17 +26,16 @@ const GUEST_WELCOME = `Namaste! 🙏 I'm *Saheli* — Kavach's caring companion 
 • Helps caregivers stay updated on mood, meals, and daily life
 • Suggests orders that your family approves before checkout
 
-Save Kavach's WhatsApp: *${kavachWhatsAppLine()}*
-
-If you already have a Kavach account, make sure the *same mobile number* is on your profile at app.kavach.care — we recognize you automatically when you message this line.
+This is Kavach's shared WhatsApp line for all families: *${kavachWhatsAppLine()}*
+Just message here from your phone — no setup or linking needed on your side.
 
 How can I help you today?`;
 
 const GUEST_FOLLOWUP = `Thanks for messaging Saheli on ${kavachWhatsAppLine()}.
 
-If you're on Kavach, add this phone number to your profile (Settings) and join your family circle — then message again and I'll know who you are.
+This is Kavach's one shared WhatsApp number for every family — you don't need to add or link anything in WhatsApp.
 
-New to Kavach? Visit kavach.care or ask your caregiver to invite you.`;
+If I didn't recognize you yet, sign up at app.kavach.care or ask your caregiver to invite you with the same mobile number you use on WhatsApp.`;
 
 function isCaregiver(role: FamilyRole): boolean {
     return role === FamilyRole.PRIMARY_CAREGIVER || role === FamilyRole.CO_CAREGIVER;

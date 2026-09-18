@@ -130,7 +130,12 @@ export async function approveOrder(familyId: string, orderId: string, actorUserI
     return order;
 }
 
-export async function payOrder(familyId: string, orderId: string, actorUserId: string) {
+export async function payOrder(
+    familyId: string,
+    orderId: string,
+    actorUserId: string,
+    opts?: { partnerAddressId?: string; deliveryAddress?: string },
+) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "approve_order");
 
@@ -138,6 +143,10 @@ export async function payOrder(familyId: string, orderId: string, actorUserId: s
     if (!order) throw new AppError("Order not found", 404);
     if (order.status !== OrderStatus.APPROVED) {
         throw new AppError("Order must be approved before payment", 400);
+    }
+
+    if (opts?.deliveryAddress) {
+        order.deliveryAddress = opts.deliveryAddress.slice(0, 300);
     }
 
     const payment = await payCommerceOrder({
@@ -148,6 +157,7 @@ export async function payOrder(familyId: string, orderId: string, actorUserId: s
         familyId,
         items: order.items.map((i) => ({ name: i.name, quantity: i.quantity })),
         paymentMethod: "COD",
+        addressId: opts?.partnerAddressId,
     });
 
     order.status = OrderStatus.PAID;

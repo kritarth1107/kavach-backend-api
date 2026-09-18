@@ -96,7 +96,12 @@ export async function postApproveOrderHandler(req: Request, res: Response) {
 
 export async function postPayOrderHandler(req: Request, res: Response) {
     const { familyId, orderId } = req.params;
-    const result = await payOrder(familyId, orderId, req.user!.userId);
+    const partnerAddressId = String(req.body?.partnerAddressId ?? req.body?.addressId ?? "").trim() || undefined;
+    const deliveryAddress = String(req.body?.deliveryAddress ?? "").trim() || undefined;
+    const result = await payOrder(familyId, orderId, req.user!.userId, {
+        partnerAddressId,
+        deliveryAddress,
+    });
     res.json({
         success: true,
         data: {

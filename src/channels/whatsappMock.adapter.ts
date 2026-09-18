@@ -17,8 +17,19 @@ async function handleTurn(
     text: string,
     channel: ChannelType,
     source: CareRecordSource,
+    phone: string,
 ): Promise<string> {
-    const channelOpts = { skipInboundCareRecord: true, channel, source };
+    const { resolveWhatsAppSaheliSession } = await import("../services/saheliSession.service");
+    const thread = role === FamilyRole.CARE_RECIPIENT ? "elder" : "caregiver";
+    const sessionId = await resolveWhatsAppSaheliSession({
+        phone,
+        familyId,
+        recipientUserId: subjectUserId,
+        actorUserId: userId,
+        thread,
+    });
+
+    const channelOpts = { skipInboundCareRecord: true, channel, source, sessionId };
     if (role === FamilyRole.CARE_RECIPIENT) {
         const result = await sendSaheliMessage(familyId, userId, userId, text, channelOpts);
         return result.reply;
@@ -82,6 +93,7 @@ export class ChannelMockAdapter implements ChannelAdapter {
             text,
             this.channelType,
             this.mapSource(),
+            inbound.channelIdentifier,
         );
 
         const voice = inbound.modality === "voice" ? await textToSpeech(replyText) : { text: replyText };

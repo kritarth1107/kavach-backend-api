@@ -32,11 +32,15 @@ import {
     getFamilyMemories,
 } from "../controllers/saheliCompanion.controller";
 import {
+    createCaregiverSaheliChatSessionHandler,
+    createSaheliChatSessionHandler,
     getActivity,
     getBriefing,
     getCaregiverSaheliChat,
     getOverview,
     getSaheliChat,
+    listCaregiverSaheliChatSessionsHandler,
+    listSaheliChatSessionsHandler,
     postCaregiverSaheliChat,
     postSaheliChat,
     postSaheliCheckIn,
@@ -65,8 +69,20 @@ router.get("/", protect, listFamilies);
 router.post("/", protect, createFamily);
 router.get("/:familyId/overview", protect, getOverview);
 router.get("/:familyId/activity", protect, getActivity);
+router.get("/:familyId/recipients/:recipientUserId/saheli/chat/sessions", protect, listSaheliChatSessionsHandler);
+router.post("/:familyId/recipients/:recipientUserId/saheli/chat/sessions", protect, createSaheliChatSessionHandler);
 router.get("/:familyId/recipients/:recipientUserId/saheli/chat", protect, getSaheliChat);
 router.post("/:familyId/recipients/:recipientUserId/saheli/chat", protect, postSaheliChat);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat/sessions",
+    protect,
+    listCaregiverSaheliChatSessionsHandler,
+);
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat/sessions",
+    protect,
+    createCaregiverSaheliChatSessionHandler,
+);
 router.get(
     "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat",
     protect,
