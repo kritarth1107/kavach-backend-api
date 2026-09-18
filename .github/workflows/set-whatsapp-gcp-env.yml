@@ -15,7 +15,7 @@ on:
         description: WHATSAPP_META_PHONE_NUMBER_ID
         required: true
         type: string
-        default: "1718021715926380"
+        default: "1307628429102389"
 
 concurrency:
   group: set-whatsapp-gcp-env

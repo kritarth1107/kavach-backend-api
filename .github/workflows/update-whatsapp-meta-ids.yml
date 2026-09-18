@@ -1,16 +1,21 @@
-name: Update WhatsApp phone number ID on Cloud Run
+name: Update WhatsApp Meta IDs on Cloud Run
 
 on:
   workflow_dispatch:
     inputs:
+      waba_id:
+        description: WHATSAPP_META_WABA_ID
+        required: true
+        type: string
+        default: "1718021715926380"
       phone_number_id:
         description: WHATSAPP_META_PHONE_NUMBER_ID
         required: true
         type: string
-        default: "1718021715926380"
+        default: "1307628429102389"
 
 concurrency:
-  group: update-whatsapp-phone-id
+  group: update-whatsapp-meta-ids
   cancel-in-progress: true
 
 env:
@@ -35,19 +40,19 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Update Cloud Run phone number ID
+      - name: Update Cloud Run WhatsApp Meta IDs
         run: |
           gcloud run services update ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
             --region=${{ env.GCP_REGION }} \
-            --update-env-vars="WHATSAPP_META_PHONE_NUMBER_ID=${{ inputs.phone_number_id }}" \
+            --update-env-vars="WHATSAPP_META_WABA_ID=${{ inputs.waba_id }},WHATSAPP_META_PHONE_NUMBER_ID=${{ inputs.phone_number_id }}" \
             --quiet
 
       - name: Run Meta webhook setup
         run: |
           curl -sS -X POST "${{ env.BACKEND_URL }}/api/webhooks/whatsapp/meta/setup?verify_token=${{ env.WEBHOOK_VERIFY_TOKEN }}" | python3 -m json.tool
 
-      - name: Verify phone on Graph API
+      - name: Verify WABA owns phone number
         run: |
           gcloud run services describe ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
