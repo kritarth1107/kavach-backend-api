@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
@@ -160,6 +161,7 @@ export async function startMcpConnect(partner: McpPartnerKey, familyId: string, 
         clientInformation: capturedClientInfo,
     });
 
+    await McpOAuthSession.deleteMany({ partner, familyId, userId });
     await McpOAuthSession.create({
         partner,
         familyId,
@@ -214,9 +216,14 @@ export async function completeMcpConnect(code: string, state: string) {
     await McpConnection.findOneAndUpdate(
         { partner: session.partner, familyId: session.familyId, userId: session.userId },
         {
-            tokensEnc: encryptJson(savedTokens),
-            clientInfoEnc: savedClientInfo ? encryptJson(savedClientInfo) : undefined,
-            connectedAt: new Date(),
+            $set: {
+                tokensEnc: encryptJson(savedTokens),
+                clientInfoEnc: savedClientInfo ? encryptJson(savedClientInfo) : undefined,
+                connectedAt: new Date(),
+            },
+            $setOnInsert: {
+                connectionId: randomUUID(),
+            },
         },
         { upsert: true, new: true },
     );

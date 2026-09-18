@@ -6,7 +6,6 @@ import { getMcpConnectionStatus } from "../partners/mcp/mcpClient.service";
 import { MCP_PARTNERS } from "../partners/mcp/partners";
 import type { McpPartnerKey } from "../partners/mcp/types";
 import config from "../config/app.config";
-import { getBaileysBridgeStatus } from "../clients/baileysBridge.client";
 import { listPartnerAddresses } from "./partnerAddress.service";
 
 async function enrichMcpBlock(
@@ -58,39 +57,15 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
     const phoneLinks = identities.filter((i) => i.channelType === "phone");
     const speakerLinks = identities.filter((i) => i.channelType === "smart_speaker");
 
-    const baileysStatus =
-        config.whatsapp.provider === "baileys" ? await getBaileysBridgeStatus() : null;
-
     const kavachNumber = config.whatsapp.kavachNumber;
-    const bridgeState = baileysStatus?.state ?? "unknown";
-    const whatsappDescription =
-        config.whatsapp.provider === "baileys"
-            ? baileysStatus?.connected
-                ? `Message Saheli on WhatsApp at ${kavachNumber}. One shared Kavach line for all families — no per-family WhatsApp setup.`
-                : bridgeState === "connecting"
-                  ? "WhatsApp bridge is reconnecting — scan QR at the bridge /logs page if needed."
-                  : "Baileys bridge offline — open /logs on the bridge VM to scan QR."
-            : "Dashboard chat is live. WhatsApp starts when the Baileys bridge is enabled.";
-
-    const whatsappStatus =
-        config.whatsapp.provider === "baileys"
-            ? baileysStatus?.connected
-                ? "baileys_connected"
-                : bridgeState === "connecting"
-                  ? "baileys_connecting"
-                  : "baileys_disconnected"
-            : "mock_adapter";
 
     return {
         zepto,
         swiggy,
         instamart,
         whatsapp: {
-            status: whatsappStatus,
-            bridgeState,
-            hasQr: baileysStatus?.hasQr ?? false,
-            lastDisconnectReason: baileysStatus?.lastDisconnectReason ?? null,
-            description: whatsappDescription,
+            status: "available",
+            description: `Message Saheli on WhatsApp at ${kavachNumber}. Save this number and chat — Saheli recognises you from your Kavach profile phone.`,
             kavachNumber,
             linkedIdentities: whatsappLinks.length,
             identities: [],

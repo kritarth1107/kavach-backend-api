@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import PartnerAddress from "../models/partnerAddress.model";
 import { listMcpTools, syncPartnerAddressesFromMcp } from "../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../partners/mcp/types";
@@ -28,28 +29,49 @@ export async function syncPartnerAddresses(
     const parsed = await syncPartnerAddressesFromMcp(partner, familyId, userId);
     if (!parsed.length) return 0;
 
-    await PartnerAddress.deleteMany({ familyId, partner, userId });
+    const deduped = new Map<string, (typeof parsed)[number]>();
+    for (const row of parsed) {
+        const id = row.partnerAddressId?.trim();
+        if (!id || deduped.has(id)) continue;
+        deduped.set(id, row);
+    }
+    const rows = [...deduped.values()];
+    if (!rows.length) return 0;
 
-    let inserted = 0;
-    for (let i = 0; i < parsed.length; i += 1) {
-        const row = parsed[i];
-        await PartnerAddress.create({
-            familyId,
-            userId,
-            partner,
-            partnerAddressId: row.partnerAddressId,
-            label: row.label,
-            line1: row.line1,
-            line2: row.line2,
-            city: row.city,
-            pincode: row.pincode,
-            isDefault: i === 0,
-            syncedAt: new Date(),
-        });
-        inserted += 1;
+    const incomingIds = rows.map((r) => r.partnerAddressId);
+    await PartnerAddress.deleteMany({
+        familyId,
+        partner,
+        userId,
+        partnerAddressId: { $nin: incomingIds },
+    });
+
+    let upserted = 0;
+    for (let i = 0; i < rows.length; i += 1) {
+        const row = rows[i];
+        await PartnerAddress.findOneAndUpdate(
+            { familyId, partner, partnerAddressId: row.partnerAddressId },
+            {
+                $set: {
+                    userId,
+                    label: row.label,
+                    line1: row.line1,
+                    line2: row.line2,
+                    city: row.city,
+                    pincode: row.pincode,
+                    isDefault: i === 0,
+                    syncedAt: new Date(),
+                },
+                $setOnInsert: {
+                    addressId: randomUUID(),
+                },
+            },
+            { upsert: true },
+        );
+        upserted += 1;
     }
 
-    return inserted;
+    return upserted;
 }
 
 export async function getDefaultPartnerAddressId(
