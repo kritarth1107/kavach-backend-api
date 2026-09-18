@@ -11,6 +11,11 @@ on:
         description: WHATSAPP_META_ACCESS_TOKEN
         required: true
         type: string
+      phone_number_id:
+        description: WHATSAPP_META_PHONE_NUMBER_ID
+        required: true
+        type: string
+        default: "1307628429102389"
 
 concurrency:
   group: set-whatsapp-gcp-env
@@ -41,5 +46,5 @@ jobs:
           gcloud run services update ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
             --region=${{ env.GCP_REGION }} \
-            --update-env-vars="WHATSAPP_META_APP_SECRET=${{ inputs.app_secret }},WHATSAPP_META_ACCESS_TOKEN=${{ inputs.access_token }}" \
+            --update-env-vars="WHATSAPP_META_APP_SECRET=${{ inputs.app_secret }},WHATSAPP_META_ACCESS_TOKEN=${{ inputs.access_token }},WHATSAPP_META_PHONE_NUMBER_ID=${{ inputs.phone_number_id }}" \
             --quiet
