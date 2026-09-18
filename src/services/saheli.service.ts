@@ -179,7 +179,7 @@ function caregiverReplyFromCosmos(opts: {
     const hits = findPrintedHits(opts.labs, q);
     const named = findNamedReports(opts.labs, q);
 
-    if (!wantsOrder && (wantsHow || (!hits.length && !named.length && !wantsList))) {
+    if (!wantsOrder && wantsHow) {
         if (opts.elderLines.length) {
             const last = opts.elderLines[opts.elderLines.length - 1];
             parts.push(`${name} last said: “${last.slice(0, 280)}”`);
@@ -260,27 +260,63 @@ async function elderReplyWithAi(
     }
 }
 
-function caregiverAiFallback(
-    question: string,
-    recipientName: string,
-    elderLines: string[],
-    labs: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>,
-): string {
-    const qLower = question.toLowerCase();
-    const wantsLabOrReport =
-        /\b(tsh|creatinine|hba1c|hemoglobin|lab|report|vitamin|cea)\b/i.test(qLower) ||
-        /\b(how is|how's|how was|feeling|check-?in|last said)\b/i.test(qLower);
+function buildCaregiverSmartReply(opts: {
+    recipientName: string;
+    question: string;
+    elderLines: string[];
+    labs: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>;
+    careContext: string;
+    sessionLines: string[];
+}): string {
+    const q = opts.question.trim();
+    const qLower = q.toLowerCase();
 
-    if (wantsLabOrReport) {
-        return caregiverReplyFromCosmos({
-            recipientName,
-            question,
-            elderLines,
-            labs,
-        });
+    if (messageLooksLikeOrder(q)) {
+        return `Tell me what to order and from where — Swiggy (food), Instamart (groceries), or Zepto. Example: "2 dal makhani from Swiggy" or "1L milk and bread from Instamart". I'll search live prices, build a cart, and you approve in chat.`;
     }
 
-    return "Saheli is briefly unavailable. Please try again in a moment.";
+    if (/\b(help|what can you|kya kar sakti|capabilities|features)\b/i.test(qLower)) {
+        return `I'm Saheli — your care co-pilot for ${opts.recipientName}.\n\n• Labs & reports — cite saved values with dates\n• Check-ins — what they last told Saheli\n• Orders — Swiggy, Instamart, Zepto from this chat\n• Care timeline — medicines, vitals, messages\n\nWhat do you need?`;
+    }
+
+    if (/\b(summary|summarize|overview|brief|kya hua|update)\b/i.test(qLower)) {
+        const timeline =
+            opts.careContext !== "No Care Record events yet."
+                ? opts.careContext.slice(0, 1800)
+                : "No care events logged yet.";
+        return `Here's ${opts.recipientName}'s recent care timeline:\n\n${timeline}`;
+    }
+
+    if (/\b(schedule|medicine|meds|dose|tablet|aaj|today)\b/i.test(qLower)) {
+        const scheduleHint = opts.careContext
+            .split("\n")
+            .filter((line) => /schedule|dose|medicine|check.?in|vitals/i.test(line))
+            .slice(-8)
+            .join("\n");
+        if (scheduleHint) {
+            return `From today's care record:\n${scheduleHint}\n\nOpen Family → schedule for full details.`;
+        }
+    }
+
+    const structured = caregiverReplyFromCosmos({
+        recipientName: opts.recipientName,
+        question: q,
+        elderLines: opts.elderLines,
+        labs: opts.labs,
+    });
+    const body = structured.replace(/\n\nReported only — nothing invented\.$/, "").trim();
+    if (body.length > 24) return structured;
+
+    if (opts.elderLines.length) {
+        const recent = opts.elderLines.slice(-3).join("\n• ");
+        return `Recent from ${opts.recipientName}:\n• ${recent}\n\nAsk about a specific lab, order, or "how is ${opts.recipientName} today?"`;
+    }
+
+    if (opts.careContext !== "No Care Record events yet.") {
+        return `${opts.recipientName}'s care record:\n${opts.careContext.slice(0, 1400)}\n\nAsk me something specific — a lab value, an order, or how they're doing.`;
+    }
+
+    return `I'm here for ${opts.recipientName}. Ask about reports, today's care, or order food and groceries — I'll pull from your family record.`;
 }
 
 async function caregiverReplyWithAi(
@@ -288,39 +324,72 @@ async function caregiverReplyWithAi(
     recipientUserId: string,
     displayName: string,
     message: string,
-    fallback: string,
+    context: {
+        elderLines: string[];
+        labs: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>;
+        sessionLines: string[];
+    },
     conversationIdOverride?: string,
 ): Promise<{ reply: string; conversationId: string }> {
-    try {
-        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-        const result = await aiPostCaregiverChat({
-            aiFamilyId: ctx.aiFamilyId,
-            aiElderId: ctx.aiElderId,
-            message,
-            conversationId: conversationIdOverride || undefined,
-        });
-        const conversationId =
-            result.conversation_id ||
-            conversationIdOverride ||
-            `${familyId}:${recipientUserId}:caregiver`;
-        if (result.conversation_id && !conversationIdOverride) {
-            await persistCaregiverConversationId(
-                familyId,
-                recipientUserId,
-                result.conversation_id,
-            );
+    const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
+    const fallback = buildCaregiverSmartReply({
+        recipientName: displayName,
+        question: message,
+        elderLines: context.elderLines,
+        labs: context.labs,
+        careContext,
+        sessionLines: context.sessionLines,
+    });
+
+    const elderThreadContext = context.elderLines
+        .slice(-12)
+        .map((line, i) => `${i + 1}. ${line}`)
+        .join("\n");
+    const labsContext = context.labs
+        .slice(-10)
+        .map((l) => `${l.title}${l.recordDate ? ` (${l.recordDate})` : ""}: ${l.rawText.slice(0, 400)}`)
+        .join("\n---\n");
+
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+            const result = await aiPostCaregiverChat({
+                aiFamilyId: ctx.aiFamilyId,
+                aiElderId: ctx.aiElderId,
+                message,
+                conversationId: conversationIdOverride || undefined,
+                careRecordContext: careContext,
+                elderThreadContext,
+                labsContext,
+                sessionContext: context.sessionLines.slice(-8).join("\n"),
+            });
+            const conversationId =
+                result.conversation_id ||
+                conversationIdOverride ||
+                `${familyId}:${recipientUserId}:caregiver`;
+            if (result.conversation_id && !conversationIdOverride) {
+                await persistCaregiverConversationId(
+                    familyId,
+                    recipientUserId,
+                    result.conversation_id,
+                );
+            }
+            const reply = result.reply.trim();
+            if (reply) {
+                return { reply, conversationId };
+            }
+        } catch (err) {
+            lastErr = err;
+            console.warn(`Saheli AI caregiver attempt ${attempt + 1} failed:`, err);
         }
-        return {
-            reply: result.reply.trim() || "Could you say that another way? I'm here to help.",
-            conversationId,
-        };
-    } catch (err) {
-        console.warn("Saheli AI caregiver reply fallback:", err);
-        return {
-            reply: fallback,
-            conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
-        };
     }
+
+    console.warn("Saheli AI caregiver using smart local reply:", lastErr);
+    return {
+        reply: fallback,
+        conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
+    };
 }
 
 export async function sendSaheliMessage(
@@ -619,26 +688,34 @@ export async function sendCaregiverSaheliMessage(
     } else {
         const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
         const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
+        const sessionHistory = await listThread(
+            familyId,
+            recipientUserId,
+            "caregiver",
+            16,
+            sessionId,
+        );
+        const sessionLines = sessionHistory
+            .filter((m) => m.role === "family" || m.role === "saheli")
+            .map((m) => `${m.role}: ${m.content}`);
         const labs = await LabDocument.find({ familyId, recipientUserId })
             .sort({ createdAt: 1 })
             .lean();
-        const fallback = caregiverAiFallback(
-            text,
-            displayName,
-            elderLines,
-            labs.map((d) => ({
-                title: d.title,
-                recordDate: d.recordDate,
-                rawText: d.rawText,
-                kind: d.kind,
-            })),
-        );
         const ai = await caregiverReplyWithAi(
             familyId,
             recipientUserId,
             displayName,
             text,
-            fallback,
+            {
+                elderLines,
+                sessionLines,
+                labs: labs.map((d) => ({
+                    title: d.title,
+                    recordDate: d.recordDate,
+                    rawText: d.rawText,
+                    kind: d.kind,
+                })),
+            },
             session.aiConversationId,
         );
         reply = ai.reply;

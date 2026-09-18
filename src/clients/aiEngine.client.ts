@@ -170,6 +170,10 @@ export async function aiPostCaregiverChat(payload: {
     aiElderId: string;
     message: string;
     conversationId?: string;
+    careRecordContext?: string;
+    elderThreadContext?: string;
+    labsContext?: string;
+    sessionContext?: string;
 }): Promise<AiChatResponse> {
     const res = await aiFetch(
         "/v1/chat/caregiver",
@@ -181,6 +185,10 @@ export async function aiPostCaregiverChat(payload: {
                 elder_id: payload.aiElderId,
                 message: payload.message,
                 conversation_id: payload.conversationId ?? null,
+                care_record_context: payload.careRecordContext ?? null,
+                elder_thread_context: payload.elderThreadContext ?? null,
+                labs_context: payload.labsContext ?? null,
+                session_context: payload.sessionContext ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
