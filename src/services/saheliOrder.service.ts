@@ -38,7 +38,14 @@ export type OrderChatResult =
           items: Array<{ name: string; quantity: number; unitPricePaise?: number; matchedName?: string }>;
           status: string;
           source: "mock" | "zepto_mcp" | "swiggy_mcp" | "instamart_mcp";
-          searchResults: Array<{ query: string; name: string; pricePaise?: number }>;
+          searchResults: Array<{
+              query: string;
+              name: string;
+              pricePaise?: number;
+              kind?: "restaurant" | "dish" | "product";
+              restaurantName?: string;
+              restaurantId?: string;
+          }>;
           addresses: Array<{
               id: string;
               label: string;
@@ -187,33 +194,79 @@ async function buildConnectResult(
     };
 }
 
+function pickCatalogHitForLine(
+    hits: Array<{
+        kind?: "restaurant" | "dish" | "product";
+        name: string;
+        matchedName?: string;
+        pricePaise?: number;
+    }>,
+    mcpPartner: McpPartnerKey,
+) {
+    if (mcpPartner === "swiggy") {
+        return (
+            hits.find((h) => h.kind === "dish" && h.pricePaise) ??
+            hits.find((h) => h.kind === "dish") ??
+            undefined
+        );
+    }
+    return (
+        hits.find((h) => (h.kind === "product" || h.kind === "dish") && h.pricePaise) ??
+        hits.find((h) => h.pricePaise) ??
+        hits.find((h) => h.kind === "product" || h.kind === "dish")
+    );
+}
+
 async function enrichItemsFromMcp(
     mcpPartner: McpPartnerKey,
     familyId: string,
     commerceUserId: string,
     items: ParsedOrderLine[],
+    addressId?: string,
 ): Promise<{
     items: ParsedOrderLine[];
-    searchResults: Array<{ query: string; name: string; pricePaise?: number }>;
+    searchResults: Array<{
+        query: string;
+        name: string;
+        pricePaise?: number;
+        kind?: "restaurant" | "dish" | "product";
+        restaurantName?: string;
+        restaurantId?: string;
+    }>;
     source: "zepto_mcp" | "swiggy_mcp" | "instamart_mcp";
+    catalogFound: boolean;
 }> {
-    const searchResults: Array<{ query: string; name: string; pricePaise?: number }> = [];
+    const searchResults: Array<{
+        query: string;
+        name: string;
+        pricePaise?: number;
+        kind?: "restaurant" | "dish" | "product";
+        restaurantName?: string;
+        restaurantId?: string;
+    }> = [];
     const enriched: ParsedOrderLine[] = [];
+    let catalogFound = false;
 
     for (const item of items) {
         try {
-            const search = await searchMcpProduct(mcpPartner, familyId, commerceUserId, item.name);
-            for (const hit of search.items.slice(0, 4)) {
+            const search = await searchMcpProduct(mcpPartner, familyId, commerceUserId, item.name, {
+                addressId,
+            });
+            for (const hit of search.items.slice(0, 6)) {
                 searchResults.push({
                     query: item.name,
-                    name: hit.name,
+                    name: hit.matchedName ?? hit.name,
                     pricePaise: hit.pricePaise,
+                    kind: hit.kind,
+                    restaurantName: hit.restaurantName,
+                    restaurantId: hit.restaurantId,
                 });
             }
-            const best = search.items[0];
+            const best = pickCatalogHitForLine(search.items, mcpPartner);
+            if (best?.pricePaise && best.kind !== "restaurant") catalogFound = true;
             enriched.push({
                 ...item,
-                matchedName: best?.name,
+                matchedName: best?.matchedName ?? best?.name,
                 unitPricePaise: best?.pricePaise ?? item.unitPricePaise,
             });
         } catch (err) {
@@ -226,6 +279,7 @@ async function enrichItemsFromMcp(
         items: enriched,
         searchResults,
         source: `${mcpPartner}_mcp` as "zepto_mcp" | "swiggy_mcp" | "instamart_mcp",
+        catalogFound,
     };
 }
 
@@ -297,7 +351,14 @@ export async function maybeSuggestOrderFromChat(input: {
             : null) ?? input.actorUserId;
 
     let pricedItems = items;
-    let searchResults: Array<{ query: string; name: string; pricePaise?: number }> = [];
+    let searchResults: Array<{
+        query: string;
+        name: string;
+        pricePaise?: number;
+        kind?: "restaurant" | "dish" | "product";
+        restaurantName?: string;
+        restaurantId?: string;
+    }> = [];
     let source: "mock" | "zepto_mcp" | "swiggy_mcp" | "instamart_mcp" = "mock";
     let addresses: Array<{
         id: string;
@@ -309,16 +370,32 @@ export async function maybeSuggestOrderFromChat(input: {
     }> = [];
 
     if (mcpPartner && isConnected) {
+        addresses = await loadPartnerAddresses(input.familyId, mcpPartner, commerceUserId);
+        const defaultAddressId = addresses.find((a) => a.isDefault)?.id ?? addresses[0]?.id;
         const enriched = await enrichItemsFromMcp(
             mcpPartner,
             input.familyId,
             commerceUserId,
             items,
+            defaultAddressId,
         );
         pricedItems = enriched.items;
         searchResults = enriched.searchResults;
         source = enriched.source;
-        addresses = await loadPartnerAddresses(input.familyId, mcpPartner, commerceUserId);
+
+        if (!enriched.catalogFound) {
+            const label = partnerLabel(partner);
+            const addressHint =
+                addresses.length === 0
+                    ? " Add a saved delivery address in Swiggy/Instamart first."
+                    : "";
+            return {
+                kind: "prompt",
+                partner,
+                partnerLabel: label,
+                message: `I couldn't find live ${label} matches for that request.${addressHint} Try a specific dish or restaurant name — e.g. "biryani from Meghana" or "1L Amul milk".`,
+            };
+        }
     }
 
     const order = await suggestOrder({

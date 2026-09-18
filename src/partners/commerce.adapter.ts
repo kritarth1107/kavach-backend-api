@@ -43,6 +43,11 @@ export async function createCommerceOrder(input: CommerceOrderContext) {
             ? await getMcpConnectionStatus(mcpPartner, input.familyId, mcpUserId)
             : { connected: false };
         if (status.connected && mcpUserId) {
+            const addressId = await getDefaultPartnerAddressId(
+                input.familyId,
+                mcpPartner,
+                mcpUserId,
+            );
             const pricedItems = [];
             for (const item of input.items) {
                 const search = await searchMcpProduct(
@@ -50,8 +55,14 @@ export async function createCommerceOrder(input: CommerceOrderContext) {
                     input.familyId,
                     mcpUserId,
                     item.name,
+                    { addressId },
                 );
-                const hit = search.items[0];
+                const hit =
+                    mcpPartner === "swiggy"
+                        ? (search.items.find((row) => row.kind === "dish" && row.pricePaise) ??
+                          search.items.find((row) => row.pricePaise) ??
+                          search.items[0])
+                        : (search.items.find((row) => row.pricePaise) ?? search.items[0]);
                 pricedItems.push({
                     ...item,
                     unitPricePaise: hit?.pricePaise ?? item.unitPricePaise,

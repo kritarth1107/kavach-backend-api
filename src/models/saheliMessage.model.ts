@@ -12,7 +12,14 @@ export type SaheliMessageOrderPayload = {
     items: Array<{ name: string; quantity: number; unitPricePaise?: number; matchedName?: string }>;
     status: string;
     source?: "mock" | "zepto_mcp" | "swiggy_mcp" | "instamart_mcp";
-    searchResults?: Array<{ query: string; name: string; pricePaise?: number }>;
+    searchResults?: Array<{
+        query: string;
+        name: string;
+        pricePaise?: number;
+        kind?: "restaurant" | "dish" | "product";
+        restaurantName?: string;
+        restaurantId?: string;
+    }>;
     addresses?: Array<{ id: string; label: string; line1: string; city?: string; pincode?: string; isDefault?: boolean }>;
 };
 

@@ -38,6 +38,382 @@ function pickToolFromNeedles(
     return null;
 }
 
+export type McpCatalogHit = {
+    kind?: "restaurant" | "dish" | "product";
+    name: string;
+    matchedName?: string;
+    pricePaise?: number;
+    productId?: string;
+    itemId?: string;
+    spinId?: string;
+    restaurantId?: string;
+    restaurantName?: string;
+};
+
+type McpTool = { name: string; description?: string };
+
+function parseToolJson(text: string): unknown {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fenced) {
+            try {
+                return JSON.parse(fenced[1].trim());
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+}
+
+function digData(obj: unknown): Record<string, unknown> | null {
+    if (!obj || typeof obj !== "object") return null;
+    const root = obj as Record<string, unknown>;
+    if (root.data && typeof root.data === "object" && !Array.isArray(root.data)) {
+        return root.data as Record<string, unknown>;
+    }
+    return root;
+}
+
+function parsePricePaise(value: unknown): number | undefined {
+    if (value == null) return undefined;
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return value >= 1000 ? Math.round(value) : Math.round(value * 100);
+    }
+    if (typeof value === "string") {
+        const match = value.match(/₹?\s*([\d,]+(?:\.\d+)?)/);
+        if (match) return Math.round(Number(match[1].replace(/,/g, "")) * 100);
+    }
+    return undefined;
+}
+
+function fuzzyMatch(name: string, query: string): boolean {
+    const normalizedName = name.toLowerCase();
+    const normalizedQuery = query.toLowerCase().trim();
+    if (!normalizedQuery) return false;
+    if (normalizedName.includes(normalizedQuery)) return true;
+    const words = normalizedQuery.split(/\s+/).filter((w) => w.length > 2);
+    return words.some((w) => normalizedName.includes(w));
+}
+
+function extractRestaurants(parsed: unknown): Array<Record<string, unknown>> {
+    const data = digData(parsed);
+    if (!data) return [];
+    const list = data.restaurants ?? data.results;
+    return Array.isArray(list) ? (list as Array<Record<string, unknown>>) : [];
+}
+
+function flattenMenuItems(parsed: unknown): Array<{ id: string; name: string; price?: unknown }> {
+    const data = digData(parsed);
+    if (!data) return [];
+
+    const items: Array<{ id: string; name: string; price?: unknown }> = [];
+    const pushItem = (row: Record<string, unknown>) => {
+        const id = row.id ?? row.itemId ?? row.menuItemId;
+        const name = row.name ?? row.title ?? row.displayName;
+        if (!id || !name) return;
+        items.push({
+            id: String(id),
+            name: String(name),
+            price: row.price ?? row.finalPrice ?? row.defaultPrice ?? row.itemPrice,
+        });
+    };
+
+    const categories = data.categories ?? data.menu;
+    if (Array.isArray(categories)) {
+        for (const category of categories) {
+            if (!category || typeof category !== "object") continue;
+            const cat = category as Record<string, unknown>;
+            if (cat.id && cat.name && !cat.items) {
+                pushItem(cat);
+                continue;
+            }
+            if (Array.isArray(cat.items)) {
+                for (const item of cat.items) {
+                    if (item && typeof item === "object") pushItem(item as Record<string, unknown>);
+                }
+            }
+        }
+    }
+
+    if (Array.isArray(data.items)) {
+        for (const item of data.items) {
+            if (item && typeof item === "object") pushItem(item as Record<string, unknown>);
+        }
+    }
+
+    return items;
+}
+
+function extractMenuSearchItems(parsed: unknown): Array<{
+    name: string;
+    itemId?: string;
+    restaurantId?: string;
+    restaurantName?: string;
+    price?: unknown;
+}> {
+    const data = digData(parsed);
+    if (!data) return [];
+
+    const list = data.items ?? data.menuItems ?? data.results ?? data.dishes;
+    if (!Array.isArray(list)) return [];
+
+    return list
+        .map((row) => {
+            if (!row || typeof row !== "object") return null;
+            const obj = row as Record<string, unknown>;
+            const name = obj.name ?? obj.title ?? obj.displayName;
+            if (!name) return null;
+            return {
+                name: String(name),
+                itemId: obj.itemId ? String(obj.itemId) : obj.id ? String(obj.id) : undefined,
+                restaurantId: obj.restaurantId ? String(obj.restaurantId) : undefined,
+                restaurantName: (() => {
+                    if (obj.restaurantName) return String(obj.restaurantName);
+                    const restaurant = obj.restaurant;
+                    if (restaurant && typeof restaurant === "object") {
+                        const name = (restaurant as Record<string, unknown>).name;
+                        if (name) return String(name);
+                    }
+                    return undefined;
+                })(),
+                price: obj.price ?? obj.finalPrice ?? obj.defaultPrice,
+            };
+        })
+        .filter((row): row is NonNullable<typeof row> => Boolean(row));
+}
+
+function extractInstamartProducts(parsed: unknown): Array<Record<string, unknown>> {
+    const data = digData(parsed);
+    if (!data) return [];
+    const list = data.products ?? data.items ?? data.results;
+    return Array.isArray(list) ? (list as Array<Record<string, unknown>>) : [];
+}
+
+function hitsFromInstamartProducts(products: Array<Record<string, unknown>>): McpCatalogHit[] {
+    const hits: McpCatalogHit[] = [];
+    for (const product of products.slice(0, 10)) {
+        const variations = (product.variations ?? product.variants) as unknown;
+        const variantList = Array.isArray(variations) ? variations : [];
+        const variant =
+            (variantList[0] as Record<string, unknown> | undefined) ??
+            (product as Record<string, unknown>);
+
+        const name = String(
+            variant.displayName ?? variant.name ?? product.name ?? product.displayName ?? "Product",
+        );
+        const spinId = variant.spinId ?? variant.id ?? product.spinId ?? product.id;
+        hits.push({
+            kind: "product",
+            name,
+            pricePaise: parsePricePaise(variant.price ?? variant.mrp ?? product.price),
+            spinId: spinId ? String(spinId) : undefined,
+            productId: spinId ? String(spinId) : undefined,
+        });
+    }
+    return hits;
+}
+
+async function resolveMcpAddressId(
+    client: Client,
+    tools: McpTool[],
+    familyId: string,
+    partner: McpPartnerKey,
+    userId: string,
+    overrideAddressId?: string,
+): Promise<string | undefined> {
+    if (overrideAddressId) return overrideAddressId;
+
+    const { getDefaultPartnerAddressId } = await import("../../services/partnerAddress.service");
+    const cached = await getDefaultPartnerAddressId(familyId, partner, userId);
+    if (cached) return cached;
+
+    const addressTool = tools.find((t) =>
+        /get_addresses|list_addresses|saved_addresses/i.test(t.name),
+    )?.name;
+    if (!addressTool) return undefined;
+
+    const result = await client.callTool({ name: addressTool, arguments: {} });
+    const addresses = parsePartnerAddresses(extractToolText(result));
+    return addresses[0]?.partnerAddressId;
+}
+
+async function searchSwiggyFoodCatalog(
+    client: Client,
+    tools: McpTool[],
+    addressId: string | undefined,
+    query: string,
+): Promise<McpCatalogHit[]> {
+    if (!addressId) return [];
+
+    const hits: McpCatalogHit[] = [];
+    const searchRestTool =
+        tools.find((t) => t.name === "search_restaurants")?.name ??
+        pickToolName(tools, "search", "restaurant");
+    const searchMenuTool = tools.find((t) => t.name === "search_menu")?.name;
+    const menuTool =
+        tools.find((t) => t.name === "get_restaurant_menu")?.name ??
+        pickToolName(tools, "restaurant", "menu");
+
+    let openRestaurants: Array<Record<string, unknown>> = [];
+    if (searchRestTool) {
+        const result = await client.callTool({
+            name: searchRestTool,
+            arguments: { addressId, query },
+        });
+        const restaurants = extractRestaurants(parseToolJson(extractToolText(result)));
+        openRestaurants = restaurants.filter(
+            (r) => !r.availabilityStatus || String(r.availabilityStatus).toUpperCase() === "OPEN",
+        );
+
+        for (const restaurant of openRestaurants.slice(0, 5)) {
+            const name = String(restaurant.name ?? "Restaurant");
+            hits.push({
+                kind: "restaurant",
+                name,
+                restaurantId: restaurant.id ? String(restaurant.id) : undefined,
+                restaurantName: name,
+                pricePaise: parsePricePaise(restaurant.costForTwo ?? restaurant.avgCostForTwo),
+                productId: restaurant.id ? String(restaurant.id) : undefined,
+            });
+        }
+    }
+
+    if (searchMenuTool) {
+        const result = await client.callTool({
+            name: searchMenuTool,
+            arguments: { addressId, query },
+        });
+        for (const dish of extractMenuSearchItems(parseToolJson(extractToolText(result))).slice(0, 8)) {
+            hits.push({
+                kind: "dish",
+                name: dish.name,
+                matchedName: dish.restaurantName ? `${dish.name} · ${dish.restaurantName}` : dish.name,
+                itemId: dish.itemId,
+                productId: dish.itemId,
+                restaurantId: dish.restaurantId,
+                restaurantName: dish.restaurantName,
+                pricePaise: parsePricePaise(dish.price),
+            });
+        }
+    }
+
+    if (!hits.some((h) => h.kind === "dish") && menuTool && openRestaurants[0]?.id) {
+        const restaurant = openRestaurants[0];
+        const restaurantId = String(restaurant.id);
+        const restaurantName = String(restaurant.name ?? "Restaurant");
+        const result = await client.callTool({
+            name: menuTool,
+            arguments: { restaurantId },
+        });
+        const menuItems = flattenMenuItems(parseToolJson(extractToolText(result)));
+        for (const item of menuItems.filter((row) => fuzzyMatch(row.name, query)).slice(0, 6)) {
+            hits.push({
+                kind: "dish",
+                name: item.name,
+                matchedName: `${item.name} · ${restaurantName}`,
+                itemId: item.id,
+                productId: item.id,
+                restaurantId,
+                restaurantName,
+                pricePaise: parsePricePaise(item.price),
+            });
+        }
+    }
+
+    return hits;
+}
+
+async function searchInstamartCatalog(
+    client: Client,
+    tools: McpTool[],
+    addressId: string | undefined,
+    query: string,
+): Promise<McpCatalogHit[]> {
+    if (!addressId) return [];
+
+    const searchTool =
+        tools.find((t) => t.name === "search_products")?.name ??
+        pickToolFromNeedles(tools, [["search", "product"], ["search"]]);
+    if (!searchTool) return [];
+
+    const result = await client.callTool({
+        name: searchTool,
+        arguments: { addressId, query },
+    });
+    return hitsFromInstamartProducts(extractInstamartProducts(parseToolJson(extractToolText(result))));
+}
+
+function pickBestCatalogHit(hits: McpCatalogHit[], preferDishes: boolean): McpCatalogHit | undefined {
+    if (!hits.length) return undefined;
+    if (preferDishes) {
+        return (
+            hits.find((h) => h.kind === "dish" && h.pricePaise) ??
+            hits.find((h) => h.kind === "product" && h.pricePaise) ??
+            hits.find((h) => h.kind === "dish") ??
+            hits.find((h) => h.kind === "product") ??
+            hits[0]
+        );
+    }
+    return hits.find((h) => h.pricePaise) ?? hits[0];
+}
+
+async function resolveSwiggyCartItems(
+    client: Client,
+    tools: McpTool[],
+    addressId: string | undefined,
+    items: Array<{ name: string; quantity: number }>,
+): Promise<{ restaurantId: string; cartItems: Array<{ itemId: string; quantity: number }> }> {
+    let restaurantId: string | undefined;
+    const cartItems: Array<{ itemId: string; quantity: number }> = [];
+
+    for (const item of items) {
+        const hits = await searchSwiggyFoodCatalog(client, tools, addressId, item.name);
+        const dish = pickBestCatalogHit(hits, true);
+        if (!dish?.itemId || !dish.restaurantId) {
+            throw new Error(`Could not find "${item.name}" on Swiggy Food. Try a specific dish name.`);
+        }
+        if (restaurantId && dish.restaurantId !== restaurantId) {
+            throw new Error(
+                `"${item.name}" is from a different restaurant. Swiggy orders must be from one restaurant.`,
+            );
+        }
+        restaurantId = dish.restaurantId;
+        cartItems.push({ itemId: dish.itemId, quantity: item.quantity });
+    }
+
+    if (!restaurantId || !cartItems.length) {
+        throw new Error("Could not build Swiggy Food cart.");
+    }
+
+    return { restaurantId, cartItems };
+}
+
+async function resolveInstamartCartItems(
+    client: Client,
+    tools: McpTool[],
+    addressId: string | undefined,
+    items: Array<{ name: string; quantity: number }>,
+): Promise<Array<{ spinId: string; quantity: number }>> {
+    const cartItems: Array<{ spinId: string; quantity: number }> = [];
+
+    for (const item of items) {
+        const hits = await searchInstamartCatalog(client, tools, addressId, item.name);
+        const product = pickBestCatalogHit(hits, false);
+        const spinId = product?.spinId ?? product?.productId;
+        if (!spinId) {
+            throw new Error(`Could not find "${item.name}" on Instamart.`);
+        }
+        cartItems.push({ spinId, quantity: item.quantity });
+    }
+
+    return cartItems;
+}
+
 async function readLegacyZeptoTokens(familyId: string, userId: string) {
     const row = await ZeptoConnection.findOne({ familyId, userId }).lean();
     if (!row) return null;
@@ -297,21 +673,56 @@ export async function searchMcpProduct(
     familyId: string,
     userId: string,
     query: string,
-): Promise<{ items: Array<{ name: string; pricePaise?: number; productId?: string }> }> {
+    opts?: { addressId?: string },
+): Promise<{ items: McpCatalogHit[] }> {
     const config = getMcpPartner(partner);
     return withMcpClient(partner, familyId, userId, async (client) => {
         const tools = (await client.listTools()).tools;
+        const addressId = await resolveMcpAddressId(
+            client,
+            tools,
+            familyId,
+            partner,
+            userId,
+            opts?.addressId,
+        );
+
+        if (partner === "swiggy") {
+            const items = await searchSwiggyFoodCatalog(client, tools, addressId, query);
+            return { items: items.length ? items : parseSearchResults("", query) };
+        }
+
+        if (partner === "instamart") {
+            const items = await searchInstamartCatalog(client, tools, addressId, query);
+            return { items: items.length ? items : parseSearchResults("", query) };
+        }
+
         const searchTool = pickToolFromNeedles(tools, config.searchToolNeedles);
         if (!searchTool) return { items: [] };
 
         const result = await client.callTool({
             name: searchTool,
-            arguments: { query, q: query, search_query: query },
+            arguments: { query, q: query, search_query: query, addressId },
         });
 
         const text = extractToolText(result);
-        const items = parseSearchResults(text, query);
-        return { items };
+        const parsed = parseToolJson(text);
+        const instamartHits = hitsFromInstamartProducts(extractInstamartProducts(parsed));
+        if (instamartHits.length) return { items: instamartHits };
+
+        const menuHits = extractMenuSearchItems(parsed).map((dish) => ({
+            kind: "dish" as const,
+            name: dish.name,
+            matchedName: dish.restaurantName ? `${dish.name} · ${dish.restaurantName}` : dish.name,
+            itemId: dish.itemId,
+            productId: dish.itemId,
+            restaurantId: dish.restaurantId,
+            restaurantName: dish.restaurantName,
+            pricePaise: parsePricePaise(dish.price),
+        }));
+        if (menuHits.length) return { items: menuHits };
+
+        return { items: parseSearchResults(text, query) };
     });
 }
 
@@ -355,24 +766,108 @@ export async function placeMcpOrder(input: {
     const config = getMcpPartner(input.partner);
     return withMcpClient(input.partner, input.familyId, input.userId, async (client) => {
         const tools = (await client.listTools()).tools;
+        const paymentMethod = input.paymentMethod ?? "COD";
+        const addressId = await resolveMcpAddressId(
+            client,
+            tools,
+            input.familyId,
+            input.partner,
+            input.userId,
+            input.addressId,
+        );
+
+        if (input.partner === "swiggy") {
+            const { restaurantId, cartItems } = await resolveSwiggyCartItems(
+                client,
+                tools,
+                addressId,
+                input.items,
+            );
+            const updateCartTool =
+                tools.find((t) => t.name === "update_food_cart")?.name ??
+                pickToolFromNeedles(tools, config.addCartNeedles);
+            const checkoutTool =
+                tools.find((t) => t.name === "place_food_order")?.name ??
+                pickToolFromNeedles(tools, config.checkoutToolNeedles);
+
+            if (!updateCartTool || !checkoutTool) {
+                throw new Error("Swiggy Food cart tools are unavailable on this connection.");
+            }
+
+            const cartUpdate = await client.callTool({
+                name: updateCartTool,
+                arguments: { restaurantId, items: cartItems },
+            });
+            const placed = await client.callTool({
+                name: checkoutTool,
+                arguments: { paymentMethod },
+            });
+
+            const rawSummary = `${extractToolText(cartUpdate)}\n${extractToolText(placed)}`;
+            const parsed = parseToolJson(extractToolText(placed));
+            const orderId =
+                (parsed &&
+                    typeof parsed === "object" &&
+                    ((parsed as Record<string, unknown>).orderId ??
+                        digData(parsed)?.orderId)) ||
+                undefined;
+
+            return {
+                partnerRef: orderId ? String(orderId) : `swiggy-mcp-${Date.now()}`,
+                deepLink: extractUrl(rawSummary) ?? config.deepLink,
+                paymentLink: extractUrl(rawSummary),
+                rawSummary,
+            };
+        }
+
+        if (input.partner === "instamart") {
+            const cartItems = await resolveInstamartCartItems(
+                client,
+                tools,
+                addressId,
+                input.items,
+            );
+            const updateCartTool =
+                tools.find((t) => t.name === "update_cart")?.name ??
+                pickToolFromNeedles(tools, config.addCartNeedles);
+            const checkoutTool =
+                tools.find((t) => t.name === "checkout")?.name ??
+                pickToolFromNeedles(tools, config.checkoutToolNeedles);
+
+            if (!updateCartTool || !checkoutTool) {
+                throw new Error("Instamart cart tools are unavailable on this connection.");
+            }
+
+            const cartUpdate = await client.callTool({
+                name: updateCartTool,
+                arguments: { items: cartItems },
+            });
+            const placed = await client.callTool({
+                name: checkoutTool,
+                arguments: { paymentMethod },
+            });
+
+            const rawSummary = `${extractToolText(cartUpdate)}\n${extractToolText(placed)}`;
+            const parsed = parseToolJson(extractToolText(placed));
+            const orderId =
+                (parsed &&
+                    typeof parsed === "object" &&
+                    ((parsed as Record<string, unknown>).orderId ??
+                        digData(parsed)?.orderId)) ||
+                undefined;
+
+            return {
+                partnerRef: orderId ? String(orderId) : `instamart-mcp-${Date.now()}`,
+                deepLink: extractUrl(rawSummary) ?? config.deepLink,
+                paymentLink: extractUrl(rawSummary),
+                rawSummary,
+            };
+        }
+
         const searchTool = pickToolFromNeedles(tools, config.searchToolNeedles);
         const addTool = pickToolFromNeedles(tools, config.addCartNeedles);
         const checkoutTool = pickToolFromNeedles(tools, config.checkoutToolNeedles);
-
         const summaries: string[] = [];
-        let addressId: string | undefined = input.addressId;
-
-        if (!addressId) {
-            const { getDefaultPartnerAddressId } = await import("../../services/partnerAddress.service");
-            addressId = await getDefaultPartnerAddressId(input.familyId, input.partner, input.userId);
-        }
-
-        const addressTool = tools.find((t) => /get_addresses|list_addresses|saved_addresses/i.test(t.name))?.name;
-        if (!addressId && addressTool) {
-            const addresses = await client.callTool({ name: addressTool, arguments: {} });
-            summaries.push(extractToolText(addresses));
-            addressId = extractFirstId(extractToolText(addresses));
-        }
 
         for (const item of input.items) {
             if (searchTool) {
@@ -409,7 +904,6 @@ export async function placeMcpOrder(input: {
             };
         }
 
-        const paymentMethod = input.paymentMethod ?? "COD";
         const placed = await client.callTool({
             name: checkoutTool,
             arguments: {
@@ -528,21 +1022,67 @@ function normalizeAddressRow(row: unknown): ParsedPartnerAddress | null {
     };
 }
 
-function parseSearchResults(
-    text: string,
-    fallbackName: string,
-): Array<{ name: string; pricePaise?: number; productId?: string }> {
-    if (!text.trim()) {
-        return [{ name: fallbackName }];
+function parseSearchResults(text: string, fallbackName: string): McpCatalogHit[] {
+    const parsed = parseToolJson(text);
+    if (parsed) {
+        const instamartHits = hitsFromInstamartProducts(extractInstamartProducts(parsed));
+        if (instamartHits.length) return instamartHits;
+
+        const restaurants = extractRestaurants(parsed);
+        if (restaurants.length) {
+            return restaurants.slice(0, 8).map((restaurant) => ({
+                kind: "restaurant" as const,
+                name: String(restaurant.name ?? fallbackName),
+                restaurantId: restaurant.id ? String(restaurant.id) : undefined,
+                restaurantName: restaurant.name ? String(restaurant.name) : undefined,
+                pricePaise: parsePricePaise(restaurant.costForTwo ?? restaurant.avgCostForTwo),
+                productId: restaurant.id ? String(restaurant.id) : undefined,
+            }));
+        }
+
+        const menuHits = extractMenuSearchItems(parsed);
+        if (menuHits.length) {
+            return menuHits.slice(0, 8).map((dish) => ({
+                kind: "dish" as const,
+                name: dish.name,
+                matchedName: dish.restaurantName ? `${dish.name} · ${dish.restaurantName}` : dish.name,
+                itemId: dish.itemId,
+                productId: dish.itemId,
+                restaurantId: dish.restaurantId,
+                restaurantName: dish.restaurantName,
+                pricePaise: parsePricePaise(dish.price),
+            }));
+        }
     }
 
-    const priceMatch = text.match(/₹\s*([\d,]+(?:\.\d+)?)/);
-    const priceRupees = priceMatch ? Number(priceMatch[1].replace(/,/g, "")) : undefined;
+    if (!text.trim()) return [];
 
-    return [
-        {
-            name: fallbackName,
-            pricePaise: priceRupees ? Math.round(priceRupees * 100) : undefined,
-        },
-    ];
+    const hits: McpCatalogHit[] = [];
+    const pricePattern = /₹\s*([\d,]+(?:\.\d+)?)/g;
+    const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+
+    for (const line of lines.slice(0, 8)) {
+        const priceMatch = line.match(/₹\s*([\d,]+(?:\.\d+)?)/);
+        const name = line
+            .replace(/₹\s*[\d,]+(?:\.\d+)?/g, "")
+            .replace(/^[\d.)]+\s*/, "")
+            .trim();
+        if (!name || name.length < 2) continue;
+        hits.push({
+            name,
+            pricePaise: priceMatch ? parsePricePaise(priceMatch[0]) : undefined,
+        });
+    }
+
+    if (hits.length) return hits;
+
+    const priceMatch = text.match(pricePattern);
+    return priceMatch
+        ? [
+              {
+                  name: fallbackName,
+                  pricePaise: parsePricePaise(priceMatch[0]),
+              },
+          ]
+        : [];
 }

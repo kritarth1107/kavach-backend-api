@@ -39,9 +39,9 @@ export const MCP_PARTNERS: Record<McpPartnerKey, McpPartnerConfig> = {
             "Your Swiggy account is linked via official MCP. Food orders can be placed through Swiggy Food tools.",
         disconnectedDescription:
             "Connect your Swiggy account for live food ordering via MCP. Until then, orders stay in mock mode.",
-        searchToolNeedles: [["search"], ["restaurant"]],
-        addCartNeedles: [["add", "cart"], ["cart"]],
-        checkoutToolNeedles: [["checkout"], ["place", "order"]],
+        searchToolNeedles: [["search", "restaurant"], ["search", "menu"]],
+        addCartNeedles: [["update", "food", "cart"], ["food", "cart"]],
+        checkoutToolNeedles: [["place", "food", "order"], ["place", "order"]],
     },
     instamart: {
         key: "instamart",
