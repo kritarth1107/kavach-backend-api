@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import OutboundMessage from "../models/outboundMessage.model";
 import { ChannelType } from "../types/careRecord.types";
 import { sendViaBaileysBridge, isBaileysWhatsAppEnabled } from "../clients/baileysBridge.client";
+import { isMetaWhatsAppEnabled, sendViaMetaWhatsApp } from "../clients/metaWhatsApp.client";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { phoneMockAdapter } from "../channels/whatsappMock.adapter";
 import { resolveUserWhatsAppPhone } from "./identityResolver.service";
@@ -63,7 +64,9 @@ export async function deliverOutboundMessage(payload: {
     }
 
     try {
-        if (payload.channel === "whatsapp" && isBaileysWhatsAppEnabled()) {
+        if (payload.channel === "whatsapp" && isMetaWhatsAppEnabled()) {
+            await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content);
+        } else if (payload.channel === "whatsapp" && isBaileysWhatsAppEnabled()) {
             await sendViaBaileysBridge(payload.channelIdentifier, payload.content);
         } else {
             const adapter =

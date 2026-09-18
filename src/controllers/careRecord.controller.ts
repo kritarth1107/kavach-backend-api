@@ -199,6 +199,59 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
     res.json({ success: true, data: { reply } });
 }
 
+export async function getWhatsAppMetaWebhook(req: Request, res: Response) {
+    const { getMetaWebhookVerifyToken } = await import("../clients/metaWhatsApp.client");
+    const mode = String(req.query["hub.mode"] ?? "");
+    const token = String(req.query["hub.verify_token"] ?? "");
+    const challenge = String(req.query["hub.challenge"] ?? "");
+
+    if (mode === "subscribe" && token === getMetaWebhookVerifyToken()) {
+        res.status(200).type("text/plain").send(challenge);
+        return;
+    }
+
+    res.status(403).json({ success: false, message: "Webhook verification failed" });
+}
+
+export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
+    const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
+    const {
+        isMetaWhatsAppEnabled,
+        parseMetaWebhookMessages,
+        sendViaMetaWhatsApp,
+    } = await import("../clients/metaWhatsApp.client");
+
+    res.status(200).json({ success: true });
+
+    const messages = parseMetaWebhookMessages(req.body);
+    if (!messages.length) return;
+
+    for (const inbound of messages) {
+        try {
+            const reply = await handleWhatsAppInbound({
+                from: inbound.from,
+                text: inbound.text,
+                modality: "text",
+            });
+            if (isMetaWhatsAppEnabled() && reply.content) {
+                await sendViaMetaWhatsApp(reply.channelIdentifier, reply.content);
+            }
+        } catch (err) {
+            console.error("Meta WhatsApp inbound failed:", err);
+            if (isMetaWhatsAppEnabled()) {
+                try {
+                    await sendViaMetaWhatsApp(
+                        inbound.from,
+                        "Saheli is having a small hiccup. Please try again in a moment.",
+                    );
+                } catch (sendErr) {
+                    console.error("Meta WhatsApp fallback send failed:", sendErr);
+                }
+            }
+        }
+    }
+}
+
 export async function postWhatsAppBaileysWebhook(req: Request, res: Response) {
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     try {

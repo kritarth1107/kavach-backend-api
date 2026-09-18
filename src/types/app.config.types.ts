@@ -106,14 +106,25 @@ export interface HealthConfig {
     secret: string;
 }
 
-export type WhatsAppProvider = "mock" | "baileys";
+export type WhatsAppProvider = "mock" | "baileys" | "meta";
+
+export interface WhatsAppMetaConfig {
+    phoneNumberId: string;
+    wabaId: string;
+    appId: string;
+    appSecret: string;
+    accessToken: string;
+    webhookVerifyToken: string;
+    graphVersion: string;
+}
 
 export interface WhatsAppConfig {
     provider: WhatsAppProvider;
     bridgeUrl: string;
     bridgeSecret: string;
-    /** Single Kavach WhatsApp line (Baileys pilot). Users message this number. */
+    /** Single Kavach WhatsApp line. Users message this number. */
     kavachNumber: string;
+    meta: WhatsAppMetaConfig;
 }
 
 /**

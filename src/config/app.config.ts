@@ -119,12 +119,26 @@ const config: AppConfig = {
     },
 
     whatsapp: {
-        provider: (process.env.WHATSAPP_PROVIDER === "baileys" ? "baileys" : "mock") as
-            | "mock"
-            | "baileys",
+        provider: ((): "mock" | "baileys" | "meta" => {
+            const p = (process.env.WHATSAPP_PROVIDER || "mock").toLowerCase();
+            if (p === "baileys") return "baileys";
+            if (p === "meta") return "meta";
+            return "mock";
+        })(),
         bridgeUrl: process.env.WHATSAPP_BRIDGE_URL || "http://localhost:3100",
         bridgeSecret: process.env.WHATSAPP_BRIDGE_SECRET || "",
         kavachNumber: process.env.KAVACH_WHATSAPP_NUMBER || "+918310905372",
+        meta: {
+            phoneNumberId: process.env.WHATSAPP_META_PHONE_NUMBER_ID || "",
+            wabaId: process.env.WHATSAPP_META_WABA_ID || "",
+            appId: process.env.WHATSAPP_META_APP_ID || "",
+            appSecret: process.env.WHATSAPP_META_APP_SECRET || "",
+            accessToken: process.env.WHATSAPP_META_ACCESS_TOKEN || "",
+            webhookVerifyToken:
+                process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN ||
+                "kavach_wa_verify_k9X2mP7nQ4vL8sR3",
+            graphVersion: process.env.WHATSAPP_META_GRAPH_VERSION || "v21.0",
+        },
     },
 
 };
