@@ -191,13 +191,17 @@ export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCreden
         } else {
             result.sendProbeError = formatMetaSendError(sendRes.status, sendBody);
             const lower = result.sendProbeError.toLowerCase();
+            // These mean auth/scopes are OK — the probe used a fake recipient on purpose.
             if (
                 lower.includes("recipient") ||
+                lower.includes("131009") ||
                 lower.includes("131030") ||
                 lower.includes("131026") ||
+                lower.includes("parameter value is not valid") ||
                 lower.includes("phone number")
             ) {
                 result.sendEndpointOk = true;
+                result.sendProbeError = undefined;
             }
         }
     } catch (err) {
@@ -214,7 +218,7 @@ export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCreden
             "Access token cannot read the configured Phone Number ID — regenerate a System User token and confirm the ID in WhatsApp Manager → API Setup.";
     } else if (!result.sendEndpointOk) {
         result.diagnosis =
-            "Token cannot POST to /messages on this Phone Number ID (code 100 sub 33). In Meta Business Suite: System Users → assign your WhatsApp account → generate token with whatsapp_business_messaging + whatsapp_business_management, then update Cloud Run via the set-whatsapp-gcp-env workflow.";
+            "Token cannot POST to /messages on this Phone Number ID. Regenerate a System User token with whatsapp_business_messaging + whatsapp_business_management, then update Cloud Run via the set-whatsapp-gcp-env workflow.";
     } else if (result.tokenDebugOk && !hasMessagingScope) {
         result.diagnosis =
             `Token is valid but missing whatsapp_business_messaging scope (current: ${scopes.join(", ") || "none"}). Regenerate the System User token with messaging permissions.`;
