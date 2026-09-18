@@ -3,6 +3,7 @@ import LabDocument from "../models/labDocument.model";
 import Family from "../models/family.model";
 import User from "../models/users.model";
 import { ensureAiContext } from "./aiTenant.service";
+import { extractStructuredLabValues } from "./labStructuredExtract.service";
 
 type AnalysisResult = {
     title: string;
@@ -117,6 +118,8 @@ export async function syncDocumentToFamilyMemory(payload: {
         /* Mongo record remains; RAG sync is best-effort */
     }
 
+    const structuredValues = extractStructuredLabValues(payload.rawText, resolvedDate);
+
     await LabDocument.updateOne(
         { documentId: payload.documentId },
         {
@@ -127,6 +130,7 @@ export async function syncDocumentToFamilyMemory(payload: {
                 aiSummary: analysis.summary,
                 tags: analysis.tags,
                 highlights: analysis.highlights,
+                structuredValues,
                 aiMemoryDocumentId,
                 analysisStatus: aiMemoryDocumentId ? "ready" : "failed",
             },

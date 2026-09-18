@@ -12,10 +12,14 @@ import { AppError } from "../middleware/error.middleware";
 import { CareScheduleType } from "../types/careSchedule.types";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import {
-    aiPostCaregiverChat,
+    aiPostCaregiverChatWithRetry,
     aiPostChat,
     aiPostCheckIn,
+    isAiEngineOfflineError,
+    streamCaregiverSaheliChat,
+    type AiStreamEvent,
 } from "../clients/aiEngine.client";
+import { syncSessionHistoryToAiEngine } from "./saheliMemorySync.service";
 import {
     ensureAiContext,
     persistCaregiverConversationId,
@@ -219,15 +223,41 @@ function caregiverReplyFromCosmos(opts: {
     return parts.filter(Boolean).join("\n\n");
 }
 
+function orderContextForAi(order: OrderChatResult | null): string | undefined {
+    if (!order) return undefined;
+    if (order.kind === "prompt") {
+        return `[Ordering note for Saheli] ${order.message}`;
+    }
+    if (order.kind === "order") {
+        const items = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
+        return `[Order card prepared] ${order.partnerLabel}: ${items}. Approx ₹${(order.totalPaise / 100).toFixed(0)}. ${order.addressNote ?? "User picks address in card and approves."}`;
+    }
+    if (order.kind === "connect_required") {
+        return `[Partner connect needed] ${order.partnerLabel}: ${order.message}`;
+    }
+    return undefined;
+}
+
 function applyOrderChatResult(reply: string, order: OrderChatResult | null): string {
     if (!order) return reply;
-    if (order.kind === "connect_required" || order.kind === "prompt") {
-        return order.message;
+    if (order.kind === "connect_required") {
+        return reply.trim() ? `${reply.trim()}\n\n${order.message}` : order.message;
+    }
+    if (order.kind === "prompt") {
+        return reply.trim() ? `${reply.trim()}\n\n${order.message}` : order.message;
     }
     const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
     const addressNote = order.addressNote ?? "";
     const basket = `I've prepared a ${order.partnerLabel} basket:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}. Your family can approve it in the dashboard or on WhatsApp.${addressNote}`;
     return reply.trim() ? `${reply.trim()}\n\n${basket}` : basket;
+}
+
+function buildElderSafeReply(displayName: string): string {
+    return `I'm here with you, ${displayName}. Tell me more — how you're feeling, what you ate, or if you need anything.`;
+}
+
+function offlineSaheliMessage(): string {
+    return "Saheli is reconnecting — please try again in a moment.";
 }
 
 async function elderReplyWithAi(
@@ -236,8 +266,19 @@ async function elderReplyWithAi(
     displayName: string,
     message: string,
     conversationIdOverride?: string,
+    opts?: { sessionId?: string; orderContext?: string },
 ): Promise<{ reply: string; conversationId: string }> {
     try {
+        if (opts?.sessionId) {
+            await syncSessionHistoryToAiEngine({
+                familyId,
+                recipientUserId,
+                displayName,
+                sessionId: opts.sessionId,
+                thread: "elder",
+                conversationId: conversationIdOverride,
+            });
+        }
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
         const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 30);
         const companion = await getCompanionProfile(familyId, recipientUserId);
@@ -249,6 +290,7 @@ async function elderReplyWithAi(
             conversationId: conversationIdOverride ?? ctx.conversationId,
             careRecordContext: careContext,
             companionProfile: profile,
+            orderContext: opts?.orderContext,
         });
         const conversationId =
             result.conversation_id || conversationIdOverride || `${familyId}:${recipientUserId}:elder`;
@@ -261,9 +303,15 @@ async function elderReplyWithAi(
         };
     } catch (err) {
         console.warn("Saheli AI elder reply fallback:", err);
+        if (isAiEngineOfflineError(err)) {
+            return {
+                reply: offlineSaheliMessage(),
+                conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
+            };
+        }
         return {
-            reply: `Namaste. I saved what you said: “${message.slice(0, 280)}”`,
-            conversationId: `${familyId}:${recipientUserId}:elder`,
+            reply: buildElderSafeReply(displayName),
+            conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
         };
     }
 }
@@ -338,16 +386,20 @@ async function caregiverReplyWithAi(
         sessionLines: string[];
     },
     conversationIdOverride?: string,
-): Promise<{ reply: string; conversationId: string }> {
+    opts?: { sessionId?: string; orderContext?: string; actorUserId?: string },
+): Promise<{ reply: string; conversationId: string; orderFromAgent?: OrderChatResult | null }> {
     const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
-    const fallback = buildCaregiverSmartReply({
-        recipientName: displayName,
-        question: message,
-        elderLines: context.elderLines,
-        labs: context.labs,
-        careContext,
-        sessionLines: context.sessionLines,
-    });
+
+    if (opts?.sessionId) {
+        await syncSessionHistoryToAiEngine({
+            familyId,
+            recipientUserId,
+            displayName,
+            sessionId: opts.sessionId,
+            thread: "caregiver",
+            conversationId: conversationIdOverride,
+        });
+    }
 
     const elderThreadContext = context.elderLines
         .slice(-12)
@@ -358,46 +410,66 @@ async function caregiverReplyWithAi(
         .map((l) => `${l.title}${l.recordDate ? ` (${l.recordDate})` : ""}: ${l.rawText.slice(0, 400)}`)
         .join("\n---\n");
 
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-            const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-            const result = await aiPostCaregiverChat({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-                message,
-                conversationId: conversationIdOverride || undefined,
-                careRecordContext: careContext,
-                elderThreadContext,
-                labsContext,
-                sessionContext: context.sessionLines.slice(-8).join("\n"),
-            });
-            const conversationId =
-                result.conversation_id ||
-                conversationIdOverride ||
-                `${familyId}:${recipientUserId}:caregiver`;
-            if (result.conversation_id && !conversationIdOverride) {
-                await persistCaregiverConversationId(
-                    familyId,
-                    recipientUserId,
-                    result.conversation_id,
-                );
-            }
-            const reply = result.reply.trim();
-            if (reply) {
-                return { reply, conversationId };
-            }
-        } catch (err) {
-            lastErr = err;
-            console.warn(`Saheli AI caregiver attempt ${attempt + 1} failed:`, err);
+    try {
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const result = await aiPostCaregiverChatWithRetry({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            message,
+            conversationId: conversationIdOverride || undefined,
+            careRecordContext: careContext,
+            elderThreadContext,
+            labsContext,
+            sessionContext: context.sessionLines.slice(-8).join("\n"),
+            orderContext: opts?.orderContext,
+            useAgent: true,
+            actorUserId: opts?.actorUserId,
+        });
+        const conversationId =
+            result.conversation_id ||
+            conversationIdOverride ||
+            `${familyId}:${recipientUserId}:caregiver`;
+        if (result.conversation_id && !conversationIdOverride) {
+            await persistCaregiverConversationId(
+                familyId,
+                recipientUserId,
+                result.conversation_id,
+            );
         }
+        const reply = result.reply.trim();
+        let orderFromAgent: OrderChatResult | null = null;
+        if (result.order && typeof result.order === "object") {
+            const o = result.order as Record<string, unknown>;
+            orderFromAgent = { kind: "order", ...o } as unknown as OrderChatResult;
+        } else if (result.connect && typeof result.connect === "object") {
+            const c = result.connect as Record<string, unknown>;
+            orderFromAgent = { kind: "connect_required", ...c } as unknown as OrderChatResult;
+        }
+        if (reply) {
+            return { reply, conversationId, orderFromAgent };
+        }
+        throw new Error("Empty AI reply");
+    } catch (err) {
+        console.warn("Saheli AI caregiver failed:", err);
+        if (!isAiEngineOfflineError(err)) {
+            return {
+                reply: `I'm having trouble forming a full answer right now. ${offlineSaheliMessage()}`,
+                conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
+            };
+        }
+        const fallback = buildCaregiverSmartReply({
+            recipientName: displayName,
+            question: message,
+            elderLines: context.elderLines,
+            labs: context.labs,
+            careContext,
+            sessionLines: context.sessionLines,
+        });
+        return {
+            reply: fallback,
+            conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
+        };
     }
-
-    console.warn("Saheli AI caregiver using smart local reply:", lastErr);
-    return {
-        reply: fallback,
-        conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
-    };
 }
 
 export async function sendSaheliMessage(
@@ -489,10 +561,6 @@ export async function sendSaheliMessage(
 
     if (order?.kind === "connect_required") {
         reply = order.message;
-    } else if (order?.kind === "prompt") {
-        reply = order.message;
-    } else if (order?.kind === "order") {
-        reply = applyOrderChatResult("", order).trim();
     } else {
         const ai = await elderReplyWithAi(
             familyId,
@@ -500,8 +568,9 @@ export async function sendSaheliMessage(
             displayName,
             text,
             session.aiConversationId,
+            { sessionId, orderContext: orderContextForAi(order) },
         );
-        reply = ai.reply;
+        reply = applyOrderChatResult(ai.reply, order);
         conversationId = ai.conversationId;
     }
 
@@ -667,74 +736,56 @@ export async function sendCaregiverSaheliMessage(
         thread: "caregiver",
     });
 
-    let order: OrderChatResult | null = null;
-    try {
-        order = await maybeSuggestOrderFromChat({
-            familyId,
-            subjectUserId: recipientUserId,
-            actorUserId,
-            message: text,
-        });
-    } catch (err) {
-        console.warn("Order suggest from caregiver chat failed:", err);
-    }
+    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
+    const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
+    const sessionHistory = await listThread(
+        familyId,
+        recipientUserId,
+        "caregiver",
+        16,
+        sessionId,
+    );
+    const sessionLines = sessionHistory
+        .filter((m) => m.role === "family" || m.role === "saheli")
+        .map((m) => `${m.role}: ${m.content}`);
+    const labs = await LabDocument.find({ familyId, recipientUserId })
+        .sort({ createdAt: 1 })
+        .lean();
 
+    let order: OrderChatResult | null = null;
     let reply = "";
     let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
 
+    const ai = await caregiverReplyWithAi(
+        familyId,
+        recipientUserId,
+        displayName,
+        text,
+        {
+            elderLines,
+            sessionLines,
+            labs: labs.map((d) => ({
+                title: d.title,
+                recordDate: d.recordDate,
+                rawText: d.rawText,
+                kind: d.kind,
+            })),
+        },
+        session.aiConversationId,
+        { sessionId, actorUserId },
+    );
+    reply = ai.reply;
+    conversationId = ai.conversationId;
+    if (ai.orderFromAgent) {
+        order = ai.orderFromAgent;
+    }
+
     if (order?.kind === "connect_required") {
-        reply = order.message;
-    } else if (order?.kind === "prompt") {
-        reply = order.message;
+        reply = applyOrderChatResult(reply, order);
     } else if (order?.kind === "order") {
-        const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
-        const live =
-            order.source !== "mock"
-                ? " Prices are from your linked account."
-                : " Connect the partner in Integrations for live catalog pricing.";
-        const addressNote =
-            order.addressNote ??
-            ((order.addresses?.length ?? 0) > 1
-                ? " Pick a delivery address below."
-                : (order.addresses?.length ?? 0) === 1
-                  ? ` Delivering to ${order.addresses![0].label}.`
-                  : "");
-        reply = `I've prepared a ${order.partnerLabel} basket for ${displayName}:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}.${live}${addressNote} Approve in the card below to place the order.`;
-    } else {
-        const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
-        const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
-        const sessionHistory = await listThread(
-            familyId,
-            recipientUserId,
-            "caregiver",
-            16,
-            sessionId,
-        );
-        const sessionLines = sessionHistory
-            .filter((m) => m.role === "family" || m.role === "saheli")
-            .map((m) => `${m.role}: ${m.content}`);
-        const labs = await LabDocument.find({ familyId, recipientUserId })
-            .sort({ createdAt: 1 })
-            .lean();
-        const ai = await caregiverReplyWithAi(
-            familyId,
-            recipientUserId,
-            displayName,
-            text,
-            {
-                elderLines,
-                sessionLines,
-                labs: labs.map((d) => ({
-                    title: d.title,
-                    recordDate: d.recordDate,
-                    rawText: d.rawText,
-                    kind: d.kind,
-                })),
-            },
-            session.aiConversationId,
-        );
-        reply = ai.reply;
-        conversationId = ai.conversationId;
+        reply = applyOrderChatResult(reply, order);
+    } else if (order?.kind === "prompt") {
+        reply = applyOrderChatResult(reply, order);
     }
 
     await touchSaheliChatSession(sessionId, {
@@ -764,6 +815,230 @@ export async function sendCaregiverSaheliMessage(
         reply: finalReply,
         conversationId,
         sessionId,
+        ...chatExtras.clientPayload,
+    };
+}
+
+function orderFromAgentPayload(raw: Record<string, unknown>): OrderChatResult | null {
+    if (raw.orderId || raw.kind === "order") {
+        return { kind: "order", ...raw } as unknown as OrderChatResult;
+    }
+    if (raw.connectPartner || raw.kind === "connect_required") {
+        return { kind: "connect_required", ...raw } as unknown as OrderChatResult;
+    }
+    if (raw.kind === "prompt") {
+        return { kind: "prompt", ...raw } as unknown as OrderChatResult;
+    }
+    return null;
+}
+
+export async function* streamCaregiverSaheliMessage(
+    familyId: string,
+    recipientUserId: string,
+    actorUserId: string,
+    message: string,
+    opts?: {
+        skipInboundCareRecord?: boolean;
+        channel?: ChannelType;
+        source?: CareRecordSource;
+        sessionId?: string;
+    },
+): AsyncGenerator<
+    AiStreamEvent | { type: "done"; sessionId: string; conversationId: string; reply: string; order?: unknown; connect?: unknown }
+> {
+    const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
+    if (!family.hasJoinedMember(actorUserId)) {
+        yield { type: "error", message: "Family not found or access denied" };
+        return;
+    }
+
+    const actor = family.members.find((m) => m.userId === actorUserId);
+    if (actor?.role === FamilyRole.CARE_RECIPIENT) {
+        yield { type: "error", message: "Care recipients use their own Saheli thread" };
+        return;
+    }
+
+    const membersPayload = await getFamilyMembersList(familyId, actorUserId);
+    const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
+    const text = message.trim();
+    if (!text) {
+        yield { type: "error", message: "Message is required" };
+        return;
+    }
+
+    let sessionId = opts?.sessionId;
+    if (sessionId) {
+        await getSaheliChatSession({
+            sessionId,
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "caregiver",
+        });
+    } else {
+        const created = await createSaheliChatSession({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            thread: "caregiver",
+        });
+        sessionId = created.sessionId;
+    }
+
+    await maybeSetSessionTitle(sessionId, text);
+    await appendMessage(familyId, recipientUserId, "caregiver", "family", text, sessionId);
+    if (!opts?.skipInboundCareRecord) {
+        await appendCareRecordEvent({
+            familyId,
+            subjectUserId: recipientUserId,
+            actorUserId,
+            type: CareRecordEventType.MESSAGE,
+            source: opts?.source ?? CareRecordSource.DASHBOARD,
+            channel: opts?.channel ?? ChannelType.DASHBOARD,
+            title: "Caregiver",
+            detail: text,
+            status: "reported",
+        });
+    }
+
+    const session = await getSaheliChatSession({
+        sessionId,
+        familyId,
+        recipientUserId,
+        actorUserId,
+        thread: "caregiver",
+    });
+
+    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
+    const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
+    const sessionHistory = await listThread(
+        familyId,
+        recipientUserId,
+        "caregiver",
+        16,
+        sessionId,
+    );
+    const sessionLines = sessionHistory
+        .filter((m) => m.role === "family" || m.role === "saheli")
+        .map((m) => `${m.role}: ${m.content}`);
+    const labs = await LabDocument.find({ familyId, recipientUserId })
+        .sort({ createdAt: 1 })
+        .lean();
+
+    let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
+    const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
+
+    await syncSessionHistoryToAiEngine({
+        familyId,
+        recipientUserId,
+        displayName,
+        sessionId,
+        thread: "caregiver",
+        conversationId: session.aiConversationId,
+    });
+
+    const elderThreadContext = elderLines
+        .slice(-12)
+        .map((line, i) => `${i + 1}. ${line}`)
+        .join("\n");
+    const labsContext = labs
+        .slice(-10)
+        .map((l) => `${l.title}${l.recordDate ? ` (${l.recordDate})` : ""}: ${l.rawText.slice(0, 400)}`)
+        .join("\n---\n");
+
+    let replyBuffer = "";
+    let order: OrderChatResult | null = null;
+
+    try {
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        for await (const event of streamCaregiverSaheliChat({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            message: text,
+            conversationId: session.aiConversationId || undefined,
+            careRecordContext: careContext,
+            elderThreadContext,
+            labsContext,
+            sessionContext: sessionLines.slice(-8).join("\n"),
+            actorUserId,
+        })) {
+            if (event.type === "token") {
+                replyBuffer += event.delta;
+                yield event;
+            } else if (event.type === "tool_result") {
+                if (event.order && typeof event.order === "object") {
+                    order = orderFromAgentPayload(event.order as Record<string, unknown>);
+                } else if (event.connect && typeof event.connect === "object") {
+                    order = orderFromAgentPayload(event.connect as Record<string, unknown>);
+                }
+                yield event;
+            } else if (event.type === "done") {
+                conversationId = event.conversation_id || conversationId;
+                if (event.reply?.trim()) replyBuffer = event.reply.trim();
+                if (event.order && typeof event.order === "object") {
+                    order = orderFromAgentPayload(event.order as Record<string, unknown>);
+                } else if (event.connect && typeof event.connect === "object") {
+                    order = orderFromAgentPayload(event.connect as Record<string, unknown>);
+                }
+            } else {
+                yield event;
+            }
+        }
+
+        if (conversationId && !session.aiConversationId) {
+            await persistCaregiverConversationId(familyId, recipientUserId, conversationId);
+        }
+    } catch (err) {
+        console.warn("Saheli AI caregiver stream failed:", err);
+        if (!replyBuffer.trim()) {
+            replyBuffer = isAiEngineOfflineError(err)
+                ? buildCaregiverSmartReply({
+                      recipientName: displayName,
+                      question: text,
+                      elderLines,
+                      labs: labs.map((d) => ({
+                          title: d.title,
+                          recordDate: d.recordDate,
+                          rawText: d.rawText,
+                          kind: d.kind,
+                      })),
+                      careContext,
+                      sessionLines,
+                  })
+                : `I'm having trouble forming a full answer right now. ${offlineSaheliMessage()}`;
+            yield { type: "token", delta: replyBuffer };
+        }
+    }
+
+    let reply = replyBuffer.trim();
+    if (order) {
+        reply = applyOrderChatResult(reply, order);
+    }
+
+    await touchSaheliChatSession(sessionId, { aiConversationId: conversationId });
+
+    const chatExtras = saheliChatExtras(order);
+    await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply, sessionId, {
+        orderPayload: chatExtras.orderPayload,
+        connectPayload: chatExtras.connectPayload,
+    });
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        type: CareRecordEventType.MESSAGE,
+        source: CareRecordSource.SAHELI,
+        channel: opts?.channel ?? ChannelType.DASHBOARD,
+        title: "Saheli",
+        detail: reply,
+        status: "reported",
+        skipSignalCheck: true,
+    });
+
+    yield {
+        type: "done",
+        sessionId,
+        conversationId,
+        reply,
         ...chatExtras.clientPayload,
     };
 }

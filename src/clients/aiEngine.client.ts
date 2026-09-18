@@ -4,7 +4,30 @@ import { AppError } from "../middleware/error.middleware";
 type AiChatResponse = {
     reply: string;
     conversation_id: string;
+    order?: Record<string, unknown>;
+    connect?: Record<string, unknown>;
+    tool_trace?: Array<{ tool: string; status: string }>;
 };
+
+export type AiStreamEvent =
+    | { type: "token"; delta: string }
+    | { type: "tool_start"; id: string; name: string; label?: string }
+    | {
+          type: "tool_result";
+          id: string;
+          order?: Record<string, unknown>;
+          connect?: Record<string, unknown>;
+      }
+    | { type: "done"; conversation_id: string; reply?: string; order?: Record<string, unknown>; connect?: Record<string, unknown> }
+    | { type: "error"; message: string };
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function isAiEngineOfflineError(err: unknown): boolean {
+    return err instanceof AppError && (err.statusCode === 503 || err.statusCode === 502);
+}
 
 type AiHistoryResponse = {
     conversation_id: string;
@@ -132,6 +155,43 @@ export async function aiCreateElder(payload: {
     return { elderId: json.elder.id };
 }
 
+export async function aiSyncConversationHistory(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    conversationId?: string;
+    thread: "elder" | "caregiver";
+    messages: Array<{
+        external_id: string;
+        role: string;
+        content: string;
+        created_at?: string | null;
+    }>;
+}): Promise<{ conversation_id: string; synced: number }> {
+    const res = await aiFetch(
+        "/v1/chat/sync-history",
+        {
+            method: "POST",
+            headers: aiHeaders(),
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                conversation_id: payload.conversationId ?? null,
+                thread: payload.thread,
+                messages: payload.messages,
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        console.warn("AI history sync failed:", body);
+        return { conversation_id: payload.conversationId ?? "", synced: 0 };
+    }
+
+    return parseAiJson<{ conversation_id: string; synced: number }>(res);
+}
+
 export async function aiPostChat(payload: {
     aiFamilyId: string;
     aiElderId: string;
@@ -139,6 +199,7 @@ export async function aiPostChat(payload: {
     conversationId?: string;
     careRecordContext?: string;
     companionProfile?: Record<string, unknown>;
+    orderContext?: string;
 }): Promise<AiChatResponse> {
     const res = await aiFetch(
         "/v1/chat",
@@ -152,6 +213,7 @@ export async function aiPostChat(payload: {
                 conversation_id: payload.conversationId ?? null,
                 care_record_context: payload.careRecordContext ?? null,
                 companion_profile: payload.companionProfile ?? null,
+                order_context: payload.orderContext ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -174,6 +236,9 @@ export async function aiPostCaregiverChat(payload: {
     elderThreadContext?: string;
     labsContext?: string;
     sessionContext?: string;
+    orderContext?: string;
+    useAgent?: boolean;
+    actorUserId?: string;
 }): Promise<AiChatResponse> {
     const res = await aiFetch(
         "/v1/chat/caregiver",
@@ -189,6 +254,9 @@ export async function aiPostCaregiverChat(payload: {
                 elder_thread_context: payload.elderThreadContext ?? null,
                 labs_context: payload.labsContext ?? null,
                 session_context: payload.sessionContext ?? null,
+                order_context: payload.orderContext ?? null,
+                use_agent: payload.useAgent ?? true,
+                actor_user_id: payload.actorUserId ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -200,6 +268,88 @@ export async function aiPostCaregiverChat(payload: {
     }
 
     return parseAiJson<AiChatResponse>(res);
+}
+
+export async function aiPostCaregiverChatWithRetry(
+    payload: Parameters<typeof aiPostCaregiverChat>[0],
+    retries = 3,
+): Promise<AiChatResponse> {
+    const delays = [500, 1000, 2000];
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+        try {
+            return await aiPostCaregiverChat(payload);
+        } catch (err) {
+            lastErr = err;
+            if (attempt < retries - 1 && isAiEngineOfflineError(err)) {
+                await sleep(delays[attempt] ?? 2000);
+                continue;
+            }
+            throw err;
+        }
+    }
+    throw lastErr;
+}
+
+export async function* streamCaregiverSaheliChat(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    message: string;
+    conversationId?: string;
+    careRecordContext?: string;
+    elderThreadContext?: string;
+    labsContext?: string;
+    sessionContext?: string;
+    orderContext?: string;
+    actorUserId?: string;
+}): AsyncGenerator<AiStreamEvent> {
+    const base = config.aiEngine.baseUrl.replace(/\/$/, "");
+    const res = await fetch(`${base}/v1/chat/caregiver/stream`, {
+        method: "POST",
+        headers: aiHeaders(),
+        body: JSON.stringify({
+            family_id: payload.aiFamilyId,
+            elder_id: payload.aiElderId,
+            message: payload.message,
+            conversation_id: payload.conversationId ?? null,
+            care_record_context: payload.careRecordContext ?? null,
+            elder_thread_context: payload.elderThreadContext ?? null,
+            labs_context: payload.labsContext ?? null,
+            session_context: payload.sessionContext ?? null,
+            order_context: payload.orderContext ?? null,
+            use_agent: true,
+            actor_user_id: payload.actorUserId ?? null,
+        }),
+    });
+
+    if (!res.ok || !res.body) {
+        const body = await res.text();
+        yield { type: "error", message: body || "Stream failed" };
+        return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith("data:")) continue;
+            const json = line.slice(5).trim();
+            if (!json || json === "[DONE]") continue;
+            try {
+                yield JSON.parse(json) as AiStreamEvent;
+            } catch {
+                // skip malformed chunk
+            }
+        }
+    }
 }
 
 export async function aiGetCaregiverChatHistory(payload: {

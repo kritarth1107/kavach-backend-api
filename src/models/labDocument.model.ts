@@ -21,6 +21,13 @@ export interface ILabDocument {
     highlights?: string[];
     aiMemoryDocumentId?: string;
     analysisStatus?: "pending" | "ready" | "failed";
+    structuredValues?: Array<{
+        name: string;
+        value: string;
+        unit?: string;
+        refRange?: string;
+        date?: string;
+    }>;
     createdAt?: Date;
 }
 
@@ -50,6 +57,18 @@ const labDocumentSchema = new Schema<ILabDocumentRecord>(
             type: String,
             enum: ["pending", "ready", "failed"],
             default: "pending",
+        },
+        structuredValues: {
+            type: [
+                {
+                    name: { type: String, trim: true },
+                    value: { type: String, trim: true },
+                    unit: { type: String, trim: true },
+                    refRange: { type: String, trim: true },
+                    date: { type: String, trim: true },
+                },
+            ],
+            default: [],
         },
     },
     {

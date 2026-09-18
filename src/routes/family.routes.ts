@@ -39,6 +39,7 @@ import {
     getCaregiverSaheliChat,
     getOverview,
     getSaheliChat,
+    getSaheliInsightsHandler,
     listCaregiverSaheliChatSessionsHandler,
     listSaheliChatSessionsHandler,
     postCaregiverSaheliChat,
@@ -117,6 +118,11 @@ router.get(
     "/:familyId/recipients/:recipientUserId/saheli/memories",
     protect,
     getFamilyMemories,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/insights",
+    protect,
+    getSaheliInsightsHandler,
 );
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);

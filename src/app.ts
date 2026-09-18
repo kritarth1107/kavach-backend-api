@@ -17,6 +17,7 @@ import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.
 import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { startOutreachScheduler } from "./workers/outreachScheduler";
+import internalRoutes from "./routes/internal.routes";
 
 dotenv.config();
 
@@ -49,6 +50,7 @@ app.use("/api/links", linkRoutes);
 app.use("/api/analytics", analyticsRoutes);
 
 app.use("/api/health", healthRoutes);
+app.use("/internal", internalRoutes);
 
 app.use(errorHandler);
 

@@ -8,12 +8,14 @@ import {
     getSaheliHistory,
     sendCaregiverSaheliMessage,
     sendSaheliMessage,
+    streamCaregiverSaheliMessage,
     triggerSaheliCheckIn,
 } from "../services/saheli.service";
 import {
     createSaheliChatSession,
     listSaheliChatSessions,
 } from "../services/saheliSession.service";
+import { getSaheliInsights } from "../services/saheliInsights.service";
 
 export const getOverview = async (
     req: Request,
@@ -185,6 +187,26 @@ export const postCaregiverSaheliChat = async (
         if (!message) throw new AppError("Message is required", 400);
 
         const sessionId = String(req.body?.sessionId ?? "").trim() || undefined;
+
+        if (req.query.stream === "1") {
+            res.setHeader("Content-Type", "text/event-stream");
+            res.setHeader("Cache-Control", "no-cache");
+            res.setHeader("Connection", "keep-alive");
+            res.flushHeaders?.();
+
+            for await (const event of streamCaregiverSaheliMessage(
+                familyId,
+                recipientUserId,
+                req.user.userId,
+                message,
+                { sessionId },
+            )) {
+                res.write(`data: ${JSON.stringify(event)}\n\n`);
+            }
+            res.end();
+            return;
+        }
+
         const data = await sendCaregiverSaheliMessage(
             familyId,
             recipientUserId,
@@ -252,6 +274,21 @@ export const getBriefing = async (
             req.user.userId,
         );
         res.json({ success: true, data });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getSaheliInsightsHandler = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        const { familyId, recipientUserId } = req.params;
+        const insights = await getSaheliInsights(familyId, recipientUserId, req.user.userId);
+        res.json({ success: true, data: { insights } });
     } catch (error) {
         next(error);
     }

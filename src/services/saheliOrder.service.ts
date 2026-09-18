@@ -13,7 +13,7 @@ const GROCERY_KEYWORDS =
     /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|dal|sabzi|vegetable|fruit|maggi|oil|ghee|paneer|curd|dahi|eggs|bread|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri)\b/i;
 
 const FOOD_KEYWORDS =
-    /\b(food|khana|lunch|dinner|breakfast|restaurant|biryani|pizza|burger|swiggy|order food|hungry|khana mangao|thali|dosa|idli|paratha|chinese|north indian|south indian)\b/i;
+    /\b(food|khana|lunch|dinner|breakfast|restaurant|biryani|pizza|pasta|burger|sandwich|noodles|momos|wrap|swiggy|order food|hungry|khana mangao|thali|dosa|idli|paratha|chinese|north indian|south indian)\b/i;
 
 const ORDER_INTENT =
     /\b(order|mangao|manga|bhej|deliver|delivery|lana|la do|chahiye|need|want|get me|bring)\b/i;
@@ -481,7 +481,20 @@ export async function maybeSuggestOrderFromChat(input: {
             };
         }
 
-        if (!enriched.catalogFound) {
+        const hasRestaurants = searchResults.some((h) => h.kind === "restaurant");
+        if (!enriched.catalogFound && hasRestaurants) {
+            for (const item of pricedItems) {
+                if (!item.unitPricePaise || item.unitPricePaise === 5000) {
+                    const restHit = searchResults.find((h) => h.kind === "restaurant" && h.pricePaise);
+                    if (restHit?.pricePaise) {
+                        item.unitPricePaise = restHit.pricePaise;
+                        item.matchedName = restHit.name;
+                    }
+                }
+            }
+        }
+
+        if (!enriched.catalogFound && !hasRestaurants) {
             const label = partnerLabel(partner);
             return {
                 kind: "prompt",
