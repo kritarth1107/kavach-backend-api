@@ -1,4 +1,4 @@
-name: Fetch backend logs (diagnostic)
+name: Diagnose WhatsApp Meta setup
 
 on:
   workflow_dispatch:
@@ -7,9 +7,10 @@ env:
   GCP_PROJECT_ID: kavach-care
   GCP_REGION: asia-south1
   SERVICE: kavach-backend
+  BACKEND_URL: https://kavach-backend-303943038694.asia-south1.run.app
 
 jobs:
-  logs:
+  diagnose:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,28 +24,52 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Recent WhatsApp webhook HTTP requests
-        run: |
-          gcloud logging read \
-            'resource.type="cloud_run_revision" AND resource.labels.service_name="${{ env.SERVICE }}" AND httpRequest.requestUrl=~"/api/webhooks/whatsapp/meta"' \
-            --project=${{ env.GCP_PROJECT_ID }} \
-            --limit=15 \
-            --freshness=3h \
-            --format='table(timestamp,httpRequest.requestMethod,httpRequest.status,httpRequest.requestUrl,httpRequest.remoteIp)'
-
-      - name: Meta WhatsApp errors and app logs
-        run: |
-          gcloud logging read \
-            'resource.type="cloud_run_revision" AND resource.labels.service_name="${{ env.SERVICE }}" AND (textPayload:"Meta WhatsApp" OR textPayload:"whatsapp" OR severity>=ERROR)' \
-            --project=${{ env.GCP_PROJECT_ID }} \
-            --limit=30 \
-            --freshness=3h \
-            --format='table(timestamp,severity,textPayload)'
-
-      - name: Cloud Run WhatsApp env (redacted)
+      - name: Cloud Run WhatsApp env check
         run: |
           gcloud run services describe ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
             --region=${{ env.GCP_REGION }} \
-            --format='yaml(spec.template.spec.containers[0].env)' \
-          | grep -E 'name:|value:' | sed -E 's/(WHATSAPP_META_ACCESS_TOKEN|WHATSAPP_META_APP_SECRET).*/\1: [REDACTED]/' || true
+            --format=json > /tmp/service.json
+          python3 <<'PY'
+          import json
+          data = json.load(open("/tmp/service.json"))
+          env = {e["name"]: e.get("value", "[secret]") for e in data["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+          keys = [
+              "WHATSAPP_PROVIDER",
+              "KAVACH_WHATSAPP_NUMBER",
+              "WHATSAPP_META_PHONE_NUMBER_ID",
+              "WHATSAPP_META_WABA_ID",
+              "WHATSAPP_META_APP_ID",
+              "WHATSAPP_META_GRAPH_VERSION",
+              "WHATSAPP_META_WEBHOOK_VERIFY_TOKEN",
+              "WHATSAPP_META_APP_SECRET",
+              "WHATSAPP_META_ACCESS_TOKEN",
+          ]
+          for k in keys:
+              v = env.get(k, "MISSING")
+              if k in ("WHATSAPP_META_APP_SECRET", "WHATSAPP_META_ACCESS_TOKEN"):
+                  print(f"{k}: {'SET' if v not in ('MISSING', '', '[secret]') else 'MISSING'} (len={len(v) if v not in ('MISSING', '[secret]') else 0})")
+              else:
+                  print(f"{k}: {v}")
+          PY
+
+      - name: Validate Meta access token against Graph API
+        run: |
+          TOKEN=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_ACCESS_TOKEN'), ''))")
+          PHONE_ID=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_PHONE_NUMBER_ID'), ''))")
+          if [ -z "$TOKEN" ] || [ -z "$PHONE_ID" ]; then
+            echo "ERROR: Missing token or phone number id on Cloud Run"
+            exit 1
+          fi
+          HTTP=$(curl -s -o /tmp/graph.json -w "%{http_code}" "https://graph.facebook.com/v21.0/${PHONE_ID}?fields=display_phone_number,verified_name,quality_rating&access_token=${TOKEN}")
+          echo "Graph API phone lookup HTTP: $HTTP"
+          cat /tmp/graph.json
+          if [ "$HTTP" != "200" ]; then exit 1; fi
+
+      - name: POST synthetic Meta webhook to production
+        run: |
+          HTTP=$(curl -s -o /tmp/webhook.json -w "%{http_code}" -X POST "${{ env.BACKEND_URL }}/api/webhooks/whatsapp/meta" \
+            -H "Content-Type: application/json" \
+            -d '{"object":"whatsapp_business_account","entry":[{"changes":[{"value":{"messages":[{"from":"919999999999","type":"text","text":{"body":"diag ping"}}]},"field":"messages"}]}]}')
+          echo "Webhook POST HTTP: $HTTP"
+          cat /tmp/webhook.json
