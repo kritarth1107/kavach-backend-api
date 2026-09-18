@@ -73,3 +73,8 @@ jobs:
             -d '{"object":"whatsapp_business_account","entry":[{"changes":[{"value":{"messages":[{"from":"919999999999","type":"text","text":{"body":"diag ping"}}]},"field":"messages"}]}]}')
           echo "Webhook POST HTTP: $HTTP"
           cat /tmp/webhook.json
+
+      - name: Read webhook debug log
+        run: |
+          VERIFY=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_WEBHOOK_VERIFY_TOKEN'), ''))")
+          curl -sS "${{ env.BACKEND_URL }}/api/webhooks/whatsapp/meta/debug?verify_token=${VERIFY}&limit=10" | python3 -m json.tool

@@ -1,4 +1,6 @@
+import { timingSafeEqual } from "crypto";
 import { Request, Response } from "express";
+import config from "../config/app.config";
 import { ChannelType } from "../types/careRecord.types";
 import { whatsAppMockAdapter, phoneMockAdapter, smartSpeakerMockAdapter } from "../channels/whatsappMock.adapter";
 import {
@@ -213,6 +215,47 @@ export async function getWhatsAppMetaWebhook(req: Request, res: Response) {
     res.status(403).json({ success: false, message: "Webhook verification failed" });
 }
 
+function isValidHealthSecret(provided: unknown): boolean {
+    const expected = config.health.secret;
+    if (!expected || typeof provided !== "string" || !provided) return false;
+    if (provided.length !== expected.length) return false;
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
+function isValidWebhookDebugAuth(req: Request): boolean {
+    if (isValidHealthSecret(req.query.HEALTH_SECRET)) return true;
+
+    const provided = String(req.query.verify_token ?? "");
+    const expected = config.whatsapp.meta.webhookVerifyToken;
+    if (!provided || !expected || provided.length !== expected.length) return false;
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
+export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
+    const {
+        getWhatsAppWebhookDebugSnapshot,
+        listWhatsAppWebhookEvents,
+    } = await import("../services/whatsappWebhookLog.service");
+
+    if (!isValidWebhookDebugAuth(req)) {
+        res.status(401).json({
+            success: false,
+            message:
+                "Unauthorized — pass ?verify_token=YOUR_META_VERIFY_TOKEN or ?HEALTH_SECRET=...",
+        });
+        return;
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    res.json({
+        success: true,
+        data: {
+            ...getWhatsAppWebhookDebugSnapshot(),
+            events: listWhatsAppWebhookEvents(limit),
+        },
+    });
+}
+
 export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     const {
@@ -221,6 +264,7 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
         parseMetaWebhookMessages,
         sendViaMetaWhatsApp,
     } = await import("../clients/metaWhatsApp.client");
+    const { recordWhatsAppWebhookEvent } = await import("../services/whatsappWebhookLog.service");
 
     const messages = parseMetaWebhookMessages(req.body);
     if (!messages.length) {
@@ -229,6 +273,11 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
                 ? String((req.body as Record<string, unknown>).object ?? "unknown")
                 : "unknown";
         console.log(`Meta WhatsApp webhook: 0 messages parsed (object=${objectType})`);
+        recordWhatsAppWebhookEvent({
+            body: req.body,
+            messagesParsed: 0,
+            processed: 0,
+        });
         res.status(200).json({ success: true, data: { processed: 0 } });
         return;
     }
@@ -236,36 +285,57 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     console.log(`Meta WhatsApp webhook: ${messages.length} message(s), enabled=${isMetaWhatsAppEnabled()}`);
 
     for (const inbound of messages) {
+        let replySent = false;
+        let replyPreview: string | undefined;
+        let error: string | undefined;
+        let sendError: string | undefined;
+
         try {
             const reply = await handleWhatsAppInbound({
                 from: inbound.from,
                 text: inbound.text,
                 modality: "text",
             });
+            replyPreview = reply.content?.slice(0, 200);
             if (isMetaWhatsAppEnabled() && reply.content) {
                 await sendViaMetaWhatsApp(reply.channelIdentifier, reply.content);
+                replySent = true;
                 console.log(`Meta WhatsApp reply sent to ${inbound.from.slice(0, 6)}…`);
             } else if (!isMetaWhatsAppEnabled()) {
+                error = "Meta WhatsApp provider not fully configured on server";
                 console.error("Meta WhatsApp inbound received but provider is not fully configured");
             }
         } catch (err) {
-            const detail = err instanceof Error ? err.message : String(err);
-            console.error("Meta WhatsApp inbound failed:", detail);
+            error = err instanceof Error ? err.message : String(err);
+            console.error("Meta WhatsApp inbound failed:", error);
             if (isMetaWhatsAppEnabled()) {
                 try {
                     await sendViaMetaWhatsApp(
                         inbound.from,
                         "Saheli is having a small hiccup. Please try again in a moment.",
                     );
+                    replySent = true;
+                    replyPreview = "Saheli is having a small hiccup. Please try again in a moment.";
                 } catch (sendErr) {
-                    const sendDetail =
+                    sendError =
                         sendErr instanceof Error
                             ? sendErr.message
                             : formatMetaSendError(500, String(sendErr));
-                    console.error("Meta WhatsApp fallback send failed:", sendDetail);
+                    console.error("Meta WhatsApp fallback send failed:", sendError);
                 }
             }
         }
+
+        recordWhatsAppWebhookEvent({
+            body: req.body,
+            messagesParsed: messages.length,
+            processed: 1,
+            replySent,
+            replyPreview,
+            replyTo: inbound.from,
+            error,
+            sendError,
+        });
     }
 
     res.status(200).json({ success: true, data: { processed: messages.length } });
