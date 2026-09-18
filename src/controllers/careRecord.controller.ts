@@ -265,6 +265,39 @@ export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
     });
 }
 
+export async function postWhatsAppMetaSubscribeWaba(req: Request, res: Response) {
+    if (!isValidWebhookDebugAuth(req)) {
+        res.status(401).json({
+            success: false,
+            message:
+                "Unauthorized — pass ?verify_token=YOUR_META_VERIFY_TOKEN or ?HEALTH_SECRET=...",
+        });
+        return;
+    }
+
+    try {
+        const { subscribeWabaToApp, probeMetaWhatsAppCredentials } = await import(
+            "../clients/metaWhatsApp.client"
+        );
+        const subscribedApps = await subscribeWabaToApp();
+        const probe = await probeMetaWhatsAppCredentials();
+        res.json({
+            success: true,
+            data: {
+                message:
+                    "WABA subscribed to app. Real inbound WhatsApp messages should now trigger webhooks.",
+                subscribedApps,
+                wabaAppSubscribed: probe.wabaAppSubscribed,
+            },
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            message: err instanceof Error ? err.message : "WABA subscribe failed",
+        });
+    }
+}
+
 export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     const {

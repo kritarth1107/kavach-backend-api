@@ -75,6 +75,12 @@ export type MetaInboundMessage = {
     messageId?: string;
 };
 
+export type MetaWabaSubscription = {
+    id?: string;
+    name?: string;
+    link?: string;
+};
+
 export type MetaWhatsAppCredentialProbe = {
     phoneLookupOk: boolean;
     phoneDisplay?: string;
@@ -88,8 +94,49 @@ export type MetaWhatsAppCredentialProbe = {
     tokenDebugError?: string;
     sendEndpointOk: boolean;
     sendProbeError?: string;
+    wabaSubscribedApps?: MetaWabaSubscription[];
+    wabaAppSubscribed?: boolean;
+    wabaSubscribeError?: string;
     diagnosis: string;
 };
+
+export async function listWabaSubscribedApps(): Promise<MetaWabaSubscription[]> {
+    const meta = config.whatsapp.meta;
+    if (!meta.wabaId || !meta.accessToken) return [];
+
+    const res = await fetch(`${graphBase()}/${meta.wabaId}/subscribed_apps`, {
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+    });
+    const body = await res.text();
+    if (!res.ok) {
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+    const parsed = JSON.parse(body) as {
+        data?: Array<{ whatsapp_business_api_data?: MetaWabaSubscription }>;
+    };
+    return (parsed.data ?? [])
+        .map((row) => row.whatsapp_business_api_data)
+        .filter((row): row is MetaWabaSubscription => Boolean(row?.id));
+}
+
+/** Required for real inbound message webhooks (Test button alone is not enough). */
+export async function subscribeWabaToApp(): Promise<MetaWabaSubscription[]> {
+    const meta = config.whatsapp.meta;
+    if (!meta.wabaId || !meta.accessToken) {
+        throw new Error("WHATSAPP_META_WABA_ID or access token not configured");
+    }
+
+    const res = await fetch(`${graphBase()}/${meta.wabaId}/subscribed_apps`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+    });
+    const body = await res.text();
+    if (!res.ok) {
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+
+    return listWabaSubscribedApps();
+}
 
 /** Live Graph API checks — does not send a message. */
 export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCredentialProbe> {
@@ -208,6 +255,17 @@ export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCreden
         result.sendProbeError = err instanceof Error ? err.message : String(err);
     }
 
+    if (meta.wabaId && meta.accessToken) {
+        try {
+            result.wabaSubscribedApps = await listWabaSubscribedApps();
+            result.wabaAppSubscribed = result.wabaSubscribedApps.some(
+                (app) => app.id === meta.appId,
+            );
+        } catch (err) {
+            result.wabaSubscribeError = err instanceof Error ? err.message : String(err);
+        }
+    }
+
     const scopes = result.tokenScopes ?? [];
     const hasMessagingScope =
         scopes.includes("whatsapp_business_messaging") ||
@@ -222,11 +280,14 @@ export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCreden
     } else if (result.tokenDebugOk && !hasMessagingScope) {
         result.diagnosis =
             `Token is valid but missing whatsapp_business_messaging scope (current: ${scopes.join(", ") || "none"}). Regenerate the System User token with messaging permissions.`;
+    } else if (result.wabaAppSubscribed === false) {
+        result.diagnosis =
+            "App is Live and token is OK, but this WhatsApp Business Account is NOT subscribed to your app for real message webhooks. POST /api/webhooks/whatsapp/meta/subscribe-waba?verify_token=... once, then send HI again.";
     } else if (result.tokenExpiresAt) {
-        result.diagnosis = `Token expires at ${result.tokenExpiresAt}. Send permission looks OK — if replies still fail, add your phone under Meta → API Setup → test numbers or switch app to Live mode.`;
+        result.diagnosis = `Token expires at ${result.tokenExpiresAt}. Send permission looks OK — if replies still fail, check Webhooks → Recent deliveries in Meta.`;
     } else {
         result.diagnosis =
-            "Credentials look OK for sending. If you still get no reply, Meta is likely not delivering inbound webhooks — check Webhooks → Recent deliveries in the Meta app dashboard.";
+            "Credentials and WABA subscription look OK. Send HI to +919203497046 — if debug stays empty, check Meta → Webhooks → Recent deliveries.";
     }
 
     return result;
