@@ -57,4 +57,18 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`Kavach Backend running on port ${PORT}`);
   startOutreachScheduler();
+
+  if (config.whatsapp.provider === "meta") {
+    void import("./clients/metaWhatsApp.client")
+      .then(({ isMetaWhatsAppEnabled, setupMetaWhatsAppWebhooks }) => {
+        if (!isMetaWhatsAppEnabled()) return null;
+        return setupMetaWhatsAppWebhooks();
+      })
+      .then((report) => {
+        if (report) console.log("WhatsApp Meta webhook auto-setup:", report.summary);
+      })
+      .catch((err) => {
+        console.error("WhatsApp Meta webhook auto-setup failed:", err);
+      });
+  }
 });

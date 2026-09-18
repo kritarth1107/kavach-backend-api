@@ -18,6 +18,17 @@ function graphBase(): string {
     return `https://graph.facebook.com/${version}`;
 }
 
+export function getMetaWebhookPublicUrl(): string {
+    const fromEnv = process.env.WHATSAPP_META_WEBHOOK_PUBLIC_URL?.trim();
+    if (fromEnv) return fromEnv;
+    return "https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/meta";
+}
+
+function appAccessToken(): string {
+    const meta = config.whatsapp.meta;
+    return `${meta.appId}|${meta.appSecret}`;
+}
+
 /** Meta expects E.164 digits without + in the `to` field. */
 function toMetaRecipient(e164: string): string {
     return e164.replace(/\D/g, "");
@@ -79,6 +90,29 @@ export type MetaWabaSubscription = {
     id?: string;
     name?: string;
     link?: string;
+    category?: string;
+    overrideCallbackUri?: string;
+};
+
+export type MetaAppWebhookSubscription = {
+    object?: string;
+    callbackUrl?: string;
+    fields?: string[];
+    active?: boolean;
+};
+
+export type MetaWhatsAppSetupReport = {
+    webhookUrl: string;
+    wabaSubscribed: boolean;
+    wabaOverrideSet: boolean;
+    appWebhookConfigured: boolean;
+    phoneOnWaba: boolean;
+    phoneStatus?: string;
+    overrideCallbackUri?: string;
+    appSubscriptions: MetaAppWebhookSubscription[];
+    subscribedApps: MetaWabaSubscription[];
+    steps: Array<{ step: string; ok: boolean; detail?: string }>;
+    summary: string;
 };
 
 export type MetaWhatsAppCredentialProbe = {
@@ -96,7 +130,9 @@ export type MetaWhatsAppCredentialProbe = {
     sendProbeError?: string;
     wabaSubscribedApps?: MetaWabaSubscription[];
     wabaAppSubscribed?: boolean;
+    wabaOverrideCallbackUri?: string;
     wabaSubscribeError?: string;
+    appWebhookSubscriptions?: MetaAppWebhookSubscription[];
     diagnosis: string;
 };
 
@@ -112,14 +148,53 @@ export async function listWabaSubscribedApps(): Promise<MetaWabaSubscription[]> 
         throw new Error(formatMetaSendError(res.status, body));
     }
     const parsed = JSON.parse(body) as {
-        data?: Array<{ whatsapp_business_api_data?: MetaWabaSubscription }>;
+        data?: Array<{
+            whatsapp_business_api_data?: MetaWabaSubscription;
+            override_callback_uri?: string;
+        }>;
+        override_callback_uri?: string;
     };
-    return (parsed.data ?? [])
-        .map((row) => row.whatsapp_business_api_data)
-        .filter((row): row is MetaWabaSubscription => Boolean(row?.id));
+    const topOverride = parsed.override_callback_uri;
+    const out: MetaWabaSubscription[] = [];
+    for (const row of parsed.data ?? []) {
+        const app = row.whatsapp_business_api_data;
+        if (!app?.id) continue;
+        out.push({
+            ...app,
+            overrideCallbackUri: row.override_callback_uri ?? topOverride,
+        });
+    }
+    return out;
 }
 
-/** Required for real inbound message webhooks (Test button alone is not enough). */
+export async function listAppWebhookSubscriptions(): Promise<MetaAppWebhookSubscription[]> {
+    const meta = config.whatsapp.meta;
+    if (!meta.appId || !meta.appSecret) return [];
+
+    const res = await fetch(
+        `${graphBase()}/${meta.appId}/subscriptions?access_token=${encodeURIComponent(appAccessToken())}`,
+    );
+    const body = await res.text();
+    if (!res.ok) {
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+    const parsed = JSON.parse(body) as {
+        data?: Array<{
+            object?: string;
+            callback_url?: string;
+            fields?: string[];
+            active?: boolean;
+        }>;
+    };
+    return (parsed.data ?? []).map((row) => ({
+        object: row.object,
+        callbackUrl: row.callback_url,
+        fields: row.fields,
+        active: row.active,
+    }));
+}
+
+/** Step 1: link WABA to app for real inbound webhooks. */
 export async function subscribeWabaToApp(): Promise<MetaWabaSubscription[]> {
     const meta = config.whatsapp.meta;
     if (!meta.wabaId || !meta.accessToken) {
@@ -136,6 +211,196 @@ export async function subscribeWabaToApp(): Promise<MetaWabaSubscription[]> {
     }
 
     return listWabaSubscribedApps();
+}
+
+/** Step 2: point WABA webhooks at our Cloud Run URL (required when App Dashboard URL is wrong/missing). */
+export async function overrideWabaWebhookCallback(): Promise<MetaWabaSubscription[]> {
+    const meta = config.whatsapp.meta;
+    if (!meta.wabaId || !meta.accessToken) {
+        throw new Error("WHATSAPP_META_WABA_ID or access token not configured");
+    }
+
+    const res = await fetch(`${graphBase()}/${meta.wabaId}/subscribed_apps`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${meta.accessToken}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            override_callback_uri: getMetaWebhookPublicUrl(),
+            verify_token: meta.webhookVerifyToken,
+        }),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+
+    return listWabaSubscribedApps();
+}
+
+/** Step 3: subscribe app to whatsapp_business_account + messages field. */
+export async function configureAppWhatsAppWebhook(): Promise<void> {
+    const meta = config.whatsapp.meta;
+    if (!meta.appId || !meta.appSecret) {
+        throw new Error("WHATSAPP_META_APP_ID or WHATSAPP_META_APP_SECRET not configured");
+    }
+
+    const params = new URLSearchParams({
+        object: "whatsapp_business_account",
+        callback_url: getMetaWebhookPublicUrl(),
+        verify_token: meta.webhookVerifyToken,
+        fields: "messages",
+        access_token: appAccessToken(),
+    });
+
+    const res = await fetch(`${graphBase()}/${meta.appId}/subscriptions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+    });
+    const body = await res.text();
+    if (!res.ok) {
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+}
+
+async function getPhoneRegistrationStatus(): Promise<{ onWaba: boolean; status?: string }> {
+    const meta = config.whatsapp.meta;
+    if (!meta.wabaId || !meta.phoneNumberId || !meta.accessToken) {
+        return { onWaba: false };
+    }
+
+    const listRes = await fetch(`${graphBase()}/${meta.wabaId}/phone_numbers`, {
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+    });
+    const listBody = await listRes.text();
+    let onWaba = false;
+    if (listRes.ok) {
+        const parsed = JSON.parse(listBody) as { data?: Array<{ id?: string }> };
+        onWaba = (parsed.data ?? []).some((row) => row.id === meta.phoneNumberId);
+    }
+
+    const phoneRes = await fetch(
+        `${graphBase()}/${meta.phoneNumberId}?fields=status,display_phone_number,code_verification_status,platform_type`,
+        { headers: { Authorization: `Bearer ${meta.accessToken}` } },
+    );
+    const phoneBody = await phoneRes.text();
+    let status: string | undefined;
+    if (phoneRes.ok) {
+        const parsed = JSON.parse(phoneBody) as { status?: string };
+        status = parsed.status;
+    }
+
+    return { onWaba, status };
+}
+
+/** Full Meta WhatsApp webhook fix: WABA subscribe + callback override + app messages subscription. */
+export async function setupMetaWhatsAppWebhooks(): Promise<MetaWhatsAppSetupReport> {
+    const meta = config.whatsapp.meta;
+    const webhookUrl = getMetaWebhookPublicUrl();
+    const report: MetaWhatsAppSetupReport = {
+        webhookUrl,
+        wabaSubscribed: false,
+        wabaOverrideSet: false,
+        appWebhookConfigured: false,
+        phoneOnWaba: false,
+        appSubscriptions: [],
+        subscribedApps: [],
+        steps: [],
+        summary: "",
+    };
+
+    try {
+        await subscribeWabaToApp();
+        report.wabaSubscribed = true;
+        report.steps.push({ step: "waba_subscribe", ok: true });
+    } catch (err) {
+        report.steps.push({
+            step: "waba_subscribe",
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+        });
+    }
+
+    try {
+        report.subscribedApps = await overrideWabaWebhookCallback();
+        const override =
+            report.subscribedApps.find((a) => a.id === meta.appId)?.overrideCallbackUri ??
+            report.subscribedApps[0]?.overrideCallbackUri;
+        report.overrideCallbackUri = override;
+        report.wabaOverrideSet = override === webhookUrl;
+        report.steps.push({
+            step: "waba_callback_override",
+            ok: report.wabaOverrideSet,
+            detail: override ? `override=${override}` : "no override returned",
+        });
+    } catch (err) {
+        report.steps.push({
+            step: "waba_callback_override",
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+        });
+    }
+
+    try {
+        await configureAppWhatsAppWebhook();
+        report.appWebhookConfigured = true;
+        report.steps.push({ step: "app_messages_subscription", ok: true });
+    } catch (err) {
+        report.steps.push({
+            step: "app_messages_subscription",
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+        });
+    }
+
+    try {
+        report.appSubscriptions = await listAppWebhookSubscriptions();
+    } catch (err) {
+        report.steps.push({
+            step: "app_subscriptions_read",
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+        });
+    }
+
+    try {
+        if (!report.subscribedApps.length) {
+            report.subscribedApps = await listWabaSubscribedApps();
+        }
+        report.wabaSubscribed = report.subscribedApps.some((a) => a.id === meta.appId);
+    } catch {
+        // ignore
+    }
+
+    try {
+        const phone = await getPhoneRegistrationStatus();
+        report.phoneOnWaba = phone.onWaba;
+        report.phoneStatus = phone.status;
+        report.steps.push({
+            step: "phone_on_waba",
+            ok: phone.onWaba,
+            detail: phone.status ? `status=${phone.status}` : undefined,
+        });
+    } catch (err) {
+        report.steps.push({
+            step: "phone_on_waba",
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+        });
+    }
+
+    const ok =
+        report.wabaSubscribed &&
+        (report.wabaOverrideSet || report.appWebhookConfigured) &&
+        report.phoneOnWaba;
+
+    report.summary = ok
+        ? "WhatsApp webhooks configured. Send HI to +919203497046 and refresh /debug."
+        : "Setup partially failed — see steps[].detail. You may still need messages field subscribed in Meta App Dashboard → WhatsApp → Configuration.";
+
+    return report;
 }
 
 /** Live Graph API checks — does not send a message. */
@@ -261,8 +526,19 @@ export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCreden
             result.wabaAppSubscribed = result.wabaSubscribedApps.some(
                 (app) => app.id === meta.appId,
             );
+            result.wabaOverrideCallbackUri =
+                result.wabaSubscribedApps.find((a) => a.id === meta.appId)?.overrideCallbackUri ??
+                result.wabaSubscribedApps[0]?.overrideCallbackUri;
         } catch (err) {
             result.wabaSubscribeError = err instanceof Error ? err.message : String(err);
+        }
+    }
+
+    if (meta.appId && meta.appSecret) {
+        try {
+            result.appWebhookSubscriptions = await listAppWebhookSubscriptions();
+        } catch {
+            // optional
         }
     }
 
@@ -282,12 +558,17 @@ export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCreden
             `Token is valid but missing whatsapp_business_messaging scope (current: ${scopes.join(", ") || "none"}). Regenerate the System User token with messaging permissions.`;
     } else if (result.wabaAppSubscribed === false) {
         result.diagnosis =
-            "App is Live and token is OK, but this WhatsApp Business Account is NOT subscribed to your app for real message webhooks. POST /api/webhooks/whatsapp/meta/subscribe-waba?verify_token=... once, then send HI again.";
+            "WABA is not subscribed to Kavach app. POST /api/webhooks/whatsapp/meta/setup?verify_token=... then send HI again.";
+    } else if (
+        result.wabaOverrideCallbackUri &&
+        result.wabaOverrideCallbackUri !== getMetaWebhookPublicUrl()
+    ) {
+        result.diagnosis = `WABA webhook override points elsewhere (${result.wabaOverrideCallbackUri}). POST /api/webhooks/whatsapp/meta/setup?verify_token=... to fix.`;
     } else if (result.tokenExpiresAt) {
-        result.diagnosis = `Token expires at ${result.tokenExpiresAt}. Send permission looks OK — if replies still fail, check Webhooks → Recent deliveries in Meta.`;
+        result.diagnosis = `Token expires at ${result.tokenExpiresAt}. Send permission looks OK — if replies still fail, run /setup and send HI again.`;
     } else {
         result.diagnosis =
-            "Credentials and WABA subscription look OK. Send HI to +919203497046 — if debug stays empty, check Meta → Webhooks → Recent deliveries.";
+            "Credentials look OK. POST /api/webhooks/whatsapp/meta/setup?verify_token=... if real messages still missing, then send HI to +919203497046.";
     }
 
     return result;

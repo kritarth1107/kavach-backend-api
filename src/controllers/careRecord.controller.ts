@@ -265,7 +265,7 @@ export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
     });
 }
 
-export async function postWhatsAppMetaSubscribeWaba(req: Request, res: Response) {
+export async function postWhatsAppMetaSetup(req: Request, res: Response) {
     if (!isValidWebhookDebugAuth(req)) {
         res.status(401).json({
             success: false,
@@ -276,26 +276,28 @@ export async function postWhatsAppMetaSubscribeWaba(req: Request, res: Response)
     }
 
     try {
-        const { subscribeWabaToApp, probeMetaWhatsAppCredentials } = await import(
+        const { setupMetaWhatsAppWebhooks, probeMetaWhatsAppCredentials } = await import(
             "../clients/metaWhatsApp.client"
         );
-        const subscribedApps = await subscribeWabaToApp();
+        const setup = await setupMetaWhatsAppWebhooks();
         const probe = await probeMetaWhatsAppCredentials();
         res.json({
             success: true,
             data: {
-                message:
-                    "WABA subscribed to app. Real inbound WhatsApp messages should now trigger webhooks.",
-                subscribedApps,
-                wabaAppSubscribed: probe.wabaAppSubscribed,
+                setup,
+                credentialProbe: probe,
             },
         });
     } catch (err) {
         res.status(500).json({
             success: false,
-            message: err instanceof Error ? err.message : "WABA subscribe failed",
+            message: err instanceof Error ? err.message : "WhatsApp Meta setup failed",
         });
     }
+}
+
+export async function postWhatsAppMetaSubscribeWaba(req: Request, res: Response) {
+    return postWhatsAppMetaSetup(req, res);
 }
 
 export async function postWhatsAppMetaWebhook(req: Request, res: Response) {

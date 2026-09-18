@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
     getWhatsAppMetaWebhook,
     getWhatsAppMetaWebhookDebug,
+    postWhatsAppMetaSetup,
     postWhatsAppMetaSubscribeWaba,
     postPhoneMockWebhook,
     postSpeakerMockWebhook,
@@ -16,6 +17,7 @@ const router = Router();
 router.post("/whatsapp/mock", postWhatsAppMockWebhook);
 router.get("/whatsapp/meta", getWhatsAppMetaWebhook);
 router.get("/whatsapp/meta/debug", getWhatsAppMetaWebhookDebug);
+router.post("/whatsapp/meta/setup", postWhatsAppMetaSetup);
 router.post("/whatsapp/meta/subscribe-waba", postWhatsAppMetaSubscribeWaba);
 router.post("/whatsapp/meta", postWhatsAppMetaWebhook);
 router.post("/whatsapp/baileys", requireBridgeSecret, postWhatsAppBaileysWebhook);
