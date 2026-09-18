@@ -118,12 +118,17 @@ function formatAddressList(
 }
 
 export function messageIsOrderIntentOnly(text: string): boolean {
+    if (!messageLooksLikeOrder(text)) return false;
+    // "order pizza", "get biryani" etc. already name a dish — not intent-only.
+    if (extractItems(text).length > 0) return false;
     const cleaned = text
         .replace(PARTNER_NOISE, " ")
         .replace(ORDER_INTENT, " ")
+        .replace(FOOD_KEYWORDS, " ")
+        .replace(GROCERY_KEYWORDS, " ")
         .replace(/\b(please|mujhe|for|mama|mummy|papa)\b/gi, " ")
         .trim();
-    return messageLooksLikeOrder(text) && cleaned.length < 8;
+    return cleaned.length < 4;
 }
 
 function extractItems(text: string): ParsedOrderLine[] {
