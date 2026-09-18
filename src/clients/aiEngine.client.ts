@@ -1,3 +1,4 @@
+import { GoogleAuth } from "google-auth-library";
 import config from "../config/app.config";
 import { AppError } from "../middleware/error.middleware";
 
@@ -49,6 +50,35 @@ function aiHeaders(): Record<string, string> {
     };
 }
 
+function aiEngineAudience(): string {
+    return config.aiEngine.baseUrl.replace(/\/$/, "");
+}
+
+async function aiRequestHeaders(): Promise<Record<string, string>> {
+    const headers = aiHeaders();
+    const audience = aiEngineAudience();
+    if (!audience.includes(".run.app")) return headers;
+    try {
+        const auth = new GoogleAuth();
+        const client = await auth.getIdTokenClient(audience);
+        const authHeaders = await client.getRequestHeaders(audience);
+        const merged = { ...headers };
+        authHeaders.forEach((value, key) => {
+            merged[key] = value;
+        });
+        return merged;
+    } catch (err) {
+        console.warn("AI engine Cloud Run identity token unavailable:", err);
+        return headers;
+    }
+}
+
+function* chunkText(text: string, size = 24): Generator<string> {
+    for (let i = 0; i < text.length; i += size) {
+        yield text.slice(i, i + size);
+    }
+}
+
 async function parseAiJson<T>(res: Response): Promise<T> {
     const text = await res.text();
     if (!text.trim()) {
@@ -72,8 +102,13 @@ async function aiFetch(
 
     const controller = new AbortController();
     try {
+        const headers = await aiRequestHeaders();
         const request = fetch(`${base}${path}`, {
             ...init,
+            headers: {
+                ...headers,
+                ...(init?.headers as Record<string, string> | undefined),
+            },
             signal: controller.signal,
         });
         const timeout = new Promise<never>((_, reject) => {
@@ -303,28 +338,68 @@ export async function* streamCaregiverSaheliChat(payload: {
     orderContext?: string;
     actorUserId?: string;
 }): AsyncGenerator<AiStreamEvent> {
-    const base = config.aiEngine.baseUrl.replace(/\/$/, "");
+    const base = aiEngineAudience();
+    const body = JSON.stringify({
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+        message: payload.message,
+        conversation_id: payload.conversationId ?? null,
+        care_record_context: payload.careRecordContext ?? null,
+        elder_thread_context: payload.elderThreadContext ?? null,
+        labs_context: payload.labsContext ?? null,
+        session_context: payload.sessionContext ?? null,
+        order_context: payload.orderContext ?? null,
+        use_agent: true,
+        actor_user_id: payload.actorUserId ?? null,
+    });
+    const headers = await aiRequestHeaders();
     const res = await fetch(`${base}/v1/chat/caregiver/stream`, {
         method: "POST",
-        headers: aiHeaders(),
-        body: JSON.stringify({
-            family_id: payload.aiFamilyId,
-            elder_id: payload.aiElderId,
-            message: payload.message,
-            conversation_id: payload.conversationId ?? null,
-            care_record_context: payload.careRecordContext ?? null,
-            elder_thread_context: payload.elderThreadContext ?? null,
-            labs_context: payload.labsContext ?? null,
-            session_context: payload.sessionContext ?? null,
-            order_context: payload.orderContext ?? null,
-            use_agent: true,
-            actor_user_id: payload.actorUserId ?? null,
-        }),
+        headers,
+        body,
     });
 
     if (!res.ok || !res.body) {
-        const body = await res.text();
-        yield { type: "error", message: body || "Stream failed" };
+        if (res.status === 401 || res.status === 403) {
+            const result = await aiPostCaregiverChatWithRetry({
+                aiFamilyId: payload.aiFamilyId,
+                aiElderId: payload.aiElderId,
+                message: payload.message,
+                conversationId: payload.conversationId,
+                careRecordContext: payload.careRecordContext,
+                elderThreadContext: payload.elderThreadContext,
+                labsContext: payload.labsContext,
+                sessionContext: payload.sessionContext,
+                orderContext: payload.orderContext,
+                useAgent: true,
+                actorUserId: payload.actorUserId,
+            });
+            const reply = result.reply.trim();
+            for (const delta of chunkText(reply)) {
+                yield { type: "token", delta };
+            }
+            if (result.order) {
+                yield { type: "tool_result", id: "order", order: result.order };
+            }
+            if (result.connect) {
+                yield { type: "tool_result", id: "connect", connect: result.connect };
+            }
+            yield {
+                type: "done",
+                conversation_id: result.conversation_id,
+                reply,
+                order: result.order,
+                connect: result.connect,
+            };
+            return;
+        }
+        const errBody = await res.text();
+        yield {
+            type: "error",
+            message: errBody.includes("<html")
+                ? "Saheli is reconnecting — try again in a moment."
+                : errBody || "Stream failed",
+        };
         return;
     }
 
