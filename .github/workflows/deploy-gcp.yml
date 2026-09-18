@@ -48,6 +48,7 @@ jobs:
             --memory=512Mi \
             --min-instances=0 \
             --max-instances=3 \
+            --update-env-vars="WHATSAPP_PROVIDER=meta,KAVACH_WHATSAPP_NUMBER=${{ secrets.KAVACH_WHATSAPP_NUMBER }},WHATSAPP_META_PHONE_NUMBER_ID=${{ secrets.WHATSAPP_META_PHONE_NUMBER_ID }},WHATSAPP_META_WABA_ID=${{ secrets.WHATSAPP_META_WABA_ID }},WHATSAPP_META_APP_ID=${{ secrets.WHATSAPP_META_APP_ID }},WHATSAPP_META_APP_SECRET=${{ secrets.WHATSAPP_META_APP_SECRET }},WHATSAPP_META_ACCESS_TOKEN=${{ secrets.WHATSAPP_META_ACCESS_TOKEN }},WHATSAPP_META_WEBHOOK_VERIFY_TOKEN=${{ secrets.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN }}" \
             --quiet
 
       - name: Smoke test
