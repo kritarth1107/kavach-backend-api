@@ -1,0 +1,50 @@
+name: Fetch backend logs (diagnostic)
+
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  GCP_REGION: asia-south1
+  SERVICE: kavach-backend
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Recent WhatsApp webhook HTTP requests
+        run: |
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="${{ env.SERVICE }}" AND httpRequest.requestUrl=~"/api/webhooks/whatsapp/meta"' \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --limit=15 \
+            --freshness=3h \
+            --format='table(timestamp,httpRequest.requestMethod,httpRequest.status,httpRequest.requestUrl,httpRequest.remoteIp)'
+
+      - name: Meta WhatsApp errors and app logs
+        run: |
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="${{ env.SERVICE }}" AND (textPayload:"Meta WhatsApp" OR textPayload:"whatsapp" OR severity>=ERROR)' \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --limit=30 \
+            --freshness=3h \
+            --format='table(timestamp,severity,textPayload)'
+
+      - name: Cloud Run WhatsApp env (redacted)
+        run: |
+          gcloud run services describe ${{ env.SERVICE }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --region=${{ env.GCP_REGION }} \
+            --format='yaml(spec.template.spec.containers[0].env)' \
+          | grep -E 'name:|value:' | sed -E 's/(WHATSAPP_META_ACCESS_TOKEN|WHATSAPP_META_APP_SECRET).*/\1: [REDACTED]/' || true

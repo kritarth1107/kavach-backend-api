@@ -221,10 +221,13 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
         sendViaMetaWhatsApp,
     } = await import("../clients/metaWhatsApp.client");
 
-    res.status(200).json({ success: true });
-
     const messages = parseMetaWebhookMessages(req.body);
-    if (!messages.length) return;
+    if (!messages.length) {
+        res.status(200).json({ success: true, data: { processed: 0 } });
+        return;
+    }
+
+    console.log(`Meta WhatsApp webhook: ${messages.length} message(s), enabled=${isMetaWhatsAppEnabled()}`);
 
     for (const inbound of messages) {
         try {
@@ -235,6 +238,9 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             });
             if (isMetaWhatsAppEnabled() && reply.content) {
                 await sendViaMetaWhatsApp(reply.channelIdentifier, reply.content);
+                console.log(`Meta WhatsApp reply sent to ${inbound.from.slice(0, 6)}…`);
+            } else if (!isMetaWhatsAppEnabled()) {
+                console.error("Meta WhatsApp inbound received but provider is not fully configured");
             }
         } catch (err) {
             console.error("Meta WhatsApp inbound failed:", err);
@@ -250,6 +256,8 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             }
         }
     }
+
+    res.status(200).json({ success: true, data: { processed: messages.length } });
 }
 
 export async function postWhatsAppBaileysWebhook(req: Request, res: Response) {
