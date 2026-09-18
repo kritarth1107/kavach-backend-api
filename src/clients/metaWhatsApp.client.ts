@@ -278,7 +278,9 @@ async function getPhoneRegistrationStatus(): Promise<{ onWaba: boolean; status?:
     let onWaba = false;
     if (listRes.ok) {
         const parsed = JSON.parse(listBody) as { data?: Array<{ id?: string }> };
-        onWaba = (parsed.data ?? []).some((row) => row.id === meta.phoneNumberId);
+        onWaba = (parsed.data ?? []).some(
+            (row) => String(row.id) === String(meta.phoneNumberId),
+        );
     }
 
     const phoneRes = await fetch(
@@ -391,14 +393,16 @@ export async function setupMetaWhatsAppWebhooks(): Promise<MetaWhatsAppSetupRepo
         });
     }
 
+    const phoneReady = report.phoneOnWaba || report.phoneStatus === "CONNECTED";
     const ok =
         report.wabaSubscribed &&
-        (report.wabaOverrideSet || report.appWebhookConfigured) &&
-        report.phoneOnWaba;
+        report.wabaOverrideSet &&
+        report.appWebhookConfigured &&
+        phoneReady;
 
     report.summary = ok
-        ? "WhatsApp webhooks configured. Send HI to +919203497046 and refresh /debug."
-        : "Setup partially failed — see steps[].detail. You may still need messages field subscribed in Meta App Dashboard → WhatsApp → Configuration.";
+        ? "WhatsApp webhooks fully configured. Send HI to +919203497046 and refresh /debug."
+        : "Setup partially failed — see steps[].detail.";
 
     return report;
 }
