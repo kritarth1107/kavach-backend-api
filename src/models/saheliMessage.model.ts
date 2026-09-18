@@ -21,6 +21,7 @@ export type SaheliMessageOrderPayload = {
         restaurantId?: string;
     }>;
     addresses?: Array<{ id: string; label: string; line1: string; city?: string; pincode?: string; isDefault?: boolean }>;
+    addressNote?: string;
 };
 
 export type SaheliMessageConnectPayload = {

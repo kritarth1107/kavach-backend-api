@@ -112,6 +112,7 @@ function orderPayloadFromChat(order: Extract<OrderChatResult, { kind: "order" }>
         source: order.source,
         searchResults: order.searchResults,
         addresses: order.addresses,
+        addressNote: order.addressNote,
     };
 }
 
@@ -208,7 +209,13 @@ function caregiverReplyFromCosmos(opts: {
         parts.push("No matching printed row was found in the saved reports.");
     }
 
-    parts.push("Reported only — nothing invented.");
+    if (parts.length) {
+        parts.push("Reported only — nothing invented.");
+    } else {
+        parts.push(
+            "I didn't find that in the saved care record. Ask about labs, check-ins, or tell me what to order from Swiggy, Instamart, or Zepto.",
+        );
+    }
     return parts.filter(Boolean).join("\n\n");
 }
 
@@ -218,7 +225,8 @@ function applyOrderChatResult(reply: string, order: OrderChatResult | null): str
         return order.message;
     }
     const itemList = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
-    const basket = `I've prepared a ${order.partnerLabel} basket:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}. Your family can approve it in the dashboard or on WhatsApp.`;
+    const addressNote = order.addressNote ?? "";
+    const basket = `I've prepared a ${order.partnerLabel} basket:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}. Your family can approve it in the dashboard or on WhatsApp.${addressNote}`;
     return reply.trim() ? `${reply.trim()}\n\n${basket}` : basket;
 }
 
@@ -684,7 +692,14 @@ export async function sendCaregiverSaheliMessage(
             order.source !== "mock"
                 ? " Prices are from your linked account."
                 : " Connect the partner in Integrations for live catalog pricing.";
-        reply = `I've prepared a ${order.partnerLabel} basket for ${displayName}:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}.${live} Pick an address below and approve to place the order.`;
+        const addressNote =
+            order.addressNote ??
+            ((order.addresses?.length ?? 0) > 1
+                ? " Pick a delivery address below."
+                : (order.addresses?.length ?? 0) === 1
+                  ? ` Delivering to ${order.addresses![0].label}.`
+                  : "");
+        reply = `I've prepared a ${order.partnerLabel} basket for ${displayName}:\n${itemList}\nApprox ₹${(order.totalPaise / 100).toFixed(0)}.${live}${addressNote} Approve in the card below to place the order.`;
     } else {
         const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
         const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);

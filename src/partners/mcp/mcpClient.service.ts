@@ -238,8 +238,42 @@ async function resolveMcpAddressId(
     if (!addressTool) return undefined;
 
     const result = await client.callTool({ name: addressTool, arguments: {} });
-    const addresses = parsePartnerAddresses(extractToolText(result));
+    const addresses = parsePartnerAddresses(extractToolJson(result));
     return addresses[0]?.partnerAddressId;
+}
+
+function normalizeCatalogQuery(query: string): string {
+    const stop = new Set([
+        "i",
+        "we",
+        "me",
+        "my",
+        "want",
+        "to",
+        "eat",
+        "order",
+        "get",
+        "have",
+        "some",
+        "please",
+        "food",
+        "khana",
+        "the",
+        "a",
+        "an",
+        "would",
+        "like",
+        "need",
+        "bring",
+        "mujhe",
+        "hungry",
+        "craving",
+    ]);
+    const words = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length > 1 && !stop.has(word));
+    return words.join(" ") || query.trim();
 }
 
 async function searchSwiggyFoodCatalog(
@@ -250,6 +284,7 @@ async function searchSwiggyFoodCatalog(
 ): Promise<McpCatalogHit[]> {
     if (!addressId) return [];
 
+    const catalogQuery = normalizeCatalogQuery(query);
     const hits: McpCatalogHit[] = [];
     const searchRestTool =
         tools.find((t) => t.name === "search_restaurants")?.name ??
@@ -263,9 +298,9 @@ async function searchSwiggyFoodCatalog(
     if (searchRestTool) {
         const result = await client.callTool({
             name: searchRestTool,
-            arguments: { addressId, query },
+            arguments: { addressId, query: catalogQuery },
         });
-        const restaurants = extractRestaurants(parseToolJson(extractToolText(result)));
+        const restaurants = extractRestaurants(extractToolJson(result));
         openRestaurants = restaurants.filter(
             (r) => !r.availabilityStatus || String(r.availabilityStatus).toUpperCase() === "OPEN",
         );
@@ -286,9 +321,9 @@ async function searchSwiggyFoodCatalog(
     if (searchMenuTool) {
         const result = await client.callTool({
             name: searchMenuTool,
-            arguments: { addressId, query },
+            arguments: { addressId, query: catalogQuery },
         });
-        for (const dish of extractMenuSearchItems(parseToolJson(extractToolText(result))).slice(0, 8)) {
+        for (const dish of extractMenuSearchItems(extractToolJson(result)).slice(0, 8)) {
             hits.push({
                 kind: "dish",
                 name: dish.name,
@@ -310,8 +345,10 @@ async function searchSwiggyFoodCatalog(
             name: menuTool,
             arguments: { restaurantId },
         });
-        const menuItems = flattenMenuItems(parseToolJson(extractToolText(result)));
-        for (const item of menuItems.filter((row) => fuzzyMatch(row.name, query)).slice(0, 6)) {
+        const menuItems = flattenMenuItems(extractToolJson(result));
+        for (const item of menuItems
+            .filter((row) => fuzzyMatch(row.name, catalogQuery) || fuzzyMatch(row.name, query))
+            .slice(0, 6)) {
             hits.push({
                 kind: "dish",
                 name: item.name,
@@ -345,7 +382,7 @@ async function searchInstamartCatalog(
         name: searchTool,
         arguments: { addressId, query },
     });
-    return hitsFromInstamartProducts(extractInstamartProducts(parseToolJson(extractToolText(result))));
+    return hitsFromInstamartProducts(extractInstamartProducts(extractToolJson(result)));
 }
 
 function pickBestCatalogHit(hits: McpCatalogHit[], preferDishes: boolean): McpCatalogHit | undefined {
@@ -705,8 +742,8 @@ export async function searchMcpProduct(
             arguments: { query, q: query, search_query: query, addressId },
         });
 
-        const text = extractToolText(result);
-        const parsed = parseToolJson(text);
+        const parsed = extractToolJson(result);
+        const text = typeof parsed === "string" ? parsed : extractToolText(result);
         const instamartHits = hitsFromInstamartProducts(extractInstamartProducts(parsed));
         if (instamartHits.length) return { items: instamartHits };
 
@@ -746,7 +783,7 @@ export async function syncPartnerAddressesFromMcp(
         if (!addressTool) return [];
 
         const result = await client.callTool({ name: addressTool, arguments: {} });
-        return parsePartnerAddresses(extractToolText(result));
+        return parsePartnerAddresses(extractToolJson(result));
     });
 }
 
@@ -927,12 +964,38 @@ export async function placeMcpOrder(input: {
 
 function extractToolText(result: unknown): string {
     if (!result || typeof result !== "object") return String(result ?? "");
-    const content = (result as { content?: Array<{ type?: string; text?: string }> }).content;
+    const obj = result as {
+        content?: Array<{ type?: string; text?: string }>;
+        structuredContent?: unknown;
+    };
+    if (obj.structuredContent != null) {
+        if (typeof obj.structuredContent === "string") return obj.structuredContent;
+        try {
+            return JSON.stringify(obj.structuredContent);
+        } catch {
+            // fall through to content blocks
+        }
+    }
+    const content = obj.content;
     if (!Array.isArray(content)) return JSON.stringify(result);
     return content
         .filter((c) => c.type === "text" && c.text)
         .map((c) => c.text!)
         .join("\n");
+}
+
+function extractToolJson(result: unknown): unknown {
+    if (!result || typeof result !== "object") {
+        if (typeof result === "string") return parseToolJson(result);
+        return null;
+    }
+    const obj = result as { structuredContent?: unknown };
+    if (obj.structuredContent != null && typeof obj.structuredContent === "object") {
+        return obj.structuredContent;
+    }
+    const text = extractToolText(result);
+    if (!text.trim()) return null;
+    return parseToolJson(text) ?? text;
 }
 
 function extractUrl(text: string): string | undefined {
@@ -945,24 +1008,36 @@ function extractFirstId(text: string): string | undefined {
     return match?.[1] ?? match?.[0];
 }
 
-function parsePartnerAddresses(text: string): ParsedPartnerAddress[] {
+function extractAddressList(parsed: unknown): unknown[] {
+    if (Array.isArray(parsed)) return parsed;
+    if (!parsed || typeof parsed !== "object") return [];
+    const root = parsed as Record<string, unknown>;
+    if (Array.isArray(root.addresses)) return root.addresses;
+    const data = digData(parsed);
+    if (!data) return [];
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data.addresses)) return data.addresses;
+    return [];
+}
+
+function parsePartnerAddresses(input: unknown): ParsedPartnerAddress[] {
+    const fromJson = extractAddressList(input);
+    if (fromJson.length) {
+        return fromJson
+            .map((row) => normalizeAddressRow(row))
+            .filter((row): row is ParsedPartnerAddress => Boolean(row));
+    }
+
+    const text = typeof input === "string" ? input : extractToolText(input);
     if (!text.trim()) return [];
 
     try {
-        const json = JSON.parse(text) as unknown;
-        if (Array.isArray(json)) {
-            return json
+        const json = parseToolJson(text);
+        const list = extractAddressList(json);
+        if (list.length) {
+            return list
                 .map((row) => normalizeAddressRow(row))
                 .filter((row): row is ParsedPartnerAddress => Boolean(row));
-        }
-        if (json && typeof json === "object") {
-            const obj = json as { addresses?: unknown[]; data?: unknown[] };
-            const list = obj.addresses ?? obj.data ?? [];
-            if (Array.isArray(list)) {
-                return list
-                    .map((row) => normalizeAddressRow(row))
-                    .filter((row): row is ParsedPartnerAddress => Boolean(row));
-            }
         }
     } catch {
         // fall through to regex parsing

@@ -5,8 +5,8 @@ import type { McpPartnerKey } from "../partners/mcp/types";
 import { MCP_PARTNERS } from "../partners/mcp/partners";
 import { searchMcpProduct, startMcpConnect } from "../partners/mcp/mcpClient.service";
 import {
+    ensurePartnerAddressesSynced,
     listPartnerAddresses,
-    refreshPartnerAddressesInBackground,
 } from "./partnerAddress.service";
 
 const GROCERY_KEYWORDS =
@@ -20,6 +20,15 @@ const ORDER_INTENT =
 
 const PARTNER_NOISE =
     /\b(from|on|via|using|through)\s+(swiggy|instamart|zepto)\b|\b(swiggy|instamart|zepto)\s+(food|groceries|grocery|se|pe)\b/gi;
+
+const FOOD_QUERY_STOP =
+    /\b(i|we|me|my|want|to|eat|order|get|have|some|please|food|khana|the|a|an|would|like|need|bring|mujhe|hungry|craving|feel)\b/gi;
+
+const ADDRESS_FOLLOWUP =
+    /\b(address|addr|location|delivery|deliver to|home|office)\b/i;
+
+const ADDRESS_ACTION =
+    /\b(check|added|add|have|saved|save|see|confirm|verify|show|which|where|my|list)\b/i;
 
 export type ParsedOrderLine = {
     name: string;
@@ -54,6 +63,7 @@ export type OrderChatResult =
               pincode?: string;
               isDefault?: boolean;
           }>;
+          addressNote?: string;
       }
     | {
           kind: "connect_required";
@@ -72,8 +82,39 @@ export type OrderChatResult =
 
 export function messageLooksLikeOrder(text: string): boolean {
     const t = text.trim();
-    if (t.length < 8) return false;
-    return ORDER_INTENT.test(t) || (GROCERY_KEYWORDS.test(t) && /\d|kg|litre|packet|pack|bottle/.test(t));
+    if (t.length < 6) return false;
+    if (messageIsAddressFollowUp(t)) return true;
+    return (
+        ORDER_INTENT.test(t) ||
+        (GROCERY_KEYWORDS.test(t) && /\d|kg|litre|packet|pack|bottle/.test(t)) ||
+        /\b(want to eat|feel like eating|craving|hungry for)\b/i.test(t) ||
+        (FOOD_KEYWORDS.test(t) && /\b(want|eat|order|get|hungry|craving|like)\b/i.test(t))
+    );
+}
+
+export function messageIsAddressFollowUp(text: string): boolean {
+    const t = text.trim();
+    return ADDRESS_FOLLOWUP.test(t) && ADDRESS_ACTION.test(t);
+}
+
+function normalizeOrderItemName(text: string): string {
+    const cleaned = text
+        .replace(PARTNER_NOISE, " ")
+        .replace(FOOD_QUERY_STOP, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    return cleaned.length >= 2 ? cleaned.slice(0, 120) : text.trim().slice(0, 120);
+}
+
+function formatAddressList(
+    addresses: Array<{ label: string; line1: string; city?: string; pincode?: string }>,
+): string {
+    return addresses
+        .map((addr, idx) => {
+            const bits = [addr.label, addr.line1, addr.city, addr.pincode].filter(Boolean);
+            return `${idx + 1}. ${bits.join(" · ")}`;
+        })
+        .join("\n");
 }
 
 export function messageIsOrderIntentOnly(text: string): boolean {
@@ -107,12 +148,10 @@ function extractItems(text: string): ParsedOrderLine[] {
             continue;
         }
 
-        if (GROCERY_KEYWORDS.test(bit) || FOOD_KEYWORDS.test(bit)) {
-            const cleaned = bit
-                .replace(/^(order|please|mujhe|mama ko|for mama|get|bring)\s+/i, "")
-                .trim();
+        if (GROCERY_KEYWORDS.test(bit) || FOOD_KEYWORDS.test(bit) || ORDER_INTENT.test(bit)) {
+            const cleaned = normalizeOrderItemName(bit);
             if (cleaned.length >= 2 && !/^(from|swiggy|instamart|zepto)$/i.test(cleaned)) {
-                items.push({ name: cleaned.slice(0, 120), quantity: 1, unitPricePaise: 5000 });
+                items.push({ name: cleaned, quantity: 1, unitPricePaise: 5000 });
             }
         }
     }
@@ -263,7 +302,10 @@ async function enrichItemsFromMcp(
                 });
             }
             const best = pickCatalogHitForLine(search.items, mcpPartner);
-            if (best?.pricePaise && best.kind !== "restaurant") catalogFound = true;
+            const hasRestaurantOptions = search.items.some((h) => h.kind === "restaurant");
+            if ((best?.pricePaise && best.kind !== "restaurant") || hasRestaurantOptions) {
+                catalogFound = true;
+            }
             enriched.push({
                 ...item,
                 matchedName: best?.matchedName ?? best?.name,
@@ -288,7 +330,7 @@ async function loadPartnerAddresses(
     mcpPartner: McpPartnerKey,
     commerceUserId: string,
 ) {
-    void refreshPartnerAddressesInBackground(mcpPartner, familyId, commerceUserId);
+    await ensurePartnerAddressesSynced(mcpPartner, familyId, commerceUserId);
     const rows = await listPartnerAddresses(familyId, mcpPartner);
     return rows
         .filter((row) => row.partner === mcpPartner)
@@ -300,6 +342,49 @@ async function loadPartnerAddresses(
             pincode: row.pincode || undefined,
             isDefault: row.is_default,
         }));
+}
+
+async function maybeAddressStatusFromChat(input: {
+    familyId: string;
+    actorUserId: string;
+    message: string;
+}): Promise<OrderChatResult | null> {
+    if (!messageIsAddressFollowUp(input.message)) return null;
+
+    const connected = await listFamilyConnectedPartners(input.familyId, input.actorUserId);
+    const partner = connected.swiggy
+        ? OrderPartner.SWIGGY
+        : connected.instamart
+          ? OrderPartner.INSTAMART
+          : connected.zepto
+            ? OrderPartner.ZEPTO
+            : null;
+    if (!partner) return null;
+
+    const mcpPartner = partnerToMcp(partner);
+    if (!mcpPartner) return null;
+
+    const commerceUserId =
+        (await resolveFamilyMcpUserId(input.familyId, mcpPartner, input.actorUserId)) ??
+        input.actorUserId;
+    const addresses = await loadPartnerAddresses(input.familyId, mcpPartner, commerceUserId);
+    const label = partnerLabel(partner);
+
+    if (!addresses.length) {
+        return {
+            kind: "prompt",
+            partner,
+            partnerLabel: label,
+            message: `I checked your linked ${label} account — no saved delivery addresses yet. Add one in the Swiggy app (same phone login), then tell me what to order — e.g. "pizza to Home".`,
+        };
+    }
+
+    return {
+        kind: "prompt",
+        partner,
+        partnerLabel: label,
+        message: `I pulled ${addresses.length} saved ${label} address${addresses.length === 1 ? "" : "es"} from your account:\n\n${formatAddressList(addresses)}\n\nTell me what you'd like — e.g. "margherita pizza" — and pick the delivery address in the order card before approving.`,
+    };
 }
 
 export function serializeOrderChatForClient(result: OrderChatResult | null): {
@@ -318,6 +403,9 @@ export async function maybeSuggestOrderFromChat(input: {
     actorUserId: string;
     message: string;
 }): Promise<OrderChatResult | null> {
+    const addressStatus = await maybeAddressStatusFromChat(input);
+    if (addressStatus) return addressStatus;
+
     if (!messageLooksLikeOrder(input.message)) return null;
 
     const partner = await pickOrderPartner(input.message, input.familyId, input.actorUserId);
@@ -383,17 +471,23 @@ export async function maybeSuggestOrderFromChat(input: {
         searchResults = enriched.searchResults;
         source = enriched.source;
 
-        if (!enriched.catalogFound) {
+        if (!addresses.length) {
             const label = partnerLabel(partner);
-            const addressHint =
-                addresses.length === 0
-                    ? " Add a saved delivery address in Swiggy/Instamart first."
-                    : "";
             return {
                 kind: "prompt",
                 partner,
                 partnerLabel: label,
-                message: `I couldn't find live ${label} matches for that request.${addressHint} Try a specific dish or restaurant name — e.g. "biryani from Meghana" or "1L Amul milk".`,
+                message: `Your ${label} account is connected but I couldn't find any saved delivery addresses. Add one in the Swiggy app, then try again — e.g. "pizza" or "biryani from Meghana".`,
+            };
+        }
+
+        if (!enriched.catalogFound) {
+            const label = partnerLabel(partner);
+            return {
+                kind: "prompt",
+                partner,
+                partnerLabel: label,
+                message: `I checked ${label} for your saved addresses (${addresses.length} on file) but couldn't find matching restaurants or dishes for that request. Try a specific dish — e.g. "margherita pizza" or "biryani from Meghana".`,
             };
         }
     }
@@ -407,6 +501,13 @@ export async function maybeSuggestOrderFromChat(input: {
         partner,
         notes: input.message.slice(0, 500),
     });
+
+    const addressNote =
+        addresses.length > 1
+            ? `\n\nPick which delivery address to use (${addresses.length} saved on Swiggy) before approving.`
+            : addresses.length === 1
+              ? `\n\nDelivering to: ${addresses[0].label} · ${addresses[0].line1}.`
+              : "";
 
     return {
         kind: "order",
@@ -424,5 +525,6 @@ export async function maybeSuggestOrderFromChat(input: {
         source,
         searchResults,
         addresses,
+        addressNote,
     };
 }

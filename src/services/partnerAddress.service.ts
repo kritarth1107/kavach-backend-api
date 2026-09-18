@@ -108,3 +108,17 @@ export async function refreshPartnerAddressesInBackground(
         }
     }
 }
+
+/** Pull latest addresses from partner MCP before order/search flows. */
+export async function ensurePartnerAddressesSynced(
+    partner: McpPartnerKey,
+    familyId: string,
+    userId: string,
+): Promise<number> {
+    try {
+        return await syncPartnerAddresses(partner, familyId, userId);
+    } catch (err) {
+        console.warn(`Blocking address sync failed for ${partner}/${familyId}:`, err);
+        return 0;
+    }
+}
