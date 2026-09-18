@@ -20,6 +20,8 @@ import {
     type AiStreamEvent,
 } from "../clients/aiEngine.client";
 import { syncSessionHistoryToAiEngine } from "./saheliMemorySync.service";
+import { aiConversationId } from "../utils/uuid.util";
+import type { AiContext } from "./aiTenant.service";
 import {
     ensureAiContext,
     persistCaregiverConversationId,
@@ -129,6 +131,17 @@ function connectPayloadFromChat(
         connectPartner: connect.connectPartner,
         connectUrl: connect.connectUrl,
     };
+}
+
+function resolveCaregiverConversationForAi(
+    ctx: AiContext,
+    sessionConversationId?: string | null,
+): string | undefined {
+    return (
+        aiConversationId(sessionConversationId) ??
+        aiConversationId(ctx.caregiverConversationId) ??
+        undefined
+    );
 }
 
 function saheliChatExtras(order: OrderChatResult | null) {
@@ -390,6 +403,9 @@ async function caregiverReplyWithAi(
 ): Promise<{ reply: string; conversationId: string; orderFromAgent?: OrderChatResult | null }> {
     const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
 
+    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+    const conversationForAi = resolveCaregiverConversationForAi(ctx, conversationIdOverride);
+
     if (opts?.sessionId) {
         await syncSessionHistoryToAiEngine({
             familyId,
@@ -397,7 +413,7 @@ async function caregiverReplyWithAi(
             displayName,
             sessionId: opts.sessionId,
             thread: "caregiver",
-            conversationId: conversationIdOverride,
+            conversationId: conversationForAi,
         });
     }
 
@@ -411,12 +427,11 @@ async function caregiverReplyWithAi(
         .join("\n---\n");
 
     try {
-        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
         const result = await aiPostCaregiverChatWithRetry({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             message,
-            conversationId: conversationIdOverride || undefined,
+            conversationId: conversationForAi,
             careRecordContext: careContext,
             elderThreadContext,
             labsContext,
@@ -424,12 +439,14 @@ async function caregiverReplyWithAi(
             orderContext: opts?.orderContext,
             useAgent: true,
             actorUserId: opts?.actorUserId,
+            kavachFamilyId: familyId,
+            kavachRecipientUserId: recipientUserId,
         });
         const conversationId =
             result.conversation_id ||
-            conversationIdOverride ||
+            conversationForAi ||
             `${familyId}:${recipientUserId}:caregiver`;
-        if (result.conversation_id && !conversationIdOverride) {
+        if (result.conversation_id) {
             await persistCaregiverConversationId(
                 familyId,
                 recipientUserId,
@@ -754,8 +771,6 @@ export async function sendCaregiverSaheliMessage(
 
     let order: OrderChatResult | null = null;
     let reply = "";
-    let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
-
     const ai = await caregiverReplyWithAi(
         familyId,
         recipientUserId,
@@ -771,11 +786,11 @@ export async function sendCaregiverSaheliMessage(
                 kind: d.kind,
             })),
         },
-        session.aiConversationId,
+        aiConversationId(session.aiConversationId),
         { sessionId, actorUserId },
     );
+    let conversationId = ai.conversationId;
     reply = ai.reply;
-    conversationId = ai.conversationId;
     if (ai.orderFromAgent) {
         order = ai.orderFromAgent;
     }
@@ -789,7 +804,7 @@ export async function sendCaregiverSaheliMessage(
     }
 
     await touchSaheliChatSession(sessionId, {
-        aiConversationId: conversationId,
+        aiConversationId: aiConversationId(conversationId) ?? undefined,
     });
 
     const finalReply = reply;
@@ -925,7 +940,10 @@ export async function* streamCaregiverSaheliMessage(
         .sort({ createdAt: 1 })
         .lean();
 
-    let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
+    const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+    const conversationForAi = resolveCaregiverConversationForAi(ctx, session.aiConversationId);
+    let conversationId =
+        conversationForAi ?? `${familyId}:${recipientUserId}:caregiver`;
     const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
 
     await syncSessionHistoryToAiEngine({
@@ -934,7 +952,7 @@ export async function* streamCaregiverSaheliMessage(
         displayName,
         sessionId,
         thread: "caregiver",
-        conversationId: session.aiConversationId,
+        conversationId: conversationForAi,
     });
 
     const elderThreadContext = elderLines
@@ -950,17 +968,18 @@ export async function* streamCaregiverSaheliMessage(
     let order: OrderChatResult | null = null;
 
     try {
-        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
         for await (const event of streamCaregiverSaheliChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             message: text,
-            conversationId: session.aiConversationId || undefined,
+            conversationId: conversationForAi,
             careRecordContext: careContext,
             elderThreadContext,
             labsContext,
             sessionContext: sessionLines.slice(-8).join("\n"),
             actorUserId,
+            kavachFamilyId: familyId,
+            kavachRecipientUserId: recipientUserId,
         })) {
             if (event.type === "token") {
                 replyBuffer += event.delta;
@@ -985,7 +1004,7 @@ export async function* streamCaregiverSaheliMessage(
             }
         }
 
-        if (conversationId && !session.aiConversationId) {
+        if (aiConversationId(conversationId)) {
             await persistCaregiverConversationId(familyId, recipientUserId, conversationId);
         }
     } catch (err) {
@@ -1015,7 +1034,9 @@ export async function* streamCaregiverSaheliMessage(
         reply = applyOrderChatResult(reply, order);
     }
 
-    await touchSaheliChatSession(sessionId, { aiConversationId: conversationId });
+    await touchSaheliChatSession(sessionId, {
+        aiConversationId: aiConversationId(conversationId) ?? conversationForAi,
+    });
 
     const chatExtras = saheliChatExtras(order);
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply, sessionId, {

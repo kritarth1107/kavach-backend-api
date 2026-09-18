@@ -2,7 +2,7 @@ import Family from "../models/family.model";
 import AiTenant from "../models/aiTenant.model";
 import User from "../models/users.model";
 import { AppError } from "../middleware/error.middleware";
-import { aiCreateElder, aiCreateFamily } from "../clients/aiEngine.client";
+import { aiCreateElder, aiCreateFamily, aiFamilyExists } from "../clients/aiEngine.client";
 
 function elderSlug(recipientUserId: string): string {
     const cleaned = recipientUserId.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
@@ -54,6 +54,19 @@ export async function ensureAiContext(
                 : undefined,
         });
         link = await AiTenant.create({ familyId, aiFamilyId, elders: [] });
+    } else if (!(await aiFamilyExists(link.aiFamilyId))) {
+        const owner = await User.findOne({ userId: family.createdBy }).lean();
+        const aiFamilyId = await aiCreateFamily({
+            name: family.name,
+            ownerExternalId: family.createdBy,
+            ownerEmail: owner?.email,
+            ownerName: owner
+                ? [owner.firstName, owner.lastName].filter(Boolean).join(" ")
+                : undefined,
+        });
+        link.aiFamilyId = aiFamilyId;
+        link.elders = [];
+        await link.save();
     }
 
     let elderLink = link.elders.find((e) => e.recipientUserId === recipientUserId);

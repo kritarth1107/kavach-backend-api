@@ -1,6 +1,7 @@
 import { GoogleAuth } from "google-auth-library";
 import config from "../config/app.config";
 import { AppError } from "../middleware/error.middleware";
+import { aiConversationId } from "../utils/uuid.util";
 
 type AiChatResponse = {
     reply: string;
@@ -132,6 +133,18 @@ async function aiFetch(
     }
 }
 
+export async function aiFamilyExists(aiFamilyId: string): Promise<boolean> {
+    try {
+        const res = await aiFetch(`/v1/families/${aiFamilyId}`, {
+            method: "GET",
+            headers: aiHeaders(),
+        });
+        return res.ok;
+    } catch {
+        return false;
+    }
+}
+
 export async function aiCreateFamily(payload: {
     name: string;
     ownerExternalId: string;
@@ -210,7 +223,7 @@ export async function aiSyncConversationHistory(payload: {
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
-                conversation_id: payload.conversationId ?? null,
+                conversation_id: aiConversationId(payload.conversationId) ?? null,
                 thread: payload.thread,
                 messages: payload.messages,
             }),
@@ -245,7 +258,7 @@ export async function aiPostChat(payload: {
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
                 message: payload.message,
-                conversation_id: payload.conversationId ?? null,
+                conversation_id: aiConversationId(payload.conversationId) ?? null,
                 care_record_context: payload.careRecordContext ?? null,
                 companion_profile: payload.companionProfile ?? null,
                 order_context: payload.orderContext ?? null,
@@ -262,6 +275,38 @@ export async function aiPostChat(payload: {
     return parseAiJson<AiChatResponse>(res);
 }
 
+function caregiverChatBody(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    message: string;
+    conversationId?: string;
+    careRecordContext?: string;
+    elderThreadContext?: string;
+    labsContext?: string;
+    sessionContext?: string;
+    orderContext?: string;
+    useAgent?: boolean;
+    actorUserId?: string;
+    kavachFamilyId?: string;
+    kavachRecipientUserId?: string;
+}) {
+    return {
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+        message: payload.message,
+        conversation_id: aiConversationId(payload.conversationId) ?? null,
+        care_record_context: payload.careRecordContext ?? null,
+        elder_thread_context: payload.elderThreadContext ?? null,
+        labs_context: payload.labsContext ?? null,
+        session_context: payload.sessionContext ?? null,
+        order_context: payload.orderContext ?? null,
+        use_agent: payload.useAgent ?? true,
+        actor_user_id: payload.actorUserId ?? null,
+        kavach_family_id: payload.kavachFamilyId ?? null,
+        kavach_recipient_user_id: payload.kavachRecipientUserId ?? null,
+    };
+}
+
 export async function aiPostCaregiverChat(payload: {
     aiFamilyId: string;
     aiElderId: string;
@@ -274,25 +319,15 @@ export async function aiPostCaregiverChat(payload: {
     orderContext?: string;
     useAgent?: boolean;
     actorUserId?: string;
+    kavachFamilyId?: string;
+    kavachRecipientUserId?: string;
 }): Promise<AiChatResponse> {
     const res = await aiFetch(
         "/v1/chat/caregiver",
         {
             method: "POST",
             headers: aiHeaders(),
-            body: JSON.stringify({
-                family_id: payload.aiFamilyId,
-                elder_id: payload.aiElderId,
-                message: payload.message,
-                conversation_id: payload.conversationId ?? null,
-                care_record_context: payload.careRecordContext ?? null,
-                elder_thread_context: payload.elderThreadContext ?? null,
-                labs_context: payload.labsContext ?? null,
-                session_context: payload.sessionContext ?? null,
-                order_context: payload.orderContext ?? null,
-                use_agent: payload.useAgent ?? true,
-                actor_user_id: payload.actorUserId ?? null,
-            }),
+            body: JSON.stringify(caregiverChatBody(payload)),
         },
         config.aiEngine.writeTimeoutMs,
     );
@@ -326,6 +361,37 @@ export async function aiPostCaregiverChatWithRetry(
     throw lastErr;
 }
 
+async function fallbackCaregiverChatFromStream(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    message: string;
+    conversationId?: string;
+    careRecordContext?: string;
+    elderThreadContext?: string;
+    labsContext?: string;
+    sessionContext?: string;
+    orderContext?: string;
+    actorUserId?: string;
+    kavachFamilyId?: string;
+    kavachRecipientUserId?: string;
+}): Promise<AiChatResponse> {
+    return aiPostCaregiverChatWithRetry({
+        aiFamilyId: payload.aiFamilyId,
+        aiElderId: payload.aiElderId,
+        message: payload.message,
+        conversationId: payload.conversationId,
+        careRecordContext: payload.careRecordContext,
+        elderThreadContext: payload.elderThreadContext,
+        labsContext: payload.labsContext,
+        sessionContext: payload.sessionContext,
+        orderContext: payload.orderContext,
+        useAgent: true,
+        actorUserId: payload.actorUserId,
+        kavachFamilyId: payload.kavachFamilyId,
+        kavachRecipientUserId: payload.kavachRecipientUserId,
+    });
+}
+
 export async function* streamCaregiverSaheliChat(payload: {
     aiFamilyId: string;
     aiElderId: string;
@@ -337,21 +403,11 @@ export async function* streamCaregiverSaheliChat(payload: {
     sessionContext?: string;
     orderContext?: string;
     actorUserId?: string;
+    kavachFamilyId?: string;
+    kavachRecipientUserId?: string;
 }): AsyncGenerator<AiStreamEvent> {
     const base = aiEngineAudience();
-    const body = JSON.stringify({
-        family_id: payload.aiFamilyId,
-        elder_id: payload.aiElderId,
-        message: payload.message,
-        conversation_id: payload.conversationId ?? null,
-        care_record_context: payload.careRecordContext ?? null,
-        elder_thread_context: payload.elderThreadContext ?? null,
-        labs_context: payload.labsContext ?? null,
-        session_context: payload.sessionContext ?? null,
-        order_context: payload.orderContext ?? null,
-        use_agent: true,
-        actor_user_id: payload.actorUserId ?? null,
-    });
+    const body = JSON.stringify(caregiverChatBody({ ...payload, useAgent: true }));
     const headers = await aiRequestHeaders();
     const res = await fetch(`${base}/v1/chat/caregiver/stream`, {
         method: "POST",
@@ -360,20 +416,8 @@ export async function* streamCaregiverSaheliChat(payload: {
     });
 
     if (!res.ok || !res.body) {
-        if (res.status === 401 || res.status === 403) {
-            const result = await aiPostCaregiverChatWithRetry({
-                aiFamilyId: payload.aiFamilyId,
-                aiElderId: payload.aiElderId,
-                message: payload.message,
-                conversationId: payload.conversationId,
-                careRecordContext: payload.careRecordContext,
-                elderThreadContext: payload.elderThreadContext,
-                labsContext: payload.labsContext,
-                sessionContext: payload.sessionContext,
-                orderContext: payload.orderContext,
-                useAgent: true,
-                actorUserId: payload.actorUserId,
-            });
+        if (res.status === 401 || res.status === 403 || res.status === 422) {
+            const result = await fallbackCaregiverChatFromStream(payload);
             const reply = result.reply.trim();
             for (const delta of chunkText(reply)) {
                 yield { type: "token", delta };
