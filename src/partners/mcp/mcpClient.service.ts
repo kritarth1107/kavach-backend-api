@@ -238,7 +238,7 @@ async function resolveMcpAddressId(
     if (!addressTool) return undefined;
 
     const result = await client.callTool({ name: addressTool, arguments: {} });
-    const addresses = parsePartnerAddresses(extractToolJson(result));
+    const addresses = parsePartnerAddresses(result);
     return addresses[0]?.partnerAddressId;
 }
 
@@ -794,7 +794,7 @@ export async function syncPartnerAddressesFromMcp(
                 name: addressTool,
                 arguments: { page, pageSize },
             });
-            const parsed = extractToolJson(result);
+            const parsed = unwrapMcpToolPayload(result);
             if (
                 parsed &&
                 typeof parsed === "object" &&
@@ -805,19 +805,19 @@ export async function syncPartnerAddressesFromMcp(
                 break;
             }
 
-            const batch = parsePartnerAddresses(parsed);
+            const batch = parsePartnerAddresses(result);
             for (const row of batch) {
                 if (!collected.has(row.partnerAddressId)) collected.set(row.partnerAddressId, row);
             }
 
             if (!batch.length && guard === 0) {
                 const fallback = await client.callTool({ name: addressTool, arguments: {} });
-                for (const row of parsePartnerAddresses(extractToolJson(fallback))) {
+                for (const row of parsePartnerAddresses(fallback)) {
                     if (!collected.has(row.partnerAddressId)) collected.set(row.partnerAddressId, row);
                 }
             }
 
-            const pagination = extractAddressPagination(parsed);
+            const pagination = extractAddressPagination(parsed ?? result);
             if (!pagination?.hasMore) break;
             if (pagination.totalPages != null && page >= pagination.totalPages) break;
             page += 1;
@@ -1006,40 +1006,105 @@ export async function placeMcpOrder(input: {
     });
 }
 
+function looksLikeOpaqueBlob(text: string): boolean {
+    const trimmed = text.trim();
+    if (trimmed.length < 96) return false;
+    const compact = trimmed.replace(/\s+/g, "");
+    if (/^[\d+/=A-Za-z_-]+$/.test(compact) && compact.length > 96) return true;
+    if (/^(CqMF|eyJ)[A-Za-z0-9+/=_-]{80,}/.test(compact)) return true;
+    return false;
+}
+
+function extractTextBlocks(result: unknown): string[] {
+    if (!result || typeof result !== "object") return [];
+    const obj = result as {
+        content?: Array<{ type?: string; text?: string }>;
+        structuredContent?: unknown;
+    };
+    const blocks: string[] = [];
+
+    if (typeof obj.structuredContent === "string" && obj.structuredContent.trim()) {
+        blocks.push(obj.structuredContent.trim());
+    }
+
+    if (Array.isArray(obj.content)) {
+        for (const block of obj.content) {
+            if (block?.type === "text" && block.text?.trim()) {
+                blocks.push(block.text.trim());
+            }
+        }
+    }
+
+    return blocks;
+}
+
 function extractToolText(result: unknown): string {
+    if (typeof result === "string") return result;
     if (!result || typeof result !== "object") return String(result ?? "");
     const obj = result as {
         content?: Array<{ type?: string; text?: string }>;
         structuredContent?: unknown;
     };
-    if (obj.structuredContent != null) {
-        if (typeof obj.structuredContent === "string") return obj.structuredContent;
+    if (obj.structuredContent != null && typeof obj.structuredContent === "object") {
         try {
             return JSON.stringify(obj.structuredContent);
         } catch {
             // fall through to content blocks
         }
     }
-    const content = obj.content;
-    if (!Array.isArray(content)) return JSON.stringify(result);
-    return content
-        .filter((c) => c.type === "text" && c.text)
-        .map((c) => c.text!)
-        .join("\n");
+    const blocks = extractTextBlocks(result).filter((text) => !looksLikeOpaqueBlob(text));
+    if (blocks.length) return blocks.join("\n");
+    return JSON.stringify(result);
+}
+
+function unwrapMcpToolPayload(result: unknown): unknown {
+    if (result == null) return null;
+    if (typeof result === "string") return parseToolJson(result);
+
+    if (Array.isArray(result)) {
+        const asBlocks = result.every(
+            (row) => row && typeof row === "object" && "type" in (row as object),
+        );
+        if (asBlocks) return unwrapMcpToolPayload({ content: result });
+    }
+
+    if (typeof result !== "object") return null;
+    const obj = result as Record<string, unknown>;
+
+    if (obj.structuredContent != null) {
+        if (typeof obj.structuredContent === "string") {
+            const parsed = parseToolJson(obj.structuredContent);
+            if (parsed != null) return parsed;
+        } else if (Array.isArray(obj.structuredContent)) {
+            const nested = unwrapMcpToolPayload({ content: obj.structuredContent });
+            if (nested != null) return nested;
+        } else if (typeof obj.structuredContent === "object") {
+            return obj.structuredContent;
+        }
+    }
+
+    for (const text of extractTextBlocks(result)) {
+        if (looksLikeOpaqueBlob(text)) continue;
+        const parsed = parseToolJson(text);
+        if (parsed != null) return parsed;
+    }
+
+    if (obj.success != null || obj.data != null || obj.addresses != null) {
+        return obj;
+    }
+
+    return null;
 }
 
 function extractToolJson(result: unknown): unknown {
-    if (!result || typeof result !== "object") {
-        if (typeof result === "string") return parseToolJson(result);
-        return null;
-    }
-    const obj = result as { structuredContent?: unknown };
-    if (obj.structuredContent != null && typeof obj.structuredContent === "object") {
-        return obj.structuredContent;
-    }
+    const payload = unwrapMcpToolPayload(result);
+    if (payload != null) return payload;
+
+    if (typeof result === "string") return parseToolJson(result);
+
     const text = extractToolText(result);
     if (!text.trim()) return null;
-    return parseToolJson(text) ?? text;
+    return parseToolJson(text);
 }
 
 function extractUrl(text: string): string | undefined {
@@ -1048,7 +1113,10 @@ function extractUrl(text: string): string | undefined {
 }
 
 function extractFirstId(text: string): string | undefined {
-    const match = text.match(/"id"\s*:\s*"([^"]+)"/i) ?? text.match(/addr_[A-Za-z0-9]+/);
+    const match =
+        text.match(/"id"\s*:\s*"([^"]+)"/i) ??
+        text.match(/"addressId"\s*:\s*"([^"]+)"/i) ??
+        text.match(/addr_[A-Za-z0-9]+/);
     return match?.[1] ?? match?.[0];
 }
 
@@ -1089,7 +1157,8 @@ function extractAddressList(parsed: unknown): unknown[] {
 }
 
 function parsePartnerAddresses(input: unknown): ParsedPartnerAddress[] {
-    const fromJson = extractAddressList(input);
+    const payload = unwrapMcpToolPayload(input);
+    const fromJson = extractAddressList(payload ?? input);
     if (fromJson.length) {
         return fromJson
             .map((row) => normalizeAddressRow(row))

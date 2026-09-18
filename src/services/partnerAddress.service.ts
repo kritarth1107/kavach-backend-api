@@ -11,7 +11,12 @@ export async function listPartnerAddresses(
     const query: Record<string, string> = { familyId };
     if (partner) query.partner = partner;
     if (userId) query.userId = userId;
-    const rows = await PartnerAddress.find(query).sort({ isDefault: -1, syncedAt: -1 }).lean();
+    let rows = await PartnerAddress.find(query).sort({ isDefault: -1, syncedAt: -1 }).lean();
+    if (!rows.length && userId && partner) {
+        rows = await PartnerAddress.find({ familyId, partner })
+            .sort({ isDefault: -1, syncedAt: -1 })
+            .lean();
+    }
     return rows.map((row) => ({
         address_id: row.addressId,
         partner: row.partner,
