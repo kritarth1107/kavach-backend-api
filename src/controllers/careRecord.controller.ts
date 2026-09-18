@@ -246,12 +246,21 @@ export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
         return;
     }
 
+    const { probeMetaWhatsAppCredentials } = await import("../clients/metaWhatsApp.client");
+
     const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const snapshot = getWhatsAppWebhookDebugSnapshot();
+    const events = listWhatsAppWebhookEvents(limit);
+    const realEvents = events.filter((e) => !e.likelySynthetic);
+
     res.json({
         success: true,
         data: {
-            ...getWhatsAppWebhookDebugSnapshot(),
-            events: listWhatsAppWebhookEvents(limit),
+            ...snapshot,
+            realEventCount: realEvents.length,
+            latestRealEventAt: realEvents[0]?.receivedAt ?? null,
+            credentialProbe: await probeMetaWhatsAppCredentials(),
+            events,
         },
     });
 }

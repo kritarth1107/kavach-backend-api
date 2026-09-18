@@ -17,6 +17,7 @@ export type WhatsAppWebhookLogEntry = {
     replyTo?: string;
     error?: string;
     sendError?: string;
+    likelySynthetic?: boolean;
     metaEnabled: boolean;
     processed: number;
     rawSummary: string;
@@ -126,6 +127,12 @@ export function recordWhatsAppWebhookEvent(input: {
     sendError?: string;
 }): WhatsAppWebhookLogEntry {
     const summary = summarizePayload(input.body);
+    const firstInbound = summary.inbound[0];
+    const likelySynthetic =
+        firstInbound?.text === "diag ping" ||
+        firstInbound?.messageId === "wamid.test" ||
+        firstInbound?.from.endsWith("9999");
+
     const entry: WhatsAppWebhookLogEntry = {
         id: `wa-${Date.now()}-${++eventCounter}`,
         receivedAt: new Date().toISOString(),
@@ -140,6 +147,7 @@ export function recordWhatsAppWebhookEvent(input: {
         replyTo: input.replyTo ? redactPhone(input.replyTo) : undefined,
         error: input.error,
         sendError: input.sendError,
+        likelySynthetic,
         metaEnabled: isMetaWhatsAppEnabled(),
         processed: input.processed,
         rawSummary: summary.rawSummary,

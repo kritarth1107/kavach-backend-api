@@ -75,6 +75,159 @@ export type MetaInboundMessage = {
     messageId?: string;
 };
 
+export type MetaWhatsAppCredentialProbe = {
+    phoneLookupOk: boolean;
+    phoneDisplay?: string;
+    phoneVerifiedName?: string;
+    phoneLookupError?: string;
+    tokenDebugOk: boolean;
+    tokenAppId?: string;
+    tokenType?: string;
+    tokenScopes?: string[];
+    tokenExpiresAt?: string | null;
+    tokenDebugError?: string;
+    sendEndpointOk: boolean;
+    sendProbeError?: string;
+    diagnosis: string;
+};
+
+/** Live Graph API checks — does not send a message. */
+export async function probeMetaWhatsAppCredentials(): Promise<MetaWhatsAppCredentialProbe> {
+    const meta = config.whatsapp.meta;
+    const result: MetaWhatsAppCredentialProbe = {
+        phoneLookupOk: false,
+        tokenDebugOk: false,
+        sendEndpointOk: false,
+        diagnosis: "",
+    };
+
+    if (!meta.phoneNumberId || !meta.accessToken) {
+        result.diagnosis =
+            "Missing WHATSAPP_META_PHONE_NUMBER_ID or WHATSAPP_META_ACCESS_TOKEN on the server.";
+        return result;
+    }
+
+    try {
+        const phoneRes = await fetch(
+            `${graphBase()}/${meta.phoneNumberId}?fields=display_phone_number,verified_name,quality_rating`,
+            { headers: { Authorization: `Bearer ${meta.accessToken}` } },
+        );
+        const phoneBody = await phoneRes.text();
+        if (phoneRes.ok) {
+            result.phoneLookupOk = true;
+            try {
+                const parsed = JSON.parse(phoneBody) as {
+                    display_phone_number?: string;
+                    verified_name?: string;
+                };
+                result.phoneDisplay = parsed.display_phone_number;
+                result.phoneVerifiedName = parsed.verified_name;
+            } catch {
+                // ignore parse
+            }
+        } else {
+            result.phoneLookupError = formatMetaSendError(phoneRes.status, phoneBody);
+        }
+    } catch (err) {
+        result.phoneLookupError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (meta.appId && meta.appSecret) {
+        try {
+            const debugRes = await fetch(
+                `${graphBase()}/debug_token?input_token=${encodeURIComponent(meta.accessToken)}&access_token=${encodeURIComponent(`${meta.appId}|${meta.appSecret}`)}`,
+            );
+            const debugBody = await debugRes.text();
+            if (debugRes.ok) {
+                result.tokenDebugOk = true;
+                try {
+                    const parsed = JSON.parse(debugBody) as {
+                        data?: {
+                            app_id?: string;
+                            type?: string;
+                            scopes?: string[];
+                            expires_at?: number;
+                        };
+                    };
+                    const data = parsed.data;
+                    result.tokenAppId = data?.app_id;
+                    result.tokenType = data?.type;
+                    result.tokenScopes = data?.scopes ?? [];
+                    result.tokenExpiresAt =
+                        data?.expires_at && data.expires_at > 0
+                            ? new Date(data.expires_at * 1000).toISOString()
+                            : null;
+                } catch {
+                    // ignore parse
+                }
+            } else {
+                result.tokenDebugError = formatMetaSendError(debugRes.status, debugBody);
+            }
+        } catch (err) {
+            result.tokenDebugError = err instanceof Error ? err.message : String(err);
+        }
+    } else {
+        result.tokenDebugError = "WHATSAPP_META_APP_ID or WHATSAPP_META_APP_SECRET not set — cannot inspect token scopes.";
+    }
+
+    // Meta rejects invalid recipient; we only need to see if the phone-number-id accepts POST at all.
+    try {
+        const sendRes = await fetch(`${graphBase()}/${meta.phoneNumberId}/messages`, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${meta.accessToken}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                messaging_product: "whatsapp",
+                to: "0000000000",
+                type: "text",
+                text: { body: "probe" },
+            }),
+        });
+        const sendBody = await sendRes.text();
+        if (sendRes.ok) {
+            result.sendEndpointOk = true;
+        } else {
+            result.sendProbeError = formatMetaSendError(sendRes.status, sendBody);
+            const lower = result.sendProbeError.toLowerCase();
+            if (
+                lower.includes("recipient") ||
+                lower.includes("131030") ||
+                lower.includes("131026") ||
+                lower.includes("phone number")
+            ) {
+                result.sendEndpointOk = true;
+            }
+        }
+    } catch (err) {
+        result.sendProbeError = err instanceof Error ? err.message : String(err);
+    }
+
+    const scopes = result.tokenScopes ?? [];
+    const hasMessagingScope =
+        scopes.includes("whatsapp_business_messaging") ||
+        scopes.includes("whatsapp_business_management");
+
+    if (!result.phoneLookupOk) {
+        result.diagnosis =
+            "Access token cannot read the configured Phone Number ID — regenerate a System User token and confirm the ID in WhatsApp Manager → API Setup.";
+    } else if (!result.sendEndpointOk) {
+        result.diagnosis =
+            "Token cannot POST to /messages on this Phone Number ID (code 100 sub 33). In Meta Business Suite: System Users → assign your WhatsApp account → generate token with whatsapp_business_messaging + whatsapp_business_management, then update Cloud Run via the set-whatsapp-gcp-env workflow.";
+    } else if (result.tokenDebugOk && !hasMessagingScope) {
+        result.diagnosis =
+            `Token is valid but missing whatsapp_business_messaging scope (current: ${scopes.join(", ") || "none"}). Regenerate the System User token with messaging permissions.`;
+    } else if (result.tokenExpiresAt) {
+        result.diagnosis = `Token expires at ${result.tokenExpiresAt}. Send permission looks OK — if replies still fail, add your phone under Meta → API Setup → test numbers or switch app to Live mode.`;
+    } else {
+        result.diagnosis =
+            "Credentials look OK for sending. If you still get no reply, Meta is likely not delivering inbound webhooks — check Webhooks → Recent deliveries in the Meta app dashboard.";
+    }
+
+    return result;
+}
+
 export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
     if (!body || typeof body !== "object") return [];
     const root = body as Record<string, unknown>;
