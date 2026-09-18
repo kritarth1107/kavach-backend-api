@@ -1,0 +1,62 @@
+name: Update WhatsApp phone number ID on Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      phone_number_id:
+        description: WHATSAPP_META_PHONE_NUMBER_ID
+        required: true
+        type: string
+        default: "1718021715926380"
+
+concurrency:
+  group: update-whatsapp-phone-id
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  GCP_REGION: asia-south1
+  SERVICE: kavach-backend
+  BACKEND_URL: https://kavach-backend-303943038694.asia-south1.run.app
+  WEBHOOK_VERIFY_TOKEN: kavach_wa_verify_k9X2mP7nQ4vL8sR3
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Update Cloud Run phone number ID
+        run: |
+          gcloud run services update ${{ env.SERVICE }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --region=${{ env.GCP_REGION }} \
+            --update-env-vars="WHATSAPP_META_PHONE_NUMBER_ID=${{ inputs.phone_number_id }}" \
+            --quiet
+
+      - name: Run Meta webhook setup
+        run: |
+          curl -sS -X POST "${{ env.BACKEND_URL }}/api/webhooks/whatsapp/meta/setup?verify_token=${{ env.WEBHOOK_VERIFY_TOKEN }}" | python3 -m json.tool
+
+      - name: Verify phone on Graph API
+        run: |
+          gcloud run services describe ${{ env.SERVICE }} \
+            --project=${{ env.GCP_PROJECT_ID }} \
+            --region=${{ env.GCP_REGION }} \
+            --format=json > /tmp/service.json
+          TOKEN=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_ACCESS_TOKEN'), ''))")
+          PHONE_ID=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_PHONE_NUMBER_ID'), ''))")
+          WABA_ID=$(python3 -c "import json; d=json.load(open('/tmp/service.json')); print(next((e.get('value','') for e in d['spec']['template']['spec']['containers'][0].get('env',[]) if e['name']=='WHATSAPP_META_WABA_ID'), ''))")
+          echo "PHONE_ID=$PHONE_ID WABA_ID=$WABA_ID"
+          curl -sS "https://graph.facebook.com/v21.0/${PHONE_ID}?fields=display_phone_number,verified_name,status,webhook_configuration&access_token=${TOKEN}" | python3 -m json.tool
+          echo "--- WABA phone_numbers ---"
+          curl -sS "https://graph.facebook.com/v21.0/${WABA_ID}/phone_numbers?fields=id,display_phone_number,verified_name&access_token=${TOKEN}" | python3 -m json.tool
