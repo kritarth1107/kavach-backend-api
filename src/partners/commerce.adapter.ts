@@ -7,6 +7,7 @@ import { getMcpPartner } from "./mcp/partners";
 import { OrderPartner } from "../types/careRecord.types";
 import { resolveFamilyMcpUserId } from "../services/commerceConnection.service";
 import { getDefaultPartnerAddressId } from "../services/partnerAddress.service";
+import config from "../config/app.config";
 
 export type CommerceLineItem = {
     name: string;
@@ -27,6 +28,10 @@ function orderPartnerToMcp(partner: OrderPartner): McpPartnerKey | null {
     if (partner === OrderPartner.SWIGGY) return "swiggy";
     if (partner === OrderPartner.INSTAMART) return "instamart";
     return null;
+}
+
+function isProduction(): boolean {
+    return config.server.env === "production";
 }
 
 export async function createCommerceOrder(input: CommerceOrderContext) {
@@ -55,17 +60,27 @@ export async function createCommerceOrder(input: CommerceOrderContext) {
                     input.familyId,
                     mcpUserId,
                     item.name,
-                    { addressId },
+                    { addressId: addressId ?? undefined },
                 );
+                if (search.error === "no_address") {
+                    throw new Error(
+                        `Connect ${input.partner} and sync a delivery address before ordering.`,
+                    );
+                }
                 const hit =
                     mcpPartner === "swiggy"
                         ? (search.items.find((row) => row.kind === "dish" && row.pricePaise) ??
-                          search.items.find((row) => row.pricePaise) ??
-                          search.items[0])
-                        : (search.items.find((row) => row.pricePaise) ?? search.items[0]);
+                          search.items.find((row) => row.kind === "dish"))
+                        : (search.items.find((row) => row.kind === "product" && row.pricePaise) ??
+                          search.items.find((row) => row.pricePaise));
+                if (!hit?.pricePaise) {
+                    throw new Error(
+                        `No live MCP price for "${item.name}". Search the catalog and pick a listed item.`,
+                    );
+                }
                 pricedItems.push({
                     ...item,
-                    unitPricePaise: hit?.pricePaise ?? item.unitPricePaise,
+                    unitPricePaise: hit.pricePaise,
                 });
             }
             return {
@@ -76,6 +91,16 @@ export async function createCommerceOrder(input: CommerceOrderContext) {
                 source: `${mcpPartner}_mcp` as const,
             };
         }
+
+        if (isProduction()) {
+            throw new Error(
+                `${input.partner} is not connected. Open Integrations and connect ${partnerConfig?.label ?? input.partner} first.`,
+            );
+        }
+    }
+
+    if (isProduction()) {
+        throw new Error("Commerce partner is not configured for live ordering.");
     }
 
     const label = input.partner;
@@ -131,6 +156,14 @@ export async function payCommerceOrder(input: {
                 rawSummary: placed.rawSummary,
             };
         }
+
+        if (isProduction()) {
+            throw new Error(`${input.partner} MCP is not connected for checkout.`);
+        }
+    }
+
+    if (isProduction()) {
+        throw new Error("Cannot place mock payment in production.");
     }
 
     return {

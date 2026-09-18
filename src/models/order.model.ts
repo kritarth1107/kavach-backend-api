@@ -20,6 +20,7 @@ export interface IOrder {
     totalPaise: number;
     currency: string;
     deliveryAddress?: string;
+    partnerAddressId?: string;
     partnerRef?: string;
     deepLink?: string;
     notes?: string;
@@ -51,6 +52,7 @@ const orderSchema = new Schema<IOrderDocument>(
         totalPaise: { type: Number, required: true, min: 0 },
         currency: { type: String, default: "INR" },
         deliveryAddress: { type: String, trim: true, maxlength: 300 },
+        partnerAddressId: { type: String, trim: true },
         partnerRef: { type: String, trim: true },
         deepLink: { type: String, trim: true },
         notes: { type: String, trim: true, maxlength: 500 },

@@ -50,12 +50,7 @@ import {
     findPrintedHits,
     formatPrintedHit,
 } from "./labCite.service";
-import {
-    handleOrderFlowChatMessage,
-    orderFlowContextForAi,
-    orderFlowReply,
-    type OrderFlowPayload,
-} from "./orderOrchestrator.service";
+import { type OrderFlowPayload } from "./orderOrchestrator.service";
 import {
     maybeSuggestOrderFromChat,
     messageLooksLikeOrder,
@@ -101,6 +96,7 @@ async function appendMessage(
     extras?: {
         orderPayload?: SaheliMessageOrderPayload;
         orderFlowPayload?: SaheliOrderFlowPayload;
+        orderPreviewPayload?: Record<string, unknown>;
         connectPayload?: SaheliMessageConnectPayload;
     },
 ) {
@@ -114,6 +110,7 @@ async function appendMessage(
         content,
         orderPayload: extras?.orderPayload,
         orderFlowPayload: extras?.orderFlowPayload,
+        orderPreviewPayload: extras?.orderPreviewPayload,
         connectPayload: extras?.connectPayload,
     });
     return doc;
@@ -185,6 +182,7 @@ async function listThread(
         createdAt: m.createdAt ? m.createdAt.toISOString() : null,
         order: m.orderPayload ?? undefined,
         orderFlow: m.orderFlowPayload ?? undefined,
+        orderPreview: m.orderPreviewPayload ?? undefined,
         connect: m.connectPayload ?? undefined,
     }));
 }
@@ -435,7 +433,12 @@ async function caregiverReplyWithAi(
         actorUserId?: string;
         useAgent?: boolean;
     },
-): Promise<{ reply: string; conversationId: string; orderFromAgent?: OrderChatResult | null }> {
+): Promise<{
+    reply: string;
+    conversationId: string;
+    orderFromAgent?: OrderChatResult | null;
+    orderPreview?: Record<string, unknown> | null;
+}> {
     const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
 
     const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
@@ -490,6 +493,7 @@ async function caregiverReplyWithAi(
         }
         const reply = result.reply.trim();
         let orderFromAgent: OrderChatResult | null = null;
+        let orderPreview: Record<string, unknown> | null = null;
         if (result.order && typeof result.order === "object") {
             const o = result.order as Record<string, unknown>;
             orderFromAgent = { kind: "order", ...o } as unknown as OrderChatResult;
@@ -497,8 +501,11 @@ async function caregiverReplyWithAi(
             const c = result.connect as Record<string, unknown>;
             orderFromAgent = { kind: "connect_required", ...c } as unknown as OrderChatResult;
         }
+        if (result.order_preview && typeof result.order_preview === "object") {
+            orderPreview = result.order_preview as Record<string, unknown>;
+        }
         if (reply) {
-            return { reply, conversationId, orderFromAgent };
+            return { reply, conversationId, orderFromAgent, orderPreview };
         }
         throw new Error("Empty AI reply");
     } catch (err) {
@@ -805,20 +812,7 @@ export async function sendCaregiverSaheliMessage(
         .lean();
 
     let order: OrderChatResult | null = null;
-    let orderFlow: OrderFlowPayload | null = null;
-    try {
-        orderFlow = await handleOrderFlowChatMessage({
-            familyId,
-            recipientUserId,
-            actorUserId,
-            message: text,
-            saheliSessionId: sessionId,
-        });
-    } catch (err) {
-        console.warn("Order flow from caregiver chat failed:", err);
-    }
-
-    const flowReply = orderFlowReply(orderFlow);
+    let orderPreview: Record<string, unknown> | null = null;
     let reply = "";
     const ai = await caregiverReplyWithAi(
         familyId,
@@ -839,14 +833,16 @@ export async function sendCaregiverSaheliMessage(
         {
             sessionId,
             actorUserId,
-            useAgent: !orderFlow?.sessionId,
-            orderContext: orderFlowContextForAi(orderFlow),
+            useAgent: true,
         },
     );
     let conversationId = ai.conversationId;
-    reply = flowReply || ai.reply;
-    if (!flowReply && ai.orderFromAgent) {
+    reply = ai.reply;
+    if (ai.orderFromAgent) {
         order = ai.orderFromAgent;
+    }
+    if (ai.orderPreview) {
+        orderPreview = ai.orderPreview;
     }
 
     if (order?.kind === "connect_required") {
@@ -863,11 +859,10 @@ export async function sendCaregiverSaheliMessage(
 
     const finalReply = reply;
     const chatExtras = saheliChatExtras(order);
-    const orderFlowPayload = serializeOrderFlow(orderFlow);
 
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", finalReply, sessionId, {
         orderPayload: chatExtras.orderPayload,
-        orderFlowPayload,
+        orderPreviewPayload: orderPreview ?? undefined,
         connectPayload: chatExtras.connectPayload,
     });
     await appendCareRecordEvent({
@@ -886,7 +881,7 @@ export async function sendCaregiverSaheliMessage(
         reply: finalReply,
         conversationId,
         sessionId,
-        orderFlow: orderFlowPayload,
+        orderPreview: orderPreview ?? undefined,
         ...chatExtras.clientPayload,
     };
 }
@@ -925,6 +920,7 @@ export async function* streamCaregiverSaheliMessage(
           order?: unknown;
           connect?: unknown;
           orderFlow?: SaheliOrderFlowPayload;
+          orderPreview?: Record<string, unknown>;
       }
 > {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
@@ -1030,30 +1026,9 @@ export async function* streamCaregiverSaheliMessage(
 
     let replyBuffer = "";
     let order: OrderChatResult | null = null;
-    let orderFlow: OrderFlowPayload | null = null;
+    let orderPreview: Record<string, unknown> | null = null;
 
     try {
-        orderFlow = await handleOrderFlowChatMessage({
-            familyId,
-            recipientUserId,
-            actorUserId,
-            message: text,
-            saheliSessionId: sessionId,
-        });
-    } catch (err) {
-        console.warn("Order flow from caregiver stream failed:", err);
-    }
-
-    const flowReply = orderFlowReply(orderFlow);
-    if (flowReply) {
-        replyBuffer = flowReply;
-        for (const chunk of flowReply.match(/.{1,24}/gs) ?? [flowReply]) {
-            yield { type: "token", delta: chunk };
-        }
-    }
-
-    try {
-        if (!orderFlow?.sessionId) {
         for await (const event of streamCaregiverSaheliChat({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
@@ -1063,7 +1038,6 @@ export async function* streamCaregiverSaheliMessage(
             elderThreadContext,
             labsContext,
             sessionContext: sessionLines.slice(-8).join("\n"),
-            orderContext: orderFlowContextForAi(orderFlow),
             useAgent: true,
             actorUserId,
             kavachFamilyId: familyId,
@@ -1077,6 +1051,8 @@ export async function* streamCaregiverSaheliMessage(
                     order = orderFromAgentPayload(event.order as Record<string, unknown>);
                 } else if (event.connect && typeof event.connect === "object") {
                     order = orderFromAgentPayload(event.connect as Record<string, unknown>);
+                } else if (event.order_preview && typeof event.order_preview === "object") {
+                    orderPreview = event.order_preview as Record<string, unknown>;
                 }
                 yield event;
             } else if (event.type === "done") {
@@ -1087,10 +1063,12 @@ export async function* streamCaregiverSaheliMessage(
                 } else if (event.connect && typeof event.connect === "object") {
                     order = orderFromAgentPayload(event.connect as Record<string, unknown>);
                 }
+                if (event.order_preview && typeof event.order_preview === "object") {
+                    orderPreview = event.order_preview as Record<string, unknown>;
+                }
             } else {
                 yield event;
             }
-        }
         }
 
         if (aiConversationId(conversationId)) {
@@ -1128,10 +1106,9 @@ export async function* streamCaregiverSaheliMessage(
     });
 
     const chatExtras = saheliChatExtras(order);
-    const orderFlowPayload = serializeOrderFlow(orderFlow);
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", reply, sessionId, {
         orderPayload: chatExtras.orderPayload,
-        orderFlowPayload,
+        orderPreviewPayload: orderPreview ?? undefined,
         connectPayload: chatExtras.connectPayload,
     });
     await appendCareRecordEvent({
@@ -1151,7 +1128,7 @@ export async function* streamCaregiverSaheliMessage(
         sessionId,
         conversationId,
         reply,
-        orderFlow: orderFlowPayload,
+        orderPreview: orderPreview ?? undefined,
         ...chatExtras.clientPayload,
     };
 }

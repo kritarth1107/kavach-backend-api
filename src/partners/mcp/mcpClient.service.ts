@@ -43,11 +43,18 @@ export type McpCatalogHit = {
     name: string;
     matchedName?: string;
     pricePaise?: number;
+    costForTwoPaise?: number;
     productId?: string;
     itemId?: string;
     spinId?: string;
     restaurantId?: string;
     restaurantName?: string;
+};
+
+export type McpSearchResult = {
+    items: McpCatalogHit[];
+    addressId?: string;
+    error?: string;
 };
 
 type McpTool = { name: string; description?: string };
@@ -312,7 +319,7 @@ async function searchSwiggyFoodCatalog(
                 name,
                 restaurantId: restaurant.id ? String(restaurant.id) : undefined,
                 restaurantName: name,
-                pricePaise: parsePricePaise(restaurant.costForTwo ?? restaurant.avgCostForTwo),
+                costForTwoPaise: parsePricePaise(restaurant.costForTwo ?? restaurant.avgCostForTwo),
                 productId: restaurant.id ? String(restaurant.id) : undefined,
             });
         }
@@ -711,7 +718,7 @@ export async function searchMcpProduct(
     userId: string,
     query: string,
     opts?: { addressId?: string },
-): Promise<{ items: McpCatalogHit[] }> {
+): Promise<McpSearchResult> {
     const config = getMcpPartner(partner);
     return withMcpClient(partner, familyId, userId, async (client) => {
         const tools = (await client.listTools()).tools;
@@ -724,14 +731,22 @@ export async function searchMcpProduct(
             opts?.addressId,
         );
 
+        if ((partner === "swiggy" || partner === "instamart") && !addressId) {
+            return {
+                items: [],
+                error: "no_address",
+                addressId: undefined,
+            };
+        }
+
         if (partner === "swiggy") {
             const items = await searchSwiggyFoodCatalog(client, tools, addressId, query);
-            return { items: items.length ? items : parseSearchResults("", query) };
+            return { items, addressId };
         }
 
         if (partner === "instamart") {
             const items = await searchInstamartCatalog(client, tools, addressId, query);
-            return { items: items.length ? items : parseSearchResults("", query) };
+            return { items, addressId };
         }
 
         const searchTool = pickToolFromNeedles(tools, config.searchToolNeedles);
@@ -851,9 +866,22 @@ export async function syncPartnerAddressesFromMcp(
             }
 
             if (!batch.length && guard === 0) {
-                const fallback = await client.callTool({ name: addressTool, arguments: {} });
-                for (const row of parsePartnerAddresses(fallback)) {
-                    if (!collected.has(row.partnerAddressId)) collected.set(row.partnerAddressId, row);
+                for (const args of [{}, { limit: 20 }, { pageSize: 20 }]) {
+                    const fallback = await client.callTool({ name: addressTool, arguments: args });
+                    const parsedFallback = parsePartnerAddresses(fallback);
+                    for (const row of parsedFallback) {
+                        if (!collected.has(row.partnerAddressId)) collected.set(row.partnerAddressId, row);
+                    }
+                    if (parsedFallback.length) break;
+                }
+                if (!collected.size) {
+                    const raw = extractToolText(
+                        await client.callTool({ name: addressTool, arguments: { page: 1, pageSize: 10 } }),
+                    );
+                    console.warn(
+                        `${partner} get_addresses unparsed sample for family ${familyId}:`,
+                        raw.slice(0, 400),
+                    );
                 }
             }
 
@@ -915,13 +943,19 @@ export async function placeMcpOrder(input: {
                 throw new Error("Swiggy Food cart tools are unavailable on this connection.");
             }
 
+            const cartArgs: Record<string, unknown> = { restaurantId, items: cartItems };
+            if (addressId) cartArgs.addressId = addressId;
+
             const cartUpdate = await client.callTool({
                 name: updateCartTool,
-                arguments: { restaurantId, items: cartItems },
+                arguments: cartArgs,
             });
+            const checkoutArgs: Record<string, unknown> = { paymentMethod };
+            if (addressId) checkoutArgs.addressId = addressId;
+
             const placed = await client.callTool({
                 name: checkoutTool,
-                arguments: { paymentMethod },
+                arguments: checkoutArgs,
             });
 
             const rawSummary = `${extractToolText(cartUpdate)}\n${extractToolText(placed)}`;
@@ -959,13 +993,19 @@ export async function placeMcpOrder(input: {
                 throw new Error("Instamart cart tools are unavailable on this connection.");
             }
 
+            const imCartArgs: Record<string, unknown> = { items: cartItems };
+            if (addressId) imCartArgs.addressId = addressId;
+
             const cartUpdate = await client.callTool({
                 name: updateCartTool,
-                arguments: { items: cartItems },
+                arguments: imCartArgs,
             });
+            const imCheckoutArgs: Record<string, unknown> = { paymentMethod };
+            if (addressId) imCheckoutArgs.addressId = addressId;
+
             const placed = await client.callTool({
                 name: checkoutTool,
-                arguments: { paymentMethod },
+                arguments: imCheckoutArgs,
             });
 
             const rawSummary = `${extractToolText(cartUpdate)}\n${extractToolText(placed)}`;
@@ -1248,9 +1288,17 @@ function parsePartnerAddresses(input: unknown): ParsedPartnerAddress[] {
 
 function normalizeAddressRow(row: unknown): ParsedPartnerAddress | null {
     if (!row || typeof row !== "object") return null;
-    const obj = row as Record<string, unknown>;
+    let obj = row as Record<string, unknown>;
+    if (obj.address && typeof obj.address === "object") {
+        obj = { ...(obj.address as Record<string, unknown>), ...obj };
+    }
     const partnerAddressId = String(
-        obj.id ?? obj.addressId ?? obj.address_id ?? obj.partnerAddressId ?? "",
+        obj.id ??
+            obj.addressId ??
+            obj.address_id ??
+            obj.partnerAddressId ??
+            obj.savedAddressId ??
+            "",
     ).trim();
     if (!partnerAddressId) return null;
 
@@ -1297,7 +1345,7 @@ function parseSearchResults(text: string, fallbackName: string): McpCatalogHit[]
                 name: String(restaurant.name ?? fallbackName),
                 restaurantId: restaurant.id ? String(restaurant.id) : undefined,
                 restaurantName: restaurant.name ? String(restaurant.name) : undefined,
-                pricePaise: parsePricePaise(restaurant.costForTwo ?? restaurant.avgCostForTwo),
+                costForTwoPaise: parsePricePaise(restaurant.costForTwo ?? restaurant.avgCostForTwo),
                 productId: restaurant.id ? String(restaurant.id) : undefined,
             }));
         }

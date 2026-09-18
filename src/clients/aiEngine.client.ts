@@ -8,6 +8,7 @@ type AiChatResponse = {
     conversation_id: string;
     order?: Record<string, unknown>;
     connect?: Record<string, unknown>;
+    order_preview?: Record<string, unknown>;
     tool_trace?: Array<{ tool: string; status: string }>;
 };
 
@@ -19,8 +20,16 @@ export type AiStreamEvent =
           id: string;
           order?: Record<string, unknown>;
           connect?: Record<string, unknown>;
+          order_preview?: Record<string, unknown>;
       }
-    | { type: "done"; conversation_id: string; reply?: string; order?: Record<string, unknown>; connect?: Record<string, unknown> }
+    | {
+          type: "done";
+          conversation_id: string;
+          reply?: string;
+          order?: Record<string, unknown>;
+          connect?: Record<string, unknown>;
+          order_preview?: Record<string, unknown>;
+      }
     | { type: "error"; message: string };
 
 function sleep(ms: number) {

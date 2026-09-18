@@ -82,6 +82,7 @@ export interface ISaheliMessage {
     content: string;
     orderPayload?: SaheliMessageOrderPayload;
     orderFlowPayload?: SaheliOrderFlowPayload;
+    orderPreviewPayload?: Record<string, unknown>;
     connectPayload?: SaheliMessageConnectPayload;
     createdAt?: Date;
 }
@@ -99,6 +100,7 @@ const saheliMessageSchema = new Schema<ISaheliMessageDocument>(
         content: { type: String, required: true, maxlength: 8000 },
         orderPayload: { type: Schema.Types.Mixed },
         orderFlowPayload: { type: Schema.Types.Mixed },
+        orderPreviewPayload: { type: Schema.Types.Mixed },
         connectPayload: { type: Schema.Types.Mixed },
     },
     {

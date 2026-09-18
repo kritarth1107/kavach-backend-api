@@ -50,6 +50,7 @@ export interface IOrderSession {
     catalog: {
         restaurants: OrderSessionCatalogItem[];
         dishes: OrderSessionCatalogItem[];
+        products: OrderSessionCatalogItem[];
     };
     cartItems: OrderSessionCartItem[];
     orderId?: string;
@@ -114,6 +115,7 @@ const orderSessionSchema = new Schema<IOrderSessionDocument>(
         catalog: {
             restaurants: { type: [catalogItemSchema], default: [] },
             dishes: { type: [catalogItemSchema], default: [] },
+            products: { type: [catalogItemSchema], default: [] },
         },
         cartItems: { type: [cartItemSchema], default: [] },
         orderId: { type: String },

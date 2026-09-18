@@ -13,6 +13,7 @@ async function enrichMcpBlock(
     familyId: string,
     actorUserId: string,
     pendingCount: number,
+    addressCount: number,
 ) {
     const config = MCP_PARTNERS[partner];
     const status = await getMcpConnectionStatus(partner, familyId, actorUserId);
@@ -24,6 +25,7 @@ async function enrichMcpBlock(
             : config.disconnectedDescription,
         connected: status.connected,
         connectedAt: status.connectedAt,
+        addressCount,
         redirectUri: config.getRedirectUri(),
         mcpUrl: config.mcpUrl,
         pendingApprovals: pendingCount,
@@ -47,10 +49,14 @@ export async function getFamilyIntegrations(familyId: string, actorUserId: strin
         listPartnerAddresses(familyId),
     ]);
 
+    const swiggyAddresses = partnerAddresses.filter((a) => a.partner === "swiggy").length;
+    const instamartAddresses = partnerAddresses.filter((a) => a.partner === "instamart").length;
+    const zeptoAddresses = partnerAddresses.filter((a) => a.partner === "zepto").length;
+
     const [zepto, swiggy, instamart] = await Promise.all([
-        enrichMcpBlock("zepto", familyId, actorUserId, pendingCount),
-        enrichMcpBlock("swiggy", familyId, actorUserId, pendingCount),
-        enrichMcpBlock("instamart", familyId, actorUserId, pendingCount),
+        enrichMcpBlock("zepto", familyId, actorUserId, pendingCount, zeptoAddresses),
+        enrichMcpBlock("swiggy", familyId, actorUserId, pendingCount, swiggyAddresses),
+        enrichMcpBlock("instamart", familyId, actorUserId, pendingCount, instamartAddresses),
     ]);
 
     const whatsappLinks = identities.filter((i) => i.channelType === "whatsapp");

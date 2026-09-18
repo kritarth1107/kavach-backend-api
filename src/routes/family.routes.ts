@@ -42,6 +42,7 @@ import {
     postOrderSessionSubmitHandler,
     postStartOrderSessionHandler,
 } from "../controllers/orderOrchestrator.controller";
+import { postPlaceCodOrderHandler } from "../controllers/orderAgent.controller";
 import {
     createCaregiverSaheliChatSessionHandler,
     createSaheliChatSessionHandler,
@@ -195,6 +196,7 @@ router.post(
     protect,
     postOrderSessionSubmitHandler,
 );
+router.post("/:familyId/saheli/orders/place-cod", protect, postPlaceCodOrderHandler);
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);
 router.get("/:familyId/recipients/:recipientUserId/labs/trends", protect, getRecipientLabTrends);

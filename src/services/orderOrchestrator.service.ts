@@ -16,8 +16,13 @@ import {
 import type { McpPartnerKey } from "../partners/mcp/types";
 import { OrderPartner } from "../types/careRecord.types";
 import { listFamilyConnectedPartners, resolveFamilyMcpUserId } from "./commerceConnection.service";
-import { getFamilyForActor, requireCareRecipient } from "./careRecordAuth.service";
-import { suggestOrder } from "./order.service";
+import {
+    getFamilyForActor,
+    getMemberRole,
+    requireCareRecipient,
+} from "./careRecordAuth.service";
+import { roleHasPermission } from "../types/careRecord.types";
+import { approveOrder, suggestOrder } from "./order.service";
 import {
     ensurePartnerAddressesSynced,
     listPartnerAddresses,
@@ -43,6 +48,7 @@ export type OrderFlowPayload = {
     catalog?: {
         restaurants: OrderSessionCatalogItem[];
         dishes: OrderSessionCatalogItem[];
+        products?: OrderSessionCatalogItem[];
     };
     cartItems?: OrderSessionCartItem[];
     orderId?: string;
@@ -74,15 +80,29 @@ function hitToCatalogItem(hit: McpCatalogHit): OrderSessionCatalogItem {
     };
 }
 
+function catalogBrowseHint(partner: McpPartnerKey, query: string): string {
+    if (partner === "instamart") {
+        return `products and groceries for "${query}"`;
+    }
+    return `restaurants and dishes for "${query}"`;
+}
+
 function splitCatalogHits(hits: McpCatalogHit[]) {
     const restaurants: OrderSessionCatalogItem[] = [];
     const dishes: OrderSessionCatalogItem[] = [];
+    const products: OrderSessionCatalogItem[] = [];
     for (const hit of hits) {
         const row = hitToCatalogItem(hit);
-        if (hit.kind === "restaurant") restaurants.push(row);
-        else dishes.push(row);
+        if (hit.kind === "restaurant") {
+            row.pricePaise = hit.costForTwoPaise;
+            restaurants.push(row);
+        } else if (hit.kind === "product") {
+            products.push(row);
+        } else {
+            dishes.push(row);
+        }
     }
-    return { restaurants, dishes };
+    return { restaurants, dishes, products };
 }
 
 async function loadAddresses(
@@ -267,7 +287,7 @@ export async function startOrderFlow(input: {
         phase: "select_address",
         query,
         addresses,
-        catalog: { restaurants: [], dishes: [] },
+        catalog: { restaurants: [], dishes: [], products: [] },
         cartItems: [],
         saheliSessionId: input.saheliSessionId,
         expiresAt: new Date(Date.now() + SESSION_TTL_MS),
@@ -282,7 +302,7 @@ export async function startOrderFlow(input: {
             await searchCatalogForSession(session);
             return flowFromSession(
                 session,
-                `Using ${matched.label}. Here are ${label} options for "${query}". Pick a dish below.`,
+                `Using ${matched.label}. Here are ${label} options for "${query}". Pick an item below.`,
             );
         }
     }
@@ -299,7 +319,7 @@ export async function startOrderFlow(input: {
 
     return flowFromSession(
         session,
-        `Found ${addresses.length} saved ${label} addresses. Pick a delivery address first — then I'll show restaurants and dishes for "${query}".`,
+        `Found ${addresses.length} saved ${label} addresses. Pick a delivery address first — then I'll show ${catalogBrowseHint(mcpPartner, query)}.`,
     );
 }
 
@@ -386,7 +406,10 @@ export async function addOrderFlowCartItem(input: {
 }): Promise<OrderFlowPayload> {
     const session = await loadSessionForActor(input.sessionId, input.familyId, input.actorUserId);
     const qty = Math.min(Math.max(input.item.quantity ?? 1, 1), 20);
-    const price = input.item.pricePaise ?? 5000;
+    if (!input.item.pricePaise || input.item.pricePaise <= 0) {
+        throw new AppError("Live price required — pick an item from catalog search results.", 400);
+    }
+    const price = input.item.pricePaise;
 
     const existing = session.cartItems.find(
         (row) =>
@@ -453,7 +476,12 @@ export async function submitOrderFlowCart(input: {
         session.actorUserId;
 
     const orderPartner = mcpToOrderPartner(session.partner);
-    const order = await suggestOrder({
+    const family = await getFamilyForActor(session.familyId, session.actorUserId);
+    const actorRole = getMemberRole(family, session.actorUserId);
+    const caregiverCanPlaceCod =
+        !!actorRole && roleHasPermission(actorRole, "approve_order");
+
+    let order = await suggestOrder({
         familyId: session.familyId,
         subjectUserId: session.recipientUserId,
         actorUserId: session.actorUserId,
@@ -470,18 +498,27 @@ export async function submitOrderFlowCart(input: {
         notes: session.query,
     });
 
+    if (caregiverCanPlaceCod) {
+        order = await approveOrder(session.familyId, order.orderId, session.actorUserId);
+    } else {
+        void createFamilyNotification(session.familyId, {
+            kind: "order_pending",
+            title: "Order awaiting approval",
+            body: `${partnerLabel(orderPartner)} basket ₹${(order.totalPaise / 100).toFixed(0)} needs family approval.`,
+            actionUrl: "/dashboard/approvals",
+            recipientUserId: session.recipientUserId,
+            dedupeKey: `order:${order.orderId}`,
+        });
+    }
+
+    if (selected?.id) {
+        order.partnerAddressId = selected.id;
+        await order.save();
+    }
+
     session.phase = "submitted";
     session.orderId = order.orderId;
     await session.save();
-
-    void createFamilyNotification(session.familyId, {
-        kind: "order_pending",
-        title: "Order awaiting approval",
-        body: `${partnerLabel(orderPartner)} basket ₹${(order.totalPaise / 100).toFixed(0)} needs family approval.`,
-        actionUrl: "/dashboard/approvals",
-        recipientUserId: session.recipientUserId,
-        dedupeKey: `order:${order.orderId}`,
-    });
 
     const searchResults = [
         ...session.catalog.restaurants.map((r) => ({
@@ -499,6 +536,14 @@ export async function submitOrderFlowCart(input: {
             kind: d.kind,
             restaurantName: d.restaurantName,
             restaurantId: d.restaurantId,
+        })),
+        ...(session.catalog.products ?? []).map((p) => ({
+            query: session.query,
+            name: p.name,
+            pricePaise: p.pricePaise,
+            kind: p.kind ?? "product",
+            restaurantName: p.restaurantName,
+            restaurantId: p.restaurantId,
         })),
     ];
 
@@ -523,7 +568,9 @@ export async function submitOrderFlowCart(input: {
 
     const flow = flowFromSession(
         session,
-        `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Family approval required before checkout.`,
+        caregiverCanPlaceCod
+            ? `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Place COD when you're ready.`
+            : `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Family approval required before checkout.`,
     );
 
     return { flow, order: orderPayload };
@@ -574,7 +621,7 @@ export async function handleOrderFlowChatMessage(input: {
     if (/\b(change address|pick address|other address|different address)\b/i.test(text)) {
         active.phase = "select_address";
         active.selectedAddressId = undefined;
-        active.catalog = { restaurants: [], dishes: [] };
+        active.catalog = { restaurants: [], dishes: [], products: [] };
         await active.save();
         return flowFromSession(active, "Pick a delivery address to continue.");
     }

@@ -46,8 +46,27 @@ export async function sendViaMetaWhatsApp(to: string, text: string): Promise<voi
 
     if (!res.ok) {
         const body = await res.text().catch(() => "");
-        throw new Error(`Meta WhatsApp send failed (${res.status}): ${body.slice(0, 300)}`);
+        throw new Error(formatMetaSendError(res.status, body));
     }
+}
+
+export function formatMetaSendError(status: number, body: string): string {
+    let detail = body.slice(0, 300);
+    try {
+        const parsed = JSON.parse(body) as {
+            error?: { message?: string; code?: number; error_subcode?: number };
+        };
+        const err = parsed.error;
+        if (err?.message) {
+            detail = `${err.message}${err.code != null ? ` (code ${err.code})` : ""}${err.error_subcode != null ? ` sub ${err.error_subcode}` : ""}`;
+        }
+    } catch {
+        // keep raw body slice
+    }
+    if (detail.includes("131030") || detail.includes("not in allowed list")) {
+        return `Meta WhatsApp: recipient not on test allow-list or outside 24h window — ${detail}`;
+    }
+    return `Meta WhatsApp send failed (${status}): ${detail}`;
 }
 
 export type MetaInboundMessage = {

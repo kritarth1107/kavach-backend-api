@@ -216,6 +216,7 @@ export async function getWhatsAppMetaWebhook(req: Request, res: Response) {
 export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     const {
+        formatMetaSendError,
         isMetaWhatsAppEnabled,
         parseMetaWebhookMessages,
         sendViaMetaWhatsApp,
@@ -223,6 +224,11 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
 
     const messages = parseMetaWebhookMessages(req.body);
     if (!messages.length) {
+        const objectType =
+            req.body && typeof req.body === "object"
+                ? String((req.body as Record<string, unknown>).object ?? "unknown")
+                : "unknown";
+        console.log(`Meta WhatsApp webhook: 0 messages parsed (object=${objectType})`);
         res.status(200).json({ success: true, data: { processed: 0 } });
         return;
     }
@@ -243,7 +249,8 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
                 console.error("Meta WhatsApp inbound received but provider is not fully configured");
             }
         } catch (err) {
-            console.error("Meta WhatsApp inbound failed:", err);
+            const detail = err instanceof Error ? err.message : String(err);
+            console.error("Meta WhatsApp inbound failed:", detail);
             if (isMetaWhatsAppEnabled()) {
                 try {
                     await sendViaMetaWhatsApp(
@@ -251,7 +258,11 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
                         "Saheli is having a small hiccup. Please try again in a moment.",
                     );
                 } catch (sendErr) {
-                    console.error("Meta WhatsApp fallback send failed:", sendErr);
+                    const sendDetail =
+                        sendErr instanceof Error
+                            ? sendErr.message
+                            : formatMetaSendError(500, String(sendErr));
+                    console.error("Meta WhatsApp fallback send failed:", sendDetail);
                 }
             }
         }

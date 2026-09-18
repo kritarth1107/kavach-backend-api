@@ -154,7 +154,7 @@ function extractItems(text: string): ParsedOrderLine[] {
                 .replace(/^(order|please|mujhe|mama ko|for mama)\s+/i, "")
                 .trim();
             if (name.length >= 2 && !/^(from|swiggy|instamart|zepto)$/i.test(name)) {
-                items.push({ name: name.slice(0, 120), quantity: Math.min(qty, 20), unitPricePaise: 5000 });
+                items.push({ name: name.slice(0, 120), quantity: Math.min(qty, 20), unitPricePaise: 0 });
             }
             continue;
         }
@@ -162,7 +162,7 @@ function extractItems(text: string): ParsedOrderLine[] {
         if (GROCERY_KEYWORDS.test(bit) || FOOD_KEYWORDS.test(bit) || ORDER_INTENT.test(bit)) {
             const cleaned = normalizeOrderItemName(bit);
             if (cleaned.length >= 2 && !/^(from|swiggy|instamart|zepto)$/i.test(cleaned)) {
-                items.push({ name: cleaned, quantity: 1, unitPricePaise: 5000 });
+                items.push({ name: cleaned, quantity: 1, unitPricePaise: 0 });
             }
         }
     }
@@ -364,11 +364,19 @@ async function enrichItemsFromMcp(
             if ((best?.pricePaise && best.kind !== "restaurant") || hasRestaurantOptions) {
                 catalogFound = true;
             }
-            enriched.push({
-                ...item,
-                matchedName: best?.matchedName ?? best?.name,
-                unitPricePaise: best?.pricePaise ?? item.unitPricePaise,
-            });
+            if (!best?.pricePaise || best.kind === "restaurant") {
+                enriched.push({
+                    ...item,
+                    matchedName: best?.matchedName ?? best?.name,
+                    unitPricePaise: 0,
+                });
+            } else {
+                enriched.push({
+                    ...item,
+                    matchedName: best?.matchedName ?? best?.name,
+                    unitPricePaise: best.pricePaise,
+                });
+            }
         } catch (err) {
             console.warn(`MCP search failed for ${item.name}:`, err);
             enriched.push(item);
@@ -540,16 +548,15 @@ export async function maybeSuggestOrderFromChat(input: {
         }
 
         const hasRestaurants = searchResults.some((h) => h.kind === "restaurant");
-        if (!enriched.catalogFound && hasRestaurants) {
-            for (const item of pricedItems) {
-                if (!item.unitPricePaise || item.unitPricePaise === 5000) {
-                    const restHit = searchResults.find((h) => h.kind === "restaurant" && h.pricePaise);
-                    if (restHit?.pricePaise) {
-                        item.unitPricePaise = restHit.pricePaise;
-                        item.matchedName = restHit.name;
-                    }
-                }
-            }
+        const hasPricedItems = pricedItems.some((i) => i.unitPricePaise > 0);
+        if (!hasPricedItems && hasRestaurants) {
+            const label = partnerLabel(partner);
+            return {
+                kind: "prompt",
+                partner,
+                partnerLabel: label,
+                message: `I found restaurants on ${label} but need a specific dish with a live price. Try "margherita pizza from [restaurant]" or pick from search results.`,
+            };
         }
 
         if (!enriched.catalogFound && !hasRestaurants) {

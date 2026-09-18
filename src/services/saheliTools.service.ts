@@ -23,8 +23,11 @@ export type SaheliToolName =
     | "get_lab_value"
     | "get_elder_messages"
     | "list_partner_addresses"
+    | "resolve_order_partner"
     | "search_swiggy_food"
     | "search_instamart"
+    | "preview_order"
+    | "place_cod_order"
     | "suggest_order"
     | "recall_memories";
 
@@ -151,6 +154,15 @@ export async function executeSaheliTool(input: {
                     })),
             };
         }
+        case "resolve_order_partner": {
+            const message = String(input.args.message ?? input.args.query ?? "");
+            const { resolveOrderPartnerForMessage } = await import("./orderAgent.service");
+            return resolveOrderPartnerForMessage({
+                message,
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+            });
+        }
         case "search_swiggy_food": {
             const query = String(input.args.query ?? "");
             const addressId = input.args.addressId ? String(input.args.addressId) : undefined;
@@ -160,7 +172,12 @@ export async function executeSaheliTool(input: {
             const search = await searchMcpProduct("swiggy", input.familyId, commerceUserId, query, {
                 addressId,
             });
-            return { items: search.items.slice(0, 10) };
+            return {
+                partner: "swiggy",
+                addressId: search.addressId,
+                error: search.error,
+                items: search.items.slice(0, 10),
+            };
         }
         case "search_instamart": {
             const query = String(input.args.query ?? "");
@@ -175,7 +192,45 @@ export async function executeSaheliTool(input: {
                 query,
                 { addressId },
             );
-            return { items: search.items.slice(0, 10) };
+            return {
+                partner: "instamart",
+                addressId: search.addressId,
+                error: search.error,
+                items: search.items.slice(0, 10),
+            };
+        }
+        case "preview_order": {
+            const partner = String(input.args.partner ?? "swiggy") as McpPartnerKey;
+            const addressId = String(input.args.addressId ?? "");
+            const items = Array.isArray(input.args.items)
+                ? (input.args.items as Array<{ name: string; quantity?: number }>)
+                : [];
+            if (!addressId || !items.length) {
+                return { error: "addressId and items[] are required for preview_order" };
+            }
+            const { previewOrder } = await import("./orderAgent.service");
+            return previewOrder({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                partner,
+                addressId,
+                items: items.map((row) => ({
+                    name: String(row.name),
+                    quantity: Number(row.quantity ?? 1),
+                })),
+                notes: input.args.notes ? String(input.args.notes) : undefined,
+            });
+        }
+        case "place_cod_order": {
+            const previewId = String(input.args.previewId ?? "");
+            if (!previewId) return { error: "previewId is required" };
+            const { placeCodOrderFromPreview } = await import("./orderAgent.service");
+            return placeCodOrderFromPreview({
+                familyId: input.familyId,
+                previewId,
+                actorUserId: input.actorUserId,
+            });
         }
         case "suggest_order": {
             const message = String(input.args.message ?? input.args.query ?? "");
