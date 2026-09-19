@@ -3,6 +3,17 @@ import { isMetaWhatsAppEnabled } from "../clients/metaWhatsApp.client";
 
 const MAX_EVENTS = 100;
 
+export type WhatsAppAiDebug = {
+    at: string;
+    familyId?: string;
+    recipientUserId?: string;
+    actorUserId?: string;
+    contextChars?: number;
+    aiError?: string;
+    aiStatusCode?: number;
+    fallbackUsed?: string;
+};
+
 export type WhatsAppWebhookLogEntry = {
     id: string;
     receivedAt: string;
@@ -17,12 +28,25 @@ export type WhatsAppWebhookLogEntry = {
     replyTo?: string;
     error?: string;
     sendError?: string;
+    aiDebug?: WhatsAppAiDebug;
     likelySynthetic?: boolean;
     metaConsoleTest?: boolean;
     metaEnabled: boolean;
     processed: number;
     rawSummary: string;
 };
+
+let lastAiDebug: WhatsAppAiDebug | null = null;
+
+export function recordWhatsAppAiDebug(debug: Omit<WhatsAppAiDebug, "at">) {
+    lastAiDebug = { at: new Date().toISOString(), ...debug };
+}
+
+export function consumeWhatsAppAiDebug(): WhatsAppAiDebug | undefined {
+    const snap = lastAiDebug;
+    lastAiDebug = null;
+    return snap ?? undefined;
+}
 
 const events: WhatsAppWebhookLogEntry[] = [];
 let eventCounter = 0;
@@ -126,6 +150,7 @@ export function recordWhatsAppWebhookEvent(input: {
     replyTo?: string;
     error?: string;
     sendError?: string;
+    aiDebug?: WhatsAppAiDebug;
 }): WhatsAppWebhookLogEntry {
     const summary = summarizePayload(input.body);
     const firstInbound = summary.inbound[0];
@@ -155,6 +180,7 @@ export function recordWhatsAppWebhookEvent(input: {
         replyTo: input.replyTo ? redactPhone(input.replyTo) : undefined,
         error: input.error,
         sendError: input.sendError,
+        aiDebug: input.aiDebug ?? consumeWhatsAppAiDebug(),
         likelySynthetic,
         metaConsoleTest,
         metaEnabled: isMetaWhatsAppEnabled(),
@@ -186,6 +212,7 @@ export function getWhatsAppWebhookDebugSnapshot() {
         webhookUrl: "https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/meta",
         eventCount: events.length,
         latestEventAt: events[0]?.receivedAt ?? null,
+        lastAiDebug: lastAiDebug,
         hint:
             events.length === 0
                 ? "No webhook POSTs recorded yet on this instance. Send a WhatsApp message, then refresh. If still empty, Meta is not delivering to this URL."

@@ -1,0 +1,579 @@
+import config from "../config/app.config";
+import type { OrderFlowPayload } from "./orderOrchestrator.service";
+import type {
+    MetaWhatsAppPayload,
+    WhatsAppReplyContext,
+    WhatsAppReplyKind,
+} from "../types/whatsappMessage.types";
+import type { OrderSessionCatalogItem } from "../models/orderSession.model";
+
+const SAHELI_HEADER_IMAGE =
+    process.env.WHATSAPP_SAHELI_HEADER_IMAGE?.trim() ||
+    `${config.r2.publicUrl}/brand/saheli-whatsapp-header.png`;
+
+function truncate(value: string, max: number): string {
+    const trimmed = value.trim();
+    if (trimmed.length <= max) return trimmed;
+    return `${trimmed.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function formatRupee(paise: number): string {
+    return `₹${(paise / 100).toFixed(0)}`;
+}
+
+function catalogItems(flow: OrderFlowPayload): OrderSessionCatalogItem[] {
+    const cat = flow.catalog;
+    if (!cat) return [];
+    return [...(cat.restaurants ?? []), ...(cat.dishes ?? []), ...(cat.products ?? [])];
+}
+
+export function buildGuestWelcomeMessages(isFirstTurn: boolean): MetaWhatsAppPayload[] {
+    const line = config.whatsapp.kavachNumber;
+    if (isFirstTurn) {
+        return [
+            {
+                type: "image",
+                image: {
+                    link: SAHELI_HEADER_IMAGE,
+                    caption: "Saheli — your family companion on WhatsApp 💚",
+                },
+            },
+            {
+                type: "interactive",
+                interactive: {
+                    type: "cta_url",
+                    body: {
+                        text: truncate(
+                            `Namaste 🙏 I'm Saheli — Kavach's family companion.\n\nI help with gentle check-ins, care reminders, family memories, and ordering from Swiggy, Instamart, or Zepto.\n\nOur line: ${line}`,
+                            1024,
+                        ),
+                    },
+                    footer: { text: "No extra setup — message me anytime." },
+                    action: {
+                        name: "cta_url",
+                        parameters: {
+                            display_text: "Join on Kavach",
+                            url: "https://app.kavach.care",
+                        },
+                    },
+                },
+            },
+            {
+                type: "interactive",
+                interactive: {
+                    type: "button",
+                    body: {
+                        text: "How can I help you today?",
+                    },
+                    action: {
+                        buttons: [
+                            {
+                                type: "reply",
+                                reply: { id: "guest_learn", title: "What can you do?" },
+                            },
+                            {
+                                type: "reply",
+                                reply: { id: "guest_signup", title: "Sign me up" },
+                            },
+                        ],
+                    },
+                },
+            },
+        ];
+    }
+
+    return [
+        {
+            type: "text",
+            text: {
+                body: truncate(
+                    `I don't recognise this number yet.\n\nSign up at app.kavach.care or ask your caregiver to invite you with the same mobile number you use on WhatsApp.`,
+                    4096,
+                ),
+            },
+        },
+        {
+            type: "interactive",
+            interactive: {
+                type: "cta_url",
+                body: { text: "Get started with Kavach in a minute." },
+                action: {
+                    name: "cta_url",
+                    parameters: {
+                        display_text: "Open Kavach",
+                        url: "https://app.kavach.care",
+                    },
+                },
+            },
+        },
+    ];
+}
+
+export function buildRecipientPickMessages(
+    recipients: Array<{ userId: string; name: string }>,
+): MetaWhatsAppPayload[] {
+    return [
+        {
+            type: "interactive",
+            interactive: {
+                type: "list",
+                body: {
+                    text: "Who are you asking about? Pick a care recipient and I'll answer about them.",
+                },
+                action: {
+                    button: "Choose person",
+                    sections: [
+                        {
+                            title: "Care recipients",
+                            rows: recipients.slice(0, 10).map((r) => ({
+                                id: `recipient:${r.userId}`,
+                                title: truncate(r.name, 24),
+                                description: "Ask Saheli about their care",
+                            })),
+                        },
+                    ],
+                },
+            },
+        },
+    ];
+}
+
+export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayload[] {
+    const messages: MetaWhatsAppPayload[] = [];
+
+    if (flow.message) {
+        messages.push({
+            type: "text",
+            text: { body: truncate(flow.message, 4096) },
+        });
+    }
+
+    if (flow.phase === "select_address" && flow.addresses?.length) {
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "list",
+                body: {
+                    text: truncate(
+                        `Choose a delivery address for your ${flow.partnerLabel} order ("${flow.query}").`,
+                        1024,
+                    ),
+                },
+                footer: { text: "Or type cancel to stop." },
+                action: {
+                    button: "Pick address",
+                    sections: [
+                        {
+                            title: "Saved addresses",
+                            rows: flow.addresses.slice(0, 10).map((addr, i) => ({
+                                id: `addr:${i}`,
+                                title: truncate(addr.label, 24),
+                                description: truncate(
+                                    [addr.line1, addr.city, addr.pincode].filter(Boolean).join(", "),
+                                    72,
+                                ),
+                            })),
+                        },
+                    ],
+                },
+            },
+        });
+        return messages;
+    }
+
+    if (flow.phase === "browse") {
+        const restaurants = flow.catalog?.restaurants ?? [];
+        const items = catalogItems(flow);
+
+        if (restaurants.length && !items.length) {
+            messages.push({
+                type: "interactive",
+                interactive: {
+                    type: "list",
+                    body: {
+                        text: truncate(`Restaurants for "${flow.query}" on ${flow.partnerLabel}.`, 1024),
+                    },
+                    action: {
+                        button: "See restaurants",
+                        sections: [
+                            {
+                                title: flow.partnerLabel,
+                                rows: restaurants.slice(0, 10).map((r, i) => ({
+                                    id: `restaurant:${i}`,
+                                    title: truncate(r.name, 24),
+                                    description: r.restaurantName
+                                        ? truncate(r.restaurantName, 72)
+                                        : "View menu",
+                                })),
+                            },
+                        ],
+                    },
+                },
+            });
+            return messages;
+        }
+
+        if (items.length) {
+            messages.push({
+                type: "interactive",
+                interactive: {
+                    type: "list",
+                    body: {
+                        text: truncate(
+                            `${flow.partnerLabel} options for "${flow.query}". Tap to add to your basket.`,
+                            1024,
+                        ),
+                    },
+                    action: {
+                        button: "Browse items",
+                        sections: [
+                            {
+                                title: "Available now",
+                                rows: items.slice(0, 10).map((item, i) => {
+                                    const price =
+                                        item.pricePaise && item.pricePaise > 0
+                                            ? formatRupee(item.pricePaise)
+                                            : "";
+                                    return {
+                                        id: `item:${i}`,
+                                        title: truncate(item.name, 24),
+                                        description: truncate(
+                                            [item.restaurantName, price].filter(Boolean).join(" · "),
+                                            72,
+                                        ),
+                                    };
+                                }),
+                            },
+                        ],
+                    },
+                },
+            });
+            messages.push({
+                type: "interactive",
+                interactive: {
+                    type: "button",
+                    body: { text: "Happy with your basket?" },
+                    action: {
+                        buttons: [
+                            {
+                                type: "reply",
+                                reply: { id: "confirm_order", title: "Review basket" },
+                            },
+                            {
+                                type: "reply",
+                                reply: { id: "cancel_order", title: "Cancel order" },
+                            },
+                        ],
+                    },
+                },
+            });
+            return messages;
+        }
+    }
+
+    if (flow.phase === "review_cart" && flow.cartItems?.length) {
+        let total = 0;
+        const lines = flow.cartItems.map((item) => {
+            const lineTotal = item.pricePaise * item.quantity;
+            total += lineTotal;
+            return `• ${item.name} ×${item.quantity} — ${formatRupee(lineTotal)}`;
+        });
+        messages.push({
+            type: "text",
+            text: {
+                body: truncate(
+                    `*Your ${flow.partnerLabel} basket*\n\n${lines.join("\n")}\n\n*Total:* ${formatRupee(total)}`,
+                    4096,
+                ),
+            },
+        });
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: "Ready to place this order?" },
+                footer: { text: "Family approval may be needed for some orders." },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: { id: "confirm_order", title: "Confirm order" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "cancel_order", title: "Cancel" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "add_more", title: "Add more" },
+                        },
+                    ],
+                },
+            },
+        });
+        return messages;
+    }
+
+    if (flow.phase === "submitted") {
+        let total = 0;
+        const itemLines =
+            flow.cartItems?.map((item) => {
+                const lineTotal = item.pricePaise * item.quantity;
+                total += lineTotal;
+                return `• ${item.name} ×${item.quantity}`;
+            }) ?? [];
+        messages.push({
+            type: "text",
+            text: {
+                body: truncate(
+                    [
+                        `✅ Order placed on ${flow.partnerLabel}`,
+                        flow.orderId ? `Ref: ${flow.orderId}` : "",
+                        itemLines.length ? `\n${itemLines.join("\n")}` : "",
+                        total > 0 ? `\nTotal: ${formatRupee(total)}` : "",
+                    ]
+                        .filter(Boolean)
+                        .join("\n"),
+                    4096,
+                ),
+            },
+        });
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: "I'll keep you posted on delivery updates." },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: { id: "order_status", title: "Track order" },
+                        },
+                    ],
+                },
+            },
+        });
+        return messages;
+    }
+
+    return messages;
+}
+
+export function buildPendingApprovalMessages(pending: {
+    partner: string;
+    amount: string;
+    itemList: string;
+}): MetaWhatsAppPayload[] {
+    return [
+        {
+            type: "text",
+            text: {
+                body: truncate(
+                    `🛒 *Pending ${pending.partner} order*\n${pending.itemList}\n*Total:* ${pending.amount}`,
+                    4096,
+                ),
+            },
+        },
+        {
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: "Approve this basket for your family?" },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: { id: "approve_order", title: "Approve" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "reject_order", title: "Reject" },
+                        },
+                    ],
+                },
+            },
+        },
+    ];
+}
+
+export function buildCareNudgeMessages(input: {
+    text: string;
+    nudgeKind: "pre_reminder" | "missed_followup" | "completion_praise" | "appointment_prep";
+    scheduleId: string;
+    title: string;
+    time: string;
+}): MetaWhatsAppPayload[] {
+    const messages: MetaWhatsAppPayload[] = [
+        { type: "text", text: { body: truncate(input.text, 4096) } },
+    ];
+
+    if (input.nudgeKind === "pre_reminder" || input.nudgeKind === "missed_followup") {
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: truncate(`${input.title} (${input.time})`, 1024) },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: {
+                                id: `done:${input.scheduleId}`,
+                                title: "Done",
+                            },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "schedule_today", title: "Today's schedule" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "need_help", title: "Need help" },
+                        },
+                    ],
+                },
+            },
+        });
+    }
+
+    return messages;
+}
+
+export function buildScheduleCompanionMessages(text: string): MetaWhatsAppPayload[] {
+    const lower = text.toLowerCase();
+    const isSchedule =
+        /\b(miss(ed)?|schedule|medicine|meds|aaj|today|reminder)\b/i.test(lower);
+    if (!isSchedule) return [];
+
+    return [
+        {
+            type: "text",
+            text: { body: truncate(text, 4096) },
+        },
+        {
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: "Anything else I can help with?" },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: { id: "schedule_today", title: "Today's schedule" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "order_help", title: "Order groceries" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "feeling_ok", title: "I'm doing fine" },
+                        },
+                    ],
+                },
+            },
+        },
+    ];
+}
+
+export function buildCompanionQuickActions(text: string): MetaWhatsAppPayload[] {
+    if (text.length > 900) {
+        return [{ type: "text", text: { body: truncate(text, 4096) } }];
+    }
+
+    return [
+        {
+            type: "text",
+            text: { body: truncate(text, 4096) },
+        },
+        {
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: "Quick actions" },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: { id: "schedule_today", title: "Today's schedule" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "order_help", title: "Order food" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "missed_today", title: "What did I miss?" },
+                        },
+                    ],
+                },
+            },
+        },
+    ];
+}
+
+export function composeWhatsAppReply(
+    text: string,
+    context: WhatsAppReplyContext = {},
+): MetaWhatsAppPayload[] {
+    const kind: WhatsAppReplyKind = context.kind ?? "plain";
+
+    if (kind === "guest_welcome") {
+        return buildGuestWelcomeMessages(true);
+    }
+    if (kind === "guest_followup") {
+        return buildGuestWelcomeMessages(false);
+    }
+    if (kind === "recipient_pick" && context.recipientOptions?.length) {
+        return buildRecipientPickMessages(context.recipientOptions);
+    }
+    if (kind === "order_flow" && context.orderFlow) {
+        const rich = buildOrderFlowMessages(context.orderFlow);
+        if (rich.length) return rich;
+    }
+    if (kind === "order_pending_approval" && context.pendingOrder) {
+        return buildPendingApprovalMessages(context.pendingOrder);
+    }
+    if (kind === "schedule_missed") {
+        const schedule = buildScheduleCompanionMessages(text);
+        if (schedule.length) return schedule;
+    }
+
+    if (/\b(miss(ed)?|schedule|medicine|aaj|today)\b/i.test(text)) {
+        const schedule = buildScheduleCompanionMessages(text);
+        if (schedule.length) return schedule;
+    }
+
+    if (context.includeSaheliHeader && text.length < 600) {
+        return buildCompanionQuickActions(text);
+    }
+
+    return [{ type: "text", text: { body: truncate(text, 4096) } }];
+}
+
+export function flattenWhatsAppPayloads(payloads: MetaWhatsAppPayload[]): string {
+    return payloads
+        .map((p) => {
+            if (p.type === "text") return p.text.body;
+            if (p.type === "image") return p.image.caption ?? "[image]";
+            if (p.type === "document") return p.document.caption ?? "[document]";
+            if (p.type === "interactive") {
+                const body = p.interactive.body.text;
+                if (p.interactive.type === "button") {
+                    const labels = p.interactive.action.buttons
+                        .map((b) => b.reply.title)
+                        .join(" | ");
+                    return `${body}\n[${labels}]`;
+                }
+                if (p.interactive.type === "list") {
+                    return `${body}\n[${p.interactive.action.button}]`;
+                }
+                if (p.interactive.type === "cta_url") {
+                    return `${body}\n[${p.interactive.action.parameters.display_text}]`;
+                }
+            }
+            return "";
+        })
+        .filter(Boolean)
+        .join("\n\n");
+}

@@ -338,11 +338,18 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             const reply = await handleWhatsAppInbound({
                 from: inbound.from,
                 text: inbound.text,
-                modality: "text",
+                modality: inbound.mediaType === "voice" || inbound.mediaType === "audio" ? "voice" : "text",
+                mediaType: inbound.mediaType,
+                mediaUrl: inbound.mediaId,
+                mediaCaption: inbound.mediaCaption,
             });
             replyPreview = reply.content?.slice(0, 200);
             if (isMetaWhatsAppEnabled() && reply.content) {
-                await sendViaMetaWhatsApp(reply.channelIdentifier, reply.content);
+                await sendViaMetaWhatsApp(
+                    reply.channelIdentifier,
+                    reply.content,
+                    reply.whatsappPayloads,
+                );
                 replySent = true;
                 console.log(`Meta WhatsApp reply sent to ${inbound.from.slice(0, 6)}…`);
             } else if (!isMetaWhatsAppEnabled()) {

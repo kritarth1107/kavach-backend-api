@@ -191,7 +191,7 @@ export async function getScheduleDayStatuses(
     };
 }
 
-export async function setScheduleCompletion(
+export async function markScheduleItemCompletion(
     familyId: string,
     recipientUserId: string,
     scheduleId: string,
@@ -203,7 +203,13 @@ export async function setScheduleCompletion(
     },
 ) {
     const family = await getFamilyAndRecipient(familyId, recipientUserId);
-    assertCanManage(family, actorUserId);
+    assertFamilyAccess(family, actorUserId);
+    const role = family.getMemberRole(actorUserId);
+    const isSelf = actorUserId === recipientUserId;
+    const isManager = role ? MANAGER_ROLES.has(role) : false;
+    if (!isSelf && !isManager) {
+        throw new AppError("You do not have permission to update care tasks", 403);
+    }
 
     const schedule = await CareSchedule.findOne({ scheduleId, familyId, recipientUserId });
     if (!schedule) throw new AppError("Schedule item not found", 404);
@@ -237,4 +243,26 @@ export async function setScheduleCompletion(
     }
 
     return getScheduleDayStatuses(familyId, recipientUserId, actorUserId, dateKey);
+}
+
+export async function setScheduleCompletion(
+    familyId: string,
+    recipientUserId: string,
+    scheduleId: string,
+    actorUserId: string,
+    payload: {
+        status: CareScheduleCompletionStatus;
+        dateKey?: string;
+        note?: string;
+    },
+) {
+    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    assertCanManage(family, actorUserId);
+    return markScheduleItemCompletion(
+        familyId,
+        recipientUserId,
+        scheduleId,
+        actorUserId,
+        payload,
+    );
 }

@@ -14,12 +14,19 @@ import { CareScheduleType } from "../types/careSchedule.types";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import {
     aiPostCaregiverChatWithRetry,
-    aiPostChat,
     aiPostCheckIn,
+    aiPostElderChatWithRetry,
     isAiEngineOfflineError,
     streamCaregiverSaheliChat,
     type AiStreamEvent,
 } from "../clients/aiEngine.client";
+import {
+    buildSaheliContextBundle,
+    formatSaheliContextForAi,
+    formatScheduleSection,
+    type SaheliContextBundle,
+} from "./saheliContext.service";
+import { recordWhatsAppAiDebug } from "./whatsappWebhookLog.service";
 import {
     refreshRecipientMemoryToAiEngine,
     syncSessionHistoryToAiEngine,
@@ -302,14 +309,114 @@ function offlineSaheliMessage(): string {
     return "Saheli is reconnecting — please try again in a moment.";
 }
 
+function elderMissedIntent(qLower: string): boolean {
+    return (
+        /\bwhat\s+(did\s+)?i\s+miss/i.test(qLower) ||
+        (/\b(miss(ed)?|forgot|skip(ped)?|didn't|did not)\b/i.test(qLower) &&
+            /\b(today|aaj|schedule|medicine|meds|check|task)\b/i.test(qLower))
+    );
+}
+
+function buildElderSmartReply(opts: {
+    displayName: string;
+    question: string;
+    context: SaheliContextBundle;
+    isFirstMessage: boolean;
+    orderHint?: string;
+    labs?: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>;
+    elderLines?: string[];
+}): string {
+    const q = opts.question.trim();
+    const qLower = q.toLowerCase();
+
+    if (messageLooksLikeOrder(q)) {
+        return (
+            opts.orderHint ??
+            `Tell me what to order and from where — Swiggy (food), Instamart (groceries), or Zepto. Example: "1L milk from Instamart" or "dal makhani from Swiggy".`
+        );
+    }
+
+    if (elderMissedIntent(qLower) || /\bwhat did i miss\b/i.test(qLower)) {
+        const parts: string[] = [];
+        if (opts.context.missed.length) {
+            parts.push(formatScheduleSection(opts.context.missed, "Here's what you missed today"));
+        } else {
+            parts.push("You haven't missed anything scheduled so far today — well done.");
+        }
+        if (opts.context.upcoming.length) {
+            parts.push(formatScheduleSection(opts.context.upcoming, "Still coming up"));
+        }
+        if (opts.context.completed.length) {
+            parts.push(formatScheduleSection(opts.context.completed, "Already done"));
+        }
+        return parts.join("\n\n");
+    }
+
+    if (/\b(schedule|medicine|meds|dose|tablet|aaj|today|what('s| is) next|reminder)\b/i.test(qLower)) {
+        const parts: string[] = [`Today's care schedule (${opts.context.dateKey}):`];
+        if (opts.context.missed.length) {
+            parts.push(formatScheduleSection(opts.context.missed, "Missed"));
+        }
+        if (opts.context.upcoming.length) {
+            parts.push(formatScheduleSection(opts.context.upcoming, "Upcoming"));
+        }
+        if (opts.context.completed.length) {
+            parts.push(formatScheduleSection(opts.context.completed, "Done"));
+        }
+        if (parts.length === 1) {
+            parts.push("Nothing scheduled for today.");
+        }
+        return parts.filter(Boolean).join("\n\n");
+    }
+
+    if (opts.labs?.length || opts.elderLines?.length) {
+        const structured = caregiverReplyFromCosmos({
+            recipientName: opts.displayName,
+            question: q,
+            elderLines: opts.elderLines ?? [],
+            labs: opts.labs ?? [],
+        });
+        const body = structured.replace(/\n\nReported only — nothing invented\.$/, "").trim();
+        if (body.length > 24 && !/didn't find that in the saved care record/i.test(body)) {
+            return structured;
+        }
+    }
+
+    if (opts.isFirstMessage) {
+        return buildElderSafeReply(opts.displayName);
+    }
+
+    return `I'm here with you, ${opts.displayName}. I couldn't reach my full memory just now — you can ask about today's schedule, how you're feeling, or if you need something ordered.`;
+}
+
 async function elderReplyWithAi(
     familyId: string,
     recipientUserId: string,
     displayName: string,
     message: string,
     conversationIdOverride?: string,
-    opts?: { sessionId?: string; orderContext?: string },
+    opts?: {
+        sessionId?: string;
+        orderContext?: string;
+        channel?: ChannelType;
+        contextBundle?: SaheliContextBundle;
+        isFirstMessage?: boolean;
+        elderLines?: string[];
+        labs?: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>;
+    },
 ): Promise<{ reply: string; conversationId: string }> {
+    const waChannel = opts?.channel === ChannelType.WHATSAPP;
+    const contextBundle =
+        opts?.contextBundle ??
+        (await buildSaheliContextBundle({
+            familyId,
+            recipientUserId,
+            actorUserId: recipientUserId,
+            channel: waChannel ? "whatsapp" : "dashboard",
+        }));
+    const scheduleContext = formatSaheliContextForAi(contextBundle);
+    const contextChars = scheduleContext.length;
+
     try {
         if (opts?.sessionId) {
             await syncSessionHistoryToAiEngine({
@@ -322,17 +429,22 @@ async function elderReplyWithAi(
             });
         }
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
-        const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 30);
-        const companion = await getCompanionProfile(familyId, recipientUserId);
-        const profile = companionProfilePayload(companion);
-        const result = await aiPostChat({
+        const result = await aiPostElderChatWithRetry({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             message,
             conversationId: conversationIdOverride ?? ctx.conversationId,
-            careRecordContext: careContext,
-            companionProfile: profile,
+            careRecordContext: contextBundle.careRecordContext,
+            companionProfile: contextBundle.companionProfile,
+            scheduleContext,
+            channelContext: waChannel
+                ? "User is on WhatsApp — keep replies short, warm, Hindi-English OK, no dashboard links unless needed."
+                : undefined,
             orderContext: opts?.orderContext,
+            useAgent: true,
+            actorUserId: recipientUserId,
+            kavachFamilyId: familyId,
+            kavachRecipientUserId: recipientUserId,
         });
         const conversationId =
             result.conversation_id || conversationIdOverride || `${familyId}:${recipientUserId}:elder`;
@@ -344,15 +456,45 @@ async function elderReplyWithAi(
             conversationId,
         };
     } catch (err) {
+        const statusCode = err instanceof AppError ? err.statusCode : undefined;
+        const aiError = err instanceof Error ? err.message : String(err);
         console.warn("Saheli AI elder reply fallback:", err);
+        if (waChannel) {
+            recordWhatsAppAiDebug({
+                familyId,
+                recipientUserId,
+                actorUserId: recipientUserId,
+                contextChars,
+                aiError,
+                aiStatusCode: statusCode,
+                fallbackUsed: "buildElderSmartReply",
+            });
+        }
         if (isAiEngineOfflineError(err)) {
+            const offlineFallback = buildElderSmartReply({
+                displayName,
+                question: message,
+                context: contextBundle,
+                isFirstMessage: opts?.isFirstMessage ?? false,
+                orderHint: opts?.orderContext,
+                labs: opts?.labs,
+                elderLines: opts?.elderLines,
+            });
             return {
-                reply: offlineSaheliMessage(),
+                reply: offlineFallback.includes("missed today") ? offlineFallback : offlineSaheliMessage(),
                 conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
             };
         }
         return {
-            reply: buildElderSafeReply(displayName),
+            reply: buildElderSmartReply({
+                displayName,
+                question: message,
+                context: contextBundle,
+                isFirstMessage: opts?.isFirstMessage ?? false,
+                orderHint: opts?.orderContext,
+                labs: opts?.labs,
+                elderLines: opts?.elderLines,
+            }),
             conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
         };
     }
@@ -433,6 +575,8 @@ async function caregiverReplyWithAi(
         orderContext?: string;
         actorUserId?: string;
         useAgent?: boolean;
+        scheduleContext?: string;
+        channel?: ChannelType;
     },
 ): Promise<{
     reply: string;
@@ -440,7 +584,10 @@ async function caregiverReplyWithAi(
     orderFromAgent?: OrderChatResult | null;
     orderPreview?: Record<string, unknown> | null;
 }> {
-    const careContext = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
+    const careContextRaw = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
+    const careContext = opts?.scheduleContext
+        ? `${opts.scheduleContext}\n\n${careContextRaw}`
+        : careContextRaw;
 
     const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
     const conversationForAi = resolveCaregiverConversationForAi(ctx, conversationIdOverride);
@@ -582,6 +729,28 @@ export async function sendSaheliMessage(
     }
 
     await maybeSetSessionTitle(sessionId, text);
+
+    const priorElderTurns = await SaheliMessage.countDocuments({
+        familyId,
+        recipientUserId,
+        thread: "elder",
+        role: "elder",
+        sessionId,
+    });
+    const isFirstMessage = priorElderTurns === 0;
+    const waChannel = opts?.channel === ChannelType.WHATSAPP;
+    const contextBundle = await buildSaheliContextBundle({
+        familyId,
+        recipientUserId,
+        actorUserId,
+        channel: waChannel ? "whatsapp" : "dashboard",
+    });
+    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80, sessionId);
+    const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
+    const labs = await LabDocument.find({ familyId, recipientUserId })
+        .sort({ createdAt: 1 })
+        .lean();
+
     await appendMessage(familyId, recipientUserId, "elder", "elder", text, sessionId);
     if (!opts?.skipInboundCareRecord) {
         await appendCareRecordEvent({
@@ -596,6 +765,22 @@ export async function sendSaheliMessage(
             status: "reported",
         });
     }
+
+    if (waChannel) {
+        const { touchWhatsAppInbound } = await import("./saheliCompanion.service");
+        await touchWhatsAppInbound(familyId, recipientUserId);
+    }
+
+    const { tryApplyElderCareActionFromMessage } = await import("./saheliCareAction.service");
+    const careActionReply = await tryApplyElderCareActionFromMessage({
+        familyId,
+        recipientUserId,
+        actorUserId,
+        message: text,
+        displayName,
+        channel: opts?.channel,
+    });
+
     const session = await getSaheliChatSession({
         sessionId,
         familyId,
@@ -619,7 +804,10 @@ export async function sendSaheliMessage(
     let reply = "";
     let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
 
-    if (order?.kind === "connect_required") {
+    if (careActionReply) {
+        reply = careActionReply;
+        conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
+    } else if (order?.kind === "connect_required") {
         reply = order.message;
     } else {
         const ai = await elderReplyWithAi(
@@ -628,7 +816,20 @@ export async function sendSaheliMessage(
             displayName,
             text,
             session.aiConversationId,
-            { sessionId, orderContext: orderContextForAi(order) },
+            {
+                sessionId,
+                orderContext: orderContextForAi(order),
+                channel: opts?.channel,
+                contextBundle,
+                isFirstMessage,
+                elderLines,
+                labs: labs.map((d) => ({
+                    title: d.title,
+                    recordDate: d.recordDate,
+                    rawText: d.rawText,
+                    kind: d.kind,
+                })),
+            },
         );
         reply = applyOrderChatResult(ai.reply, order);
         conversationId = ai.conversationId;
@@ -812,6 +1013,18 @@ export async function sendCaregiverSaheliMessage(
         .sort({ createdAt: 1 })
         .lean();
 
+    const waChannel = opts?.channel === ChannelType.WHATSAPP;
+    const scheduleContext = waChannel
+        ? formatSaheliContextForAi(
+              await buildSaheliContextBundle({
+                  familyId,
+                  recipientUserId,
+                  actorUserId,
+                  channel: "whatsapp",
+              }),
+          )
+        : undefined;
+
     let order: OrderChatResult | null = null;
     let orderPreview: Record<string, unknown> | null = null;
     let reply = "";
@@ -835,6 +1048,8 @@ export async function sendCaregiverSaheliMessage(
             sessionId,
             actorUserId,
             useAgent: true,
+            scheduleContext,
+            channel: opts?.channel,
         },
     );
     let conversationId = ai.conversationId;

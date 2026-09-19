@@ -28,6 +28,7 @@ import {
 } from "../controllers/careSchedule.controller";
 import {
     getCompanionSettings,
+    getCompanionActivity,
     patchCompanionSettings,
     triggerOutreach,
     getFamilyMemories,
@@ -135,6 +136,11 @@ router.patch(
     "/:familyId/recipients/:recipientUserId/saheli/companion",
     protect,
     patchCompanionSettings,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/companion/activity",
+    protect,
+    getCompanionActivity,
 );
 router.post(
     "/:familyId/recipients/:recipientUserId/saheli/outreach",

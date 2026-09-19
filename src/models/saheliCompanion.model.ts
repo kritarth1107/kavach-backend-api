@@ -2,6 +2,8 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export type OutreachSlot = "morning" | "afternoon" | "evening";
 
+export type NudgeIntensity = "gentle" | "standard" | "persistent";
+
 export interface ISaheliCompanion {
     familyId: string;
     recipientUserId: string;
@@ -14,7 +16,14 @@ export interface ISaheliCompanion {
     shareWithFamily: boolean;
     preferredChannel: "dashboard" | "whatsapp" | "phone";
     timezone: string;
+    quietHoursStart?: string;
+    quietHoursEnd?: string;
+    nudgeIntensity?: NudgeIntensity;
+    preferredLanguage?: "hinglish" | "hindi" | "english";
+    birthday?: string;
+    importantDates?: Array<{ label: string; date: string }>;
     lastOutreachAt?: Date;
+    lastWhatsAppInboundAt?: Date;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -53,7 +62,27 @@ const saheliCompanionSchema = new Schema<ISaheliCompanionDocument>(
             default: "whatsapp",
         },
         timezone: { type: String, default: "Asia/Kolkata" },
+        quietHoursStart: { type: String },
+        quietHoursEnd: { type: String },
+        nudgeIntensity: {
+            type: String,
+            enum: ["gentle", "standard", "persistent"],
+            default: "standard",
+        },
+        preferredLanguage: {
+            type: String,
+            enum: ["hinglish", "hindi", "english"],
+            default: "hinglish",
+        },
+        birthday: { type: String },
+        importantDates: [
+            {
+                label: { type: String, required: true },
+                date: { type: String, required: true },
+            },
+        ],
         lastOutreachAt: { type: Date },
+        lastWhatsAppInboundAt: { type: Date },
     },
     { timestamps: true },
 );

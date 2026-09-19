@@ -17,6 +17,8 @@ import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.
 import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { startOutreachScheduler } from "./workers/outreachScheduler";
+import { startCareNudgeScheduler } from "./workers/careNudgeScheduler";
+import { startMemoryConsolidationScheduler } from "./workers/memoryConsolidationScheduler";
 import internalRoutes from "./routes/internal.routes";
 
 dotenv.config();
@@ -57,6 +59,8 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`Kavach Backend running on port ${PORT}`);
   startOutreachScheduler();
+  startCareNudgeScheduler();
+  startMemoryConsolidationScheduler();
 
   if (config.whatsapp.provider === "meta") {
     void import("./clients/metaWhatsApp.client")

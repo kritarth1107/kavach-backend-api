@@ -1,7 +1,14 @@
 import { randomUUID } from "crypto";
 import OutboundMessage from "../models/outboundMessage.model";
 import { ChannelType } from "../types/careRecord.types";
-import { isMetaWhatsAppEnabled, sendViaMetaWhatsApp } from "../clients/metaWhatsApp.client";
+import {
+    isMetaWhatsAppEnabled,
+    sendViaMetaWhatsApp,
+    sendMetaWhatsAppTemplate,
+} from "../clients/metaWhatsApp.client";
+import SaheliCompanion from "../models/saheliCompanion.model";
+import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
+import { composeWhatsAppReply } from "./whatsappMessageComposer.service";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { phoneMockAdapter } from "../channels/whatsappMock.adapter";
 import { resolveUserWhatsAppPhone } from "./identityResolver.service";
@@ -41,6 +48,7 @@ export async function deliverOutboundMessage(payload: {
     content: string;
     channel: "whatsapp" | "phone" | "dashboard";
     channelIdentifier: string;
+    whatsappPayloads?: MetaWhatsAppPayload[];
 }): Promise<OutboundDelivery> {
     const record = {
         messageId: randomUUID(),
@@ -64,7 +72,27 @@ export async function deliverOutboundMessage(payload: {
 
     try {
         if (payload.channel === "whatsapp" && isMetaWhatsAppEnabled()) {
-            await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content);
+            const companion = await SaheliCompanion.findOne({
+                familyId: payload.familyId,
+                recipientUserId: payload.recipientUserId,
+            }).lean();
+            const outsideWindow =
+                companion?.lastWhatsAppInboundAt &&
+                Date.now() - new Date(companion.lastWhatsAppInboundAt).getTime() >
+                    24 * 60 * 60 * 1000;
+
+            if (outsideWindow && process.env.WHATSAPP_TEMPLATE_MORNING_CARE) {
+                await sendMetaWhatsAppTemplate({
+                    to: payload.channelIdentifier,
+                    templateName: process.env.WHATSAPP_TEMPLATE_MORNING_CARE,
+                    bodyParameters: [payload.content.slice(0, 120)],
+                });
+            } else {
+                const rich =
+                    payload.whatsappPayloads ??
+                    composeWhatsAppReply(payload.content, { kind: "schedule_missed" });
+                await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content, rich);
+            }
         } else {
             const adapter =
                 payload.channel === "phone" ? phoneMockAdapter : whatsAppMockAdapter;

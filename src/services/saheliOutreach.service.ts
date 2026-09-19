@@ -6,6 +6,8 @@ import {
     companionProfilePayload,
     dueOutreachSlot,
     getCompanionProfile,
+    isWithinQuietHours,
+    localDateParts,
     markCompanionOutreach,
     newOutreachLogId,
     slotDateKey,
@@ -23,6 +25,9 @@ import { deliverOutboundMessage, resolveRecipientChannel } from "./channelOutbou
 import { getFamilyMembersList } from "./familyMember.service";
 import { scheduleAppliesToday } from "./saheli.service";
 import type { OutreachSlot } from "../models/saheliCompanion.model";
+import { getScheduleDayStatuses } from "./careScheduleCompletion.service";
+import { formatScheduleSection } from "./saheliContext.service";
+import { isAiEngineOfflineError } from "../clients/aiEngine.client";
 
 function resolveRecipientName(
     members: Awaited<ReturnType<typeof getFamilyMembersList>>["members"],
@@ -75,6 +80,7 @@ export async function deliverSaheliOutreach(payload: {
 }): Promise<{ reply: string; delivered: boolean; topicBucket?: string } | null> {
     const companion = await getCompanionProfile(payload.familyId, payload.recipientUserId);
     if (!companion.enabled && !payload.force) return null;
+    if (isWithinQuietHours(companion) && !payload.force) return null;
 
     const slot = payload.slot ?? dueOutreachSlot(companion);
     if (!slot && !payload.force) return null;
@@ -100,41 +106,92 @@ export async function deliverSaheliOutreach(payload: {
 
     const todayItems = await getTodayScheduleItems(payload.familyId, payload.recipientUserId);
     const hasCareToday = todayItems.some((s) => s.type === "MEDICINE" || s.type === "CHECK_IN");
+    const dayStatus = await getScheduleDayStatuses(
+        payload.familyId,
+        payload.recipientUserId,
+        payload.recipientUserId,
+    );
 
     let outreachKind = payload.outreachKind ?? "casual";
     if (!payload.outreachKind && slot === "morning" && hasCareToday) {
         outreachKind = "mixed";
     }
 
-    const result = await aiPostOutreach({
-        aiFamilyId: ctx.aiFamilyId,
-        aiElderId: ctx.aiElderId,
-        conversationId: ctx.conversationId,
-        outreachKind,
-        careRecordContext: careContext,
-        companionProfile: profile,
-        scheduleItems:
-            outreachKind !== "casual"
-                ? todayItems.map((s) => ({
-                      title: s.title,
-                      time: s.time,
-                      dosage: s.dosage,
-                      type: s.type,
-                  }))
-                : [],
-    });
+    let reply = "";
+    let topicBucket = slot === "morning" && hasCareToday ? "care" : "casual";
+    const todayDate = localDateParts(companion.timezone || "Asia/Kolkata").date;
+    const mmdd = todayDate.slice(5);
+    const specialDate =
+        companion.birthday?.slice(5) === mmdd
+            ? "birthday"
+            : companion.importantDates?.find((d) => d.date.slice(5) === mmdd)?.label;
 
-    if (result.conversation_id) {
-        await persistConversationId(payload.familyId, payload.recipientUserId, result.conversation_id);
+    let topicHint: string | undefined = specialDate
+        ? `special_day:${specialDate}`
+        : companion.outreachTopics?.length && companion.outreachTopics.length > 0
+          ? companion.outreachTopics[Math.floor(Math.random() * companion.outreachTopics.length)]
+          : undefined;
+    try {
+        const result = await aiPostOutreach({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            conversationId: ctx.conversationId,
+            outreachKind,
+            topicHint,
+            careRecordContext: careContext,
+            companionProfile: profile,
+            outreachTopics: companion.outreachTopics ?? [],
+            scheduleItems:
+                outreachKind !== "casual"
+                    ? todayItems.map((s) => ({
+                          title: s.title,
+                          time: s.time,
+                          dosage: s.dosage,
+                          type: s.type,
+                      }))
+                    : [],
+        });
+
+        if (result.conversation_id) {
+            await persistConversationId(
+                payload.familyId,
+                payload.recipientUserId,
+                result.conversation_id,
+            );
+        }
+        reply = result.reply.trim();
+        topicBucket = result.topic_bucket ?? topicBucket;
+        topicHint = result.topic_hint;
+    } catch (err) {
+        if (!isAiEngineOfflineError(err) && slot !== "morning") throw err;
+        const missed = dayStatus.items.filter((i) => i.status === "missed");
+        const upcoming = dayStatus.items.filter((i) => i.status === "upcoming");
+        const parts = [`Good morning, ${displayName}!`];
+        if (missed.length) {
+            parts.push(formatScheduleSection(missed, "Missed so far today"));
+        }
+        if (upcoming.length) {
+            parts.push(formatScheduleSection(upcoming.slice(0, 5), "Coming up today"));
+        }
+        if (parts.length === 1) {
+            parts.push("Hope you're having a gentle start to the day.");
+        }
+        reply = parts.join("\n\n");
+        topicBucket = "care";
     }
 
-    const reply = result.reply.trim();
     if (!reply) return null;
+
+    const channelTarget = await resolveRecipientChannel(
+        payload.familyId,
+        payload.recipientUserId,
+        companion.preferredChannel,
+    );
 
     await recordProactiveMessages(
         payload.familyId,
         payload.recipientUserId,
-        `Saheli reached out · ${result.topic_bucket ?? "casual"}`,
+        `Saheli reached out · ${topicBucket}`,
         reply,
     );
 
@@ -143,24 +200,18 @@ export async function deliverSaheliOutreach(payload: {
         subjectUserId: payload.recipientUserId,
         type: CareRecordEventType.CHECK_IN,
         source: CareRecordSource.SAHELI,
-        channel: ChannelType.DASHBOARD,
+        channel: channelTarget?.channel === "whatsapp" ? ChannelType.WHATSAPP : ChannelType.DASHBOARD,
         title: "Saheli reached out",
         detail: reply.slice(0, 280),
         status: "sent",
         payload: {
             outreachKind,
-            topicBucket: result.topic_bucket,
-            topicHint: result.topic_hint,
+            topicBucket,
+            topicHint,
             slot,
         },
         skipSignalCheck: true,
     });
-
-    const channelTarget = await resolveRecipientChannel(
-        payload.familyId,
-        payload.recipientUserId,
-        companion.preferredChannel,
-    );
 
     let delivered = true;
     if (channelTarget && channelTarget.channel !== "dashboard") {
@@ -182,15 +233,15 @@ export async function deliverSaheliOutreach(payload: {
             slot,
             slotDate: dateKey,
             outreachKind,
-            topicBucket: result.topic_bucket,
-            topicHint: result.topic_hint,
+            topicBucket,
+            topicHint,
             channel: channelTarget?.channel ?? "dashboard",
             delivered,
         });
     }
 
     await markCompanionOutreach(payload.familyId, payload.recipientUserId);
-    return { reply, delivered, topicBucket: result.topic_bucket };
+    return { reply, delivered, topicBucket };
 }
 
 export async function shareElderUpdateWithFamily(payload: {

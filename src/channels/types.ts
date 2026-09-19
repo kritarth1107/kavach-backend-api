@@ -1,5 +1,6 @@
 import { ChannelType } from "../types/careRecord.types";
 import { FamilyRole } from "../types/family.types";
+import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
 
 export type MessageModality = "voice" | "text";
 
@@ -26,6 +27,8 @@ export type OutboundMessage = {
     modality: MessageModality;
     content: string;
     audioBase64?: string;
+    /** Rich Meta WhatsApp payloads (interactive, media, text). */
+    whatsappPayloads?: MetaWhatsAppPayload[];
 };
 
 export interface ChannelAdapter {

@@ -1,4 +1,5 @@
 import config from "../config/app.config";
+import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
 
 export function isMetaWhatsAppEnabled(): boolean {
     const meta = config.whatsapp.meta;
@@ -34,7 +35,28 @@ function toMetaRecipient(e164: string): string {
     return e164.replace(/\D/g, "");
 }
 
-export async function sendViaMetaWhatsApp(to: string, text: string): Promise<void> {
+const WHATSAPP_TEXT_LIMIT = 4096;
+
+function splitWhatsAppText(text: string, limit = WHATSAPP_TEXT_LIMIT): string[] {
+    const trimmed = text.trim();
+    if (!trimmed) return [];
+    if (trimmed.length <= limit) return [trimmed];
+
+    const chunks: string[] = [];
+    let rest = trimmed;
+    while (rest.length > limit) {
+        let splitAt = rest.lastIndexOf("\n\n", limit);
+        if (splitAt < limit * 0.5) splitAt = rest.lastIndexOf("\n", limit);
+        if (splitAt < limit * 0.5) splitAt = rest.lastIndexOf(" ", limit);
+        if (splitAt < limit * 0.5) splitAt = limit;
+        chunks.push(rest.slice(0, splitAt).trim());
+        rest = rest.slice(splitAt).trim();
+    }
+    if (rest) chunks.push(rest);
+    return chunks;
+}
+
+async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<void> {
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
         throw new Error("Meta WhatsApp is not configured");
@@ -51,13 +73,125 @@ export async function sendViaMetaWhatsApp(to: string, text: string): Promise<voi
             recipient_type: "individual",
             to: toMetaRecipient(to),
             type: "text",
-            text: { preview_url: false, body: text.slice(0, 4096) },
+            text: { preview_url: false, body: text.slice(0, WHATSAPP_TEXT_LIMIT) },
         }),
     });
 
     if (!res.ok) {
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
+    }
+}
+
+async function sendSingleMetaWhatsAppPayload(to: string, payload: MetaWhatsAppPayload): Promise<void> {
+    const meta = config.whatsapp.meta;
+    if (!meta.phoneNumberId || !meta.accessToken) {
+        throw new Error("Meta WhatsApp is not configured");
+    }
+
+    const res = await fetch(`${graphBase()}/${meta.phoneNumberId}/messages`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${meta.accessToken}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            messaging_product: "whatsapp",
+            recipient_type: "individual",
+            to: toMetaRecipient(to),
+            ...payload,
+        }),
+    });
+
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+}
+
+export async function sendWhatsAppPayloads(to: string, payloads: MetaWhatsAppPayload[]): Promise<void> {
+    for (const payload of payloads) {
+        if (payload.type === "text") {
+            const parts = splitWhatsAppText(payload.text.body);
+            for (const part of parts) {
+                await sendSingleMetaWhatsAppText(to, part);
+            }
+            continue;
+        }
+        try {
+            await sendSingleMetaWhatsAppPayload(to, payload);
+        } catch (err) {
+            if (payload.type === "image" || payload.type === "document") {
+                console.warn("WhatsApp media send failed, falling back to text:", err);
+                const caption =
+                    payload.type === "image"
+                        ? payload.image.caption
+                        : payload.document.caption;
+                if (caption) await sendSingleMetaWhatsAppText(to, caption);
+                continue;
+            }
+            throw err;
+        }
+    }
+}
+
+export async function sendMetaWhatsAppTemplate(input: {
+    to: string;
+    templateName: string;
+    languageCode?: string;
+    bodyParameters?: string[];
+}): Promise<void> {
+    const meta = config.whatsapp.meta;
+    if (!meta.phoneNumberId || !meta.accessToken) {
+        throw new Error("Meta WhatsApp is not configured");
+    }
+
+    const res = await fetch(`${graphBase()}/${meta.phoneNumberId}/messages`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${meta.accessToken}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: toMetaRecipient(input.to),
+            type: "template",
+            template: {
+                name: input.templateName,
+                language: { code: input.languageCode ?? "en" },
+                components: input.bodyParameters?.length
+                    ? [
+                          {
+                              type: "body",
+                              parameters: input.bodyParameters.map((text) => ({
+                                  type: "text",
+                                  text,
+                              })),
+                          },
+                      ]
+                    : undefined,
+            },
+        }),
+    });
+
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+}
+
+export async function sendViaMetaWhatsApp(
+    to: string,
+    text: string,
+    payloads?: MetaWhatsAppPayload[],
+): Promise<void> {
+    if (payloads?.length) {
+        await sendWhatsAppPayloads(to, payloads);
+        return;
+    }
+    const parts = splitWhatsAppText(text);
+    for (const part of parts) {
+        await sendSingleMetaWhatsAppText(to, part);
     }
 }
 
@@ -84,7 +218,131 @@ export type MetaInboundMessage = {
     from: string;
     text: string;
     messageId?: string;
+    inboundType?: string;
+    interactiveId?: string;
+    mediaType?: string;
+    mediaId?: string;
+    mediaCaption?: string;
 };
+
+function normalizeInteractiveInboundId(id: string): string {
+    const lower = id.toLowerCase();
+    if (lower === "confirm_order" || lower === "add_more") return "confirm";
+    if (lower === "cancel_order") return "cancel";
+    if (lower === "approve_order") return "approve";
+    if (lower === "reject_order") return "reject";
+    if (lower === "schedule_today") return "what is my schedule today";
+    if (lower === "missed_today") return "what did i miss today";
+    if (lower === "order_help") return "order groceries from instamart";
+    if (lower === "feeling_ok") return "I'm doing fine today";
+    if (lower === "need_help") return "I need help please";
+    if (lower === "order_status") return "what is my order status";
+
+    const done = id.match(/^done:(.+)$/i);
+    if (done) return `I completed schedule ${done[1]}`;
+    if (lower === "guest_learn") return "what can you help me with";
+    if (lower === "guest_signup") return "how do I sign up for kavach";
+
+    const addr = id.match(/^addr:(\d+)$/i);
+    if (addr) return String(Number(addr[1]) + 1);
+
+    const item = id.match(/^item:(\d+)$/i);
+    if (item) return String(Number(item[1]) + 1);
+
+    const restaurant = id.match(/^restaurant:(\d+)$/i);
+    if (restaurant) return String(Number(restaurant[1]) + 1);
+
+    const recipient = id.match(/^recipient:(.+)$/i);
+    if (recipient) return recipient[1]!;
+
+    return id;
+}
+
+function extractInboundText(row: Record<string, unknown>): string {
+    const type = String(row.type ?? "");
+    if (type === "text") {
+        const textObj = row.text as Record<string, unknown> | undefined;
+        return String(textObj?.body ?? "").trim();
+    }
+    if (type === "interactive") {
+        const interactive = row.interactive as Record<string, unknown> | undefined;
+        const interactiveType = String(interactive?.type ?? "");
+        if (interactiveType === "button_reply") {
+            const reply = interactive?.button_reply as Record<string, unknown> | undefined;
+            const id = String(reply?.id ?? reply?.title ?? "").trim();
+            return normalizeInteractiveInboundId(id);
+        }
+        if (interactiveType === "list_reply") {
+            const reply = interactive?.list_reply as Record<string, unknown> | undefined;
+            const id = String(reply?.id ?? reply?.title ?? "").trim();
+            return normalizeInteractiveInboundId(id);
+        }
+    }
+    if (type === "button") {
+        const button = row.button as Record<string, unknown> | undefined;
+        const payload = String(button?.payload ?? button?.text ?? "").trim();
+        if (payload) return normalizeInteractiveInboundId(payload);
+    }
+    if (type === "image") {
+        const image = row.image as Record<string, unknown> | undefined;
+        const caption = String(image?.caption ?? "").trim();
+        return caption || "[image message]";
+    }
+    if (type === "document") {
+        const doc = row.document as Record<string, unknown> | undefined;
+        const caption = String(doc?.caption ?? "").trim();
+        const filename = String(doc?.filename ?? "").trim();
+        return caption || filename || "[document message]";
+    }
+    if (type === "audio" || type === "voice") return "[voice message]";
+    if (type === "video") {
+        const video = row.video as Record<string, unknown> | undefined;
+        return String(video?.caption ?? "").trim() || "[video message]";
+    }
+    if (type === "location") return "[location shared]";
+    if (type === "contacts") return "[contact shared]";
+    return "";
+}
+
+function extractInboundMedia(row: Record<string, unknown>): {
+    mediaType?: string;
+    mediaId?: string;
+    mediaCaption?: string;
+} {
+    const type = String(row.type ?? "");
+    if (type === "image") {
+        const image = row.image as Record<string, unknown> | undefined;
+        return {
+            mediaType: "image",
+            mediaId: image?.id ? String(image.id) : undefined,
+            mediaCaption: String(image?.caption ?? "").trim() || undefined,
+        };
+    }
+    if (type === "document") {
+        const doc = row.document as Record<string, unknown> | undefined;
+        return {
+            mediaType: "document",
+            mediaId: doc?.id ? String(doc.id) : undefined,
+            mediaCaption: String(doc?.caption ?? doc?.filename ?? "").trim() || undefined,
+        };
+    }
+    if (type === "audio" || type === "voice") {
+        const audio = (row.audio ?? row.voice) as Record<string, unknown> | undefined;
+        return {
+            mediaType: type === "voice" ? "voice" : "audio",
+            mediaId: audio?.id ? String(audio.id) : undefined,
+        };
+    }
+    if (type === "video") {
+        const video = row.video as Record<string, unknown> | undefined;
+        return {
+            mediaType: "video",
+            mediaId: video?.id ? String(video.id) : undefined,
+            mediaCaption: String(video?.caption ?? "").trim() || undefined,
+        };
+    }
+    return {};
+}
 
 export type MetaWabaSubscription = {
     id?: string;
@@ -604,16 +862,30 @@ export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
                 const from = String(row.from ?? "");
                 const type = String(row.type ?? "");
                 if (!from) continue;
-                if (type === "text") {
-                    const textObj = row.text as Record<string, unknown> | undefined;
-                    const text = String(textObj?.body ?? "").trim();
-                    if (text) {
-                        out.push({
-                            from,
-                            text,
-                            messageId: row.id ? String(row.id) : undefined,
-                        });
-                    }
+                const text = extractInboundText(row);
+                const media = extractInboundMedia(row);
+                if (text || media.mediaType) {
+                    out.push({
+                        from,
+                        text: text || `[${media.mediaType ?? type} shared]`,
+                        messageId: row.id ? String(row.id) : undefined,
+                        inboundType: type,
+                        interactiveId:
+                            type === "interactive"
+                                ? String(
+                                      (
+                                          (row.interactive as Record<string, unknown> | undefined)
+                                              ?.button_reply as Record<string, unknown> | undefined
+                                      )?.id ??
+                                          (
+                                              (row.interactive as Record<string, unknown> | undefined)
+                                                  ?.list_reply as Record<string, unknown> | undefined
+                                          )?.id ??
+                                          "",
+                                  ) || undefined
+                                : undefined,
+                        ...media,
+                    });
                 }
             }
         }

@@ -1,5 +1,9 @@
 import { deliverSaheliOutreach } from "../services/saheliOutreach.service";
-import { listEnabledCompanions, dueOutreachSlot } from "../services/saheliCompanion.service";
+import {
+    listEnabledCompanions,
+    dueOutreachSlot,
+    isWithinQuietHours,
+} from "../services/saheliCompanion.service";
 
 const TICK_MS = 60_000;
 const RANDOM_OUTREACH_CHANCE = 0.06;
@@ -8,13 +12,35 @@ const OUTREACH_KINDS = ["casual", "care", "mixed"] as const;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
-async function runOutreachTick() {
+export async function runOutreachTick() {
     if (running) return;
     running = true;
     try {
         const companions = await listEnabledCompanions();
         const now = new Date();
         for (const companion of companions) {
+            const lonely =
+                companion.lastWhatsAppInboundAt &&
+                Date.now() - new Date(companion.lastWhatsAppInboundAt).getTime() >
+                    48 * 60 * 60 * 1000;
+
+            if (lonely && !dueOutreachSlot(companion, now) && !isWithinQuietHours(companion, now)) {
+                try {
+                    await deliverSaheliOutreach({
+                        familyId: companion.familyId,
+                        recipientUserId: companion.recipientUserId,
+                        outreachKind: "mixed",
+                        force: true,
+                    });
+                } catch (err) {
+                    console.warn(
+                        `Loneliness outreach failed for ${companion.familyId}/${companion.recipientUserId}:`,
+                        err,
+                    );
+                }
+                continue;
+            }
+
             const slot = dueOutreachSlot(companion, now);
             if (slot) {
                 try {

@@ -9,7 +9,14 @@ import {
 } from "./identityResolver.service";
 import config from "../config/app.config";
 import { tryHandleCaregiverWhatsAppOrderCommand } from "./whatsappOrder.service";
+import { tryHandleWhatsAppOrderTurn } from "./whatsappOrderFlow.service";
 import { getFamilyMembersList } from "./familyMember.service";
+import {
+    composeWhatsAppReply,
+    flattenWhatsAppPayloads,
+} from "./whatsappMessageComposer.service";
+import type { WhatsAppReplyContext } from "../types/whatsappMessage.types";
+import { messageLooksLikeEmergency } from "./saheliEmergency.service";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -52,12 +59,18 @@ function isCaregiver(role: FamilyRole): boolean {
     return role === FamilyRole.PRIMARY_CAREGIVER || role === FamilyRole.CO_CAREGIVER;
 }
 
-function outbound(phone: string, text: string): OutboundMessage {
+function outbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
+    const whatsappPayloads = composeWhatsAppReply(text, context);
+    const content =
+        whatsappPayloads.length > 1 || whatsappPayloads[0]?.type !== "text"
+            ? flattenWhatsAppPayloads(whatsappPayloads)
+            : text;
     return {
         channelType: ChannelType.WHATSAPP,
         channelIdentifier: phone,
         modality: "text",
-        content: text,
+        content,
+        whatsappPayloads,
     };
 }
 
@@ -80,7 +93,9 @@ async function touchGuestSession(phone: string) {
 
 async function handleGuestMessage(phone: string): Promise<OutboundMessage> {
     const turns = await touchGuestSession(phone);
-    return outbound(phone, turns <= 1 ? GUEST_WELCOME : GUEST_FOLLOWUP);
+    return outbound(phone, turns <= 1 ? GUEST_WELCOME : GUEST_FOLLOWUP, {
+        kind: turns <= 1 ? "guest_welcome" : "guest_followup",
+    });
 }
 
 async function listFamilyRecipients(familyId: string, actorUserId: string) {
@@ -100,6 +115,9 @@ function matchRecipientByText(
     recipients: Array<{ userId: string; name: string }>,
 ): string | null {
     const lower = text.toLowerCase();
+    const directId = recipients.find((r) => r.userId === text.trim());
+    if (directId) return directId.userId;
+
     const numbered = lower.match(/^\s*([1-9])\s*$/);
     if (numbered) {
         const idx = Number(numbered[1]) - 1;
@@ -117,7 +135,10 @@ async function resolveCaregiverSubject(input: {
     familyId: string;
     userId: string;
     text: string;
-}): Promise<{ subjectUserId: string } | { prompt: string }> {
+}): Promise<
+    | { subjectUserId: string }
+    | { prompt: string; recipientOptions?: Array<{ userId: string; name: string }> }
+> {
     const recipients = await listFamilyRecipients(input.familyId, input.userId);
     if (!recipients.length) {
         return { prompt: "Your family doesn't have a care recipient profile yet. Add one in the Kavach dashboard first." };
@@ -168,6 +189,7 @@ async function resolveCaregiverSubject(input: {
 
     return {
         prompt: `Who are you asking about?\n${lines}\n\nReply with a number or name, and I'll answer about them.`,
+        recipientOptions: options,
     };
 }
 
@@ -176,9 +198,16 @@ export async function handleWhatsAppInbound(body: {
     text?: string;
     modality?: "text" | "voice";
     audioBase64?: string;
+    mediaUrl?: string;
+    mediaType?: string;
+    mediaCaption?: string;
 }): Promise<OutboundMessage> {
     const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
-    const text = String(body.text ?? "").trim();
+    let text = String(body.text ?? "").trim();
+
+    if (!text && body.mediaUrl && body.mediaType) {
+        text = `[${body.mediaType} shared]`;
+    }
 
     let identity: Awaited<ReturnType<typeof resolveWhatsAppSender>> | null = null;
     try {
@@ -187,15 +216,48 @@ export async function handleWhatsAppInbound(body: {
         return handleGuestMessage(phone);
     }
 
-    if (isCaregiver(identity.role)) {
-        const orderReply = await tryHandleCaregiverWhatsAppOrderCommand({
+    if (identity.role === FamilyRole.CARE_RECIPIENT && messageLooksLikeEmergency(text)) {
+        const { triggerEmergencyEscalation, elderEmergencyReply } = await import(
+            "./saheliEmergency.service"
+        );
+        const membersPayload = await getFamilyMembersList(identity.familyId, identity.userId);
+        const displayName =
+            membersPayload.members.find((m) => m.userId === identity!.userId)?.name?.trim() ||
+            "there";
+        await triggerEmergencyEscalation({
             familyId: identity.familyId,
+            recipientUserId: identity.userId,
             actorUserId: identity.userId,
-            role: identity.role,
-            text,
+            message: text,
+            channel: "whatsapp",
         });
-        if (orderReply) {
-            return outbound(phone, orderReply);
+        return outbound(phone, elderEmergencyReply(displayName));
+    }
+
+    const { touchWhatsAppInbound } = await import("./saheliCompanion.service");
+    if (identity.role === FamilyRole.CARE_RECIPIENT) {
+        await touchWhatsAppInbound(identity.familyId, identity.userId);
+    }
+
+    if (
+        body.mediaType &&
+        identity.role === FamilyRole.CARE_RECIPIENT &&
+        !messageLooksLikeEmergency(text)
+    ) {
+        const { ingestWhatsAppMediaMessage } = await import("./whatsappMediaIngest.service");
+        const mediaReply = await ingestWhatsAppMediaMessage({
+            familyId: identity.familyId,
+            recipientUserId: identity.userId,
+            actorUserId: identity.userId,
+            mediaType: body.mediaType,
+            mediaUrl: body.mediaUrl,
+            caption: body.mediaCaption ?? (text.startsWith("[") ? undefined : text),
+        });
+        const isMediaOnly =
+            !text ||
+            /^\[(image|document|voice|audio|video) (message|shared)\]$/i.test(text);
+        if (isMediaOnly) {
+            return outbound(phone, mediaReply);
         }
     }
 
@@ -208,9 +270,52 @@ export async function handleWhatsAppInbound(body: {
             text,
         });
         if ("prompt" in subject) {
-            return outbound(phone, subject.prompt);
+            return outbound(phone, subject.prompt, {
+                kind: subject.recipientOptions?.length ? "recipient_pick" : "plain",
+                recipientOptions: subject.recipientOptions,
+            });
         }
         subjectUserId = subject.subjectUserId;
+    }
+
+    const waSession = await WhatsappSession.findOne({ phone }).lean();
+    const orderFlowReply = await tryHandleWhatsAppOrderTurn({
+        phone,
+        familyId: identity.familyId,
+        recipientUserId: subjectUserId,
+        actorUserId: identity.userId,
+        text,
+        saheliSessionId: waSession?.saheliSessionId,
+    });
+    if (orderFlowReply) {
+        return outbound(phone, orderFlowReply.text, {
+            kind: "order_flow",
+            orderFlow: orderFlowReply.orderFlow,
+        });
+    }
+
+    if (isCaregiver(identity.role)) {
+        const orderReply = await tryHandleCaregiverWhatsAppOrderCommand({
+            familyId: identity.familyId,
+            actorUserId: identity.userId,
+            role: identity.role,
+            text,
+        });
+        if (orderReply) {
+            const pendingMatch = orderReply.match(
+                /pending (\S+) basket \((.+), (₹[\d,.]+)\)/i,
+            );
+            return outbound(phone, orderReply, {
+                kind: pendingMatch ? "order_pending_approval" : "plain",
+                pendingOrder: pendingMatch
+                    ? {
+                          partner: pendingMatch[1]!,
+                          itemList: pendingMatch[2]!,
+                          amount: pendingMatch[3]!,
+                      }
+                    : undefined,
+            });
+        }
     }
 
     const { reply } = await whatsAppMockAdapter.receive({
@@ -228,5 +333,14 @@ export async function handleWhatsAppInbound(body: {
         },
     });
 
-    return reply;
+    const scheduleKind =
+        /\b(miss(ed)?|schedule|medicine|aaj|today)\b/i.test(text) ||
+        /\b(miss(ed)?|schedule|medicine|aaj|today)\b/i.test(reply.content)
+            ? "schedule_missed"
+            : "companion";
+
+    return outbound(phone, reply.content, {
+        kind: scheduleKind,
+        includeSaheliHeader: identity.role === FamilyRole.CARE_RECIPIENT,
+    });
 }

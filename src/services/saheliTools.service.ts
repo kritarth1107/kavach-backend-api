@@ -26,10 +26,29 @@ export type SaheliToolName =
     | "resolve_order_partner"
     | "search_swiggy_food"
     | "search_instamart"
+    | "search_zepto"
     | "preview_order"
     | "place_cod_order"
     | "suggest_order"
-    | "recall_memories";
+    | "get_order_status"
+    | "suggest_reorder"
+    | "recall_memories"
+    | "save_memory"
+    | "get_today_schedule"
+    | "get_missed_tasks"
+    | "get_family_briefing"
+    | "get_upcoming_appointments"
+    | "mark_schedule_completed"
+    | "mark_schedule_missed"
+    | "log_vitals"
+    | "log_dose"
+    | "log_check_in"
+    | "log_appointment_notes"
+    | "get_lab_trends"
+    | "get_abnormal_flags"
+    | "summarize_health_record"
+    | "notify_caregivers"
+    | "trigger_emergency_escalation";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -259,6 +278,263 @@ export async function executeSaheliTool(input: {
                 limit: Number(input.args.limit ?? 10),
             });
             return { memories: memories.memories };
+        }
+        case "get_today_schedule": {
+            const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
+            const dateKey = input.args.dateKey ? String(input.args.dateKey) : undefined;
+            const day = await getScheduleDayStatuses(
+                input.familyId,
+                input.recipientUserId,
+                input.actorUserId,
+                dateKey,
+            );
+            return {
+                dateKey: day.dateKey,
+                items: day.items,
+                completedCount: day.completedCount,
+                missedCount: day.missedCount,
+                upcomingCount: day.upcomingCount,
+                adherencePercent: day.adherencePercent,
+            };
+        }
+        case "get_missed_tasks": {
+            const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
+            const dateKey = input.args.dateKey ? String(input.args.dateKey) : undefined;
+            const day = await getScheduleDayStatuses(
+                input.familyId,
+                input.recipientUserId,
+                input.actorUserId,
+                dateKey,
+            );
+            const missed = day.items.filter((i) => i.status === "missed" || i.status === "due");
+            return {
+                dateKey: day.dateKey,
+                missed,
+                missedCount: missed.length,
+            };
+        }
+        case "get_family_briefing": {
+            const { getRecipientBriefing } = await import("./saheli.service");
+            const dateKey = input.args.dateKey ? String(input.args.dateKey) : undefined;
+            const briefing = await getRecipientBriefing(
+                input.familyId,
+                input.recipientUserId,
+                input.actorUserId,
+                dateKey,
+            );
+            return {
+                recipientName: briefing.recipientName,
+                lastHeardAt: briefing.lastHeardAt,
+                lastHeardLine: briefing.lastHeardLine,
+                lastCheckInAt: briefing.lastCheckInAt,
+                todayItems: briefing.todayItems,
+                unconfirmedItems: briefing.unconfirmedItems,
+                adherencePercent: briefing.adherencePercent,
+                dateKey: briefing.dateKey,
+            };
+        }
+        case "search_zepto": {
+            const query = String(input.args.query ?? "");
+            const addressId = input.args.addressId ? String(input.args.addressId) : undefined;
+            const commerceUserId =
+                (await resolveFamilyMcpUserId(input.familyId, "zepto", input.actorUserId)) ??
+                input.actorUserId;
+            const search = await searchMcpProduct("zepto", input.familyId, commerceUserId, query, {
+                addressId,
+            });
+            return {
+                partner: "zepto",
+                addressId: search.addressId,
+                error: search.error,
+                items: search.items.slice(0, 10),
+            };
+        }
+        case "get_order_status": {
+            const orderId = String(input.args.orderId ?? "");
+            const filter = orderId
+                ? { familyId: input.familyId, orderId }
+                : { familyId: input.familyId, recipientUserId: input.recipientUserId };
+            const order = await Order.findOne(filter).sort({ createdAt: -1 }).lean();
+            if (!order) return { error: "No order found" };
+            return {
+                orderId: order.orderId,
+                partner: order.partner,
+                status: order.status,
+                totalPaise: order.totalPaise,
+                items: order.items,
+                createdAt: order.createdAt?.toISOString?.() ?? null,
+            };
+        }
+        case "suggest_reorder": {
+            const last = await Order.findOne({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                status: { $nin: [OrderStatus.CANCELLED] },
+            })
+                .sort({ createdAt: -1 })
+                .lean();
+            if (!last) return { error: "No previous order to repeat" };
+            const message = last.items.map((i) => `${i.name}`).join(", ");
+            const { startOrderFlow } = await import("./orderOrchestrator.service");
+            const flow = await startOrderFlow({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                message: `order ${message} from ${last.partner}`,
+            });
+            return flow
+                ? { status: "order_flow", orderFlow: flow, message: flow.message }
+                : { error: "Could not start reorder flow" };
+        }
+        case "save_memory": {
+            const { aiPostFamilyShare } = await import("../clients/aiEngine.client");
+            const { ensureAiContext } = await import("./aiTenant.service");
+            const ctx = await ensureAiContext(
+                input.familyId,
+                input.recipientUserId,
+                "Care recipient",
+            );
+            const content = String(input.args.content ?? input.args.memory ?? "");
+            if (!content.trim()) return { error: "content is required" };
+            await aiPostFamilyShare({
+                aiFamilyId: ctx.aiFamilyId,
+                aiElderId: ctx.aiElderId,
+                shareSummary: content.slice(0, 500),
+            });
+            return { saved: true };
+        }
+        case "mark_schedule_completed": {
+            const { markScheduleCompleted } = await import("./saheliCareAction.service");
+            return markScheduleCompleted({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                scheduleId: input.args.scheduleId ? String(input.args.scheduleId) : undefined,
+                titleHint: input.args.title ? String(input.args.title) : undefined,
+                dateKey: input.args.dateKey ? String(input.args.dateKey) : undefined,
+                note: input.args.note ? String(input.args.note) : undefined,
+            });
+        }
+        case "mark_schedule_missed": {
+            const { markScheduleMissed } = await import("./saheliCareAction.service");
+            return markScheduleMissed({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                scheduleId: input.args.scheduleId ? String(input.args.scheduleId) : undefined,
+                titleHint: input.args.title ? String(input.args.title) : undefined,
+                dateKey: input.args.dateKey ? String(input.args.dateKey) : undefined,
+                note: input.args.note ? String(input.args.note) : undefined,
+            });
+        }
+        case "log_vitals": {
+            const { logVitals } = await import("./saheliCareAction.service");
+            return logVitals({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind: String(input.args.kind ?? input.args.name ?? "Vitals"),
+                value: String(input.args.value ?? ""),
+                unit: input.args.unit ? String(input.args.unit) : undefined,
+                note: input.args.note ? String(input.args.note) : undefined,
+            });
+        }
+        case "log_dose": {
+            const { logDose } = await import("./saheliCareAction.service");
+            return logDose({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                medicineName: String(input.args.medicineName ?? input.args.name ?? ""),
+                quantity: input.args.quantity ? String(input.args.quantity) : undefined,
+                note: input.args.note ? String(input.args.note) : undefined,
+            });
+        }
+        case "log_check_in": {
+            const { logCheckIn } = await import("./saheliCareAction.service");
+            return logCheckIn({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                mood: input.args.mood ? String(input.args.mood) : undefined,
+                meals: input.args.meals ? String(input.args.meals) : undefined,
+                sleep: input.args.sleep ? String(input.args.sleep) : undefined,
+                pain: input.args.pain ? String(input.args.pain) : undefined,
+                note: input.args.note ? String(input.args.note) : undefined,
+            });
+        }
+        case "log_appointment_notes": {
+            const { logAppointmentNotes } = await import("./saheliCareAction.service");
+            return logAppointmentNotes({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                summary: String(input.args.summary ?? input.args.notes ?? ""),
+                doctorName: input.args.doctorName ? String(input.args.doctorName) : undefined,
+            });
+        }
+        case "get_upcoming_appointments": {
+            const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
+            const day = await getScheduleDayStatuses(
+                input.familyId,
+                input.recipientUserId,
+                input.actorUserId,
+            );
+            const appointments = day.items.filter((i) => i.type === "APPOINTMENT");
+            return { dateKey: day.dateKey, appointments };
+        }
+        case "get_lab_trends": {
+            const { getLabTrends } = await import("./labTrends.service");
+            const marker = String(input.args.marker ?? input.args.name ?? "TSH");
+            return getLabTrends(
+                input.familyId,
+                input.recipientUserId,
+                input.actorUserId,
+                marker,
+                Number(input.args.limit ?? 12),
+            );
+        }
+        case "get_abnormal_flags": {
+            const { getAbnormalLabFlags } = await import("./saheliHealthAlert.service");
+            return getAbnormalLabFlags(input.familyId, input.recipientUserId, input.actorUserId);
+        }
+        case "summarize_health_record": {
+            const timeline = await getCareRecordContextForSaheli(
+                input.familyId,
+                input.recipientUserId,
+                Number(input.args.limit ?? 30),
+            );
+            const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
+            const day = await getScheduleDayStatuses(
+                input.familyId,
+                input.recipientUserId,
+                input.actorUserId,
+            );
+            return {
+                careTimeline: timeline,
+                todaySchedule: day.items,
+                adherencePercent: day.adherencePercent,
+            };
+        }
+        case "notify_caregivers": {
+            const { notifyCaregivers } = await import("./saheliCaregiverAlert.service");
+            return notifyCaregivers({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                message: String(input.args.message ?? ""),
+                urgency: (input.args.urgency as "low" | "medium" | "high") ?? "medium",
+            });
+        }
+        case "trigger_emergency_escalation": {
+            const { triggerEmergencyEscalation } = await import("./saheliEmergency.service");
+            return triggerEmergencyEscalation({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                message: String(input.args.message ?? "Emergency"),
+                channel: "whatsapp",
+            });
         }
         default:
             return { error: `Unknown tool: ${input.tool}` };

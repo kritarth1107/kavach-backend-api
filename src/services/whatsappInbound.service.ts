@@ -6,6 +6,9 @@ export async function handleWhatsAppInbound(body: {
     text?: string;
     modality?: "text" | "voice";
     audioBase64?: string;
+    mediaUrl?: string;
+    mediaType?: string;
+    mediaCaption?: string;
 }): Promise<OutboundMessage> {
     return routeWhatsAppInbound(body);
 }

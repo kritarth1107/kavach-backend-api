@@ -105,4 +105,17 @@ export async function enrichLabStructuredValues(documentId: string): Promise<voi
             },
         },
     );
+
+    const { maybeAlertCaregiversOnLabUpload } = await import("./saheliHealthAlert.service");
+    await maybeAlertCaregiversOnLabUpload({
+        familyId: doc.familyId,
+        recipientUserId: doc.recipientUserId,
+        documentTitle: doc.title,
+        structuredValues: extracted.map((row) => ({
+            name: row.name,
+            value: row.value,
+            unit: row.unit,
+            date: doc.recordDate,
+        })),
+    });
 }

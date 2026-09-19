@@ -257,6 +257,12 @@ export async function aiPostChat(payload: {
     careRecordContext?: string;
     companionProfile?: Record<string, unknown>;
     orderContext?: string;
+    scheduleContext?: string;
+    channelContext?: string;
+    useAgent?: boolean;
+    actorUserId?: string;
+    kavachFamilyId?: string;
+    kavachRecipientUserId?: string;
 }): Promise<AiChatResponse> {
     const res = await aiFetch(
         "/v1/chat",
@@ -271,6 +277,12 @@ export async function aiPostChat(payload: {
                 care_record_context: payload.careRecordContext ?? null,
                 companion_profile: payload.companionProfile ?? null,
                 order_context: payload.orderContext ?? null,
+                schedule_context: payload.scheduleContext ?? null,
+                channel_context: payload.channelContext ?? null,
+                use_agent: payload.useAgent ?? false,
+                actor_user_id: payload.actorUserId ?? null,
+                kavach_family_id: payload.kavachFamilyId ?? null,
+                kavach_recipient_user_id: payload.kavachRecipientUserId ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -282,6 +294,47 @@ export async function aiPostChat(payload: {
     }
 
     return parseAiJson<AiChatResponse>(res);
+}
+
+export async function aiPostElderChatWithRetry(
+    payload: Parameters<typeof aiPostChat>[0],
+    retries = 3,
+): Promise<AiChatResponse> {
+    const delays = [500, 1000, 2000];
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+        try {
+            return await aiPostChat({ ...payload, useAgent: payload.useAgent ?? true });
+        } catch (err) {
+            lastErr = err;
+            if (attempt < retries - 1 && isAiEngineOfflineError(err)) {
+                await sleep(delays[attempt] ?? 2000);
+                continue;
+            }
+            break;
+        }
+    }
+
+    const elderHint =
+        payload.channelContext ??
+        "The care recipient is speaking directly to Saheli (not a caregiver). Answer in first person to them.";
+    return aiPostCaregiverChatWithRetry({
+        aiFamilyId: payload.aiFamilyId,
+        aiElderId: payload.aiElderId,
+        message: payload.message,
+        conversationId: payload.conversationId,
+        careRecordContext: [payload.scheduleContext, payload.careRecordContext]
+            .filter(Boolean)
+            .join("\n\n"),
+        sessionContext: elderHint,
+        orderContext: payload.orderContext,
+        useAgent: true,
+        actorUserId: payload.actorUserId ?? payload.kavachRecipientUserId,
+        kavachFamilyId: payload.kavachFamilyId,
+        kavachRecipientUserId: payload.kavachRecipientUserId,
+    }).catch(() => {
+        throw lastErr;
+    });
 }
 
 function caregiverChatBody(payload: {
@@ -715,6 +768,7 @@ export async function aiPostOutreach(payload: {
         dosage?: string;
         type?: string;
     }>;
+    outreachTopics?: string[];
 }): Promise<AiOutreachResponse> {
     const res = await aiFetch(
         "/v1/chat/outreach",
@@ -731,6 +785,7 @@ export async function aiPostOutreach(payload: {
                 care_record_context: payload.careRecordContext ?? null,
                 companion_profile: payload.companionProfile ?? null,
                 schedule_items: payload.scheduleItems ?? [],
+                outreach_topics: payload.outreachTopics ?? [],
             }),
         },
         config.aiEngine.writeTimeoutMs,

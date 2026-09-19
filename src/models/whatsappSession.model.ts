@@ -1,5 +1,12 @@
 import mongoose, { Document, Schema } from "mongoose";
 
+export type WhatsappOrderPhase =
+    | "select_address"
+    | "browse"
+    | "review_cart"
+    | "pending_approval"
+    | "completed";
+
 export interface IWhatsappSession {
     phone: string;
     familyId?: string;
@@ -9,6 +16,9 @@ export interface IWhatsappSession {
     recipientOptions?: Array<{ userId: string; name: string }>;
     guestTurns?: number;
     saheliSessionId?: string;
+    orderSessionId?: string;
+    orderPhase?: WhatsappOrderPhase;
+    pendingOrderId?: string;
     expiresAt: Date;
 }
 
@@ -29,6 +39,9 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         ],
         guestTurns: { type: Number, default: 0 },
         saheliSessionId: { type: String },
+        orderSessionId: { type: String },
+        orderPhase: { type: String },
+        pendingOrderId: { type: String },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

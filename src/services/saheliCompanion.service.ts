@@ -19,6 +19,28 @@ const DEFAULT_COMPANION: Omit<ISaheliCompanion, "familyId" | "recipientUserId"> 
     timezone: "Asia/Kolkata",
 };
 
+export function serializeCompanionForApi(doc: ISaheliCompanion) {
+    return {
+        enabled: doc.enabled,
+        childName: doc.childName,
+        relationshipLabel: doc.relationshipLabel,
+        personaNotes: doc.personaNotes ?? "",
+        outreachSlots: doc.outreachSlots,
+        outreachTopics: doc.outreachTopics,
+        shareWithFamily: doc.shareWithFamily,
+        preferredChannel: doc.preferredChannel,
+        timezone: doc.timezone,
+        quietHoursStart: doc.quietHoursStart ?? "",
+        quietHoursEnd: doc.quietHoursEnd ?? "",
+        nudgeIntensity: doc.nudgeIntensity ?? "standard",
+        preferredLanguage: doc.preferredLanguage ?? "hinglish",
+        birthday: doc.birthday ?? "",
+        importantDates: doc.importantDates ?? [],
+        lastOutreachAt: doc.lastOutreachAt?.toISOString?.() ?? null,
+        lastWhatsAppInboundAt: doc.lastWhatsAppInboundAt?.toISOString?.() ?? null,
+    };
+}
+
 export function companionProfilePayload(doc: ISaheliCompanion) {
     return {
         child_name: doc.childName,
@@ -78,6 +100,12 @@ export async function updateCompanionProfile(
     if (patch.shareWithFamily !== undefined) allowed.shareWithFamily = patch.shareWithFamily;
     if (patch.preferredChannel !== undefined) allowed.preferredChannel = patch.preferredChannel;
     if (patch.timezone !== undefined) allowed.timezone = patch.timezone;
+    if (patch.quietHoursStart !== undefined) allowed.quietHoursStart = patch.quietHoursStart;
+    if (patch.quietHoursEnd !== undefined) allowed.quietHoursEnd = patch.quietHoursEnd;
+    if (patch.nudgeIntensity !== undefined) allowed.nudgeIntensity = patch.nudgeIntensity;
+    if (patch.preferredLanguage !== undefined) allowed.preferredLanguage = patch.preferredLanguage;
+    if (patch.birthday !== undefined) allowed.birthday = patch.birthday;
+    if (patch.importantDates !== undefined) allowed.importantDates = patch.importantDates;
 
     const doc = await SaheliCompanion.findOneAndUpdate(
         { familyId, recipientUserId },
@@ -151,4 +179,43 @@ export async function ensureRecipientInFamily(familyId: string, recipientUserId:
 
 export function newOutreachLogId() {
     return randomUUID();
+}
+
+function parseHourMinute(value?: string): number | null {
+    if (!value?.trim()) return null;
+    const match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
+}
+
+export function isWithinQuietHours(
+    companion: ISaheliCompanion,
+    at = new Date(),
+): boolean {
+    const start = parseHourMinute(companion.quietHoursStart);
+    const end = parseHourMinute(companion.quietHoursEnd);
+    if (start == null || end == null) return false;
+
+    const { hour, minute } = (() => {
+        const fmt = new Intl.DateTimeFormat("en-GB", {
+            timeZone: companion.timezone || "Asia/Kolkata",
+            hour: "numeric",
+            minute: "numeric",
+            hour12: false,
+        });
+        const parts = fmt.formatToParts(at);
+        const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+        return { hour: get("hour"), minute: get("minute") };
+    })();
+    const now = hour * 60 + minute;
+
+    if (start <= end) return now >= start && now < end;
+    return now >= start || now < end;
+}
+
+export async function touchWhatsAppInbound(familyId: string, recipientUserId: string) {
+    await SaheliCompanion.updateOne(
+        { familyId, recipientUserId },
+        { $set: { lastWhatsAppInboundAt: new Date() } },
+    );
 }
