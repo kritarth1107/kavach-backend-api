@@ -552,6 +552,64 @@ function duplicateContactError(error: unknown): never {
     throw error;
 }
 
+async function ensureMemberUserAccount(input: {
+    userId: string;
+    email: string;
+    memberName: string;
+    namePrefix?: string;
+    phone?: string;
+    phoneCountryCode?: string;
+}): Promise<void> {
+    const normalizedPhone =
+        input.phone?.trim() && input.phoneCountryCode?.trim()
+            ? normalizePhoneInput(input.phoneCountryCode.trim(), input.phone.trim())
+            : null;
+
+    const existing = await User.findOne({ userId: input.userId }).lean();
+    if (existing) {
+        if (normalizedPhone) {
+            await User.updateOne(
+                { userId: input.userId },
+                {
+                    phone: {
+                        countryCode: normalizedPhone.countryCode,
+                        number: normalizedPhone.number,
+                    },
+                    phoneKey: normalizedPhone.key,
+                },
+            );
+        }
+        return;
+    }
+
+    const { name: parsedName } = input.namePrefix?.trim()
+        ? { name: input.memberName.trim() }
+        : splitNamePrefix(input.memberName);
+    const [firstName, ...rest] = parsedName.split(/\s+/).filter(Boolean);
+    const passwordHash = await bcrypt.hash(
+        randomBytes(24).toString("hex"),
+        config.security.bcryptSaltRounds,
+    );
+    const phoneFields = normalizedPhone
+        ? phoneFieldsFromNormalized(normalizedPhone)
+        : phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder());
+
+    try {
+        await User.create({
+            userId: input.userId,
+            email: input.email.toLowerCase().trim(),
+            passwordHash,
+            primaryAuthProvider: AuthProvider.EMAIL,
+            emailVerified: false,
+            firstName: firstName || undefined,
+            lastName: rest.join(" ") || undefined,
+            ...phoneFields,
+        });
+    } catch (error) {
+        throw duplicateContactError(error);
+    }
+}
+
 async function addCareRecipientMember(
     family: IFamilyDocument,
     inviter: IUserDocument,
@@ -580,7 +638,27 @@ async function addCareRecipientMember(
         },
     });
 
-    const memberUserId = existingInvite?.userId ?? randomUUID();
+    let memberUserId = existingInvite?.userId;
+    if (!memberUserId) {
+        const created = await createInvitedUser(
+            invitationEmail,
+            params.memberName,
+            params.namePrefix,
+            params.phone,
+            params.phoneCountryCode,
+            { attachPhoneToUser: true },
+        );
+        memberUserId = created.userId;
+    } else {
+        await ensureMemberUserAccount({
+            userId: memberUserId,
+            email: invitationEmail,
+            memberName: params.memberName,
+            namePrefix: params.namePrefix,
+            phone: params.phone,
+            phoneCountryCode: params.phoneCountryCode,
+        });
+    }
 
     const existingMember = family.members.find(
         (m) =>
@@ -1391,20 +1469,22 @@ export async function updateFamilyMemberDetails(
     }
 
     if (payload.phone?.trim() && payload.phoneCountryCode?.trim()) {
-        const normalizedPhone = normalizePhoneInput(
-            payload.phoneCountryCode.trim(),
-            payload.phone.trim(),
-        );
-        await User.updateOne(
-            { userId: memberUserId },
-            {
-                phone: {
-                    countryCode: normalizedPhone.countryCode,
-                    number: normalizedPhone.number,
-                },
-                phoneKey: normalizedPhone.key,
-            },
-        );
+        const { namePrefix, name: memberName } = normalizeMemberNameInput(payload);
+        await ensureMemberUserAccount({
+            userId: memberUserId,
+            email:
+                existingInvite?.email ??
+                existingUser?.email ??
+                buildPlaceholderMemberEmail(),
+            memberName:
+                memberName ||
+                existingInvite?.inviteeName ||
+                [existingUser?.firstName, existingUser?.lastName].filter(Boolean).join(" ") ||
+                "Care recipient",
+            namePrefix: namePrefix || existingInvite?.namePrefix,
+            phone: payload.phone.trim(),
+            phoneCountryCode: payload.phoneCountryCode.trim(),
+        });
     }
 
     if (

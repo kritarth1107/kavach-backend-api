@@ -1,11 +1,16 @@
 import { randomUUID } from "crypto";
 import ChannelIdentity from "../models/channelIdentity.model";
 import Family from "../models/family.model";
+import FamilyInvitation from "../models/familyInvitation.model";
 import User from "../models/users.model";
 import { AppError } from "../middleware/error.middleware";
 import { ChannelType } from "../types/careRecord.types";
-import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
-import { isInternalPhone } from "../utils/phone.util";
+import {
+    FamilyInvitationStatus,
+    FamilyMemberStatus,
+    FamilyRole,
+} from "../types/family.types";
+import { isInternalPhone, normalizePhoneInput } from "../utils/phone.util";
 
 export function normalizeChannelIdentifier(channelType: ChannelType, raw: string): string {
     const trimmed = raw.trim();
@@ -25,19 +30,99 @@ export type ResolvedChannelIdentity = {
     channelIdentifier: string;
 };
 
-async function findUserByWhatsAppPhone(normalized: string) {
+function phoneLookupVariants(normalized: string) {
     const digits = normalized.replace(/\D/g, "");
-    const last10 = digits.slice(-10);
+    const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+    const keys = new Set<string>();
+    if (normalized) keys.add(normalized);
+    if (digits) {
+        keys.add(digits);
+        keys.add(`+${digits}`);
+    }
+    if (last10.length === 10) {
+        keys.add(`+91${last10}`);
+        keys.add(`91${last10}`);
+    }
+    return { digits, last10, keys: [...keys] };
+}
+
+async function findUserByWhatsAppPhone(normalized: string) {
+    const { last10, keys } = phoneLookupVariants(normalized);
 
     return User.findOne({
         $or: [
-            { phoneKey: normalized },
-            { phoneKey: `+${digits}` },
+            ...keys.map((phoneKey) => ({ phoneKey })),
             ...(last10.length === 10
-                ? [{ "phone.countryCode": "+91", "phone.number": last10 }]
+                ? [
+                      { "phone.countryCode": "+91", "phone.number": last10 },
+                      { "phone.number": last10 },
+                  ]
                 : []),
         ],
     }).lean();
+}
+
+async function backfillUserPhoneFromInvite(
+    userId: string,
+    countryCode: string,
+    number: string,
+): Promise<void> {
+    try {
+        const normalized = normalizePhoneInput(countryCode, number);
+        const user = await User.findOne({ userId }).lean();
+        if (!user) return;
+        if (user.phone?.number && !isInternalPhone(user.phone.countryCode)) return;
+        await User.updateOne(
+            { userId },
+            {
+                phone: {
+                    countryCode: normalized.countryCode,
+                    number: normalized.number,
+                },
+                phoneKey: normalized.key,
+            },
+        );
+    } catch {
+        // best-effort backfill
+    }
+}
+
+async function resolveCareRecipientFromInvitePhone(
+    normalized: string,
+): Promise<ResolvedChannelIdentity | null> {
+    const { last10 } = phoneLookupVariants(normalized);
+    if (last10.length !== 10) return null;
+
+    const invites = await FamilyInvitation.find({
+        role: FamilyRole.CARE_RECIPIENT,
+        status: FamilyInvitationStatus.ACCEPTED,
+        userId: { $exists: true, $nin: [null, ""] },
+        phone: { $exists: true, $ne: "" },
+    })
+        .sort({ updatedAt: -1 })
+        .lean();
+
+    for (const invite of invites) {
+        const cc = invite.phoneCountryCode?.trim() || "+91";
+        let inviteLast10 = "";
+        try {
+            inviteLast10 = normalizePhoneInput(cc, invite.phone ?? "").number;
+        } catch {
+            inviteLast10 = String(invite.phone ?? "").replace(/\D/g, "").slice(-10);
+        }
+        if (inviteLast10 !== last10) continue;
+
+        const membership = await resolveFamilyMembership(String(invite.userId));
+        if (!membership) continue;
+
+        void backfillUserPhoneFromInvite(String(invite.userId), cc, inviteLast10);
+        return {
+            ...membership,
+            channelIdentifier: normalized,
+        };
+    }
+
+    return null;
 }
 
 async function resolveFamilyMembership(userId: string) {
@@ -83,19 +168,25 @@ export async function resolveWhatsAppSender(senderPhone: string): Promise<Resolv
     }
 
     const user = await findUserByWhatsAppPhone(normalized);
-    if (!user) {
-        throw new AppError("Phone not recognized — sign up at Kavach or ask your caregiver to invite you", 404);
+    if (user) {
+        const membership = await resolveFamilyMembership(user.userId);
+        if (membership) {
+            return {
+                ...membership,
+                channelIdentifier: normalized,
+            };
+        }
     }
 
-    const membership = await resolveFamilyMembership(user.userId);
-    if (!membership) {
-        throw new AppError("No active Kavach family found for this phone", 404);
+    const fromInvite = await resolveCareRecipientFromInvitePhone(normalized);
+    if (fromInvite) {
+        return fromInvite;
     }
 
-    return {
-        ...membership,
-        channelIdentifier: normalized,
-    };
+    throw new AppError(
+        "Phone not recognized — sign up at Kavach or ask your caregiver to invite you",
+        404,
+    );
 }
 
 export async function resolveUserWhatsAppPhone(userId: string): Promise<string | null> {
