@@ -119,14 +119,11 @@ const config: AppConfig = {
     },
 
     whatsapp: {
-        provider: ((): "mock" | "baileys" | "meta" => {
+        provider: ((): "mock" | "meta" => {
             const p = (process.env.WHATSAPP_PROVIDER || "mock").toLowerCase();
-            if (p === "baileys") return "baileys";
             if (p === "meta") return "meta";
             return "mock";
         })(),
-        bridgeUrl: process.env.WHATSAPP_BRIDGE_URL || "http://localhost:3100",
-        bridgeSecret: process.env.WHATSAPP_BRIDGE_SECRET || "",
         kavachNumber: process.env.KAVACH_WHATSAPP_NUMBER || "+918310905372",
         meta: {
             phoneNumberId: process.env.WHATSAPP_META_PHONE_NUMBER_ID || "",

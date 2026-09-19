@@ -106,7 +106,7 @@ export interface HealthConfig {
     secret: string;
 }
 
-export type WhatsAppProvider = "mock" | "baileys" | "meta";
+export type WhatsAppProvider = "mock" | "meta";
 
 export interface WhatsAppMetaConfig {
     phoneNumberId: string;
@@ -120,8 +120,6 @@ export interface WhatsAppMetaConfig {
 
 export interface WhatsAppConfig {
     provider: WhatsAppProvider;
-    bridgeUrl: string;
-    bridgeSecret: string;
     /** Single Kavach WhatsApp line. Users message this number. */
     kavachNumber: string;
     meta: WhatsAppMetaConfig;
@@ -143,5 +141,5 @@ export interface AppConfig {
     r2: R2Config;                    // Cloudflare R2 settings
     aiEngine: AiEngineConfig;        // Kawach AI engine (Saheli / RAG)
     health: HealthConfig;              // Protected health endpoint settings
-    whatsapp: WhatsAppConfig;          // WhatsApp transport (mock | Baileys bridge)
+    whatsapp: WhatsAppConfig;          // WhatsApp transport (mock | Meta Cloud API)
 }

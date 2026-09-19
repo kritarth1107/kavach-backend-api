@@ -1,0 +1,76 @@
+name: Tear down Baileys bridge GCP resources
+
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  GCP_REGION: asia-south1
+  SERVICE: kavach-backend
+  BAILEYS_VM_NAME: kavach-baileys-bridge
+  BAILEYS_ZONE: asia-south1-a
+  FIREWALL_RULE: allow-kavach-baileys-3100
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Delete Baileys bridge VM if present
+        run: |
+          if gcloud compute instances describe "${{ env.BAILEYS_VM_NAME }}" \
+            --zone="${{ env.BAILEYS_ZONE }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" >/dev/null 2>&1; then
+            echo "Deleting VM ${{ env.BAILEYS_VM_NAME }}..."
+            gcloud compute instances delete "${{ env.BAILEYS_VM_NAME }}" \
+              --zone="${{ env.BAILEYS_ZONE }}" \
+              --project="${{ env.GCP_PROJECT_ID }}" \
+              --quiet
+          else
+            echo "VM ${{ env.BAILEYS_VM_NAME }} not found — skipping."
+          fi
+
+      - name: Delete Baileys firewall rule if present
+        run: |
+          if gcloud compute firewall-rules describe "${{ env.FIREWALL_RULE }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" >/dev/null 2>&1; then
+            echo "Deleting firewall rule ${{ env.FIREWALL_RULE }}..."
+            gcloud compute firewall-rules delete "${{ env.FIREWALL_RULE }}" \
+              --project="${{ env.GCP_PROJECT_ID }}" \
+              --quiet
+          else
+            echo "Firewall rule ${{ env.FIREWALL_RULE }} not found — skipping."
+          fi
+
+      - name: Remove Baileys env vars from Cloud Run backend
+        run: |
+          gcloud run services update "${{ env.SERVICE }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --remove-env-vars="WHATSAPP_BRIDGE_URL,WHATSAPP_BRIDGE_SECRET" \
+            --update-env-vars="WHATSAPP_PROVIDER=meta" \
+            --quiet
+
+      - name: Confirm backend WhatsApp config
+        run: |
+          gcloud run services describe "${{ env.SERVICE }}" \
+            --project="${{ env.GCP_PROJECT_ID }}" \
+            --region="${{ env.GCP_REGION }}" \
+            --format=json > /tmp/service.json
+          python3 <<'PY'
+          import json
+          data = json.load(open("/tmp/service.json"))
+          env = {e["name"]: e.get("value", "[secret]") for e in data["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+          for k in ["WHATSAPP_PROVIDER", "WHATSAPP_BRIDGE_URL", "WHATSAPP_BRIDGE_SECRET", "WHATSAPP_META_PHONE_NUMBER_ID", "WHATSAPP_META_WABA_ID"]:
+              print(f"{k}: {env.get(k, 'MISSING')}")
+          PY

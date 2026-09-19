@@ -385,29 +385,6 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     res.status(200).json({ success: true, data: { processed: messages.length } });
 }
 
-export async function postWhatsAppBaileysWebhook(req: Request, res: Response) {
-    const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
-    try {
-        const reply = await handleWhatsAppInbound(req.body);
-        res.json({ success: true, data: { reply } });
-    } catch (err) {
-        console.error("WhatsApp inbound failed:", err);
-        const fallback =
-            "Saheli is having a small hiccup. Please try again in a moment, or ask your caregiver to check the Kavach dashboard.";
-        res.json({
-            success: true,
-            data: {
-                reply: {
-                    channelType: "whatsapp",
-                    channelIdentifier: String(req.body?.from ?? ""),
-                    modality: "text",
-                    content: fallback,
-                },
-            },
-        });
-    }
-}
-
 export async function postPhoneMockWebhook(req: Request, res: Response) {
     const { reply } = await phoneMockAdapter.receive({
         channelType: ChannelType.PHONE,

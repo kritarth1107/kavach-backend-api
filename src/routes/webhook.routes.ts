@@ -6,11 +6,9 @@ import {
     postWhatsAppMetaSubscribeWaba,
     postPhoneMockWebhook,
     postSpeakerMockWebhook,
-    postWhatsAppBaileysWebhook,
     postWhatsAppMetaWebhook,
     postWhatsAppMockWebhook,
 } from "../controllers/careRecord.controller";
-import { requireBridgeSecret } from "../middleware/bridgeAuth.middleware";
 
 const router = Router();
 
@@ -20,7 +18,6 @@ router.get("/whatsapp/meta/debug", getWhatsAppMetaWebhookDebug);
 router.post("/whatsapp/meta/setup", postWhatsAppMetaSetup);
 router.post("/whatsapp/meta/subscribe-waba", postWhatsAppMetaSubscribeWaba);
 router.post("/whatsapp/meta", postWhatsAppMetaWebhook);
-router.post("/whatsapp/baileys", requireBridgeSecret, postWhatsAppBaileysWebhook);
 router.post("/phone/mock", postPhoneMockWebhook);
 router.post("/speaker/mock", postSpeakerMockWebhook);
 
