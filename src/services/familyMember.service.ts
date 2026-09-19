@@ -22,6 +22,10 @@ import {
 } from "./userContact.service";
 import { validateInviteRole } from "./careRecordAuth.service";
 import {
+    notifyCareRecipientWhatsApp,
+    phoneToWhatsAppRecipient,
+} from "./careRecipientWhatsAppNotify.service";
+import {
     FamilyInvitationStatus,
     FamilyMemberStatus,
     FamilyRole,
@@ -617,6 +621,18 @@ async function addCareRecipientMember(
         location: params.location,
         userId: memberUserId,
     });
+
+    if (params.phone?.trim() && params.phoneCountryCode?.trim()) {
+        void notifyCareRecipientWhatsApp({
+            phoneCountryCode: params.phoneCountryCode.trim(),
+            phone: params.phone.trim(),
+            recipientPrefix: params.namePrefix,
+            recipientName: params.memberName,
+            caregiverUserId: inviter.userId,
+            relationship: params.relationship,
+            isPhoneUpdate: false,
+        });
+    }
 }
 
 async function upsertCareRecipientMetadata(
@@ -1294,6 +1310,19 @@ export async function updateFamilyMemberDetails(
         throw new AppError("Cannot edit the primary caregiver", 400);
     }
 
+    const existingInvite = await FamilyInvitation.findOne({
+        familyId,
+        userId: memberUserId,
+    }).lean();
+    const existingUser = await User.findOne({ userId: memberUserId }).lean();
+    const priorPhoneKey =
+        member.role === FamilyRole.CARE_RECIPIENT
+            ? phoneToWhatsAppRecipient(
+                  existingInvite?.phoneCountryCode ?? existingUser?.phone?.countryCode,
+                  existingInvite?.phone ?? existingUser?.phone?.number,
+              )
+            : null;
+
     if (payload.role) {
         const role = mapUiRoleToFamilyRole(payload.role);
         if (role === FamilyRole.PRIMARY_CAREGIVER) {
@@ -1362,15 +1391,47 @@ export async function updateFamilyMemberDetails(
     }
 
     if (payload.phone?.trim() && payload.phoneCountryCode?.trim()) {
+        const normalizedPhone = normalizePhoneInput(
+            payload.phoneCountryCode.trim(),
+            payload.phone.trim(),
+        );
         await User.updateOne(
             { userId: memberUserId },
             {
                 phone: {
-                    countryCode: payload.phoneCountryCode.trim(),
-                    number: payload.phone.replace(/\D/g, ""),
+                    countryCode: normalizedPhone.countryCode,
+                    number: normalizedPhone.number,
                 },
+                phoneKey: normalizedPhone.key,
             },
         );
+    }
+
+    if (
+        member.role === FamilyRole.CARE_RECIPIENT &&
+        payload.phone?.trim() &&
+        payload.phoneCountryCode?.trim()
+    ) {
+        const newPhoneKey = phoneToWhatsAppRecipient(
+            payload.phoneCountryCode.trim(),
+            payload.phone.trim(),
+        );
+        if (newPhoneKey && newPhoneKey !== priorPhoneKey) {
+            const { namePrefix, name: memberName } = normalizeMemberNameInput(payload);
+            void notifyCareRecipientWhatsApp({
+                phoneCountryCode: payload.phoneCountryCode.trim(),
+                phone: payload.phone.trim(),
+                recipientPrefix: namePrefix || existingInvite?.namePrefix,
+                recipientName:
+                    memberName ||
+                    existingInvite?.inviteeName ||
+                    [existingUser?.firstName, existingUser?.lastName].filter(Boolean).join(" ") ||
+                    "there",
+                caregiverUserId: actorUserId,
+                relationship: payload.relationship ?? existingInvite?.relationship,
+                isPhoneUpdate: Boolean(priorPhoneKey),
+            });
+        }
     }
 
     return getFamilyMembersList(familyId, actorUserId);
