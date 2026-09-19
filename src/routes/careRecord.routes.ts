@@ -15,6 +15,11 @@ import {
     postRejectOrderHandler,
     postSuggestOrderHandler,
 } from "../controllers/careRecord.controller";
+import {
+    getPartnerIntegrationDetailHandler,
+    getPartnerOrderSettingsHandler,
+    patchPartnerOrderSettingsHandler,
+} from "../controllers/integrationPartner.controller";
 
 const router = Router();
 
@@ -30,6 +35,9 @@ router.post("/:familyId/orders/:orderId/pay", protect, postPayOrderHandler);
 router.post("/:familyId/orders/:orderId/reject", protect, postRejectOrderHandler);
 router.get("/:familyId/orders/history", protect, getOrderHistoryHandler);
 router.get("/:familyId/integrations", protect, getIntegrationsHandler);
+router.get("/:familyId/integrations/:partner/detail", protect, getPartnerIntegrationDetailHandler);
+router.get("/:familyId/integrations/:partner/settings", protect, getPartnerOrderSettingsHandler);
+router.patch("/:familyId/integrations/:partner/settings", protect, patchPartnerOrderSettingsHandler);
 
 router.get("/:familyId/channel-identities", protect, getChannelIdentitiesHandler);
 router.post("/:familyId/channel-identities", protect, postChannelIdentityHandler);

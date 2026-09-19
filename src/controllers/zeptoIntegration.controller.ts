@@ -52,22 +52,22 @@ export async function getZeptoOAuthCallbackHandler(req: Request, res: Response) 
     const frontend = config.server.liveFrontendUrl.replace(/\/$/, "");
 
     if (error) {
-        res.redirect(`${frontend}/dashboard/integrations?zepto=error&message=${encodeURIComponent(error)}`);
+        res.redirect(`${frontend}/dashboard/integrations/zepto?zepto=error&message=${encodeURIComponent(error)}`);
         return;
     }
 
     if (!code || !state) {
-        res.redirect(`${frontend}/dashboard/integrations?zepto=error&message=missing_code`);
+        res.redirect(`${frontend}/dashboard/integrations/zepto?zepto=error&message=missing_code`);
         return;
     }
 
     try {
         await completeZeptoConnect(code, state);
-        res.redirect(`${frontend}/dashboard/integrations?zepto=connected`);
+        res.redirect(`${frontend}/dashboard/integrations/zepto?zepto=connected`);
     } catch (err) {
         const message = err instanceof Error ? err.message : "oauth_failed";
         res.redirect(
-            `${frontend}/dashboard/integrations?zepto=error&message=${encodeURIComponent(message)}`,
+            `${frontend}/dashboard/integrations/zepto?zepto=error&message=${encodeURIComponent(message)}`,
         );
     }
 }

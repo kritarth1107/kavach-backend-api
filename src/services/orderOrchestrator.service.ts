@@ -21,8 +21,11 @@ import {
     getMemberRole,
     requireCareRecipient,
 } from "./careRecordAuth.service";
-import { roleHasPermission } from "../types/careRecord.types";
 import { approveOrder, suggestOrder } from "./order.service";
+import {
+    getPartnerOrderSettings,
+    orderRequiresCaregiverApproval,
+} from "./commerceSettings.service";
 import {
     ensurePartnerAddressesSynced,
     listPartnerAddresses,
@@ -478,8 +481,6 @@ export async function submitOrderFlowCart(input: {
     const orderPartner = mcpToOrderPartner(session.partner);
     const family = await getFamilyForActor(session.familyId, session.actorUserId);
     const actorRole = getMemberRole(family, session.actorUserId);
-    const caregiverCanPlaceCod =
-        !!actorRole && roleHasPermission(actorRole, "approve_order");
 
     let order = await suggestOrder({
         familyId: session.familyId,
@@ -498,7 +499,14 @@ export async function submitOrderFlowCart(input: {
         notes: session.query,
     });
 
-    if (caregiverCanPlaceCod) {
+    const partnerSettings = await getPartnerOrderSettings(session.familyId, session.partner);
+    const needsApproval = orderRequiresCaregiverApproval({
+        actorRole,
+        totalPaise: order.totalPaise,
+        settings: partnerSettings,
+    });
+
+    if (!needsApproval) {
         order = await approveOrder(session.familyId, order.orderId, session.actorUserId);
     } else {
         void createFamilyNotification(session.familyId, {
@@ -568,7 +576,7 @@ export async function submitOrderFlowCart(input: {
 
     const flow = flowFromSession(
         session,
-        caregiverCanPlaceCod
+        !needsApproval
             ? `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Place COD when you're ready.`
             : `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Family approval required before checkout.`,
     );

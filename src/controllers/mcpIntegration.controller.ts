@@ -79,23 +79,23 @@ export async function getMcpOAuthCallbackHandler(req: Request, res: Response) {
 
     if (error) {
         res.redirect(
-            `${frontend}/dashboard/integrations?${partner}=error&message=${encodeURIComponent(error)}`,
+            `${frontend}/dashboard/integrations/${partner}?${partner}=error&message=${encodeURIComponent(error)}`,
         );
         return;
     }
 
     if (!code || !state) {
-        res.redirect(`${frontend}/dashboard/integrations?${partner}=error&message=missing_code`);
+        res.redirect(`${frontend}/dashboard/integrations/${partner}?${partner}=error&message=missing_code`);
         return;
     }
 
     try {
         await completeMcpConnect(code, state);
-        res.redirect(`${frontend}/dashboard/integrations?${partner}=connected`);
+        res.redirect(`${frontend}/dashboard/integrations/${partner}?${partner}=connected`);
     } catch (err) {
         const message = err instanceof Error ? err.message : "oauth_failed";
         res.redirect(
-            `${frontend}/dashboard/integrations?${partner}=error&message=${encodeURIComponent(message)}`,
+            `${frontend}/dashboard/integrations/${partner}?${partner}=error&message=${encodeURIComponent(message)}`,
         );
     }
 }
