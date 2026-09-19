@@ -28,7 +28,7 @@ const ORDER_VERBS_WITH_OBJECT =
     /\b(need|want|chahiye)\s+(to\s+)?(order|buy|get|eat)\b/i;
 
 const CASUAL_NON_ORDER =
-    /\b(want to know|anything you want|need help|need anything|i'?m (doing )?fine|i am fine|theek|how are you|what can you|tell me about|share updates|care co-?pilot|talk to me|change to|switch to)\b/i;
+    /\b(want to know|anything you want|do you need any|need any information|update in (the )?system|need help|need anything|i'?m (doing )?fine|i am fine|theek|how are you|what can you|tell me about|share updates|care co-?pilot|talk to me|change to|switch to)\b/i;
 
 const ORDER_TYPOS = /\b(oder|ordr|odr)\b/i;
 

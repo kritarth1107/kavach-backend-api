@@ -1,13 +1,11 @@
 import WhatsappSession, { type WhatsappOrderPhase } from "../models/whatsappSession.model";
 import {
     addOrderFlowCartItem,
-    handleOrderFlowChatMessage,
     loadOrderFlowRestaurantMenu,
     selectOrderFlowAddress,
     submitOrderFlowCart,
     type OrderFlowPayload,
 } from "./orderOrchestrator.service";
-import { isHighConfidenceOrderIntent, normalizeOrderText } from "./saheliOrder.service";
 import type { OrderSessionCatalogItem } from "../models/orderSession.model";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -35,7 +33,17 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
         lines.push('\nReply with a number (e.g. "1") or say *cancel*.');
     }
 
-    if (flow.phase === "browse") {
+    if (flow.disambiguation?.candidates?.length) {
+        lines.push(`\n*Which "${flow.disambiguation.query}" did you mean?*`);
+        flow.disambiguation.candidates.slice(0, 5).forEach((item, i) => {
+            const price =
+                item.pricePaise && item.pricePaise > 0
+                    ? ` — ${formatRupee(item.pricePaise)}`
+                    : "";
+            lines.push(`${i + 1}. ${item.name}${price}`);
+        });
+        lines.push('\nReply with a number (e.g. "1").');
+    } else if (flow.phase === "browse") {
         const items = catalogItems(flow);
         if (items.length) {
             lines.push(`\n*${flow.partnerLabel} options for "${flow.query}":*`);
@@ -89,7 +97,7 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
     return lines.filter(Boolean).join("\n").trim();
 }
 
-async function syncWhatsappOrderSession(
+export async function syncWhatsappOrderSession(
     phone: string,
     flow: OrderFlowPayload | null,
     pendingOrderId?: string,
@@ -175,6 +183,19 @@ async function handleActiveOrderTurn(input: {
             actorUserId: input.actorUserId,
             addressId: flow.addresses[idx]!.id,
         });
+        await syncWhatsappOrderSession(input.phone, flow);
+        return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
+    }
+
+    if (flow.disambiguation?.candidates?.length && idx != null) {
+        const { addToOrderCart } = await import("./orderKernel.service");
+        const result = await addToOrderCart({
+            sessionId: input.orderSessionId,
+            familyId: input.familyId,
+            actorUserId: input.actorUserId,
+            items: [{ candidateIndex: idx, quantity: 1 }],
+        });
+        flow = (result.orderFlow as typeof flow) ?? flow;
         await syncWhatsappOrderSession(input.phone, flow);
         return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
     }
@@ -317,21 +338,6 @@ export async function tryHandleWhatsAppOrderTurn(input: {
         }
     }
 
-    if (!isHighConfidenceOrderIntent(text)) return null;
-
-    const flow = await handleOrderFlowChatMessage({
-        familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
-        actorUserId: input.actorUserId,
-        message: normalizeOrderText(text),
-        saheliSessionId: input.saheliSessionId ?? waSession?.saheliSessionId,
-    });
-
-    if (!flow?.sessionId && flow?.message) {
-        return orderTurn(flow.message, flow);
-    }
-    if (!flow?.sessionId) return null;
-
-    await syncWhatsappOrderSession(input.phone, flow);
-    return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
+    // New orders are AI-first — Saheli agent starts flows via tools when appropriate.
+    return null;
 }

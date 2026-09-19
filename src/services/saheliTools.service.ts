@@ -15,7 +15,7 @@ import Order from "../models/order.model";
 import { OrderStatus } from "../types/careRecord.types";
 import { ensurePartnerAddressesSynced, listPartnerAddresses } from "./partnerAddress.service";
 import { resolveFamilyMcpUserId } from "./commerceConnection.service";
-import { maybeSuggestOrderFromChat, type OrderChatResult } from "./saheliOrder.service";
+import { rankCatalogHits } from "./catalogResolver.service";
 
 export type SaheliToolName =
     | "get_care_timeline"
@@ -30,6 +30,13 @@ export type SaheliToolName =
     | "preview_order"
     | "place_cod_order"
     | "suggest_order"
+    | "ensure_order_session"
+    | "search_catalog"
+    | "resolve_catalog_item"
+    | "add_to_order_cart"
+    | "get_order_cart"
+    | "submit_order_cart"
+    | "select_order_address"
     | "get_order_status"
     | "suggest_reorder"
     | "recall_memories"
@@ -191,11 +198,13 @@ export async function executeSaheliTool(input: {
             const search = await searchMcpProduct("swiggy", input.familyId, commerceUserId, query, {
                 addressId,
             });
+            const candidates = rankCatalogHits(query, search.items, "swiggy", 10);
             return {
                 partner: "swiggy",
                 addressId: search.addressId,
                 error: search.error,
                 items: search.items.slice(0, 10),
+                candidates,
             };
         }
         case "search_instamart": {
@@ -211,12 +220,91 @@ export async function executeSaheliTool(input: {
                 query,
                 { addressId },
             );
+            const candidates = rankCatalogHits(query, search.items, "instamart", 10);
             return {
                 partner: "instamart",
                 addressId: search.addressId,
                 error: search.error,
                 items: search.items.slice(0, 10),
+                candidates,
             };
+        }
+        case "ensure_order_session": {
+            const { ensureOrderSession } = await import("./orderKernel.service");
+            return ensureOrderSession({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                message: input.args.message ? String(input.args.message) : undefined,
+                saheliSessionId: input.args.saheliSessionId
+                    ? String(input.args.saheliSessionId)
+                    : undefined,
+            });
+        }
+        case "search_catalog": {
+            const { searchOrderCatalog } = await import("./orderKernel.service");
+            return searchOrderCatalog({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                query: String(input.args.query ?? ""),
+            });
+        }
+        case "resolve_catalog_item": {
+            const { resolveOrderCatalogItem } = await import("./orderKernel.service");
+            return resolveOrderCatalogItem({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                query: input.args.query ? String(input.args.query) : undefined,
+                candidateIndex:
+                    input.args.candidateIndex != null
+                        ? Number(input.args.candidateIndex)
+                        : undefined,
+                candidateId: input.args.candidateId ? String(input.args.candidateId) : undefined,
+            });
+        }
+        case "add_to_order_cart": {
+            const { addToOrderCart } = await import("./orderKernel.service");
+            const rawItems = Array.isArray(input.args.items) ? input.args.items : [input.args];
+            const items = rawItems.map((row: Record<string, unknown>) => ({
+                query: row.query ? String(row.query) : undefined,
+                candidateIndex:
+                    row.candidateIndex != null ? Number(row.candidateIndex) : undefined,
+                candidateId: row.candidateId ? String(row.candidateId) : undefined,
+                quantity: row.quantity != null ? Number(row.quantity) : 1,
+            }));
+            return addToOrderCart({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                items,
+            });
+        }
+        case "get_order_cart": {
+            const { getOrderCart } = await import("./orderKernel.service");
+            return getOrderCart({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+            });
+        }
+        case "submit_order_cart": {
+            const { submitOrderCart } = await import("./orderKernel.service");
+            return submitOrderCart({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+            });
+        }
+        case "select_order_address": {
+            const { selectOrderSessionAddress } = await import("./orderKernel.service");
+            return selectOrderSessionAddress({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                addressId: String(input.args.addressId ?? ""),
+            });
         }
         case "preview_order": {
             const partner = String(input.args.partner ?? "swiggy") as McpPartnerKey;
@@ -259,6 +347,7 @@ export async function executeSaheliTool(input: {
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 message,
+                aiInitiated: true,
             });
             if (!flow) return { status: "no_order_intent" };
             return { status: "order_flow", kind: "order_flow", orderFlow: flow, message: flow.message };
@@ -381,6 +470,7 @@ export async function executeSaheliTool(input: {
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 message: `order ${message} from ${last.partner}`,
+                aiInitiated: true,
             });
             return flow
                 ? { status: "order_flow", orderFlow: flow, message: flow.message }

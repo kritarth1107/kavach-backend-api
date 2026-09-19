@@ -1,6 +1,7 @@
 import { AppError } from "../middleware/error.middleware";
 import OrderPreview from "../models/orderPreview.model";
 import type { McpCatalogHit } from "../partners/mcp/mcpClient.service";
+import { resolveCatalogFromHits } from "./catalogResolver.service";
 import type { McpPartnerKey } from "../partners/mcp/types";
 import { searchMcpProduct } from "../partners/mcp/mcpClient.service";
 import { OrderPartner, OrderStatus } from "../types/careRecord.types";
@@ -105,7 +106,21 @@ export async function previewOrder(input: {
         if (search.error === "no_address") {
             throw new AppError("Select a delivery address before searching.", 400);
         }
-        const hit = pickPricedHit(search.items, input.partner);
+        const resolved = resolveCatalogFromHits(item.name, search.items, input.partner);
+        if (resolved.status === "disambiguation_required") {
+            const options = resolved.candidates
+                .slice(0, 3)
+                .map((c) => `${c.name}${c.pricePaise ? ` ₹${(c.pricePaise / 100).toFixed(0)}` : ""}`)
+                .join("; ");
+            throw new AppError(
+                `Multiple matches for "${item.name}": ${options}. Ask for the exact product.`,
+                400,
+            );
+        }
+        if (resolved.status === "not_found") {
+            throw new AppError(resolved.message, 400);
+        }
+        const hit = resolved.hit;
         if (!hit?.pricePaise) {
             throw new AppError(
                 `No live price found for "${item.name}" on ${partnerLabel(mcpToOrderPartner(input.partner))}. Try a more specific name from search results.`,

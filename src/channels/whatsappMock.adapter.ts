@@ -9,6 +9,11 @@ import {
 } from "../services/saheli.service";
 import { FamilyRole } from "../types/family.types";
 
+type TurnResult = {
+    reply: string;
+    orderFlow?: import("../services/orderOrchestrator.service").OrderFlowPayload;
+};
+
 async function handleTurn(
     familyId: string,
     userId: string,
@@ -18,7 +23,7 @@ async function handleTurn(
     channel: ChannelType,
     source: CareRecordSource,
     phone: string,
-): Promise<string> {
+): Promise<TurnResult> {
     const { resolveWhatsAppSaheliSession } = await import("../services/saheliSession.service");
     const thread = role === FamilyRole.CARE_RECIPIENT ? "elder" : "caregiver";
     const sessionId = await resolveWhatsAppSaheliSession({
@@ -29,10 +34,16 @@ async function handleTurn(
         thread,
     });
 
-    const channelOpts = { skipInboundCareRecord: true, channel, source, sessionId };
+    const channelOpts = {
+        skipInboundCareRecord: true,
+        channel,
+        source,
+        sessionId,
+        whatsappPhone: channel === ChannelType.WHATSAPP ? phone : undefined,
+    };
     if (role === FamilyRole.CARE_RECIPIENT) {
         const result = await sendSaheliMessage(familyId, userId, userId, text, channelOpts);
-        return result.reply;
+        return { reply: result.reply, orderFlow: result.orderFlow };
     }
 
     const result = await sendCaregiverSaheliMessage(
@@ -42,7 +53,7 @@ async function handleTurn(
         text,
         channelOpts,
     );
-    return result.reply;
+    return { reply: result.reply };
 }
 
 export class ChannelMockAdapter implements ChannelAdapter {
@@ -85,7 +96,7 @@ export class ChannelMockAdapter implements ChannelAdapter {
             status: "reported",
         });
 
-        const replyText = await handleTurn(
+        const turn = await handleTurn(
             identity.familyId,
             identity.userId,
             identity.role,
@@ -96,7 +107,8 @@ export class ChannelMockAdapter implements ChannelAdapter {
             inbound.channelIdentifier,
         );
 
-        const voice = inbound.modality === "voice" ? await textToSpeech(replyText) : { text: replyText };
+        const voice =
+            inbound.modality === "voice" ? await textToSpeech(turn.reply) : { text: turn.reply };
 
         const outbound: OutboundMessage = {
             channelType: this.channelType,
@@ -104,6 +116,7 @@ export class ChannelMockAdapter implements ChannelAdapter {
             modality: inbound.modality,
             content: voice.text,
             audioBase64: voice.audioBase64,
+            orderFlow: turn.orderFlow,
         };
 
         return { reply: outbound };

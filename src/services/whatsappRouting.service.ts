@@ -347,5 +347,12 @@ export async function handleWhatsAppInbound(body: {
         },
     });
 
+    if (reply.orderFlow?.sessionId) {
+        return outbound(phone, reply.content, {
+            kind: "order_flow",
+            orderFlow: reply.orderFlow,
+        });
+    }
+
     return outbound(phone, reply.content, { kind: "plain" });
 }

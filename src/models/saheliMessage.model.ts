@@ -42,6 +42,16 @@ export type SaheliOrderFlowPayload = {
     }>;
     orderId?: string;
     message?: string;
+    disambiguation?: {
+        query: string;
+        candidates: Array<{
+            candidateId?: string;
+            name: string;
+            pricePaise?: number;
+            kind?: string;
+            confidence?: number;
+        }>;
+    };
 };
 
 export type SaheliMessageOrderPayload = {

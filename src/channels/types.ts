@@ -27,6 +27,8 @@ export type OutboundMessage = {
     modality: MessageModality;
     content: string;
     audioBase64?: string;
+    /** Active WhatsApp order flow started by Saheli AI tools. */
+    orderFlow?: import("../services/orderOrchestrator.service").OrderFlowPayload;
     /** Rich Meta WhatsApp payloads (interactive, media, text). */
     whatsappPayloads?: MetaWhatsAppPayload[];
 };

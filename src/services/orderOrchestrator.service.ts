@@ -30,6 +30,7 @@ import {
     ensurePartnerAddressesSynced,
     listPartnerAddresses,
 } from "./partnerAddress.service";
+import { rankCatalogHits } from "./catalogResolver.service";
 import {
     extractOrderQuery,
     isHighConfidenceOrderIntent,
@@ -40,7 +41,7 @@ import {
 } from "./saheliOrder.service";
 import { createFamilyNotification } from "./notification.service";
 
-const SESSION_TTL_MS = 2 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export type OrderFlowPayload = {
     sessionId: string;
@@ -58,6 +59,12 @@ export type OrderFlowPayload = {
     cartItems?: OrderSessionCartItem[];
     orderId?: string;
     message?: string;
+    disambiguation?: {
+        query: string;
+        candidates: Array<
+            OrderSessionCatalogItem & { candidateId?: string; confidence?: number }
+        >;
+    };
 };
 
 function orderPartnerToMcp(partner: OrderPartner): McpPartnerKey | null {
@@ -140,6 +147,12 @@ function flowFromSession(session: IOrderSessionDocument, message?: string): Orde
         cartItems: session.cartItems,
         orderId: session.orderId,
         message,
+        disambiguation: session.pendingDisambiguation
+            ? {
+                  query: session.pendingDisambiguation.query,
+                  candidates: session.pendingDisambiguation.candidates,
+              }
+            : undefined,
     };
 }
 
@@ -198,8 +211,24 @@ async function searchCatalogForSession(
         searchQuery,
         { addressId: session.selectedAddressId },
     );
-    session.catalog = splitCatalogHits(items);
+    const ranked = rankCatalogHits(searchQuery, items, session.partner, 20);
+    const rankedHits = ranked
+        .map((c) =>
+            items.find(
+                (h) =>
+                    (h.itemId && h.itemId === c.itemId) ||
+                    (h.spinId && h.spinId === c.spinId) ||
+                    (h.productId && h.productId === c.productId) ||
+                    (h.restaurantId && h.restaurantId === c.restaurantId) ||
+                    (h.matchedName ?? h.name) === c.name,
+            ),
+        )
+        .filter(Boolean) as McpCatalogHit[];
+    session.catalog = splitCatalogHits(rankedHits.length ? rankedHits : items);
+    session.lastCatalogQuery = searchQuery;
+    session.lastCatalogHits = items;
     session.phase = "browse";
+    session.pendingDisambiguation = undefined;
     session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
     await session.save();
     return session;
@@ -226,9 +255,11 @@ export async function startOrderFlow(input: {
     actorUserId: string;
     message: string;
     saheliSessionId?: string;
+    /** Set when the AI agent already decided this is an order request. */
+    aiInitiated?: boolean;
 }): Promise<OrderFlowPayload | null> {
     const orderMessage = normalizeOrderText(input.message);
-    if (!isHighConfidenceOrderIntent(orderMessage)) return null;
+    if (!input.aiInitiated && !isHighConfidenceOrderIntent(orderMessage)) return null;
 
     const family = await getFamilyForActor(input.familyId, input.actorUserId);
     requireCareRecipient(family, input.recipientUserId);
@@ -423,6 +454,20 @@ export async function addOrderFlowCartItem(input: {
             row.name.toLowerCase() === input.item.name.toLowerCase(),
     );
 
+    if (
+        session.partner === "swiggy" &&
+        input.item.restaurantId &&
+        session.cartItems.length > 0
+    ) {
+        const cartRestaurant = session.cartItems.find((row) => row.restaurantId)?.restaurantId;
+        if (cartRestaurant && cartRestaurant !== input.item.restaurantId) {
+            throw new AppError(
+                `"${input.item.name}" is from a different restaurant. Swiggy orders must be from one restaurant — start a new order or pick dishes from the same place.`,
+                400,
+            );
+        }
+    }
+
     if (existing) {
         existing.quantity = Math.min(existing.quantity + qty, 20);
     } else {
@@ -436,6 +481,7 @@ export async function addOrderFlowCartItem(input: {
         });
     }
 
+    session.pendingDisambiguation = undefined;
     session.phase = "review_cart";
     session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
     await session.save();

@@ -9,6 +9,7 @@ type AiChatResponse = {
     order?: Record<string, unknown>;
     connect?: Record<string, unknown>;
     order_preview?: Record<string, unknown>;
+    order_flow?: Record<string, unknown>;
     tool_trace?: Array<{ tool: string; status: string }>;
 };
 

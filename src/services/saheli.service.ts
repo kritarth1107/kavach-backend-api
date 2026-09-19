@@ -61,7 +61,6 @@ import {
 } from "./labCite.service";
 import { type OrderFlowPayload } from "./orderOrchestrator.service";
 import {
-    maybeSuggestOrderFromChat,
     messageLooksLikeOrder,
     normalizeOrderText,
     serializeOrderChatForClient,
@@ -212,6 +211,7 @@ function serializeOrderFlow(flow: OrderFlowPayload | null | undefined): SaheliOr
         cartItems: flow.cartItems,
         orderId: flow.orderId,
         message: flow.message,
+        disambiguation: flow.disambiguation,
     };
 }
 
@@ -459,7 +459,13 @@ async function elderReplyWithAi(
         elderLines?: string[];
         labs?: Array<{ title: string; recordDate?: string; rawText: string; kind?: string }>;
     },
-): Promise<{ reply: string; conversationId: string }> {
+): Promise<{
+    reply: string;
+    conversationId: string;
+    orderFromAgent?: OrderChatResult | null;
+    orderPreview?: Record<string, unknown> | null;
+    orderFlow?: OrderFlowPayload | null;
+}> {
     const waChannel = opts?.channel === ChannelType.WHATSAPP;
     const contextBundle =
         opts?.contextBundle ??
@@ -511,9 +517,29 @@ async function elderReplyWithAi(
             await persistConversationId(familyId, recipientUserId, result.conversation_id);
         }
         const rawReply = result.reply.trim() || "I'm here. Tell me more when you're ready.";
+        let orderFromAgent: OrderChatResult | null = null;
+        let orderPreview: Record<string, unknown> | null = null;
+        let orderFlow: OrderFlowPayload | null = null;
+        if (result.order && typeof result.order === "object") {
+            orderFromAgent = { kind: "order", ...result.order } as unknown as OrderChatResult;
+        } else if (result.connect && typeof result.connect === "object") {
+            orderFromAgent = {
+                kind: "connect_required",
+                ...result.connect,
+            } as unknown as OrderChatResult;
+        }
+        if (result.order_preview && typeof result.order_preview === "object") {
+            orderPreview = result.order_preview;
+        }
+        if (result.order_flow && typeof result.order_flow === "object") {
+            orderFlow = result.order_flow as OrderFlowPayload;
+        }
         return {
             reply: waChannel ? sanitizeElderReply(rawReply, displayName) : rawReply,
             conversationId,
+            orderFromAgent,
+            orderPreview,
+            orderFlow,
         };
     } catch (err) {
         const statusCode = err instanceof AppError ? err.statusCode : undefined;
@@ -749,6 +775,7 @@ export async function sendSaheliMessage(
         channel?: ChannelType;
         source?: CareRecordSource;
         sessionId?: string;
+        whatsappPhone?: string;
     },
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
@@ -851,17 +878,8 @@ export async function sendSaheliMessage(
     });
 
     let order: OrderChatResult | null = null;
-    try {
-        order = await maybeSuggestOrderFromChat({
-            familyId,
-            subjectUserId: recipientUserId,
-            actorUserId,
-            message: text,
-            minConfidence: "high",
-        });
-    } catch (err) {
-        console.warn("Order suggest from elder chat failed:", err);
-    }
+    let orderFlow: OrderFlowPayload | null = null;
+    let orderPreview: Record<string, unknown> | null = null;
 
     let reply = "";
     let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
@@ -869,10 +887,6 @@ export async function sendSaheliMessage(
     if (careActionReply) {
         reply = careActionReply;
         conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
-    } else if (order?.kind === "connect_required" || order?.kind === "prompt") {
-        reply = order.message;
-    } else if (order?.kind === "order") {
-        reply = applyOrderChatResult("", order);
     } else {
         const ai = await elderReplyWithAi(
             familyId,
@@ -882,7 +896,6 @@ export async function sendSaheliMessage(
             session.aiConversationId,
             {
                 sessionId,
-                orderContext: orderContextForAi(order),
                 channel: opts?.channel,
                 contextBundle,
                 isFirstMessage,
@@ -895,29 +908,27 @@ export async function sendSaheliMessage(
                 })),
             },
         );
-        reply = applyOrderChatResult(ai.reply, order);
+        reply = ai.reply;
         conversationId = ai.conversationId;
+        if (ai.orderFromAgent) {
+            order = ai.orderFromAgent;
+        }
+        if (ai.orderPreview) {
+            orderPreview = ai.orderPreview;
+        }
+        if (ai.orderFlow) {
+            orderFlow = ai.orderFlow;
+        }
 
-        const genericFallback = /^I'm here — please try again/i.test(reply.trim());
-        if (waChannel && (genericFallback || !reply.trim()) && messageLooksLikeOrder(text)) {
-            try {
-                const looseOrder = await maybeSuggestOrderFromChat({
-                    familyId,
-                    subjectUserId: recipientUserId,
-                    actorUserId,
-                    message: text,
-                    minConfidence: "loose",
-                });
-                if (looseOrder) {
-                    order = looseOrder;
-                    reply =
-                        looseOrder.kind === "connect_required" || looseOrder.kind === "prompt"
-                            ? looseOrder.message
-                            : applyOrderChatResult(reply, looseOrder);
-                }
-            } catch (err) {
-                console.warn("Loose order fallback failed:", err);
-            }
+        if (order?.kind === "connect_required" || order?.kind === "prompt") {
+            reply = applyOrderChatResult(reply, order);
+        } else if (order?.kind === "order") {
+            reply = applyOrderChatResult(reply, order);
+        }
+
+        if (waChannel && opts?.whatsappPhone && orderFlow?.sessionId) {
+            const { syncWhatsappOrderSession } = await import("./whatsappOrderFlow.service");
+            await syncWhatsappOrderSession(opts.whatsappPhone, orderFlow);
         }
     }
 
@@ -927,9 +938,12 @@ export async function sendSaheliMessage(
 
     const finalReply = reply;
     const chatExtras = saheliChatExtras(order);
+    const orderFlowPayload = serializeOrderFlow(orderFlow);
 
     await appendMessage(familyId, recipientUserId, "elder", "saheli", finalReply, sessionId, {
         orderPayload: chatExtras.orderPayload,
+        orderFlowPayload,
+        orderPreviewPayload: orderPreview ?? undefined,
         connectPayload: chatExtras.connectPayload,
     });
     await appendCareRecordEvent({
@@ -952,6 +966,8 @@ export async function sendSaheliMessage(
         reply: finalReply,
         conversationId,
         sessionId,
+        orderFlow: orderFlow ?? undefined,
+        orderPreview: orderPreview ?? undefined,
         ...chatExtras.clientPayload,
     };
 }

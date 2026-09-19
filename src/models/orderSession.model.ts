@@ -55,6 +55,21 @@ export interface IOrderSession {
     cartItems: OrderSessionCartItem[];
     orderId?: string;
     saheliSessionId?: string;
+    lastCatalogQuery?: string;
+    lastCatalogHits?: unknown[];
+    pendingDisambiguation?: {
+        query: string;
+        candidates: Array<{
+            candidateId?: string;
+            name: string;
+            pricePaise?: number;
+            kind?: "restaurant" | "dish" | "product";
+            restaurantId?: string;
+            restaurantName?: string;
+            itemId?: string;
+            confidence?: number;
+        }>;
+    };
     expiresAt: Date;
 }
 
@@ -120,6 +135,15 @@ const orderSessionSchema = new Schema<IOrderSessionDocument>(
         cartItems: { type: [cartItemSchema], default: [] },
         orderId: { type: String },
         saheliSessionId: { type: String, index: true },
+        lastCatalogQuery: { type: String },
+        lastCatalogHits: { type: [Schema.Types.Mixed], default: undefined },
+        pendingDisambiguation: {
+            type: {
+                query: { type: String, required: true },
+                candidates: { type: [catalogItemSchema], default: [] },
+            },
+            default: undefined,
+        },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },
