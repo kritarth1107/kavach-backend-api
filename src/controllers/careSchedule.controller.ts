@@ -6,6 +6,7 @@ import {
     listCareSchedules,
     updateCareSchedule,
 } from "../services/careSchedule.service";
+import { setScheduleCompletion } from "../services/careScheduleCompletion.service";
 
 export const getRecipientCareSchedule = async (
     req: Request,
@@ -77,6 +78,44 @@ export const patchRecipientCareSchedule = async (
             success: true,
             message: "Schedule item updated",
             data: schedule,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const putScheduleCompletion = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+): Promise<void> => {
+    try {
+        if (!req.user) {
+            throw new AppError("Not authenticated", 401);
+        }
+
+        const { familyId, recipientUserId, scheduleId } = req.params;
+        const status = req.body?.status;
+        if (status !== "completed" && status !== "missed") {
+            throw new AppError("status must be completed or missed", 400);
+        }
+
+        const data = await setScheduleCompletion(
+            familyId,
+            recipientUserId,
+            scheduleId,
+            req.user.userId,
+            {
+                status,
+                dateKey: typeof req.body?.dateKey === "string" ? req.body.dateKey : undefined,
+                note: typeof req.body?.note === "string" ? req.body.note : undefined,
+            },
+        );
+
+        res.json({
+            success: true,
+            message: "Care task updated",
+            data,
         });
     } catch (error) {
         next(error);

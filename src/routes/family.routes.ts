@@ -23,6 +23,7 @@ import {
     getRecipientCareSchedule,
     patchRecipientCareSchedule,
     postRecipientCareSchedule,
+    putScheduleCompletion,
     removeRecipientCareSchedule,
 } from "../controllers/careSchedule.controller";
 import {
@@ -232,6 +233,11 @@ router.patch(
     "/:familyId/recipients/:recipientUserId/care-schedule/:scheduleId",
     protect,
     patchRecipientCareSchedule,
+);
+router.put(
+    "/:familyId/recipients/:recipientUserId/care-schedule/:scheduleId/completion",
+    protect,
+    putScheduleCompletion,
 );
 router.delete(
     "/:familyId/recipients/:recipientUserId/care-schedule/:scheduleId",

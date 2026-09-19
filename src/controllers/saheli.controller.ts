@@ -268,10 +268,15 @@ export const getBriefing = async (
     try {
         if (!req.user) throw new AppError("Not authenticated", 401);
         const { familyId, recipientUserId } = req.params;
+        const dateKey =
+            typeof req.query.date === "string" && req.query.date.trim()
+                ? req.query.date.trim()
+                : undefined;
         const data = await getRecipientBriefing(
             familyId,
             recipientUserId,
             req.user.userId,
+            dateKey,
         );
         res.json({ success: true, data });
     } catch (error) {

@@ -1256,16 +1256,19 @@ async function getTodayScheduleItems(familyId: string, recipientUserId: string) 
 }
 
 export type BriefingItem = {
+    scheduleId?: string;
     title: string;
     time: string;
     dosage?: string;
     type: string;
+    status?: string;
 };
 
 export async function getRecipientBriefing(
     familyId: string,
     recipientUserId: string,
     actorUserId: string,
+    dateKey?: string,
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
     if (!family.hasJoinedMember(actorUserId)) {
@@ -1274,20 +1277,32 @@ export async function getRecipientBriefing(
 
     const membersPayload = await getFamilyMembersList(familyId, actorUserId);
     const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const todayItems = await getTodayScheduleItems(familyId, recipientUserId);
+    const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
+    const dayStatus = await getScheduleDayStatuses(
+        familyId,
+        recipientUserId,
+        actorUserId,
+        dateKey,
+    );
 
-    const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-    const unconfirmedItems: BriefingItem[] = todayItems
-        .filter((s) => {
-            const mins = parseTimeToMinutes(s.time);
-            return mins !== null && mins <= nowMinutes;
-        })
+    const todayItems: BriefingItem[] = dayStatus.items.map((s) => ({
+        scheduleId: s.scheduleId,
+        title: s.title,
+        time: s.time,
+        dosage: s.dosage ?? undefined,
+        type: s.type,
+        status: s.status,
+    }));
+
+    const unconfirmedItems = dayStatus.items
+        .filter((s) => s.status === "missed" || s.status === "due")
         .map((s) => ({
+            scheduleId: s.scheduleId,
             title: s.title,
             time: s.time,
-            dosage: s.dosage,
+            dosage: s.dosage ?? undefined,
             type: s.type,
+            status: s.status,
         }));
 
     const elderHistory = await listThread(familyId, recipientUserId, "elder", 80);
@@ -1301,13 +1316,15 @@ export async function getRecipientBriefing(
         lastHeardAt: lastElder?.createdAt ?? null,
         lastHeardLine: lastElder?.content ?? null,
         lastCheckInAt: lastCheckIn?.createdAt ?? null,
-        todayItems: todayItems.map((s) => ({
-            title: s.title,
-            time: s.time,
-            dosage: s.dosage,
-            type: s.type,
-        })),
+        todayItems,
         unconfirmedItems,
+        scheduleStatuses: dayStatus.items,
+        completedCount: dayStatus.completedCount,
+        missedCount: dayStatus.missedCount,
+        upcomingCount: dayStatus.upcomingCount,
+        elapsedCount: dayStatus.elapsedCount,
+        adherencePercent: dayStatus.adherencePercent,
+        dateKey: dayStatus.dateKey,
     };
 }
 
