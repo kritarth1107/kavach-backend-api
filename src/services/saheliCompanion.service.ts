@@ -33,7 +33,7 @@ export function serializeCompanionForApi(doc: ISaheliCompanion) {
         quietHoursStart: doc.quietHoursStart ?? "",
         quietHoursEnd: doc.quietHoursEnd ?? "",
         nudgeIntensity: doc.nudgeIntensity ?? "standard",
-        preferredLanguage: doc.preferredLanguage ?? "hinglish",
+        preferredLanguage: doc.preferredLanguage ?? "english",
         birthday: doc.birthday ?? "",
         importantDates: doc.importantDates ?? [],
         lastOutreachAt: doc.lastOutreachAt?.toISOString?.() ?? null,
@@ -218,4 +218,58 @@ export async function touchWhatsAppInbound(familyId: string, recipientUserId: st
         { familyId, recipientUserId },
         { $set: { lastWhatsAppInboundAt: new Date() } },
     );
+}
+
+export type SaheliLanguage = "english" | "hinglish" | "hindi" | "tamil";
+
+const LANGUAGE_LABELS: Record<SaheliLanguage, string> = {
+    english: "English",
+    hindi: "Hindi",
+    hinglish: "Hinglish",
+    tamil: "Tamil",
+};
+
+export function languageInstruction(lang: SaheliLanguage): string {
+    switch (lang) {
+        case "hindi":
+            return "Reply in simple Hindi (Devanagari script) only.";
+        case "hinglish":
+            return "Reply in natural Hinglish (simple Hindi-English mix).";
+        case "tamil":
+            return "Reply in simple Tamil only.";
+        default:
+            return "Reply in clear, simple English only.";
+    }
+}
+
+export function buildWhatsAppElderChannelContext(lang: SaheliLanguage): string {
+    return [
+        "The user IS the care recipient (elder) messaging Saheli directly on WhatsApp — NOT a caregiver.",
+        'Always address them as "you". Never describe them in third person (e.g. never "how Vasundhara is doing").',
+        "Speak like a caring child/companion (Saheli), not a clinical co-pilot or dashboard assistant.",
+        languageInstruction(lang),
+        "Keep replies short, warm, and easy to read on a phone.",
+    ].join(" ");
+}
+
+export function parseLanguageChangeMessage(text: string): SaheliLanguage | null {
+    const q = text.trim().toLowerCase();
+    if (
+        !/\b(change|switch|set|use|speak|talk|reply|respond|language|lang|bhasha|bolo|baat)\b/i.test(
+            q,
+        ) &&
+        !/\b(english|hindi|hinglish|tamil|tamizh)\b/i.test(q)
+    ) {
+        return null;
+    }
+
+    if (/\b(english|angrezi|angreji)\b/i.test(q)) return "english";
+    if (/\b(hinglish|mix(ed)?)\b/i.test(q)) return "hinglish";
+    if (/\b(tamil|tamizh|thamizh)\b/i.test(q)) return "tamil";
+    if (/\b(hindi|devanagari)\b/i.test(q)) return "hindi";
+    return null;
+}
+
+export function languageChangeConfirmation(lang: SaheliLanguage): string {
+    return `Got it — I'll talk to you in ${LANGUAGE_LABELS[lang]} from now on.`;
 }

@@ -48,8 +48,10 @@ import Order from "../models/order.model";
 import { OrderStatus } from "../types/careRecord.types";
 import { getFamilyMembersList } from "./familyMember.service";
 import {
+    buildWhatsAppElderChannelContext,
     companionProfilePayload,
     getCompanionProfile,
+    type SaheliLanguage,
 } from "./saheliCompanion.service";
 import {
     excerptReport,
@@ -302,7 +304,40 @@ function applyOrderChatResult(reply: string, order: OrderChatResult | null): str
 }
 
 function buildElderSafeReply(displayName: string): string {
-    return `I'm here with you, ${displayName}. Tell me more — how you're feeling, what you ate, or if you need anything.`;
+    const name = displayName.split(/\s+/)[0] || displayName;
+    return `Hi ${name}! I'm Saheli — here with you on WhatsApp.\n\nYou can ask about today's medicines, what's still left to do, order food or groceries, or just tell me how you're feeling.\n\nWhat would you like help with?`;
+}
+
+function buildElderHelpReply(displayName: string): string {
+    const name = displayName.split(/\s+/)[0] || displayName;
+    return `Hi ${name}! I'm Saheli — like family on WhatsApp.\n\nI can help you with:\n• Today's medicines and check-ins\n• Your schedule — what's done and what's coming up\n• Ordering food or groceries\n• How you're feeling — I'll gently keep your family updated\n\nJust ask, or use the quick actions below. To change language, say "talk to me in Hindi" or "switch to English".`;
+}
+
+function sanitizeElderReply(reply: string, displayName: string): string {
+    let out = reply.trim();
+    const first = displayName.split(/\s+/)[0]?.trim();
+    const escapedFirst = first ? first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "";
+    const escapedFull = displayName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+    out = out.replace(/\bAI care co-pilot\b/gi, "companion");
+    out = out.replace(/\bcare co-pilot\b/gi, "companion");
+    out = out.replace(/\bcare coordination\b/gi, "daily care");
+
+    if (escapedFirst) {
+        out = out.replace(new RegExp(`how\\s+${escapedFirst}\\s+is\\s+doing`, "gi"), "how you're doing");
+        out = out.replace(
+            new RegExp(`updates on how\\s+${escapedFirst}\\s+is`, "gi"),
+            "updates on how you're",
+        );
+        out = out.replace(new RegExp(`${escapedFirst}\\s+last said`, "gi"), "You last told me");
+        out = out.replace(new RegExp(`if\\s+${escapedFirst}\\s+has told me`, "gi"), "if you've told me");
+    }
+    if (escapedFull && escapedFull !== escapedFirst) {
+        out = out.replace(new RegExp(`how\\s+${escapedFull}\\s+is\\s+doing`, "gi"), "how you're doing");
+        out = out.replace(new RegExp(`${escapedFull}\\s+last said`, "gi"), "You last told me");
+    }
+
+    return out;
 }
 
 function offlineSaheliMessage(): string {
@@ -334,6 +369,18 @@ function buildElderSmartReply(opts: {
             opts.orderHint ??
             `Tell me what to order and from where — Swiggy (food), Instamart (groceries), or Zepto. Example: "1L milk from Instamart" or "dal makhani from Swiggy".`
         );
+    }
+
+    if (/\b(help|what can you|what do you|capabilities|features|kya kar)\b/i.test(qLower)) {
+        return buildElderHelpReply(opts.displayName);
+    }
+
+    if (
+        /\b(how am i|how i am|how are you asking|feeling|last said|check-?in)\b/i.test(qLower) &&
+        opts.elderLines?.length
+    ) {
+        const last = opts.elderLines[opts.elderLines.length - 1]!;
+        return `You last told me: "${last.slice(0, 280)}"`;
     }
 
     if (elderMissedIntent(qLower) || /\bwhat did i miss\b/i.test(qLower)) {
@@ -429,17 +476,21 @@ async function elderReplyWithAi(
             });
         }
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const companion = await getCompanionProfile(familyId, recipientUserId);
+        const lang = (companion.preferredLanguage ?? "english") as SaheliLanguage;
         const result = await aiPostElderChatWithRetry({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             message,
             conversationId: conversationIdOverride ?? ctx.conversationId,
             careRecordContext: contextBundle.careRecordContext,
-            companionProfile: contextBundle.companionProfile,
+            companionProfile: {
+                ...contextBundle.companionProfile,
+                preferred_language: lang,
+                audience: "elder_direct",
+            },
             scheduleContext,
-            channelContext: waChannel
-                ? "User is on WhatsApp — keep replies short, warm, Hindi-English OK, no dashboard links unless needed."
-                : undefined,
+            channelContext: waChannel ? buildWhatsAppElderChannelContext(lang) : undefined,
             orderContext: opts?.orderContext,
             useAgent: true,
             actorUserId: recipientUserId,
@@ -451,8 +502,9 @@ async function elderReplyWithAi(
         if (result.conversation_id && !conversationIdOverride) {
             await persistConversationId(familyId, recipientUserId, result.conversation_id);
         }
+        const rawReply = result.reply.trim() || "I'm here. Tell me more when you're ready.";
         return {
-            reply: result.reply.trim() || "I'm here. Tell me more when you're ready.",
+            reply: waChannel ? sanitizeElderReply(rawReply, displayName) : rawReply,
             conversationId,
         };
     } catch (err) {

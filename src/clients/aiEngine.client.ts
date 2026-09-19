@@ -315,26 +315,7 @@ export async function aiPostElderChatWithRetry(
         }
     }
 
-    const elderHint =
-        payload.channelContext ??
-        "The care recipient is speaking directly to Saheli (not a caregiver). Answer in first person to them.";
-    return aiPostCaregiverChatWithRetry({
-        aiFamilyId: payload.aiFamilyId,
-        aiElderId: payload.aiElderId,
-        message: payload.message,
-        conversationId: payload.conversationId,
-        careRecordContext: [payload.scheduleContext, payload.careRecordContext]
-            .filter(Boolean)
-            .join("\n\n"),
-        sessionContext: elderHint,
-        orderContext: payload.orderContext,
-        useAgent: true,
-        actorUserId: payload.actorUserId ?? payload.kavachRecipientUserId,
-        kavachFamilyId: payload.kavachFamilyId,
-        kavachRecipientUserId: payload.kavachRecipientUserId,
-    }).catch(() => {
-        throw lastErr;
-    });
+    throw lastErr;
 }
 
 function caregiverChatBody(payload: {

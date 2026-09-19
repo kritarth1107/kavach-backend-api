@@ -135,6 +135,22 @@ async function resolveFamilyMembership(userId: string) {
 
     if (!families.length) return null;
 
+    for (const family of families) {
+        const recipient = family.members.find(
+            (m) =>
+                m.userId === userId &&
+                m.status === FamilyMemberStatus.JOINED &&
+                m.role === FamilyRole.CARE_RECIPIENT,
+        );
+        if (recipient) {
+            return {
+                familyId: family.familyId,
+                userId,
+                role: FamilyRole.CARE_RECIPIENT,
+            };
+        }
+    }
+
     const family = families[0]!;
     const member = family.members.find(
         (m) => m.userId === userId && m.status === FamilyMemberStatus.JOINED,
@@ -167,6 +183,11 @@ export async function resolveWhatsAppSender(senderPhone: string): Promise<Resolv
         };
     }
 
+    const fromInvite = await resolveCareRecipientFromInvitePhone(normalized);
+    if (fromInvite) {
+        return fromInvite;
+    }
+
     const user = await findUserByWhatsAppPhone(normalized);
     if (user) {
         const membership = await resolveFamilyMembership(user.userId);
@@ -176,11 +197,6 @@ export async function resolveWhatsAppSender(senderPhone: string): Promise<Resolv
                 channelIdentifier: normalized,
             };
         }
-    }
-
-    const fromInvite = await resolveCareRecipientFromInvitePhone(normalized);
-    if (fromInvite) {
-        return fromInvite;
     }
 
     throw new AppError(

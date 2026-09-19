@@ -44,7 +44,7 @@ export function buildGuestWelcomeMessages(isFirstTurn: boolean): MetaWhatsAppPay
                     type: "cta_url",
                     body: {
                         text: truncate(
-                            `Namaste 🙏 I'm Saheli — Kavach's family companion.\n\nI help with gentle check-ins, care reminders, family memories, and ordering from Swiggy, Instamart, or Zepto.\n\nOur line: ${line}`,
+                            `Hi! I'm Saheli — Kavach's family companion on WhatsApp.\n\nI help with gentle check-ins, care reminders, and ordering from Swiggy, Instamart, or Zepto.\n\nOur line: ${line}`,
                             1024,
                         ),
                     },

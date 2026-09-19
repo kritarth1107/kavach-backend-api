@@ -26,32 +26,30 @@ function kavachWhatsAppLine(): string {
 
 const GUEST_WELCOME = `👋 *Welcome to Saheli!*
 
-Namaste 🙏 I'm *Saheli* — Kavach's *family companion* on WhatsApp. No extra setup needed; just message me here from your phone.
+Hi — I'm *Saheli*, Kavach's family companion on WhatsApp. No extra setup needed; just message me from your phone.
 
-*Kavach* helps families look after their loved ones — gentle check-ins, reminders, family memories, and ordering through *Swiggy*, *Instamart*, or *Zepto*.
+*Kavach* helps families stay connected — gentle check-ins, medicine reminders, and ordering from *Swiggy*, *Instamart*, or *Zepto*.
 
 *What I can help with:*
-💬 Warm, respectful conversations with care recipients
-📋 Updates for caregivers on mood, meals, and daily life
-🛒 Order suggestions your family approves before checkout
+💬 Warm conversations and daily check-ins
+📋 Medicine and care reminders
+🛒 Food and grocery orders (with family approval when needed)
 
-Our shared WhatsApp line for every family: *${kavachWhatsAppLine()}*
+Our WhatsApp line: *${kavachWhatsAppLine()}*
 
 Not on Kavach yet?
 ✨ *Sign up at app.kavach.care*
-👨‍👩‍👧 Or ask your *caregiver to invite you* with the *same mobile number* you use on WhatsApp
+👨‍👩‍👧 Or ask your caregiver to invite you with the *same mobile number* you use on WhatsApp
 
 How can I help you today? 💚`;
 
 const GUEST_FOLLOWUP = `👋 *Welcome to Saheli!*
 
-Thanks for messaging me. I'm Kavach's *family companion* on WhatsApp — no extra setup needed. You don't have to add or link anything here.
-
-_I don't recognise this number yet._ To get started:
+Thanks for messaging me. I don't recognise this number yet.
 
 ✨ *Sign up at app.kavach.care*
 
-👨‍👩‍👧 Or ask your *caregiver to invite you* using the *same mobile number* you use on WhatsApp
+👨‍👩‍👧 Or ask your caregiver to invite you using the *same mobile number* you use on WhatsApp
 
 Once you're on the family, I can help from right here. 💚`;
 
@@ -234,9 +232,25 @@ export async function handleWhatsAppInbound(body: {
         return outbound(phone, elderEmergencyReply(displayName));
     }
 
-    const { touchWhatsAppInbound } = await import("./saheliCompanion.service");
+    const {
+        touchWhatsAppInbound,
+        parseLanguageChangeMessage,
+        languageChangeConfirmation,
+        updateCompanionProfile,
+    } = await import("./saheliCompanion.service");
     if (identity.role === FamilyRole.CARE_RECIPIENT) {
         await touchWhatsAppInbound(identity.familyId, identity.userId);
+
+        const langChange = parseLanguageChangeMessage(text);
+        if (langChange) {
+            await updateCompanionProfile(
+                identity.familyId,
+                identity.userId,
+                identity.userId,
+                { preferredLanguage: langChange },
+            );
+            return outbound(phone, languageChangeConfirmation(langChange));
+        }
     }
 
     if (
