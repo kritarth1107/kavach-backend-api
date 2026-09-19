@@ -305,16 +305,28 @@ function applyOrderChatResult(reply: string, order: OrderChatResult | null): str
 
 function buildElderSafeReply(displayName: string): string {
     const name = displayName.split(/\s+/)[0] || displayName;
-    return `Hi ${name}! I'm Saheli — here with you on WhatsApp.\n\nYou can ask about today's medicines, what's still left to do, order food or groceries, or just tell me how you're feeling.\n\nWhat would you like help with?`;
+    return `Hi ${name}! I'm Saheli. How can I help?`;
 }
 
-function buildElderHelpReply(displayName: string): string {
-    const name = displayName.split(/\s+/)[0] || displayName;
-    return `Hi ${name}! I'm Saheli — like family on WhatsApp.\n\nI can help you with:\n• Today's medicines and check-ins\n• Your schedule — what's done and what's coming up\n• Ordering food or groceries\n• How you're feeling — I'll gently keep your family updated\n\nJust ask, or use the quick actions below. To change language, say "talk to me in Hindi" or "switch to English".`;
+function buildElderHelpReply(_displayName: string): string {
+    return "I can help with today's schedule, medicines, orders, and check-ins. Just ask.";
+}
+
+function trimElderReplyFluff(reply: string): string {
+    let out = reply.trim();
+    const fluffPatterns = [
+        /\n+(What would you like|How can I help|Just ask|Is there anything else|Let me know if).*/is,
+        /\n+(To change language|You can say "switch to).*/is,
+        /\n+(I can also help|Here are some things|Quick actions).*/is,
+    ];
+    for (const pattern of fluffPatterns) {
+        out = out.replace(pattern, "");
+    }
+    return out.trim();
 }
 
 function sanitizeElderReply(reply: string, displayName: string): string {
-    let out = reply.trim();
+    let out = trimElderReplyFluff(reply);
     const first = displayName.split(/\s+/)[0]?.trim();
     const escapedFirst = first ? first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "";
     const escapedFull = displayName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -384,34 +396,29 @@ function buildElderSmartReply(opts: {
     }
 
     if (elderMissedIntent(qLower) || /\bwhat did i miss\b/i.test(qLower)) {
-        const parts: string[] = [];
-        if (opts.context.missed.length) {
-            parts.push(formatScheduleSection(opts.context.missed, "Here's what you missed today"));
-        } else {
-            parts.push("You haven't missed anything scheduled so far today — well done.");
+        if (!opts.context.missed.length) {
+            return "Nothing missed today.";
         }
-        if (opts.context.upcoming.length) {
-            parts.push(formatScheduleSection(opts.context.upcoming, "Still coming up"));
-        }
-        if (opts.context.completed.length) {
-            parts.push(formatScheduleSection(opts.context.completed, "Already done"));
-        }
-        return parts.join("\n\n");
+        return formatScheduleSection(opts.context.missed, "Missed today");
     }
 
-    if (/\b(schedule|medicine|meds|dose|tablet|aaj|today|what('s| is) next|reminder)\b/i.test(qLower)) {
-        const parts: string[] = [`Today's care schedule (${opts.context.dateKey}):`];
+    if (/\bwhat('s| is) next|coming up|upcoming\b/i.test(qLower)) {
+        if (!opts.context.upcoming.length) {
+            return "Nothing else scheduled for today.";
+        }
+        return formatScheduleSection(opts.context.upcoming, "Up next");
+    }
+
+    if (/\b(schedule|medicine|meds|dose|tablet|aaj|today|reminder)\b/i.test(qLower)) {
+        const parts: string[] = [];
         if (opts.context.missed.length) {
             parts.push(formatScheduleSection(opts.context.missed, "Missed"));
         }
         if (opts.context.upcoming.length) {
             parts.push(formatScheduleSection(opts.context.upcoming, "Upcoming"));
         }
-        if (opts.context.completed.length) {
-            parts.push(formatScheduleSection(opts.context.completed, "Done"));
-        }
-        if (parts.length === 1) {
-            parts.push("Nothing scheduled for today.");
+        if (!parts.length) {
+            return "Nothing scheduled for today.";
         }
         return parts.filter(Boolean).join("\n\n");
     }
@@ -425,7 +432,7 @@ function buildElderSmartReply(opts: {
         });
         const body = structured.replace(/\n\nReported only — nothing invented\.$/, "").trim();
         if (body.length > 24 && !/didn't find that in the saved care record/i.test(body)) {
-            return structured;
+            return body;
         }
     }
 
@@ -433,7 +440,7 @@ function buildElderSmartReply(opts: {
         return buildElderSafeReply(opts.displayName);
     }
 
-    return `I'm here with you, ${opts.displayName}. I couldn't reach my full memory just now — you can ask about today's schedule, how you're feeling, or if you need something ordered.`;
+    return "I'm here — please try again in a moment.";
 }
 
 async function elderReplyWithAi(
@@ -797,7 +804,8 @@ export async function sendSaheliMessage(
         actorUserId,
         channel: waChannel ? "whatsapp" : "dashboard",
     });
-    const elderHistory = await listThread(familyId, recipientUserId, "elder", 80, sessionId);
+    const historyLimit = waChannel ? 10 : 80;
+    const elderHistory = await listThread(familyId, recipientUserId, "elder", historyLimit, sessionId);
     const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
     const labs = await LabDocument.find({ familyId, recipientUserId })
         .sort({ createdAt: 1 })

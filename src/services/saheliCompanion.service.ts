@@ -51,6 +51,8 @@ export function companionProfilePayload(doc: ISaheliCompanion) {
         outreach_topics: doc.outreachTopics,
         outreachTopics: doc.outreachTopics,
         share_with_family: doc.shareWithFamily,
+        preferred_language: doc.preferredLanguage ?? "english",
+        preferredLanguage: doc.preferredLanguage ?? "english",
     };
 }
 
@@ -244,11 +246,13 @@ export function languageInstruction(lang: SaheliLanguage): string {
 
 export function buildWhatsAppElderChannelContext(lang: SaheliLanguage): string {
     return [
-        "The user IS the care recipient (elder) messaging Saheli directly on WhatsApp — NOT a caregiver.",
-        'Always address them as "you". Never describe them in third person (e.g. never "how Vasundhara is doing").',
-        "Speak like a caring child/companion (Saheli), not a clinical co-pilot or dashboard assistant.",
+        "The user IS the care recipient (elder) on WhatsApp — NOT a caregiver.",
+        'Address them as "you" only. Never third person.',
         languageInstruction(lang),
-        "Keep replies short, warm, and easy to read on a phone.",
+        "Answer ONLY what was asked — nothing extra.",
+        "Max 1-3 short sentences unless listing schedule items or lab values they asked for.",
+        "No menus, no bullet lists of capabilities, no follow-up questions, no unprompted suggestions.",
+        "Proactive reminders are sent separately — do not nudge or check in unless they asked.",
     ].join(" ");
 }
 

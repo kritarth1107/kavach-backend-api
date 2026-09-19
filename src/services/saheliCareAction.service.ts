@@ -303,7 +303,7 @@ export async function tryApplyElderCareActionFromMessage(input: {
             channel: input.channel,
         });
         if (result.title) {
-            return `Done — I've marked ${result.title} as complete for today. Thank you, ${input.displayName}.`;
+            return `Done — ${result.title} marked complete.`;
         }
     }
 
@@ -319,7 +319,7 @@ export async function tryApplyElderCareActionFromMessage(input: {
                 value,
                 channel: input.channel,
             });
-            return `Got it, ${input.displayName} — I've logged your BP as ${value}. Thank you for keeping track.`;
+            return `Logged BP: ${value}.`;
         }
     }
 
@@ -346,9 +346,9 @@ export async function tryApplyElderCareActionFromMessage(input: {
                 typeof schedule.title === "string" &&
                 schedule.title
             ) {
-                return `Lovely — I've marked ${schedule.title} as done for today. Well done, ${input.displayName}.`;
+                return `Done — ${schedule.title} marked for today.`;
             }
-            return `I've noted that you took ${hint}, ${input.displayName}.`;
+            return `Noted — ${hint}.`;
         }
     }
 
@@ -360,7 +360,7 @@ export async function tryApplyElderCareActionFromMessage(input: {
             mood: q,
             channel: input.channel,
         });
-        return `I'm glad to hear that, ${input.displayName}. I'm here if you need anything.`;
+        return "Glad to hear that.";
     }
 
     return null;

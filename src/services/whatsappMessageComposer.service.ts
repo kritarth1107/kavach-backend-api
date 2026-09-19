@@ -539,15 +539,6 @@ export function composeWhatsAppReply(
         if (schedule.length) return schedule;
     }
 
-    if (/\b(miss(ed)?|schedule|medicine|aaj|today)\b/i.test(text)) {
-        const schedule = buildScheduleCompanionMessages(text);
-        if (schedule.length) return schedule;
-    }
-
-    if (context.includeSaheliHeader && text.length < 600) {
-        return buildCompanionQuickActions(text);
-    }
-
     return [{ type: "text", text: { body: truncate(text, 4096) } }];
 }
 

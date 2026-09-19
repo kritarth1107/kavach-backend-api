@@ -347,14 +347,5 @@ export async function handleWhatsAppInbound(body: {
         },
     });
 
-    const scheduleKind =
-        /\b(miss(ed)?|schedule|medicine|aaj|today)\b/i.test(text) ||
-        /\b(miss(ed)?|schedule|medicine|aaj|today)\b/i.test(reply.content)
-            ? "schedule_missed"
-            : "companion";
-
-    return outbound(phone, reply.content, {
-        kind: scheduleKind,
-        includeSaheliHeader: identity.role === FamilyRole.CARE_RECIPIENT,
-    });
+    return outbound(phone, reply.content, { kind: "plain" });
 }

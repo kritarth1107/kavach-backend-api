@@ -38,43 +38,47 @@ export function formatScheduleSection(items: ScheduleDayItem[], label: string): 
 }
 
 export function formatSaheliContextForAi(bundle: SaheliContextBundle): string {
+    const compact = bundle.channel === "whatsapp";
     const parts: string[] = [];
 
-    if (bundle.channel === "whatsapp") {
-        parts.push(
-            "[Channel] User is on WhatsApp — keep replies short, warm, Hindi-English OK, no dashboard links unless needed.",
-        );
-    }
-
-    parts.push(`[Today ${bundle.dateKey} IST schedule]`);
+    parts.push(`[Today ${bundle.dateKey} IST]`);
     parts.push(formatScheduleSection(bundle.missed, "Missed") || "Missed: none");
     parts.push(formatScheduleSection(bundle.upcoming, "Upcoming") || "Upcoming: none");
-    parts.push(formatScheduleSection(bundle.completed, "Completed") || "Completed: none");
-    if (bundle.adherencePercent != null) {
-        parts.push(`Adherence today: ${bundle.adherencePercent}%`);
+    if (!compact) {
+        parts.push(formatScheduleSection(bundle.completed, "Completed") || "Completed: none");
+        if (bundle.adherencePercent != null) {
+            parts.push(`Adherence today: ${bundle.adherencePercent}%`);
+        }
     }
 
-    if (bundle.lastHeardLine) {
+    if (!compact && bundle.lastHeardLine) {
         parts.push(
             `[Last heard] ${bundle.lastHeardAt ?? "recently"}: "${bundle.lastHeardLine.slice(0, 280)}"`,
         );
     }
-    if (bundle.lastCheckInAt) {
-        parts.push(`[Last check-in] ${bundle.lastCheckInAt}`);
+
+    const careLimit = compact ? 600 : bundle.careRecordContext.length;
+    const careSnippet = bundle.careRecordContext.slice(0, careLimit);
+    parts.push(`[Care record]\n${careSnippet}`);
+
+    if (!compact) {
+        if (bundle.lastCheckInAt) {
+            parts.push(`[Last check-in] ${bundle.lastCheckInAt}`);
+        }
+        const partners = Object.entries(bundle.connectedPartners)
+            .filter(([, on]) => on)
+            .map(([p]) => p)
+            .join(", ");
+        parts.push(
+            partners
+                ? `[Commerce] Connected: ${partners}. Saved addresses: ${bundle.defaultAddressCount}.`
+                : "[Commerce] No Swiggy/Instamart/Zepto connected yet.",
+        );
+        parts.push(`[Companion profile]\n${JSON.stringify(bundle.companionProfile)}`);
+    } else {
+        const lang = bundle.companionProfile.preferred_language ?? bundle.companionProfile.preferredLanguage;
+        if (lang) parts.push(`[Language preference] ${lang}`);
     }
-
-    const partners = Object.entries(bundle.connectedPartners)
-        .filter(([, on]) => on)
-        .map(([p]) => p)
-        .join(", ");
-    parts.push(
-        partners
-            ? `[Commerce] Connected: ${partners}. Saved addresses: ${bundle.defaultAddressCount}.`
-            : "[Commerce] No Swiggy/Instamart/Zepto connected yet.",
-    );
-
-    parts.push(`[Care record]\n${bundle.careRecordContext}`);
-    parts.push(`[Companion profile]\n${JSON.stringify(bundle.companionProfile)}`);
 
     return parts.filter(Boolean).join("\n\n");
 }
@@ -133,10 +137,11 @@ export async function buildSaheliContextBundle(input: {
     const lastElder = elderRows[0];
     const lastCheckIn = checkInRows[0];
     const companion = await getCompanionProfile(input.familyId, input.recipientUserId);
+    const defaultCareLimit = input.channel === "whatsapp" ? 8 : 30;
     const careRecordContext = await getCareRecordContextForSaheli(
         input.familyId,
         input.recipientUserId,
-        input.careRecordLimit ?? 30,
+        input.careRecordLimit ?? defaultCareLimit,
     );
     const connectedPartners = await listFamilyConnectedPartners(
         input.familyId,

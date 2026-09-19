@@ -33,10 +33,10 @@ export async function ingestWhatsAppMediaMessage(input: {
     });
 
     if (input.mediaType === "document" || input.mediaType === "image") {
-        return "Thank you — I've saved that in your care record. Your family can review it in Kavach.";
+        return "Saved in your care record.";
     }
     if (input.mediaType === "voice" || input.mediaType === "audio") {
-        return "I heard your voice message. Tell me more if you'd like.";
+        return "Got your voice message.";
     }
-    return "Got it — I've noted that for your family.";
+    return "Noted.";
 }
