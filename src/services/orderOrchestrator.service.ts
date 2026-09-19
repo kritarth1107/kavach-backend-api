@@ -275,15 +275,48 @@ export async function startOrderFlow(input: {
         (partner === OrderPartner.ZEPTO && connected.zepto);
 
     if (!isConnected) {
+        const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
+        const comms = await buildOrderCommunicationReply({
+            familyId: input.familyId,
+            actorUserId: input.actorUserId,
+            message: orderMessage,
+        });
         const started = await startMcpConnect(mcpPartner, input.familyId, input.actorUserId);
+        const altHint =
+            comms ??
+            `${partnerLabel(partner)} isn't connected yet — ask your caregiver to connect it in Integrations.`;
         return {
             sessionId: "",
             phase: "select_address",
             partner: mcpPartner,
             partnerLabel: partnerLabel(partner),
             query: extractOrderQuery(orderMessage),
-            message: `Connect ${partnerLabel(partner)} in Integrations to order live. ${started.authorizationUrl ? "Use the connect card below." : ""}`.trim(),
+            message: `${altHint}${started.authorizationUrl ? " Connect card below." : ""}`.trim(),
         };
+    }
+
+    if (mcpPartner === "swiggy") {
+        const { getOrderPartnerAvailability } = await import("./orderPartnerAvailability.service");
+        const availability = await getOrderPartnerAvailability(input.familyId, input.actorUserId);
+        const swiggy = availability.find((r) => r.partner === "swiggy");
+        if (swiggy?.connected && !swiggy.serviceable && swiggy.reason === "closed_or_unavailable") {
+            const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
+            const comms =
+                (await buildOrderCommunicationReply({
+                    familyId: input.familyId,
+                    actorUserId: input.actorUserId,
+                    message: orderMessage,
+                })) ??
+                "Swiggy isn't taking orders at your saved address right now — restaurants look closed for the day.";
+            return {
+                sessionId: "",
+                phase: "select_address",
+                partner: mcpPartner,
+                partnerLabel: partnerLabel(partner),
+                query: extractOrderQuery(orderMessage),
+                message: comms,
+            };
+        }
     }
 
     const commerceUserId =

@@ -58,16 +58,35 @@ export async function resolveOrderPartnerForMessage(input: {
     const mcpPartner = orderPartnerToMcp(partner);
     const connected = await listFamilyConnectedPartners(input.familyId, input.actorUserId);
     const explicit = parseExplicitPartner(input.message);
+    const isConnected =
+        (partner === OrderPartner.SWIGGY && connected.swiggy) ||
+        (partner === OrderPartner.INSTAMART && connected.instamart) ||
+        (partner === OrderPartner.ZEPTO && connected.zepto);
+
+    const { getOrderPartnerAvailability } = await import("./orderPartnerAvailability.service");
+    const availability = await getOrderPartnerAvailability(input.familyId, input.actorUserId);
+    const connectedPartners = availability
+        .filter((r) => r.connected && r.serviceable)
+        .map((r) => r.label);
+    const unavailableReason = availability.find(
+        (r) => r.partner === mcpPartner && r.connected && !r.serviceable,
+    )?.reason;
+
     return {
         partner,
         mcpPartner,
         partnerLabel: partnerLabel(partner),
-        connected:
-            (partner === OrderPartner.SWIGGY && connected.swiggy) ||
-            (partner === OrderPartner.INSTAMART && connected.instamart) ||
-            (partner === OrderPartner.ZEPTO && connected.zepto),
+        connected: isConnected,
+        serviceable: availability.find((r) => r.partner === mcpPartner)?.serviceable ?? isConnected,
+        unavailableReason,
+        connectedPartners,
         explicit,
         intent: partner === OrderPartner.SWIGGY ? "food" : "grocery",
+        message: !isConnected
+            ? `${partnerLabel(partner)} is not connected. Connected now: ${connectedPartners.join(", ") || "none"}.`
+            : unavailableReason === "closed_or_unavailable" && mcpPartner === "swiggy"
+              ? "Swiggy is connected but not taking orders at your address right now (closed for the day)."
+              : undefined,
     };
 }
 

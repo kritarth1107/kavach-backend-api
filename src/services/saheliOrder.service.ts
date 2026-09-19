@@ -212,11 +212,16 @@ function extractItems(text: string): ParsedOrderLine[] {
 
 export function parseExplicitPartner(message: string): OrderPartner | null {
     const match = message.match(EXPLICIT_PARTNER);
-    if (!match) return null;
-    const token = (match[1] ?? match[2] ?? "").toLowerCase();
-    if (token.includes("swiggy")) return OrderPartner.SWIGGY;
-    if (token.includes("instamart")) return OrderPartner.INSTAMART;
-    if (token.includes("zepto")) return OrderPartner.ZEPTO;
+    if (match) {
+        const token = (match[1] ?? match[2] ?? "").toLowerCase();
+        if (token.includes("swiggy")) return OrderPartner.SWIGGY;
+        if (token.includes("instamart")) return OrderPartner.INSTAMART;
+        if (token.includes("zepto")) return OrderPartner.ZEPTO;
+    }
+    const tail = message.trim().toLowerCase();
+    if (/\bzepto\s*$/.test(tail)) return OrderPartner.ZEPTO;
+    if (/\binstamart\s*$/.test(tail)) return OrderPartner.INSTAMART;
+    if (/\bswiggy(?:\s+food)?\s*$/.test(tail)) return OrderPartner.SWIGGY;
     return null;
 }
 

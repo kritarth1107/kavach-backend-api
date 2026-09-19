@@ -318,6 +318,13 @@ export async function tryHandleWhatsAppOrderTurn(input: {
     const text = input.text.trim();
     if (!text) return null;
 
+    if (isCancel(text)) {
+        if (waSession?.orderSessionId) {
+            await clearWhatsAppOrderSession(input.phone);
+        }
+        return orderTurn("Order cancelled. Tell me anytime if you'd like to order again.");
+    }
+
     if (waSession?.orderSessionId && waSession.orderPhase) {
         try {
             return await handleActiveOrderTurn({

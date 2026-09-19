@@ -380,7 +380,7 @@ function buildElderSmartReply(opts: {
     if (messageLooksLikeOrder(q)) {
         return (
             opts.orderHint ??
-            `Tell me what to order and from where — Swiggy (food), Instamart (groceries), or Zepto. Example: "1L milk from Instamart" or "dal makhani from Swiggy".`
+            "I couldn't reach ordering right now — please try again in a moment, or ask your caregiver to check Integrations."
         );
     }
 
@@ -555,6 +555,18 @@ async function elderReplyWithAi(
                 aiStatusCode: statusCode,
                 fallbackUsed: "buildElderSmartReply",
             });
+        }
+        const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
+        const orderComms = await buildOrderCommunicationReply({
+            familyId,
+            actorUserId: recipientUserId,
+            message,
+        });
+        if (orderComms) {
+            return {
+                reply: orderComms,
+                conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
+            };
         }
         if (isAiEngineOfflineError(err)) {
             const offlineFallback = buildElderSmartReply({
@@ -887,6 +899,42 @@ export async function sendSaheliMessage(
     if (careActionReply) {
         reply = careActionReply;
         conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
+    } else if (waChannel && messageLooksLikeOrder(text)) {
+        const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
+        const orderComms = await buildOrderCommunicationReply({
+            familyId,
+            actorUserId: recipientUserId,
+            message: text,
+        });
+        if (orderComms) {
+            reply = orderComms;
+        } else {
+            const ai = await elderReplyWithAi(
+                familyId,
+                recipientUserId,
+                displayName,
+                text,
+                session.aiConversationId,
+                {
+                    sessionId,
+                    channel: opts?.channel,
+                    contextBundle,
+                    isFirstMessage,
+                    elderLines,
+                    labs: labs.map((d) => ({
+                        title: d.title,
+                        recordDate: d.recordDate,
+                        rawText: d.rawText,
+                        kind: d.kind,
+                    })),
+                },
+            );
+            reply = ai.reply;
+            conversationId = ai.conversationId;
+            if (ai.orderFromAgent) order = ai.orderFromAgent;
+            if (ai.orderPreview) orderPreview = ai.orderPreview;
+            if (ai.orderFlow) orderFlow = ai.orderFlow;
+        }
     } else {
         const ai = await elderReplyWithAi(
             familyId,
@@ -919,17 +967,17 @@ export async function sendSaheliMessage(
         if (ai.orderFlow) {
             orderFlow = ai.orderFlow;
         }
+    }
 
-        if (order?.kind === "connect_required" || order?.kind === "prompt") {
-            reply = applyOrderChatResult(reply, order);
-        } else if (order?.kind === "order") {
-            reply = applyOrderChatResult(reply, order);
-        }
+    if (order?.kind === "connect_required" || order?.kind === "prompt") {
+        reply = applyOrderChatResult(reply, order);
+    } else if (order?.kind === "order") {
+        reply = applyOrderChatResult(reply, order);
+    }
 
-        if (waChannel && opts?.whatsappPhone && orderFlow?.sessionId) {
-            const { syncWhatsappOrderSession } = await import("./whatsappOrderFlow.service");
-            await syncWhatsappOrderSession(opts.whatsappPhone, orderFlow);
-        }
+    if (waChannel && opts?.whatsappPhone && orderFlow?.sessionId) {
+        const { syncWhatsappOrderSession } = await import("./whatsappOrderFlow.service");
+        await syncWhatsappOrderSession(opts.whatsappPhone, orderFlow);
     }
 
     await touchSaheliChatSession(sessionId, {
