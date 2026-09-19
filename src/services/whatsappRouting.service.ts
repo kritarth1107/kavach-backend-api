@@ -17,19 +17,24 @@ function kavachWhatsAppLine(): string {
     return config.whatsapp.kavachNumber;
 }
 
-const GUEST_WELCOME = `Namaste! 🙏 I'm *Saheli* — Kavach's caring companion on WhatsApp.
+const GUEST_WELCOME = `👋 *Welcome to Saheli!*
 
-*Kavach* helps families look after their loved ones — gentle check-ins, reminders, family memories, and ordering groceries or food through Swiggy, Instamart, or Zepto.
+Namaste 🙏 I'm *Saheli* — Kavach's *family companion* on WhatsApp. No extra setup needed; just message me here from your phone.
 
-*What Saheli does:*
-• Talks with care recipients like a warm, respectful companion
-• Helps caregivers stay updated on mood, meals, and daily life
-• Suggests orders that your family approves before checkout
+*Kavach* helps families look after their loved ones — gentle check-ins, reminders, family memories, and ordering through *Swiggy*, *Instamart*, or *Zepto*.
 
-This is Kavach's shared WhatsApp line for all families: *${kavachWhatsAppLine()}*
-Just message here from your phone — no setup or linking needed on your side.
+*What I can help with:*
+💬 Warm, respectful conversations with care recipients
+📋 Updates for caregivers on mood, meals, and daily life
+🛒 Order suggestions your family approves before checkout
 
-How can I help you today?`;
+Our shared WhatsApp line for every family: *${kavachWhatsAppLine()}*
+
+Not on Kavach yet?
+✨ *Sign up at app.kavach.care*
+👨‍👩‍👧 Or ask your *caregiver to invite you* with the *same mobile number* you use on WhatsApp
+
+How can I help you today? 💚`;
 
 const GUEST_FOLLOWUP = `👋 *Welcome to Saheli!*
 
