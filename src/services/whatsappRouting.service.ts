@@ -31,11 +31,17 @@ Just message here from your phone — no setup or linking needed on your side.
 
 How can I help you today?`;
 
-const GUEST_FOLLOWUP = `Thanks for messaging Saheli on ${kavachWhatsAppLine()}.
+const GUEST_FOLLOWUP = `👋 *Welcome to Saheli!*
 
-This is Kavach's one shared WhatsApp number for every family — you don't need to add or link anything in WhatsApp.
+Thanks for messaging me. I'm Kavach's *family companion* on WhatsApp — no extra setup needed. You don't have to add or link anything here.
 
-If I didn't recognize you yet, sign up at app.kavach.care or ask your caregiver to invite you with the same mobile number you use on WhatsApp.`;
+_I don't recognise this number yet._ To get started:
+
+✨ *Sign up at app.kavach.care*
+
+👨‍👩‍👧 Or ask your *caregiver to invite you* using the *same mobile number* you use on WhatsApp
+
+Once you're on the family, I can help from right here. 💚`;
 
 function isCaregiver(role: FamilyRole): boolean {
     return role === FamilyRole.PRIMARY_CAREGIVER || role === FamilyRole.CO_CAREGIVER;
