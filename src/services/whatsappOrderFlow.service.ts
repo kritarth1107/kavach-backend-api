@@ -7,7 +7,7 @@ import {
     submitOrderFlowCart,
     type OrderFlowPayload,
 } from "./orderOrchestrator.service";
-import { messageLooksLikeOrder } from "./saheliOrder.service";
+import { isHighConfidenceOrderIntent, normalizeOrderText } from "./saheliOrder.service";
 import type { OrderSessionCatalogItem } from "../models/orderSession.model";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -317,13 +317,13 @@ export async function tryHandleWhatsAppOrderTurn(input: {
         }
     }
 
-    if (!messageLooksLikeOrder(text)) return null;
+    if (!isHighConfidenceOrderIntent(text)) return null;
 
     const flow = await handleOrderFlowChatMessage({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
-        message: text,
+        message: normalizeOrderText(text),
         saheliSessionId: input.saheliSessionId ?? waSession?.saheliSessionId,
     });
 

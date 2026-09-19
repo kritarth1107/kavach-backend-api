@@ -10,7 +10,7 @@ import {
 } from "./partnerAddress.service";
 
 const GROCERY_KEYWORDS =
-    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri)\b/i;
+    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri|coke|cola|pepsi|soda|sprite|fanta|diet coke|diet cole|beverage|drinks?)\b/i;
 
 const GROCERY_WITH_UNIT =
     /\b(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\s*(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\b|\b(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\s+(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\b/i;
@@ -21,8 +21,16 @@ const FOOD_KEYWORDS =
 const EXPLICIT_PARTNER =
     /\b(?:from|on|via|using|through)\s+(swiggy(?:\s+food)?|instamart|zepto)\b|\b(swiggy(?:\s+food)?|instamart|zepto)\s+(?:food|groceries|grocery|se|pe)\b/i;
 
-const ORDER_INTENT =
-    /\b(order|mangao|manga|bhej|deliver|delivery|lana|la do|chahiye|need|want|get me|bring)\b/i;
+const ORDER_VERBS =
+    /\b(order|orders?|ordered|mangao|manga|mangwa|bhej|deliver|delivery|lana|la do|get me|bring me|buy)\b/i;
+
+const ORDER_VERBS_WITH_OBJECT =
+    /\b(need|want|chahiye)\s+(to\s+)?(order|buy|get|eat)\b/i;
+
+const CASUAL_NON_ORDER =
+    /\b(want to know|anything you want|need help|need anything|i'?m (doing )?fine|i am fine|theek|how are you|what can you|tell me about|share updates|care co-?pilot|talk to me|change to|switch to)\b/i;
+
+const ORDER_TYPOS = /\b(oder|ordr|odr)\b/i;
 
 const PARTNER_NOISE =
     /\b(from|on|via|using|through)\s+(swiggy|instamart|zepto)\b|\b(swiggy|instamart|zepto)\s+(food|groceries|grocery|se|pe)\b/gi;
@@ -86,16 +94,48 @@ export type OrderChatResult =
           message: string;
       };
 
-export function messageLooksLikeOrder(text: string): boolean {
-    const t = text.trim();
-    if (t.length < 6) return false;
+export function normalizeOrderText(text: string): string {
+    return text
+        .replace(/\b(oder|ordr|odr)\b/gi, "order")
+        .replace(/\bcole\b/gi, "coke")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+export function isCasualNonOrderMessage(text: string): boolean {
+    const t = normalizeOrderText(text);
+    if (CASUAL_NON_ORDER.test(t)) return true;
+    if (/^(hi|hello|hey|ok|okay|thanks|thank you|yes|no)\b/i.test(t) && t.length < 40) return true;
+    return false;
+}
+
+export function isHighConfidenceOrderIntent(text: string): boolean {
+    const t = normalizeOrderText(text);
+    if (t.length < 4 || isCasualNonOrderMessage(t)) return false;
     if (messageIsAddressFollowUp(t)) return true;
-    return (
-        ORDER_INTENT.test(t) ||
-        (GROCERY_KEYWORDS.test(t) && /\d|kg|litre|packet|pack|bottle/.test(t)) ||
-        /\b(want to eat|feel like eating|craving|hungry for)\b/i.test(t) ||
-        (FOOD_KEYWORDS.test(t) && /\b(want|eat|order|get|hungry|craving|like)\b/i.test(t))
-    );
+    if (EXPLICIT_PARTNER.test(t)) return true;
+    if (ORDER_VERBS.test(t) || ORDER_TYPOS.test(text)) {
+        if (extractItems(t).length > 0) return true;
+        if (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t)) return true;
+        if (/\b(food|groceries|grocery|khana|restaurant)\b/i.test(t)) return true;
+        const words = t.split(/\s+/).filter(Boolean);
+        if (words.length >= 3) return true;
+    }
+    if (ORDER_VERBS_WITH_OBJECT.test(t)) return true;
+    if (GROCERY_WITH_UNIT.test(t)) return true;
+    if (/\b(want to eat|feel like eating|craving|hungry for)\b/i.test(t)) return true;
+    if (FOOD_KEYWORDS.test(t) && /\b(want|eat|order|get|hungry|craving|like)\b/i.test(t)) return true;
+    return false;
+}
+
+/** Looser check — used only after AI could not handle the turn. */
+export function messageLooksLikeOrder(text: string): boolean {
+    const t = normalizeOrderText(text);
+    if (t.length < 4 || isCasualNonOrderMessage(t)) return false;
+    if (isHighConfidenceOrderIntent(t)) return true;
+    if (GROCERY_KEYWORDS.test(t) && /\d|kg|litre|packet|pack|bottle|can|pet/i.test(t)) return true;
+    if (ORDER_VERBS.test(t) && t.split(/\s+/).length >= 2) return true;
+    return false;
 }
 
 export function messageIsAddressFollowUp(text: string): boolean {
@@ -129,7 +169,7 @@ export function messageIsOrderIntentOnly(text: string): boolean {
     if (extractItems(text).length > 0) return false;
     const cleaned = text
         .replace(PARTNER_NOISE, " ")
-        .replace(ORDER_INTENT, " ")
+        .replace(ORDER_VERBS, " ")
         .replace(FOOD_KEYWORDS, " ")
         .replace(GROCERY_KEYWORDS, " ")
         .replace(/\b(please|mujhe|for|mama|mummy|papa)\b/gi, " ")
@@ -159,7 +199,7 @@ function extractItems(text: string): ParsedOrderLine[] {
             continue;
         }
 
-        if (GROCERY_KEYWORDS.test(bit) || FOOD_KEYWORDS.test(bit) || ORDER_INTENT.test(bit)) {
+        if (GROCERY_KEYWORDS.test(bit) || FOOD_KEYWORDS.test(bit) || ORDER_VERBS.test(bit)) {
             const cleaned = normalizeOrderItemName(bit);
             if (cleaned.length >= 2 && !/^(from|swiggy|instamart|zepto)$/i.test(cleaned)) {
                 items.push({ name: cleaned, quantity: 1, unitPricePaise: 0 });
@@ -201,7 +241,7 @@ export function extractOrderQuery(message: string): string {
     if (items.length) return items.map((i) => i.name).join(", ");
     const cleaned = message
         .replace(PARTNER_NOISE, " ")
-        .replace(ORDER_INTENT, " ")
+        .replace(ORDER_VERBS, " ")
         .replace(FOOD_KEYWORDS, " ")
         .replace(GROCERY_KEYWORDS, " ")
         .replace(/\b(for|lunch|dinner|breakfast|please|mujhe)\b/gi, " ")
@@ -468,13 +508,19 @@ export async function maybeSuggestOrderFromChat(input: {
     subjectUserId: string;
     actorUserId: string;
     message: string;
+    minConfidence?: "high" | "loose";
 }): Promise<OrderChatResult | null> {
-    const addressStatus = await maybeAddressStatusFromChat(input);
+    const message = normalizeOrderText(input.message);
+    const addressStatus = await maybeAddressStatusFromChat({ ...input, message });
     if (addressStatus) return addressStatus;
 
-    if (!messageLooksLikeOrder(input.message)) return null;
+    const looksLikeOrder =
+        input.minConfidence === "loose"
+            ? messageLooksLikeOrder(message)
+            : isHighConfidenceOrderIntent(message);
+    if (!looksLikeOrder) return null;
 
-    const partner = await pickOrderPartner(input.message, input.familyId, input.actorUserId);
+    const partner = await pickOrderPartner(message, input.familyId, input.actorUserId);
     const mcpPartner = partnerToMcp(partner);
     const connected = await listFamilyConnectedPartners(input.familyId, input.actorUserId);
     const isConnected =
@@ -486,7 +532,7 @@ export async function maybeSuggestOrderFromChat(input: {
         return buildConnectResult(partner, input.familyId, input.actorUserId);
     }
 
-    if (messageIsOrderIntentOnly(input.message)) {
+    if (messageIsOrderIntentOnly(message)) {
         const label = partnerLabel(partner);
         return {
             kind: "prompt",
@@ -496,7 +542,7 @@ export async function maybeSuggestOrderFromChat(input: {
         };
     }
 
-    const items = extractItems(input.message);
+    const items = extractItems(message);
     if (!items.length) return null;
 
     const commerceUserId =

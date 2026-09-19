@@ -32,7 +32,9 @@ import {
 } from "./partnerAddress.service";
 import {
     extractOrderQuery,
+    isHighConfidenceOrderIntent,
     messageLooksLikeOrder,
+    normalizeOrderText,
     partnerLabel,
     pickOrderPartner,
 } from "./saheliOrder.service";
@@ -225,12 +227,13 @@ export async function startOrderFlow(input: {
     message: string;
     saheliSessionId?: string;
 }): Promise<OrderFlowPayload | null> {
-    if (!messageLooksLikeOrder(input.message)) return null;
+    const orderMessage = normalizeOrderText(input.message);
+    if (!isHighConfidenceOrderIntent(orderMessage)) return null;
 
     const family = await getFamilyForActor(input.familyId, input.actorUserId);
     requireCareRecipient(family, input.recipientUserId);
 
-    const partner = await pickOrderPartner(input.message, input.familyId, input.actorUserId);
+    const partner = await pickOrderPartner(orderMessage, input.familyId, input.actorUserId);
     const mcpPartner = orderPartnerToMcp(partner);
     if (!mcpPartner) return null;
 
@@ -247,7 +250,7 @@ export async function startOrderFlow(input: {
             phase: "select_address",
             partner: mcpPartner,
             partnerLabel: partnerLabel(partner),
-            query: extractOrderQuery(input.message),
+            query: extractOrderQuery(orderMessage),
             message: `Connect ${partnerLabel(partner)} in Integrations to order live. ${started.authorizationUrl ? "Use the connect card below." : ""}`.trim(),
         };
     }
@@ -256,7 +259,7 @@ export async function startOrderFlow(input: {
         (await resolveFamilyMcpUserId(input.familyId, mcpPartner, input.actorUserId)) ??
         input.actorUserId;
     const addresses = await loadAddresses(input.familyId, mcpPartner, commerceUserId);
-    const query = extractOrderQuery(input.message);
+    const query = extractOrderQuery(orderMessage);
     const label = partnerLabel(partner);
 
     if (!addresses.length) {
@@ -296,7 +299,7 @@ export async function startOrderFlow(input: {
         expiresAt: new Date(Date.now() + SESSION_TTL_MS),
     });
 
-    const addressHint = parseAddressLabelFromMessage(input.message);
+    const addressHint = parseAddressLabelFromMessage(orderMessage);
     if (addressHint) {
         const matched = matchAddressByLabel(addresses, addressHint);
         if (matched) {

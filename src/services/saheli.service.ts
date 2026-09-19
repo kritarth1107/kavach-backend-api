@@ -63,6 +63,7 @@ import { type OrderFlowPayload } from "./orderOrchestrator.service";
 import {
     maybeSuggestOrderFromChat,
     messageLooksLikeOrder,
+    normalizeOrderText,
     serializeOrderChatForClient,
     type OrderChatResult,
 } from "./saheliOrder.service";
@@ -765,7 +766,8 @@ export async function sendSaheliMessage(
 
     const membersPayload = await getFamilyMembersList(familyId, actorUserId);
     const displayName = resolveRecipientName(membersPayload.members, recipientUserId);
-    const text = message.trim();
+    const waChannel = opts?.channel === ChannelType.WHATSAPP;
+    const text = waChannel ? normalizeOrderText(message.trim()) : message.trim();
     if (!text) throw new AppError("Message is required", 400);
 
     let sessionId = opts?.sessionId;
@@ -797,7 +799,6 @@ export async function sendSaheliMessage(
         sessionId,
     });
     const isFirstMessage = priorElderTurns === 0;
-    const waChannel = opts?.channel === ChannelType.WHATSAPP;
     const contextBundle = await buildSaheliContextBundle({
         familyId,
         recipientUserId,
@@ -856,6 +857,7 @@ export async function sendSaheliMessage(
             subjectUserId: recipientUserId,
             actorUserId,
             message: text,
+            minConfidence: "high",
         });
     } catch (err) {
         console.warn("Order suggest from elder chat failed:", err);
@@ -867,8 +869,10 @@ export async function sendSaheliMessage(
     if (careActionReply) {
         reply = careActionReply;
         conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
-    } else if (order?.kind === "connect_required") {
+    } else if (order?.kind === "connect_required" || order?.kind === "prompt") {
         reply = order.message;
+    } else if (order?.kind === "order") {
+        reply = applyOrderChatResult("", order);
     } else {
         const ai = await elderReplyWithAi(
             familyId,
@@ -893,6 +897,28 @@ export async function sendSaheliMessage(
         );
         reply = applyOrderChatResult(ai.reply, order);
         conversationId = ai.conversationId;
+
+        const genericFallback = /^I'm here — please try again/i.test(reply.trim());
+        if (waChannel && (genericFallback || !reply.trim()) && messageLooksLikeOrder(text)) {
+            try {
+                const looseOrder = await maybeSuggestOrderFromChat({
+                    familyId,
+                    subjectUserId: recipientUserId,
+                    actorUserId,
+                    message: text,
+                    minConfidence: "loose",
+                });
+                if (looseOrder) {
+                    order = looseOrder;
+                    reply =
+                        looseOrder.kind === "connect_required" || looseOrder.kind === "prompt"
+                            ? looseOrder.message
+                            : applyOrderChatResult(reply, looseOrder);
+                }
+            } catch (err) {
+                console.warn("Loose order fallback failed:", err);
+            }
+        }
     }
 
     await touchSaheliChatSession(sessionId, {
