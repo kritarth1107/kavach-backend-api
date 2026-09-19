@@ -323,13 +323,35 @@ export async function tryApplyElderCareActionFromMessage(input: {
         }
     }
 
+    const sugarMatch =
+        q.match(/\b(sugar|glucose|blood sugar)\s*[:\s-]*(\d{2,3})\b/i) ??
+        q.match(/\b(\d{2,3})\s*(mg\/dl|mgdl)\b/i);
+    if (sugarMatch) {
+        const value = sugarMatch[2] ?? sugarMatch[1];
+        if (value && /\d/.test(value)) {
+            await logVitals({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind: "Blood sugar",
+                value,
+                unit: "mg/dL",
+                channel: input.channel,
+            });
+            return `Logged blood sugar: ${value} mg/dL.`;
+        }
+    }
+
     const tookMed =
-        /\b(took|had|eaten|finished|le li|li hai|le liya|tablet|medicine|dose|capsule)\b/i.test(qLower);
+        /\b(took|had|eaten|finished|le li|le liya|le li hai)\b/i.test(qLower) &&
+        /\b(tablet|medicine|dose|capsule|pill|shelcal|folvite|metformin|amlodipine|telma|thyrox|ecosprin|paracetamol)\b/i.test(
+            qLower,
+        );
     if (tookMed) {
         const medMatch = q.match(
-            /\b(folvite|shelcal|metformin|amlodipine|telma|thyrox|ecosprin|paracetamol|[a-z]{4,})\b/i,
+            /\b(folvite|shelcal|metformin|amlodipine|telma|thyrox|ecosprin|paracetamol)\b/i,
         );
-        const hint = medMatch?.[1] ?? q.replace(/.*\b(took|had|finished)\b/i, "").trim();
+        const hint = medMatch?.[1] ?? q.replace(/.*\b(took|had|finished|le li)\b/i, "").trim();
         if (hint.length >= 3) {
             const result = await logDose({
                 familyId: input.familyId,

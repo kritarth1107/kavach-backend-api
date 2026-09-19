@@ -166,15 +166,33 @@ export async function deliverSaheliOutreach(payload: {
         if (!isAiEngineOfflineError(err) && slot !== "morning") throw err;
         const missed = dayStatus.items.filter((i) => i.status === "missed");
         const upcoming = dayStatus.items.filter((i) => i.status === "upcoming");
-        const parts = [`Good morning, ${displayName}!`];
+        const lang = companion.preferredLanguage ?? "english";
+        const hindi = lang === "hindi" || lang === "hinglish";
+        const parts = hindi
+            ? [`Suprabhat ${displayName}!`]
+            : [`Good morning, ${displayName}!`];
         if (missed.length) {
-            parts.push(formatScheduleSection(missed, "Missed so far today"));
+            parts.push(
+                formatScheduleSection(
+                    missed,
+                    hindi ? "Aaj abhi tak miss hua" : "Missed so far today",
+                ),
+            );
         }
         if (upcoming.length) {
-            parts.push(formatScheduleSection(upcoming.slice(0, 5), "Coming up today"));
+            parts.push(
+                formatScheduleSection(
+                    upcoming.slice(0, 5),
+                    hindi ? "Aaj aage" : "Coming up today",
+                ),
+            );
         }
         if (parts.length === 1) {
-            parts.push("Hope you're having a gentle start to the day.");
+            parts.push(
+                hindi
+                    ? "Umeed hai aapka din accha shuru ho raha hai."
+                    : "Hope you're having a gentle start to the day.",
+            );
         }
         reply = parts.join("\n\n");
         topicBucket = "care";

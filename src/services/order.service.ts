@@ -215,6 +215,49 @@ export async function markOrderDelivered(
     return order;
 }
 
+/** Care recipient cancels their own basket awaiting family approval. */
+export async function cancelRecipientPendingOrder(
+    familyId: string,
+    recipientUserId: string,
+    actorUserId: string,
+) {
+    const family = await getFamilyForActor(familyId, actorUserId);
+    requireCareRecipient(family, recipientUserId);
+    if (actorUserId !== recipientUserId) {
+        throw new AppError("Only the care recipient can cancel their own basket", 403);
+    }
+
+    const order = await Order.findOne({
+        familyId,
+        subjectUserId: recipientUserId,
+        status: OrderStatus.AWAITING_APPROVAL,
+    })
+        .sort({ createdAt: -1 })
+        .lean();
+
+    if (!order) return null;
+
+    await Order.updateOne(
+        { orderId: order.orderId, familyId },
+        { $set: { status: OrderStatus.CANCELLED } },
+    );
+
+    await appendCareRecordEvent({
+        familyId,
+        subjectUserId: recipientUserId,
+        actorUserId,
+        type: CareRecordEventType.SYSTEM,
+        source: CareRecordSource.WHATSAPP,
+        channel: ChannelType.WHATSAPP,
+        title: "Order cancelled",
+        detail: `${order.partner} basket cancelled by care recipient.`,
+        payload: { orderId: order.orderId, cancelled: true },
+        status: "cancelled",
+    });
+
+    return order;
+}
+
 export async function rejectOrder(familyId: string, orderId: string, actorUserId: string) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "approve_order");

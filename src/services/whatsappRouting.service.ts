@@ -302,6 +302,14 @@ export async function handleWhatsAppInbound(body: {
         saheliSessionId: waSession?.saheliSessionId,
     });
     if (orderFlowReply) {
+        const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
+        recordWhatsAppAiDebug({
+            familyId: identity.familyId,
+            recipientUserId: subjectUserId,
+            actorUserId: identity.userId,
+            replySource: "orderSession",
+            fallbackUsed: "tryHandleWhatsAppOrderTurn",
+        });
         return outbound(phone, orderFlowReply.text, {
             kind: "order_flow",
             orderFlow: orderFlowReply.orderFlow,

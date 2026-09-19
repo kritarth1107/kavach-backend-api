@@ -1,4 +1,5 @@
 import WhatsappSession, { type WhatsappOrderPhase } from "../models/whatsappSession.model";
+import OrderSession from "../models/orderSession.model";
 import {
     addOrderFlowCartItem,
     loadOrderFlowRestaurantMenu,
@@ -145,8 +146,52 @@ function isConfirm(text: string): boolean {
     return /\b(yes|confirm|ok|okay|place|submit|checkout|done|haan|ha|ji)\b/i.test(text.trim());
 }
 
-function isCancel(text: string): boolean {
-    return /\b(cancel|stop|nevermind|never mind|abort|nahi|no thanks)\b/i.test(text.trim());
+function isExplicitOrderCancel(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    return (
+        /^cancel(\s+order)?$/.test(t) ||
+        /\bcancel\s+(the\s+)?order\b/.test(t) ||
+        /\bstop\s+order\b/.test(t)
+    );
+}
+
+function isActiveSessionCancel(text: string): boolean {
+    return /\b(cancel|stop|nevermind|never mind|abort)\b/i.test(text.trim());
+}
+
+async function cancelElderOrderSession(input: {
+    phone: string;
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    orderSessionId?: string;
+}): Promise<{ cancelledPendingOrder: boolean }> {
+    if (input.orderSessionId) {
+        await OrderSession.updateOne(
+            { sessionId: input.orderSessionId, familyId: input.familyId },
+            { $set: { phase: "expired" } },
+        );
+    }
+    await clearWhatsAppOrderSession(input.phone);
+    const { cancelRecipientPendingOrder } = await import("./order.service");
+    const cancelled = await cancelRecipientPendingOrder(
+        input.familyId,
+        input.recipientUserId,
+        input.actorUserId,
+    );
+    return { cancelledPendingOrder: Boolean(cancelled) };
+}
+
+function formatOrderStatusReply(order: {
+    orderId: string;
+    partner: string;
+    status: string;
+    totalPaise: number;
+    items: Array<{ name: string; quantity: number }>;
+}): string {
+    const items = order.items.map((i) => `${i.name} ×${i.quantity}`).join(", ");
+    const total = `₹${(order.totalPaise / 100).toFixed(0)}`;
+    return `Your latest ${order.partner} order (${total}): ${items}. Status: ${order.status.replace(/_/g, " ")}. Ref: ${order.orderId.slice(0, 8)}.`;
 }
 
 function orderTurn(text: string, orderFlow?: OrderFlowPayload): WhatsAppOrderTurnResult {
@@ -163,9 +208,19 @@ async function handleActiveOrderTurn(input: {
     saheliSessionId?: string;
 }): Promise<WhatsAppOrderTurnResult> {
     const text = input.text.trim();
-    if (isCancel(text)) {
-        await clearWhatsAppOrderSession(input.phone);
-        return orderTurn("Order cancelled. Tell me anytime if you'd like to order again.");
+    if (isActiveSessionCancel(text)) {
+        const { cancelledPendingOrder } = await cancelElderOrderSession({
+            phone: input.phone,
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            orderSessionId: input.orderSessionId,
+        });
+        return orderTurn(
+            cancelledPendingOrder
+                ? "Order cancelled — your basket was removed."
+                : "Order cancelled. Tell me anytime if you'd like to order again.",
+        );
     }
 
     const idx = parseNumberChoice(text);
@@ -306,6 +361,43 @@ export type WhatsAppOrderTurnResult = {
     orderFlow?: OrderFlowPayload;
 };
 
+export async function tryHandleOrderStatusQuery(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+}): Promise<WhatsAppOrderTurnResult | null> {
+    const t = input.text.trim().toLowerCase();
+    if (!/^(status|order status)$/.test(t) && !/\b(where is my order|track order|order status)\b/.test(t)) {
+        return null;
+    }
+
+    const { executeSaheliTool } = await import("./saheliTools.service");
+    const result = await executeSaheliTool({
+        tool: "get_order_status",
+        args: {},
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+    });
+
+    if (result.error) {
+        return orderTurn("I don't see a recent order yet. Say what you'd like to order anytime.");
+    }
+
+    return orderTurn(
+        formatOrderStatusReply({
+            orderId: String(result.orderId ?? ""),
+            partner: String(result.partner ?? "order"),
+            status: String(result.status ?? "unknown"),
+            totalPaise: Number(result.totalPaise ?? 0),
+            items: Array.isArray(result.items)
+                ? (result.items as Array<{ name: string; quantity: number }>)
+                : [],
+        }),
+    );
+}
+
 export async function tryHandleWhatsAppOrderTurn(input: {
     phone: string;
     familyId: string;
@@ -318,14 +410,31 @@ export async function tryHandleWhatsAppOrderTurn(input: {
     const text = input.text.trim();
     if (!text) return null;
 
-    if (isCancel(text)) {
-        if (waSession?.orderSessionId) {
-            await clearWhatsAppOrderSession(input.phone);
-        }
-        return orderTurn("Order cancelled. Tell me anytime if you'd like to order again.");
+    const statusReply = await tryHandleOrderStatusQuery({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        text,
+    });
+    if (statusReply) return statusReply;
+
+    if (isExplicitOrderCancel(text)) {
+        const { cancelledPendingOrder } = await cancelElderOrderSession({
+            phone: input.phone,
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            orderSessionId: waSession?.orderSessionId,
+        });
+        return orderTurn(
+            cancelledPendingOrder
+                ? "Order cancelled — your basket was removed."
+                : "Order cancelled. Tell me anytime if you'd like to order again.",
+        );
     }
 
-    if (waSession?.orderSessionId && waSession.orderPhase) {
+    const orderSessionId = waSession?.orderSessionId;
+    if (orderSessionId) {
         try {
             return await handleActiveOrderTurn({
                 phone: input.phone,
@@ -333,8 +442,8 @@ export async function tryHandleWhatsAppOrderTurn(input: {
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 text,
-                orderSessionId: waSession.orderSessionId,
-                saheliSessionId: input.saheliSessionId ?? waSession.saheliSessionId,
+                orderSessionId,
+                saheliSessionId: input.saheliSessionId ?? waSession?.saheliSessionId,
             });
         } catch (err) {
             console.warn("WhatsApp order turn failed:", err);

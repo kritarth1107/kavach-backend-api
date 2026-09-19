@@ -442,7 +442,7 @@ export async function executeSaheliTool(input: {
             const orderId = String(input.args.orderId ?? "");
             const filter = orderId
                 ? { familyId: input.familyId, orderId }
-                : { familyId: input.familyId, recipientUserId: input.recipientUserId };
+                : { familyId: input.familyId, subjectUserId: input.recipientUserId };
             const order = await Order.findOne(filter).sort({ createdAt: -1 }).lean();
             if (!order) return { error: "No order found" };
             return {

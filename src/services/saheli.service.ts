@@ -26,7 +26,10 @@ import {
     formatScheduleSection,
     type SaheliContextBundle,
 } from "./saheliContext.service";
-import { recordWhatsAppAiDebug } from "./whatsappWebhookLog.service";
+import {
+    recordWhatsAppAiDebug,
+    type SaheliReplySource,
+} from "./whatsappWebhookLog.service";
 import {
     refreshRecipientMemoryToAiEngine,
     syncSessionHistoryToAiEngine,
@@ -212,6 +215,8 @@ function serializeOrderFlow(flow: OrderFlowPayload | null | undefined): SaheliOr
         orderId: flow.orderId,
         message: flow.message,
         disambiguation: flow.disambiguation,
+        connectPartner: flow.connectPartner,
+        connectUrl: flow.connectUrl ?? undefined,
     };
 }
 
@@ -554,6 +559,7 @@ async function elderReplyWithAi(
                 aiError,
                 aiStatusCode: statusCode,
                 fallbackUsed: "buildElderSmartReply",
+                replySource: "ai",
             });
         }
         const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
@@ -563,10 +569,45 @@ async function elderReplyWithAi(
             message,
         });
         if (orderComms) {
+            if (waChannel) {
+                recordWhatsAppAiDebug({
+                    familyId,
+                    recipientUserId,
+                    actorUserId: recipientUserId,
+                    replySource: "orderComms",
+                    fallbackUsed: "buildOrderCommunicationReply",
+                });
+            }
             return {
                 reply: orderComms,
                 conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
             };
+        }
+        if (messageLooksLikeOrder(message)) {
+            const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+            const kernel = await tryStartOrderFromMessage({
+                familyId,
+                recipientUserId,
+                actorUserId: recipientUserId,
+                message,
+                saheliSessionId: opts?.sessionId,
+            });
+            if (kernel) {
+                if (waChannel) {
+                    recordWhatsAppAiDebug({
+                        familyId,
+                        recipientUserId,
+                        actorUserId: recipientUserId,
+                        replySource: "kernelFallback",
+                        fallbackUsed: "tryStartOrderFromMessage",
+                    });
+                }
+                return {
+                    reply: kernel.reply,
+                    conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
+                    orderFlow: kernel.orderFlow ?? null,
+                };
+            }
         }
         if (isAiEngineOfflineError(err)) {
             const offlineFallback = buildElderSmartReply({
@@ -895,9 +936,11 @@ export async function sendSaheliMessage(
 
     let reply = "";
     let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
+    let replySource: SaheliReplySource = "ai";
 
     if (careActionReply) {
         reply = careActionReply;
+        replySource = "careAction";
         conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
     } else if (waChannel && messageLooksLikeOrder(text)) {
         const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
@@ -908,6 +951,7 @@ export async function sendSaheliMessage(
         });
         if (orderComms) {
             reply = orderComms;
+            replySource = "orderComms";
         } else {
             const ai = await elderReplyWithAi(
                 familyId,
@@ -967,6 +1011,38 @@ export async function sendSaheliMessage(
         if (ai.orderFlow) {
             orderFlow = ai.orderFlow;
         }
+    }
+
+    if (
+        waChannel &&
+        messageLooksLikeOrder(text) &&
+        !orderFlow &&
+        replySource === "ai" &&
+        (!reply.trim() || reply === "I'm here — please try again in a moment.")
+    ) {
+        const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+        const kernel = await tryStartOrderFromMessage({
+            familyId,
+            recipientUserId,
+            actorUserId: recipientUserId,
+            message: text,
+            saheliSessionId: sessionId,
+        });
+        if (kernel) {
+            reply = kernel.reply;
+            orderFlow = kernel.orderFlow ?? null;
+            replySource = "kernelFallback";
+        }
+    }
+
+    if (waChannel) {
+        recordWhatsAppAiDebug({
+            familyId,
+            recipientUserId,
+            actorUserId: recipientUserId,
+            replySource,
+            fallbackUsed: replySource !== "ai" ? replySource : undefined,
+        });
     }
 
     if (order?.kind === "connect_required" || order?.kind === "prompt") {

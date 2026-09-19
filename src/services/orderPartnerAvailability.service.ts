@@ -26,6 +26,36 @@ function orderPartnerToMcp(partner: OrderPartner): McpPartnerKey | null {
     return null;
 }
 
+async function probeCatalogServiceability(
+    partner: "instamart" | "zepto",
+    familyId: string,
+    actorUserId: string,
+): Promise<{ serviceable: boolean; reason?: string }> {
+    const userId = await resolveFamilyMcpUserId(familyId, partner, actorUserId);
+    if (!userId) return { serviceable: false, reason: "not_connected" };
+
+    await ensurePartnerAddressesSynced(partner, familyId, userId);
+    const addresses = await listPartnerAddresses(familyId, partner, userId);
+    const addressId =
+        addresses.find((a) => a.is_default)?.partner_address_id ?? addresses[0]?.partner_address_id;
+    if (!addressId && partner === "instamart") {
+        return { serviceable: false, reason: "no_address" };
+    }
+
+    try {
+        const search = await searchMcpProduct(partner, familyId, userId, "milk", { addressId });
+        if (search.error === "no_address") {
+            return { serviceable: false, reason: "no_address" };
+        }
+        if (!search.items.length) {
+            return { serviceable: false, reason: "unavailable" };
+        }
+        return { serviceable: true };
+    } catch {
+        return { serviceable: false, reason: "probe_failed" };
+    }
+}
+
 async function probeSwiggyServiceability(
     familyId: string,
     actorUserId: string,
@@ -80,6 +110,10 @@ export async function getOrderPartnerAvailability(
             reason = "not_connected";
         } else if (partner === "swiggy") {
             const probe = await probeSwiggyServiceability(familyId, actorUserId);
+            serviceable = probe.serviceable;
+            reason = probe.reason;
+        } else if (partner === "instamart" || partner === "zepto") {
+            const probe = await probeCatalogServiceability(partner, familyId, actorUserId);
             serviceable = probe.serviceable;
             reason = probe.reason;
         }

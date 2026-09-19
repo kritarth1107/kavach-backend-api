@@ -345,6 +345,41 @@ export async function submitOrderCart(input: {
     };
 }
 
+/** Deterministic order start when AI is unavailable but message is clearly an order. */
+export async function tryStartOrderFromMessage(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    message: string;
+    saheliSessionId?: string;
+}): Promise<{ reply: string; orderFlow?: OrderFlowPayload } | null> {
+    const { messageLooksLikeOrder } = await import("./saheliOrder.service");
+    if (!messageLooksLikeOrder(input.message)) return null;
+
+    const result = await ensureOrderSession({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        message: input.message,
+        saheliSessionId: input.saheliSessionId,
+    });
+
+    if (result.status === "no_order_intent") return null;
+
+    const flow = result.orderFlow as OrderFlowPayload | undefined;
+    const reply =
+        (typeof flow?.message === "string" && flow.message.trim()) ||
+        (typeof result.message === "string" && result.message.trim()) ||
+        "";
+
+    if (!reply && !flow?.sessionId && !flow?.connectPartner) return null;
+
+    return {
+        reply: reply || "Starting your order — one moment.",
+        orderFlow: flow,
+    };
+}
+
 export async function selectOrderSessionAddress(input: {
     sessionId: string;
     familyId: string;

@@ -3,6 +3,13 @@ import { isMetaWhatsAppEnabled } from "../clients/metaWhatsApp.client";
 
 const MAX_EVENTS = 100;
 
+export type SaheliReplySource =
+    | "ai"
+    | "orderComms"
+    | "careAction"
+    | "orderSession"
+    | "kernelFallback";
+
 export type WhatsAppAiDebug = {
     at: string;
     familyId?: string;
@@ -12,6 +19,7 @@ export type WhatsAppAiDebug = {
     aiError?: string;
     aiStatusCode?: number;
     fallbackUsed?: string;
+    replySource?: SaheliReplySource;
 };
 
 export type WhatsAppWebhookLogEntry = {
@@ -29,6 +37,7 @@ export type WhatsAppWebhookLogEntry = {
     error?: string;
     sendError?: string;
     aiDebug?: WhatsAppAiDebug;
+    replySource?: SaheliReplySource;
     likelySynthetic?: boolean;
     metaConsoleTest?: boolean;
     metaEnabled: boolean;
@@ -151,6 +160,7 @@ export function recordWhatsAppWebhookEvent(input: {
     error?: string;
     sendError?: string;
     aiDebug?: WhatsAppAiDebug;
+    replySource?: SaheliReplySource;
 }): WhatsAppWebhookLogEntry {
     const summary = summarizePayload(input.body);
     const firstInbound = summary.inbound[0];
@@ -166,6 +176,8 @@ export function recordWhatsAppWebhookEvent(input: {
         firstInbound?.messageId === "wamid.test" ||
         firstInbound?.from.endsWith("9999");
 
+    const aiDebug = input.aiDebug ?? consumeWhatsAppAiDebug();
+
     const entry: WhatsAppWebhookLogEntry = {
         id: `wa-${Date.now()}-${++eventCounter}`,
         receivedAt: new Date().toISOString(),
@@ -180,7 +192,8 @@ export function recordWhatsAppWebhookEvent(input: {
         replyTo: input.replyTo ? redactPhone(input.replyTo) : undefined,
         error: input.error,
         sendError: input.sendError,
-        aiDebug: input.aiDebug ?? consumeWhatsAppAiDebug(),
+        aiDebug,
+        replySource: input.replySource ?? aiDebug?.replySource,
         likelySynthetic,
         metaConsoleTest,
         metaEnabled: isMetaWhatsAppEnabled(),

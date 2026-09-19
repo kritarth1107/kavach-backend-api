@@ -49,6 +49,8 @@ export type OrderFlowPayload = {
     partner: McpPartnerKey;
     partnerLabel: string;
     query: string;
+    connectPartner?: McpPartnerKey;
+    connectUrl?: string | null;
     selectedAddressId?: string;
     addresses?: OrderSessionAddress[];
     catalog?: {
@@ -291,6 +293,8 @@ export async function startOrderFlow(input: {
             partner: mcpPartner,
             partnerLabel: partnerLabel(partner),
             query: extractOrderQuery(orderMessage),
+            connectPartner: mcpPartner,
+            connectUrl: started.authorizationUrl ?? null,
             message: `${altHint}${started.authorizationUrl ? " Connect card below." : ""}`.trim(),
         };
     }

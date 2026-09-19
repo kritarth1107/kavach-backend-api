@@ -42,6 +42,8 @@ export type SaheliOrderFlowPayload = {
     }>;
     orderId?: string;
     message?: string;
+    connectPartner?: string;
+    connectUrl?: string | null;
     disambiguation?: {
         query: string;
         candidates: Array<{

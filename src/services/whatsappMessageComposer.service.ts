@@ -148,6 +148,30 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
         });
     }
 
+    if (!flow.sessionId && flow.connectUrl) {
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "cta_url",
+                body: {
+                    text: truncate(
+                        flow.message ??
+                            `Connect ${flow.partnerLabel} so I can finish this order for you.`,
+                        1024,
+                    ),
+                },
+                action: {
+                    name: "cta_url",
+                    parameters: {
+                        display_text: `Connect ${flow.partnerLabel}`,
+                        url: flow.connectUrl,
+                    },
+                },
+            },
+        });
+        return messages;
+    }
+
     if (flow.phase === "select_address" && flow.addresses?.length) {
         messages.push({
             type: "interactive",

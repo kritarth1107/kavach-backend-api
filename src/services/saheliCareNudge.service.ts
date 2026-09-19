@@ -8,6 +8,7 @@ import { listEnabledCompanions, isWithinQuietHours } from "./saheliCompanion.ser
 import { deliverOutboundMessage, resolveRecipientChannel } from "./channelOutbound.service";
 import { getFamilyMembersList } from "./familyMember.service";
 import { buildCareNudgeMessages } from "./whatsappMessageComposer.service";
+import { buildCareNudgeText } from "./saheliNudgeCopy.service";
 import { checkCaregiverAlertsForMissedTasks } from "./saheliCaregiverAlert.service";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
 
@@ -72,6 +73,7 @@ export async function deliverCareNudge(input: {
     nudgeKind: SaheliNudgeKind;
     dateKey: string;
     preferredChannel: "whatsapp" | "phone" | "dashboard";
+    preferredLanguage?: string;
 }): Promise<boolean> {
     if (
         await nudgeAlreadySent({
@@ -85,14 +87,13 @@ export async function deliverCareNudge(input: {
         return false;
     }
 
-    const text =
-        input.nudgeKind === "pre_reminder"
-            ? `Reminder: ${input.title} at ${input.time} is coming up soon.`
-            : input.nudgeKind === "missed_followup"
-              ? `Just checking — did you get a chance to do ${input.title} (${input.time})?`
-              : input.nudgeKind === "completion_praise"
-                ? `Well done on completing ${input.title} today.`
-                : `Reminder: ${input.title} at ${input.time}.`;
+    const text = buildCareNudgeText({
+        nudgeKind: input.nudgeKind,
+        title: input.title,
+        time: input.time,
+        displayName: input.displayName,
+        preferredLanguage: input.preferredLanguage,
+    });
 
     const payloads = buildCareNudgeMessages({
         text,
@@ -158,6 +159,8 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
             companion.recipientUserId,
         );
         const displayName = resolveRecipientName(members.members, companion.recipientUserId);
+        const intensity = companion.nudgeIntensity ?? "standard";
+        const preferredLanguage = companion.preferredLanguage ?? "english";
 
         for (const item of day.items) {
             const scheduleMinutes = parseTimeToMinutes(item.time);
@@ -174,11 +177,13 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
                     nudgeKind: "pre_reminder",
                     dateKey,
                     preferredChannel: companion.preferredChannel,
+                    preferredLanguage,
                 });
                 if (ok) sent += 1;
             }
 
             if (
+                intensity !== "gentle" &&
                 (item.status === "missed" || item.status === "due") &&
                 nowMinutes - scheduleMinutes >= 30 &&
                 nowMinutes - scheduleMinutes <= 45
@@ -193,6 +198,49 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
                     nudgeKind: "missed_followup",
                     dateKey,
                     preferredChannel: companion.preferredChannel,
+                    preferredLanguage,
+                });
+                if (ok) sent += 1;
+            }
+
+            if (
+                intensity === "persistent" &&
+                (item.status === "missed" || item.status === "due") &&
+                nowMinutes - scheduleMinutes >= 60 &&
+                nowMinutes - scheduleMinutes <= 75
+            ) {
+                const ok = await deliverCareNudge({
+                    familyId: companion.familyId,
+                    recipientUserId: companion.recipientUserId,
+                    displayName,
+                    scheduleId: item.scheduleId,
+                    title: item.title,
+                    time: item.time,
+                    nudgeKind: "missed_followup",
+                    dateKey,
+                    preferredChannel: companion.preferredChannel,
+                    preferredLanguage,
+                });
+                if (ok) sent += 1;
+            }
+
+            if (
+                item.type === "APPOINTMENT" &&
+                item.status === "upcoming" &&
+                scheduleMinutes - nowMinutes >= 30 &&
+                scheduleMinutes - nowMinutes <= 60
+            ) {
+                const ok = await deliverCareNudge({
+                    familyId: companion.familyId,
+                    recipientUserId: companion.recipientUserId,
+                    displayName,
+                    scheduleId: item.scheduleId,
+                    title: item.title,
+                    time: item.time,
+                    nudgeKind: "appointment_prep",
+                    dateKey,
+                    preferredChannel: companion.preferredChannel,
+                    preferredLanguage,
                 });
                 if (ok) sent += 1;
             }
@@ -208,6 +256,7 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
                     nudgeKind: "completion_praise",
                     dateKey,
                     preferredChannel: companion.preferredChannel,
+                    preferredLanguage,
                 });
                 if (ok) sent += 1;
             }
