@@ -18,6 +18,7 @@ import {
     CareRecordSource,
     ChannelType,
 } from "../types/careRecord.types";
+import { getISTParts } from "../utils/istTime.util";
 import { deliverOutboundMessage, resolveRecipientChannel } from "./channelOutbound.service";
 import { getFamilyMembersList } from "./familyMember.service";
 import { scheduleAppliesToday } from "./saheli.service";
@@ -32,7 +33,7 @@ function resolveRecipientName(
 }
 
 async function getTodayScheduleItems(familyId: string, recipientUserId: string) {
-    const today = new Date().getDay();
+    const today = getISTParts().dayOfWeek;
     const schedules = await CareSchedule.find({
         familyId,
         recipientUserId,

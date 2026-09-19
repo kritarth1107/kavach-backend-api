@@ -12,6 +12,7 @@ import { getMcpConnectionStatus } from "../partners/mcp/mcpClient.service";
 import { listPartnerAddresses } from "./partnerAddress.service";
 import { scheduleAppliesToday } from "./saheli.service";
 import { resolveFamilyMcpUserId } from "./commerceConnection.service";
+import { getISTParts } from "../utils/istTime.util";
 
 export type CommandCenterRecipient = {
     userId: string;
@@ -60,8 +61,9 @@ export async function getCommandCenter(
         status: { $in: [OrderStatus.AWAITING_APPROVAL, OrderStatus.APPROVED] },
     });
 
-    const today = new Date().getDay();
-    const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+    const ist = getISTParts();
+    const today = ist.dayOfWeek;
+    const nowMinutes = ist.minutesSinceMidnight;
     const rows: CommandCenterRecipient[] = [];
 
     for (const recipient of recipients) {

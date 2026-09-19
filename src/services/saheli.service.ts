@@ -63,6 +63,7 @@ import {
     maybeSetSessionTitle,
     touchSaheliChatSession,
 } from "./saheliSession.service";
+import { getISTParts } from "../utils/istTime.util";
 
 async function getFamilyAndRecipientLocal(familyId: string, recipientUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
@@ -1246,7 +1247,7 @@ function parseTimeToMinutes(time: string): number | null {
 }
 
 async function getTodayScheduleItems(familyId: string, recipientUserId: string) {
-    const today = new Date().getDay();
+    const today = getISTParts().dayOfWeek;
     const schedules = await CareSchedule.find({
         familyId,
         recipientUserId,
@@ -1328,9 +1329,10 @@ export async function getRecipientBriefing(
     };
 }
 
-export function scheduleAppliesToday(daysOfWeek: number[], day = new Date().getDay()): boolean {
+export function scheduleAppliesToday(daysOfWeek: number[], day?: number): boolean {
     if (!daysOfWeek.length) return true;
-    return daysOfWeek.includes(day);
+    const dow = day ?? getISTParts().dayOfWeek;
+    return daysOfWeek.includes(dow);
 }
 
 function scheduleTimeToday(time: string): string {
@@ -1399,7 +1401,7 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
         (m) => m.role === FamilyRole.CARE_RECIPIENT && m.status === FamilyMemberStatus.JOINED,
     );
 
-    const today = new Date().getDay();
+    const today = getISTParts().dayOfWeek;
     let schedulesToday = 0;
     let checkInsToday = 0;
     let completedToday = 0;

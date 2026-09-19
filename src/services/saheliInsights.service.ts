@@ -10,6 +10,7 @@ import { listPartnerAddresses } from "./partnerAddress.service";
 import { resolveFamilyMcpUserId } from "./commerceConnection.service";
 import CareSchedule from "../models/careSchedule.model";
 import { scheduleAppliesToday } from "./saheli.service";
+import { getISTParts } from "../utils/istTime.util";
 
 export type SaheliInsightItem = {
     kind: string;
@@ -115,8 +116,9 @@ export async function getSaheliInsights(
         });
     }
 
-    const today = new Date().getDay();
-    const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+    const ist = getISTParts();
+    const today = ist.dayOfWeek;
+    const nowMinutes = ist.minutesSinceMidnight;
     const schedules = await CareSchedule.find({ familyId, recipientUserId, active: true }).lean();
     for (const schedule of schedules) {
         if (!scheduleAppliesToday(schedule.daysOfWeek ?? [], today)) continue;

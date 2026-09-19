@@ -9,6 +9,14 @@ import {
     ScheduleDayItem,
 } from "../types/careScheduleCompletion.types";
 import Family from "../models/family.model";
+import {
+    getISTParts,
+    isPastDayIST,
+    isSameDayIST,
+    parseDateKeyIST,
+    toDateKeyIST,
+} from "../utils/istTime.util";
+
 function scheduleAppliesOnDay(daysOfWeek: number[], day: number): boolean {
     if (!daysOfWeek.length) return true;
     return daysOfWeek.includes(day);
@@ -23,28 +31,6 @@ export function parseTimeToMinutes(time: string): number | null {
     const minutes = Number(match[2]);
     if (match[3].toUpperCase() === "PM") hours += 12;
     return hours * 60 + minutes;
-}
-
-export function toDateKey(date: Date): string {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-}
-
-function parseDateKey(dateKey: string): Date | null {
-    const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!match) return null;
-    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-    return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function isSameLocalDay(a: Date, b: Date): boolean {
-    return (
-        a.getFullYear() === b.getFullYear() &&
-        a.getMonth() === b.getMonth() &&
-        a.getDate() === b.getDate()
-    );
 }
 
 async function getFamilyAndRecipient(familyId: string, recipientUserId: string) {
@@ -80,10 +66,10 @@ function assertCanManage(
     }
 }
 
-async function getSchedulesForDate(
+async function getSchedulesForDayOfWeek(
     familyId: string,
     recipientUserId: string,
-    date: Date,
+    dayOfWeek: number,
 ) {
     const schedules = await CareSchedule.find({
         familyId,
@@ -91,9 +77,8 @@ async function getSchedulesForDate(
         active: true,
     }).lean();
 
-    const day = date.getDay();
     return schedules
-        .filter((s) => scheduleAppliesOnDay(s.daysOfWeek ?? [], day))
+        .filter((s) => scheduleAppliesOnDay(s.daysOfWeek ?? [], dayOfWeek))
         .sort((a, b) => {
             const ma = parseTimeToMinutes(a.time) ?? Number.MAX_SAFE_INTEGER;
             const mb = parseTimeToMinutes(b.time) ?? Number.MAX_SAFE_INTEGER;
@@ -103,28 +88,25 @@ async function getSchedulesForDate(
 
 function resolveItemStatus(input: {
     scheduleTime: string;
-    referenceDate: Date;
-    now: Date;
+    dateKey: string;
+    now?: Date;
     manualStatus?: CareScheduleCompletionStatus | null;
 }): CareScheduleDayStatus {
-    const { scheduleTime, referenceDate, now, manualStatus } = input;
+    const { scheduleTime, dateKey, manualStatus } = input;
+    const now = input.now ?? new Date();
 
     if (manualStatus === "completed") return "completed";
     if (manualStatus === "missed") return "missed";
 
-    const scheduleMinutes = parseTimeToMinutes(scheduleTime);
-    const isToday = isSameLocalDay(referenceDate, now);
-
-    if (!isToday) {
-        const refStart = new Date(referenceDate);
-        refStart.setHours(23, 59, 59, 999);
-        if (refStart.getTime() < now.getTime()) return "missed";
+    if (!isSameDayIST(dateKey, now)) {
+        if (isPastDayIST(dateKey, now)) return "missed";
         return "upcoming";
     }
 
+    const scheduleMinutes = parseTimeToMinutes(scheduleTime);
     if (scheduleMinutes === null) return "due";
 
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const nowMinutes = getISTParts(now).minutesSinceMidnight;
     if (nowMinutes < scheduleMinutes) return "upcoming";
     return "missed";
 }
@@ -147,12 +129,16 @@ export async function getScheduleDayStatuses(
     const family = await getFamilyAndRecipient(familyId, recipientUserId);
     assertFamilyAccess(family, actorUserId);
 
-    const referenceDate = dateKey ? parseDateKey(dateKey) : new Date();
-    if (!referenceDate) throw new AppError("Invalid date", 400);
+    const key = dateKey ?? toDateKeyIST();
+    const reference = parseDateKeyIST(key);
+    if (!reference) throw new AppError("Invalid date", 400);
 
-    const key = dateKey ?? toDateKey(referenceDate);
     const now = new Date();
-    const schedules = await getSchedulesForDate(familyId, recipientUserId, referenceDate);
+    const schedules = await getSchedulesForDayOfWeek(
+        familyId,
+        recipientUserId,
+        reference.dayOfWeek,
+    );
 
     const completions = await CareScheduleCompletion.find({
         familyId,
@@ -168,7 +154,7 @@ export async function getScheduleDayStatuses(
         const manual = completionBySchedule.get(s.scheduleId);
         const status = resolveItemStatus({
             scheduleTime: s.time,
-            referenceDate,
+            dateKey: key,
             now,
             manualStatus: manual?.status ?? null,
         });
@@ -222,8 +208,8 @@ export async function setScheduleCompletion(
     const schedule = await CareSchedule.findOne({ scheduleId, familyId, recipientUserId });
     if (!schedule) throw new AppError("Schedule item not found", 404);
 
-    const dateKey = payload.dateKey ?? toDateKey(new Date());
-    if (!parseDateKey(dateKey)) throw new AppError("Invalid date", 400);
+    const dateKey = payload.dateKey ?? toDateKeyIST();
+    if (!parseDateKeyIST(dateKey)) throw new AppError("Invalid date", 400);
 
     const existing = await CareScheduleCompletion.findOne({
         familyId,
