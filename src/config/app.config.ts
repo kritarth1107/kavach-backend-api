@@ -134,7 +134,7 @@ const config: AppConfig = {
             webhookVerifyToken:
                 process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN ||
                 "kavach_wa_verify_k9X2mP7nQ4vL8sR3",
-            graphVersion: process.env.WHATSAPP_META_GRAPH_VERSION || "v21.0",
+            graphVersion: process.env.WHATSAPP_META_GRAPH_VERSION || "v22.0",
         },
     },
 

@@ -56,24 +56,21 @@ function splitWhatsAppText(text: string, limit = WHATSAPP_TEXT_LIMIT): string[] 
     return chunks;
 }
 
-/** Mark an inbound message read and optionally show the WhatsApp typing indicator. */
-export async function markMetaWhatsAppInboundSeen(input: {
+async function postMetaWhatsAppMarkRead(input: {
     messageId: string;
-    showTyping?: boolean;
+    showTyping: boolean;
 }): Promise<boolean> {
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
         return false;
     }
-    const messageId = input.messageId.trim();
-    if (!messageId) return false;
 
     const payload: Record<string, unknown> = {
         messaging_product: "whatsapp",
         status: "read",
-        message_id: messageId,
+        message_id: input.messageId,
     };
-    if (input.showTyping !== false) {
+    if (input.showTyping) {
         payload.typing_indicator = { type: "text" };
     }
 
@@ -93,6 +90,29 @@ export async function markMetaWhatsAppInboundSeen(input: {
 
     const parsed = (await res.json().catch(() => ({}))) as { success?: boolean };
     return parsed.success !== false;
+}
+
+/** Mark an inbound message read and optionally show the WhatsApp typing indicator. */
+export async function markMetaWhatsAppInboundSeen(input: {
+    messageId: string;
+    showTyping?: boolean;
+}): Promise<boolean> {
+    const messageId = input.messageId.trim();
+    if (!messageId) return false;
+
+    const wantTyping = input.showTyping !== false;
+    if (wantTyping) {
+        try {
+            return await postMetaWhatsAppMarkRead({ messageId, showTyping: true });
+        } catch (err) {
+            console.warn(
+                "Meta WhatsApp read+typing failed, retrying read-only:",
+                err instanceof Error ? err.message : err,
+            );
+        }
+    }
+
+    return postMetaWhatsAppMarkRead({ messageId, showTyping: false });
 }
 
 /** Re-send typing while Saheli composes a long reply (Meta clears typing after ~25s). */

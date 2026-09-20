@@ -6,9 +6,11 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
     buildCasualOfferReply,
+    buildGreetingReply,
     messageAsksHelp,
     messageAsksSchedule,
     messageIsCasualOffer,
+    messageIsGreeting,
     tryHandleElderScheduleQuery,
 } from "../src/services/saheliElderFacts.service";
 import { guardElderReply } from "../src/services/saheliReplyGuard.service";
@@ -71,6 +73,7 @@ function mockContext(mock?: ElderFactsCase["mock_schedule"]): SaheliContextBundl
 }
 
 function resolvePreAiPath(message: string): SaheliReplySource {
+    if (messageIsGreeting(message)) return "scheduleFacts";
     if (messageIsCasualOffer(message)) return "scheduleFacts";
     if (messageAsksSchedule(message)) return "scheduleFacts";
     if (messageAsksHelp(message)) return "scheduleFacts";
@@ -104,9 +107,15 @@ async function runCase(caseRow: ElderFactsCase): Promise<string[]> {
         }
     }
 
-    if (messageAsksSchedule(caseRow.message) || messageIsCasualOffer(caseRow.message)) {
+    if (
+        messageAsksSchedule(caseRow.message) ||
+        messageIsCasualOffer(caseRow.message) ||
+        messageIsGreeting(caseRow.message)
+    ) {
         let reply: string;
-        if (messageIsCasualOffer(caseRow.message)) {
+        if (messageIsGreeting(caseRow.message)) {
+            reply = buildGreetingReply("Amma");
+        } else if (messageIsCasualOffer(caseRow.message)) {
             reply = buildCasualOfferReply("Amma");
         } else {
             const scheduleReply = tryHandleElderScheduleQuery({

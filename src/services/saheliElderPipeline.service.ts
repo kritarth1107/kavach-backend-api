@@ -6,8 +6,10 @@ import type { ChannelType } from "../types/careRecord.types";
 import type { SaheliReplySource } from "./whatsappWebhookLog.service";
 import {
     buildElderHelpReply,
+    buildGreetingReply,
     messageAsksHelp,
     messageIsCasualOffer,
+    messageIsGreeting,
     buildCasualOfferReply,
     tryHandleElderScheduleQuery,
 } from "./saheliElderFacts.service";
@@ -63,6 +65,19 @@ export async function resolveElderWhatsappReply(input: {
             orderFlow: null,
             orderPreview: null,
             skippedAi: true,
+        };
+    }
+
+    if (messageIsGreeting(input.message)) {
+        return {
+            reply: buildGreetingReply(input.displayName),
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+            guardAction: "greeting",
         };
     }
 
@@ -204,6 +219,19 @@ export async function resolveElderDashboardReply(input: {
             orderFlow: null,
             orderPreview: null,
             skippedAi: true,
+        };
+    }
+
+    if (messageIsGreeting(input.message)) {
+        return {
+            reply: buildGreetingReply(input.displayName),
+            replySource: "scheduleFacts",
+            conversationId: input.conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+            guardAction: "greeting",
         };
     }
 

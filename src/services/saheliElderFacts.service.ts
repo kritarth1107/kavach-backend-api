@@ -2,6 +2,19 @@ import type { SaheliContextBundle } from "./saheliContext.service";
 import { formatScheduleSection } from "./saheliContext.service";
 import { messageLooksLikeOrder } from "./saheliOrder.service";
 
+export function messageIsGreeting(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    if (!t || t.length > 48) return false;
+    return /^(hi+|hello+|hey+|hlo+|hii+|yo+|sup+|gm+|namaste+|namaskar+|good\s+(morning|evening|night|afternoon))[\s!.?]*$/i.test(
+        t,
+    );
+}
+
+export function buildGreetingReply(displayName: string): string {
+    const name = displayName.split(/\s+/)[0]?.trim() || displayName;
+    return `Hi ${name}! Good to hear from you. How are you doing today?`;
+}
+
 export function messageIsCasualOffer(text: string): boolean {
     const t = text.trim().toLowerCase();
     return (

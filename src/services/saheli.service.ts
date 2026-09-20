@@ -34,6 +34,7 @@ import {
     resolveElderDashboardReply,
     resolveElderWhatsappReply,
 } from "./saheliElderPipeline.service";
+import { buildGreetingReply, messageIsGreeting } from "./saheliElderFacts.service";
 import { messageAsksForMemberPhone } from "./saheliCaregiverFacts.service";
 import {
     refreshRecipientMemoryToAiEngine,
@@ -447,11 +448,19 @@ function buildElderSmartReply(opts: {
         }
     }
 
+    if (messageIsGreeting(q)) {
+        return buildGreetingReply(opts.displayName);
+    }
+
     if (opts.isFirstMessage) {
         return buildElderSafeReply(opts.displayName);
     }
 
-    return "I'm here — please try again in a moment.";
+    if (/^(thanks|thank you|ok|okay|bye|goodbye|good night)[!.?\s]*$/i.test(qLower)) {
+        return "Anytime! I'm here whenever you need me.";
+    }
+
+    return buildGreetingReply(opts.displayName);
 }
 
 async function elderReplyWithAi(
