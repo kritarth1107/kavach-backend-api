@@ -11,7 +11,7 @@ import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
 import { composeWhatsAppReply } from "./whatsappMessageComposer.service";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { phoneMockAdapter } from "../channels/whatsappMock.adapter";
-import { resolveUserWhatsAppPhone } from "./identityResolver.service";
+import { resolveRecipientWhatsAppPhone } from "./identityResolver.service";
 
 export type OutboundDelivery = {
     channel: "whatsapp" | "phone" | "dashboard";
@@ -29,7 +29,7 @@ export async function resolveRecipientChannel(
     }
 
     if (preferred === "whatsapp") {
-        const recipientPhone = await resolveUserWhatsAppPhone(recipientUserId);
+        const recipientPhone = await resolveRecipientWhatsAppPhone(recipientUserId, familyId);
         if (recipientPhone) {
             return {
                 channel: "whatsapp",

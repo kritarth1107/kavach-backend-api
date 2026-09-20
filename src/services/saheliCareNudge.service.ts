@@ -11,12 +11,17 @@ import { buildCareNudgeMessages } from "./whatsappMessageComposer.service";
 import { buildCareNudgeText } from "./saheliNudgeCopy.service";
 import { checkCaregiverAlertsForMissedTasks } from "./saheliCaregiverAlert.service";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
+import { formatScheduleSection } from "./saheliContext.service";
 
 function resolveRecipientName(
     members: Awaited<ReturnType<typeof getFamilyMembersList>>["members"],
     recipientUserId: string,
 ): string {
     return members.find((m) => m.userId === recipientUserId)?.name?.trim() || "there";
+}
+
+function inWindow(value: number, min: number, max: number): boolean {
+    return value >= min && value <= max;
 }
 
 async function nudgeAlreadySent(input: {
@@ -32,6 +37,7 @@ async function nudgeAlreadySent(input: {
         scheduleId: input.scheduleId,
         dateKey: input.dateKey,
         nudgeKind: input.nudgeKind,
+        delivered: true,
     }).lean();
     return Boolean(existing);
 }
@@ -97,7 +103,10 @@ export async function deliverCareNudge(input: {
 
     const payloads = buildCareNudgeMessages({
         text,
-        nudgeKind: input.nudgeKind,
+        nudgeKind:
+            input.nudgeKind === "daily_schedule"
+                ? "pre_reminder"
+                : input.nudgeKind,
         scheduleId: input.scheduleId,
         title: input.title,
         time: input.time,
@@ -109,6 +118,9 @@ export async function deliverCareNudge(input: {
         input.preferredChannel,
     );
     if (!target || target.channel === "dashboard") {
+        console.warn(
+            `Care nudge skipped — no WhatsApp channel for ${input.recipientUserId} (${input.nudgeKind})`,
+        );
         await recordNudge({
             ...input,
             delivered: false,
@@ -133,6 +145,12 @@ export async function deliverCareNudge(input: {
         channel: target.channel,
         messagePreview: text,
     });
+
+    if (!delivery.delivered) {
+        console.warn(
+            `Care nudge delivery failed for ${input.recipientUserId} (${input.nudgeKind})`,
+        );
+    }
     return delivery.delivered;
 }
 
@@ -162,11 +180,42 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
         const intensity = companion.nudgeIntensity ?? "standard";
         const preferredLanguage = companion.preferredLanguage ?? "english";
 
+        const upcomingToday = day.items.filter(
+            (i) => i.status === "upcoming" || i.status === "due",
+        );
+        if (
+            inWindow(nowMinutes, 7 * 60 + 30, 8 * 60 + 30) &&
+            upcomingToday.length > 0
+        ) {
+            const scheduleBody = formatScheduleSection(upcomingToday.slice(0, 8), "Today");
+            const ok = await deliverCareNudge({
+                familyId: companion.familyId,
+                recipientUserId: companion.recipientUserId,
+                displayName,
+                scheduleId: "daily_schedule",
+                title: scheduleBody,
+                time: "",
+                nudgeKind: "daily_schedule",
+                dateKey,
+                preferredChannel: companion.preferredChannel,
+                preferredLanguage,
+            });
+            if (ok) sent += 1;
+        }
+
         for (const item of day.items) {
             const scheduleMinutes = parseTimeToMinutes(item.time);
-            if (scheduleMinutes == null) continue;
+            if (scheduleMinutes == null) {
+                console.warn(
+                    `Skipping nudge — unparseable schedule time "${item.time}" (${item.scheduleId})`,
+                );
+                continue;
+            }
 
-            if (item.status === "upcoming" && scheduleMinutes - nowMinutes === 15) {
+            const minutesUntil = scheduleMinutes - nowMinutes;
+            const minutesSince = nowMinutes - scheduleMinutes;
+
+            if (item.status === "upcoming" && inWindow(minutesUntil, 5, 20)) {
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
                     recipientUserId: companion.recipientUserId,
@@ -185,8 +234,7 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
             if (
                 intensity !== "gentle" &&
                 (item.status === "missed" || item.status === "due") &&
-                nowMinutes - scheduleMinutes >= 30 &&
-                nowMinutes - scheduleMinutes <= 45
+                inWindow(minutesSince, 15, 60)
             ) {
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
@@ -206,8 +254,7 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
             if (
                 intensity === "persistent" &&
                 (item.status === "missed" || item.status === "due") &&
-                nowMinutes - scheduleMinutes >= 60 &&
-                nowMinutes - scheduleMinutes <= 75
+                inWindow(minutesSince, 55, 95)
             ) {
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
@@ -227,8 +274,7 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
             if (
                 item.type === "APPOINTMENT" &&
                 item.status === "upcoming" &&
-                scheduleMinutes - nowMinutes >= 30 &&
-                scheduleMinutes - nowMinutes <= 60
+                inWindow(minutesUntil, 25, 70)
             ) {
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
@@ -245,7 +291,11 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
                 if (ok) sent += 1;
             }
 
-            if (item.status === "completed" && item.type === "MEDICINE") {
+            if (
+                item.status === "completed" &&
+                item.type === "MEDICINE" &&
+                inWindow(minutesSince, 0, 20)
+            ) {
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
                     recipientUserId: companion.recipientUserId,

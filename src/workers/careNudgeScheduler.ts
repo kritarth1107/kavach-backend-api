@@ -1,6 +1,6 @@
 import { runCareNudgeTick } from "../services/saheliCareNudge.service";
 
-const TICK_MS = 5 * 60 * 1000;
+const TICK_MS = 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
@@ -9,7 +9,7 @@ async function runTick() {
     running = true;
     try {
         const result = await runCareNudgeTick();
-        if (result.sent > 0) {
+        if (result.sent > 0 || result.scanned > 0) {
             console.log(`Care nudge tick: sent=${result.sent} scanned=${result.scanned}`);
         }
     } catch (err) {
@@ -25,7 +25,7 @@ export function startCareNudgeScheduler() {
         return;
     }
     if (timer) return;
-    console.log("Care nudge scheduler started (5m tick)");
+    console.log("Care nudge scheduler started (1m tick)");
     void runTick();
     timer = setInterval(() => void runTick(), TICK_MS);
 }

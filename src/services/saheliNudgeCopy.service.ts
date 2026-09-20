@@ -34,5 +34,10 @@ export function buildCareNudgeText(input: {
             ? `${input.title} ${input.time} baje hai — documents/taxi ready rakhein?`
             : `${input.title} at ${input.time} is coming up — need help getting ready?`;
     }
+    if (input.nudgeKind === "daily_schedule") {
+        return hindi
+            ? `Namaste ${input.displayName}! Aaj ka schedule:\n${input.title}`
+            : `Good morning, ${input.displayName}! Here's your schedule for today:\n${input.title}`;
+    }
     return `Reminder: ${input.title} at ${input.time}.`;
 }

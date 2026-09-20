@@ -25,12 +25,23 @@ function scheduleAppliesOnDay(daysOfWeek: number[], day: number): boolean {
 const MANAGER_ROLES = new Set([FamilyRole.PRIMARY_CAREGIVER, FamilyRole.CO_CAREGIVER]);
 
 export function parseTimeToMinutes(time: string): number | null {
-    const match = time.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-    if (!match) return null;
-    let hours = Number(match[1]) % 12;
-    const minutes = Number(match[2]);
-    if (match[3].toUpperCase() === "PM") hours += 12;
-    return hours * 60 + minutes;
+    const trimmed = time.trim();
+    const ampm = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+    if (ampm) {
+        let hours = Number(ampm[1]) % 12;
+        const minutes = Number(ampm[2]);
+        if (ampm[3].toUpperCase() === "PM") hours += 12;
+        return hours * 60 + minutes;
+    }
+    const h24 = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+    if (h24) {
+        const hours = Number(h24[1]);
+        const minutes = Number(h24[2]);
+        if (hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59) {
+            return hours * 60 + minutes;
+        }
+    }
+    return null;
 }
 
 async function getFamilyAndRecipient(familyId: string, recipientUserId: string) {

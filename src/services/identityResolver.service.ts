@@ -206,13 +206,73 @@ export async function resolveWhatsAppSender(senderPhone: string): Promise<Resolv
 }
 
 export async function resolveUserWhatsAppPhone(userId: string): Promise<string | null> {
+    return resolveRecipientWhatsAppPhone(userId);
+}
+
+/** Best-effort WhatsApp number for outbound nudges and care messages. */
+export async function resolveRecipientWhatsAppPhone(
+    userId: string,
+    familyId?: string,
+): Promise<string | null> {
     const user = await User.findOne({ userId }).lean();
-    if (!user?.phone?.countryCode || !user.phone.number) return null;
-    if (isInternalPhone(user.phone.countryCode)) return null;
-    return normalizeChannelIdentifier(
-        ChannelType.WHATSAPP,
-        `${user.phone.countryCode}${user.phone.number}`,
-    );
+    if (user?.phone?.countryCode && user.phone.number && !isInternalPhone(user.phone.countryCode)) {
+        return normalizeChannelIdentifier(
+            ChannelType.WHATSAPP,
+            `${user.phone.countryCode}${user.phone.number}`,
+        );
+    }
+
+    const channelRow = await ChannelIdentity.findOne({
+        userId,
+        channelType: ChannelType.WHATSAPP,
+        active: true,
+        ...(familyId ? { familyId } : {}),
+    })
+        .sort({ updatedAt: -1 })
+        .lean();
+    if (channelRow?.channelIdentifier) {
+        return normalizeChannelIdentifier(ChannelType.WHATSAPP, channelRow.channelIdentifier);
+    }
+
+    const invite = await FamilyInvitation.findOne({
+        userId,
+        role: FamilyRole.CARE_RECIPIENT,
+        status: FamilyInvitationStatus.ACCEPTED,
+        phone: { $exists: true, $ne: "" },
+        ...(familyId ? { familyId } : {}),
+    })
+        .sort({ updatedAt: -1 })
+        .lean();
+    if (invite?.phone && invite.phoneCountryCode) {
+        try {
+            const normalized = normalizePhoneInput(invite.phoneCountryCode, invite.phone);
+            return normalizeChannelIdentifier(
+                ChannelType.WHATSAPP,
+                `${normalized.countryCode}${normalized.number}`,
+            );
+        } catch {
+            // fall through
+        }
+    }
+
+    if (familyId) {
+        const { getFamilyMembersList } = await import("./familyMember.service");
+        try {
+            const list = await getFamilyMembersList(familyId, userId);
+            const member = list.members.find((m) => m.userId === userId);
+            if (member?.phone && member.phoneCountryCode) {
+                const normalized = normalizePhoneInput(member.phoneCountryCode, member.phone);
+                return normalizeChannelIdentifier(
+                    ChannelType.WHATSAPP,
+                    `${normalized.countryCode}${normalized.number}`,
+                );
+            }
+        } catch {
+            // access denied or missing family
+        }
+    }
+
+    return null;
 }
 
 export async function resolveChannelIdentity(
