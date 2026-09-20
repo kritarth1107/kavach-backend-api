@@ -8,7 +8,8 @@ export type SaheliReplySource =
     | "orderComms"
     | "careAction"
     | "orderSession"
-    | "kernelFallback";
+    | "kernelFallback"
+    | "scheduleFacts";
 
 export type WhatsAppAiDebug = {
     at: string;
@@ -38,6 +39,8 @@ export type WhatsAppWebhookLogEntry = {
     sendError?: string;
     aiDebug?: WhatsAppAiDebug;
     replySource?: SaheliReplySource;
+    markedRead?: boolean;
+    typingShown?: boolean;
     likelySynthetic?: boolean;
     metaConsoleTest?: boolean;
     metaEnabled: boolean;
@@ -161,6 +164,8 @@ export function recordWhatsAppWebhookEvent(input: {
     sendError?: string;
     aiDebug?: WhatsAppAiDebug;
     replySource?: SaheliReplySource;
+    markedRead?: boolean;
+    typingShown?: boolean;
 }): WhatsAppWebhookLogEntry {
     const summary = summarizePayload(input.body);
     const firstInbound = summary.inbound[0];
@@ -194,6 +199,8 @@ export function recordWhatsAppWebhookEvent(input: {
         sendError: input.sendError,
         aiDebug,
         replySource: input.replySource ?? aiDebug?.replySource,
+        markedRead: input.markedRead,
+        typingShown: input.typingShown,
         likelySynthetic,
         metaConsoleTest,
         metaEnabled: isMetaWhatsAppEnabled(),

@@ -305,8 +305,10 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const {
         formatMetaSendError,
         isMetaWhatsAppEnabled,
+        markMetaWhatsAppInboundSeen,
         parseMetaWebhookMessages,
         sendViaMetaWhatsApp,
+        startMetaWhatsAppTypingRefresh,
     } = await import("../clients/metaWhatsApp.client");
     const { recordWhatsAppWebhookEvent } = await import("../services/whatsappWebhookLog.service");
 
@@ -333,6 +335,27 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
         let replyPreview: string | undefined;
         let error: string | undefined;
         let sendError: string | undefined;
+        let markedRead = false;
+        let typingShown = false;
+
+        let stopTypingRefresh: (() => void) | undefined;
+        if (isMetaWhatsAppEnabled() && inbound.messageId) {
+            try {
+                markedRead = await markMetaWhatsAppInboundSeen({
+                    messageId: inbound.messageId,
+                    showTyping: true,
+                });
+                typingShown = markedRead;
+                if (typingShown) {
+                    stopTypingRefresh = startMetaWhatsAppTypingRefresh(inbound.messageId);
+                }
+            } catch (readErr) {
+                console.warn(
+                    "Meta WhatsApp mark-read/typing failed:",
+                    readErr instanceof Error ? readErr.message : readErr,
+                );
+            }
+        }
 
         try {
             const reply = await handleWhatsAppInbound({
@@ -375,6 +398,8 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
                     console.error("Meta WhatsApp fallback send failed:", sendError);
                 }
             }
+        } finally {
+            stopTypingRefresh?.();
         }
 
         recordWhatsAppWebhookEvent({
@@ -386,6 +411,8 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             replyTo: inbound.from,
             error,
             sendError,
+            markedRead,
+            typingShown,
         });
     }
 

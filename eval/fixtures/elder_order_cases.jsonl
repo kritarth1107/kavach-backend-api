@@ -1,7 +1,10 @@
-{"message":"Order parleg zepto","expect_contains":["zepto","instamart"],"forbid":["Tell me what to order"],"reply_source":"orderComms"}
-{"message":"Order dal swiggy","expect_contains":["swiggy","closed","instamart"],"forbid":["Tell me what to order"],"reply_source":"orderComms"}
-{"message":"milk bread eggs instamart","expect_contains":["instamart"],"forbid":["Anything you want to know"],"reply_source":"ai"}
-{"message":"cancel order","expect_contains":["cancelled"],"forbid":[],"reply_source":"orderSession"}
-{"message":"status","expect_contains":["order","status"],"forbid":[],"reply_source":"orderSession"}
-{"message":"Anything you want to know?","expect_contains":[],"forbid":["order","Tell me what to order"],"reply_source":"ai"}
-{"message":"I'm fine","expect_contains":["Glad"],"forbid":["order"],"reply_source":"careAction"}
+{"message":"Order parleg zepto","expect_path":"orderComms","forbid":["Tell me what to order"]}
+{"message":"Order dal swiggy","expect_path":"orderComms","forbid":["Tell me what to order"]}
+{"message":"milk bread eggs instamart","expect_path":"orderComms","forbid":["Anything you want to know"]}
+{"message":"Anything you want to know?","expect_path":"scheduleFacts","forbid":["order","Tell me what to order"],"reply_source":"scheduleFacts"}
+{"message":"what's next today","expect_path":"scheduleFacts","expect_contains":["Up next"],"mock_schedule":{"upcoming":[{"time":"09:00","title":"Shelcal"}]}}
+{"message":"what did I miss","expect_path":"scheduleFacts","expect_contains":["Missed today","Shelcal"],"mock_schedule":{"missed":[{"time":"08:00","title":"Shelcal"}]}}
+{"message":"help","expect_path":"scheduleFacts","expect_contains":["schedule"]}
+{"message":"I'm fine","expect_path":"ai"}
+{"message":"Anything you want to know?","guard":{"ai_reply":"Tell me what to order from Swiggy, Instamart, or Zepto.","expect_guard":"blocked_casual_order_hallucination","forbid":["Tell me what to order","Swiggy"]}}
+{"message":"order milk instamart","guard":{"ai_reply":"That will be ₹45 for 1L milk.","expect_guard":"invented_price_blocked","forbid":["₹45"]},"expect_path":"orderComms"}

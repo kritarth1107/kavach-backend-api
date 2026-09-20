@@ -1,0 +1,31 @@
+name: Eval elder facts
+
+on:
+  pull_request:
+    paths:
+      - "src/services/saheliElderFacts.service.ts"
+      - "src/services/saheliReplyGuard.service.ts"
+      - "src/services/saheliElderPipeline.service.ts"
+      - "src/services/saheliOrder.service.ts"
+      - "eval/**"
+  push:
+    branches: [main]
+    paths:
+      - "src/services/saheliElderFacts.service.ts"
+      - "src/services/saheliReplyGuard.service.ts"
+      - "src/services/saheliElderPipeline.service.ts"
+      - "src/services/saheliOrder.service.ts"
+      - "eval/**"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run eval:elder-facts

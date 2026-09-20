@@ -1,0 +1,247 @@
+import type { OrderFlowPayload } from "./orderOrchestrator.service";
+import type { OrderChatResult } from "./saheliOrder.service";
+import { messageLooksLikeOrder } from "./saheliOrder.service";
+import type { SaheliContextBundle } from "./saheliContext.service";
+import type { ChannelType } from "../types/careRecord.types";
+import type { SaheliReplySource } from "./whatsappWebhookLog.service";
+import {
+    buildElderHelpReply,
+    messageAsksHelp,
+    messageIsCasualOffer,
+    buildCasualOfferReply,
+    tryHandleElderScheduleQuery,
+} from "./saheliElderFacts.service";
+import { guardElderReply } from "./saheliReplyGuard.service";
+
+export type ElderPipelineResult = {
+    reply: string;
+    replySource: SaheliReplySource;
+    conversationId: string;
+    order: OrderChatResult | null;
+    orderFlow: OrderFlowPayload | null;
+    orderPreview: Record<string, unknown> | null;
+    guardAction?: string;
+    skippedAi?: boolean;
+};
+
+type AiTurn = {
+    reply: string;
+    conversationId: string;
+    orderFromAgent?: OrderChatResult | null;
+    orderPreview?: Record<string, unknown> | null;
+    orderFlow?: OrderFlowPayload | null;
+    toolTrace?: Array<{ tool: string; status?: string }>;
+};
+
+export async function resolveElderWhatsappReply(input: {
+    familyId: string;
+    recipientUserId: string;
+    displayName: string;
+    message: string;
+    sessionId: string;
+    contextBundle: SaheliContextBundle;
+    conversationId: string;
+    careActionReply: string | null;
+    runAi: () => Promise<AiTurn>;
+}): Promise<ElderPipelineResult> {
+    let reply = "";
+    let replySource: SaheliReplySource = "ai";
+    let conversationId = input.conversationId;
+    let order: OrderChatResult | null = null;
+    let orderFlow: OrderFlowPayload | null = null;
+    let orderPreview: Record<string, unknown> | null = null;
+    let toolTrace: Array<{ tool: string; status?: string }> | undefined;
+    let guardAction: string | undefined;
+    let skippedAi = false;
+
+    if (input.careActionReply) {
+        return {
+            reply: input.careActionReply,
+            replySource: "careAction",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+        };
+    }
+
+    if (messageIsCasualOffer(input.message)) {
+        return {
+            reply: buildCasualOfferReply(input.displayName),
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+            guardAction: "casual_offer",
+        };
+    }
+
+    const scheduleReply = tryHandleElderScheduleQuery({
+        message: input.message,
+        context: input.contextBundle,
+    });
+    if (scheduleReply) {
+        return {
+            reply: scheduleReply,
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+        };
+    }
+
+    if (messageAsksHelp(input.message)) {
+        return {
+            reply: buildElderHelpReply(input.displayName),
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+        };
+    }
+
+    if (messageLooksLikeOrder(input.message)) {
+        const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
+        const orderComms = await buildOrderCommunicationReply({
+            familyId: input.familyId,
+            actorUserId: input.recipientUserId,
+            message: input.message,
+        });
+        if (orderComms) {
+            return {
+                reply: orderComms,
+                replySource: "orderComms",
+                conversationId,
+                order: null,
+                orderFlow: null,
+                orderPreview: null,
+                skippedAi: true,
+            };
+        }
+    }
+
+    const ai = await input.runAi();
+    reply = ai.reply;
+    conversationId = ai.conversationId;
+    order = ai.orderFromAgent ?? null;
+    orderPreview = ai.orderPreview ?? null;
+    orderFlow = ai.orderFlow ?? null;
+    toolTrace = ai.toolTrace;
+    replySource = "ai";
+
+    const guarded = await guardElderReply({
+        message: input.message,
+        reply,
+        replySource,
+        orderFlow,
+        toolTrace,
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        displayName: input.displayName,
+        sessionId: input.sessionId,
+    });
+    reply = guarded.reply;
+    replySource = guarded.replySource;
+    orderFlow = guarded.orderFlow ?? orderFlow;
+    guardAction = guarded.guardAction;
+
+    if (
+        messageLooksLikeOrder(input.message) &&
+        !orderFlow &&
+        (replySource === "ai" || guarded.guardAction === "generic_order_blocked")
+    ) {
+        const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+        const kernel = await tryStartOrderFromMessage({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.recipientUserId,
+            message: input.message,
+            saheliSessionId: input.sessionId,
+        });
+        if (kernel) {
+            reply = kernel.reply;
+            orderFlow = kernel.orderFlow ?? null;
+            replySource = "kernelFallback";
+            guardAction = guardAction ?? "kernel_post_ai";
+        }
+    }
+
+    return {
+        reply,
+        replySource,
+        conversationId,
+        order,
+        orderFlow,
+        orderPreview,
+        guardAction,
+    };
+}
+
+export async function resolveElderDashboardReply(input: {
+    familyId: string;
+    recipientUserId: string;
+    displayName: string;
+    message: string;
+    contextBundle: SaheliContextBundle;
+    conversationId: string;
+    careActionReply: string | null;
+    channel?: ChannelType;
+    runAi: () => Promise<AiTurn>;
+}): Promise<ElderPipelineResult> {
+    if (input.careActionReply) {
+        return {
+            reply: input.careActionReply,
+            replySource: "careAction",
+            conversationId: input.conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+        };
+    }
+
+    const scheduleReply = tryHandleElderScheduleQuery({
+        message: input.message,
+        context: input.contextBundle,
+    });
+    if (scheduleReply) {
+        return {
+            reply: scheduleReply,
+            replySource: "scheduleFacts",
+            conversationId: input.conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+        };
+    }
+
+    const ai = await input.runAi();
+    const guarded = await guardElderReply({
+        message: input.message,
+        reply: ai.reply,
+        replySource: "ai",
+        orderFlow: ai.orderFlow ?? null,
+        toolTrace: ai.toolTrace,
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        displayName: input.displayName,
+    });
+
+    return {
+        reply: guarded.reply,
+        replySource: guarded.replySource,
+        conversationId: ai.conversationId,
+        order: ai.orderFromAgent ?? null,
+        orderFlow: guarded.orderFlow ?? ai.orderFlow ?? null,
+        orderPreview: ai.orderPreview ?? null,
+        guardAction: guarded.guardAction,
+    };
+}

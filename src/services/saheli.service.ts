@@ -30,6 +30,10 @@ import {
     recordWhatsAppAiDebug,
     type SaheliReplySource,
 } from "./whatsappWebhookLog.service";
+import {
+    resolveElderDashboardReply,
+    resolveElderWhatsappReply,
+} from "./saheliElderPipeline.service";
 import { messageAsksForMemberPhone } from "./saheliCaregiverFacts.service";
 import {
     refreshRecipientMemoryToAiEngine,
@@ -471,6 +475,7 @@ async function elderReplyWithAi(
     orderFromAgent?: OrderChatResult | null;
     orderPreview?: Record<string, unknown> | null;
     orderFlow?: OrderFlowPayload | null;
+    toolTrace?: Array<{ tool: string; status?: string }>;
 }> {
     const waChannel = opts?.channel === ChannelType.WHATSAPP;
     const contextBundle =
@@ -546,6 +551,7 @@ async function elderReplyWithAi(
             orderFromAgent,
             orderPreview,
             orderFlow,
+            toolTrace: result.tool_trace,
         };
     } catch (err) {
         const statusCode = err instanceof AppError ? err.statusCode : undefined;
@@ -940,110 +946,59 @@ export async function sendSaheliMessage(
         thread: "elder",
     });
 
-    let order: OrderChatResult | null = null;
-    let orderFlow: OrderFlowPayload | null = null;
-    let orderPreview: Record<string, unknown> | null = null;
-
-    let reply = "";
-    let conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
-    let replySource: SaheliReplySource = "ai";
-
-    if (careActionReply) {
-        reply = careActionReply;
-        replySource = "careAction";
-        conversationId = session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`;
-    } else if (waChannel && messageLooksLikeOrder(text)) {
-        const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
-        const orderComms = await buildOrderCommunicationReply({
-            familyId,
-            actorUserId: recipientUserId,
-            message: text,
-        });
-        if (orderComms) {
-            reply = orderComms;
-            replySource = "orderComms";
-        } else {
-            const ai = await elderReplyWithAi(
-                familyId,
-                recipientUserId,
-                displayName,
-                text,
-                session.aiConversationId,
-                {
-                    sessionId,
-                    channel: opts?.channel,
-                    contextBundle,
-                    isFirstMessage,
-                    elderLines,
-                    labs: labs.map((d) => ({
-                        title: d.title,
-                        recordDate: d.recordDate,
-                        rawText: d.rawText,
-                        kind: d.kind,
-                    })),
-                },
-            );
-            reply = ai.reply;
-            conversationId = ai.conversationId;
-            if (ai.orderFromAgent) order = ai.orderFromAgent;
-            if (ai.orderPreview) orderPreview = ai.orderPreview;
-            if (ai.orderFlow) orderFlow = ai.orderFlow;
-        }
-    } else {
-        const ai = await elderReplyWithAi(
+    const aiOpts = {
+        sessionId,
+        channel: opts?.channel,
+        contextBundle,
+        isFirstMessage,
+        elderLines,
+        labs: labs.map((d) => ({
+            title: d.title,
+            recordDate: d.recordDate,
+            rawText: d.rawText,
+            kind: d.kind,
+        })),
+    };
+    const runAi = () =>
+        elderReplyWithAi(
             familyId,
             recipientUserId,
             displayName,
             text,
             session.aiConversationId,
-            {
-                sessionId,
-                channel: opts?.channel,
-                contextBundle,
-                isFirstMessage,
-                elderLines,
-                labs: labs.map((d) => ({
-                    title: d.title,
-                    recordDate: d.recordDate,
-                    rawText: d.rawText,
-                    kind: d.kind,
-                })),
-            },
+            aiOpts,
         );
-        reply = ai.reply;
-        conversationId = ai.conversationId;
-        if (ai.orderFromAgent) {
-            order = ai.orderFromAgent;
-        }
-        if (ai.orderPreview) {
-            orderPreview = ai.orderPreview;
-        }
-        if (ai.orderFlow) {
-            orderFlow = ai.orderFlow;
-        }
-    }
 
-    if (
-        waChannel &&
-        messageLooksLikeOrder(text) &&
-        !orderFlow &&
-        replySource === "ai" &&
-        (!reply.trim() || reply === "I'm here — please try again in a moment.")
-    ) {
-        const { tryStartOrderFromMessage } = await import("./orderKernel.service");
-        const kernel = await tryStartOrderFromMessage({
-            familyId,
-            recipientUserId,
-            actorUserId: recipientUserId,
-            message: text,
-            saheliSessionId: sessionId,
-        });
-        if (kernel) {
-            reply = kernel.reply;
-            orderFlow = kernel.orderFlow ?? null;
-            replySource = "kernelFallback";
-        }
-    }
+    const pipelineResult = waChannel
+        ? await resolveElderWhatsappReply({
+              familyId,
+              recipientUserId,
+              displayName,
+              message: text,
+              sessionId: sessionId!,
+              contextBundle,
+              conversationId: session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`,
+              careActionReply,
+              runAi,
+          })
+        : await resolveElderDashboardReply({
+              familyId,
+              recipientUserId,
+              displayName,
+              message: text,
+              contextBundle,
+              conversationId: session.aiConversationId ?? `${familyId}:${recipientUserId}:elder`,
+              careActionReply,
+              channel: opts?.channel,
+              runAi,
+          });
+
+    let reply = pipelineResult.reply;
+    let conversationId = pipelineResult.conversationId;
+    let replySource: SaheliReplySource = pipelineResult.replySource;
+    let order: OrderChatResult | null = pipelineResult.order;
+    let orderFlow: OrderFlowPayload | null = pipelineResult.orderFlow;
+    let orderPreview: Record<string, unknown> | null = pipelineResult.orderPreview;
 
     if (waChannel) {
         recordWhatsAppAiDebug({
@@ -1051,7 +1006,10 @@ export async function sendSaheliMessage(
             recipientUserId,
             actorUserId: recipientUserId,
             replySource,
-            fallbackUsed: replySource !== "ai" ? replySource : undefined,
+            fallbackUsed:
+                replySource !== "ai"
+                    ? pipelineResult.guardAction ?? replySource
+                    : pipelineResult.guardAction,
         });
     }
 

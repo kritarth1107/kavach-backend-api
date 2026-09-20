@@ -125,6 +125,12 @@ export function isHighConfidenceOrderIntent(text: string): boolean {
     if (GROCERY_WITH_UNIT.test(t)) return true;
     if (/\b(want to eat|feel like eating|craving|hungry for)\b/i.test(t)) return true;
     if (FOOD_KEYWORDS.test(t) && /\b(want|eat|order|get|hungry|craving|like)\b/i.test(t)) return true;
+    if (
+        /\b(swiggy(?:\s+food)?|instamart|zepto)\b/i.test(t) &&
+        (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t))
+    ) {
+        return true;
+    }
     return false;
 }
 

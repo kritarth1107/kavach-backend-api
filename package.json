@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/app.js",
     "db:reset": "tsx scripts/reset-cosmos-db.ts --yes",
-    "seed:vish": "tsx scripts/seed-vish-demo.ts"
+    "seed:vish": "tsx scripts/seed-vish-demo.ts",
+    "eval:elder-facts": "tsx eval/run-elder-facts.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

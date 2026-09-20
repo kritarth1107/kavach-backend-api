@@ -56,6 +56,65 @@ function splitWhatsAppText(text: string, limit = WHATSAPP_TEXT_LIMIT): string[] 
     return chunks;
 }
 
+/** Mark an inbound message read and optionally show the WhatsApp typing indicator. */
+export async function markMetaWhatsAppInboundSeen(input: {
+    messageId: string;
+    showTyping?: boolean;
+}): Promise<boolean> {
+    const meta = config.whatsapp.meta;
+    if (!meta.phoneNumberId || !meta.accessToken) {
+        return false;
+    }
+    const messageId = input.messageId.trim();
+    if (!messageId) return false;
+
+    const payload: Record<string, unknown> = {
+        messaging_product: "whatsapp",
+        status: "read",
+        message_id: messageId,
+    };
+    if (input.showTyping !== false) {
+        payload.typing_indicator = { type: "text" };
+    }
+
+    const res = await fetch(`${graphBase()}/${meta.phoneNumberId}/messages`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${meta.accessToken}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(formatMetaSendError(res.status, body));
+    }
+
+    const parsed = (await res.json().catch(() => ({}))) as { success?: boolean };
+    return parsed.success !== false;
+}
+
+/** Re-send typing while Saheli composes a long reply (Meta clears typing after ~25s). */
+export function startMetaWhatsAppTypingRefresh(messageId: string): () => void {
+    if (!isMetaWhatsAppEnabled() || !messageId.trim()) {
+        return () => undefined;
+    }
+    const intervalMs = Math.max(
+        10_000,
+        Number(process.env.WHATSAPP_TYPING_REFRESH_MS) || 20_000,
+    );
+    const timer = setInterval(() => {
+        markMetaWhatsAppInboundSeen({ messageId, showTyping: true }).catch((err) => {
+            console.warn(
+                "Meta WhatsApp typing refresh failed:",
+                err instanceof Error ? err.message : err,
+            );
+        });
+    }, intervalMs);
+    return () => clearInterval(timer);
+}
+
 async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<void> {
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
