@@ -30,6 +30,7 @@ import {
     recordWhatsAppAiDebug,
     type SaheliReplySource,
 } from "./whatsappWebhookLog.service";
+import { messageAsksForMemberPhone } from "./saheliCaregiverFacts.service";
 import {
     refreshRecipientMemoryToAiEngine,
     syncSessionHistoryToAiEngine,
@@ -654,6 +655,10 @@ function buildCaregiverSmartReply(opts: {
         return `Tell me what to order and from where — Swiggy (food), Instamart (groceries), or Zepto. Example: "2 dal makhani from Swiggy" or "1L milk and bread from Instamart". I'll search live prices, build a cart, and you approve in chat.`;
     }
 
+    if (messageAsksForMemberPhone(q)) {
+        return `${opts.recipientName}'s contact details are in Family — I couldn't load the number just now. Check Family → ${opts.recipientName}'s profile.`;
+    }
+
     if (/\b(help|what can you|kya kar sakti|capabilities|features)\b/i.test(qLower)) {
         return `I'm Saheli — your care co-pilot for ${opts.recipientName}.\n\n• Labs & reports — cite saved values with dates\n• Check-ins — what they last told Saheli\n• Orders — Swiggy, Instamart, Zepto from this chat\n• Care timeline — medicines, vitals, messages\n\nWhat do you need?`;
     }
@@ -715,6 +720,7 @@ async function caregiverReplyWithAi(
         actorUserId?: string;
         useAgent?: boolean;
         scheduleContext?: string;
+        familyRosterContext?: string;
         channel?: ChannelType;
     },
 ): Promise<{
@@ -724,9 +730,13 @@ async function caregiverReplyWithAi(
     orderPreview?: Record<string, unknown> | null;
 }> {
     const careContextRaw = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
-    const careContext = opts?.scheduleContext
-        ? `${opts.scheduleContext}\n\n${careContextRaw}`
-        : careContextRaw;
+    const careContext = [
+        opts?.scheduleContext,
+        opts?.familyRosterContext,
+        careContextRaw,
+    ]
+        .filter(Boolean)
+        .join("\n\n");
 
     const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
     const conversationForAi = resolveCaregiverConversationForAi(ctx, conversationIdOverride);
@@ -1251,40 +1261,58 @@ export async function sendCaregiverSaheliMessage(
           )
         : undefined;
 
+    const { tryHandleCaregiverContactQuery, formatFamilyRosterForAi } = await import(
+        "./saheliCaregiverFacts.service"
+    );
+    const contactReply = await tryHandleCaregiverContactQuery({
+        familyId,
+        actorUserId,
+        recipientUserId,
+        message: text,
+        displayName,
+    });
+
     let order: OrderChatResult | null = null;
     let orderPreview: Record<string, unknown> | null = null;
     let reply = "";
-    const ai = await caregiverReplyWithAi(
-        familyId,
-        recipientUserId,
-        displayName,
-        text,
-        {
-            elderLines,
-            sessionLines,
-            labs: labs.map((d) => ({
-                title: d.title,
-                recordDate: d.recordDate,
-                rawText: d.rawText,
-                kind: d.kind,
-            })),
-        },
-        aiConversationId(session.aiConversationId),
-        {
-            sessionId,
-            actorUserId,
-            useAgent: true,
-            scheduleContext,
-            channel: opts?.channel,
-        },
-    );
-    let conversationId = ai.conversationId;
-    reply = ai.reply;
-    if (ai.orderFromAgent) {
-        order = ai.orderFromAgent;
-    }
-    if (ai.orderPreview) {
-        orderPreview = ai.orderPreview;
+    let conversationId =
+        session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
+    if (contactReply) {
+        reply = contactReply;
+    } else {
+        const ai = await caregiverReplyWithAi(
+            familyId,
+            recipientUserId,
+            displayName,
+            text,
+            {
+                elderLines,
+                sessionLines,
+                labs: labs.map((d) => ({
+                    title: d.title,
+                    recordDate: d.recordDate,
+                    rawText: d.rawText,
+                    kind: d.kind,
+                })),
+            },
+            aiConversationId(session.aiConversationId),
+            {
+                sessionId,
+                actorUserId,
+                useAgent: true,
+                scheduleContext,
+                familyRosterContext: formatFamilyRosterForAi(membersPayload.members),
+                channel: opts?.channel,
+            },
+        );
+        conversationId = ai.conversationId;
+        reply = ai.reply;
+        if (ai.orderFromAgent) {
+            order = ai.orderFromAgent;
+        }
+        if (ai.orderPreview) {
+            orderPreview = ai.orderPreview;
+        }
     }
 
     if (order?.kind === "connect_required") {

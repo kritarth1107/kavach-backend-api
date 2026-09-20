@@ -44,6 +44,7 @@ export type SaheliToolName =
     | "get_today_schedule"
     | "get_missed_tasks"
     | "get_family_briefing"
+    | "get_family_members"
     | "get_upcoming_appointments"
     | "mark_schedule_completed"
     | "mark_schedule_missed"
@@ -420,6 +421,27 @@ export async function executeSaheliTool(input: {
                 unconfirmedItems: briefing.unconfirmedItems,
                 adherencePercent: briefing.adherencePercent,
                 dateKey: briefing.dateKey,
+            };
+        }
+        case "get_family_members": {
+            const { getFamilyMembersList } = await import("./familyMember.service");
+            const { formatFamilyRosterForAi } = await import("./saheliCaregiverFacts.service");
+            const list = await getFamilyMembersList(input.familyId, input.actorUserId);
+            return {
+                familyName: list.familyName,
+                members: list.members.map((m) => ({
+                    userId: m.userId,
+                    name: m.fullName || m.name,
+                    role: m.roleLabel,
+                    relationship: m.relationship,
+                    phone:
+                        m.phone && m.phoneCountryCode
+                            ? `${m.phoneCountryCode} ${m.phone.replace(/\D/g, "")}`
+                            : m.phone ?? null,
+                    email: m.email,
+                    status: m.status,
+                })),
+                rosterText: formatFamilyRosterForAi(list.members),
             };
         }
         case "search_zepto": {
