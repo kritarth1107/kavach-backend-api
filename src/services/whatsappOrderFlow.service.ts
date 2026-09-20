@@ -435,6 +435,11 @@ export async function tryHandleWhatsAppOrderTurn(input: {
 
     const orderSessionId = waSession?.orderSessionId;
     if (orderSessionId) {
+        const { isActiveOrderSession } = await import("./orderSessionRecovery.service");
+        if (!(await isActiveOrderSession(orderSessionId, input.familyId))) {
+            await clearWhatsAppOrderSession(input.phone);
+            return null;
+        }
         try {
             return await handleActiveOrderTurn({
                 phone: input.phone,

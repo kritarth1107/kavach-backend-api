@@ -93,12 +93,16 @@ export async function ensureOrderSession(input: {
         saheliSessionId: input.saheliSessionId,
     });
     if (active?.sessionId) {
-        return {
-            status: "order_flow",
-            kind: "order_flow",
-            orderFlow: active,
-            message: active.message ?? "Continuing your order.",
-        };
+        const { isActiveOrderSession } = await import("./orderSessionRecovery.service");
+        const stillValid = await isActiveOrderSession(active.sessionId, input.familyId);
+        if (stillValid) {
+            return {
+                status: "order_flow",
+                kind: "order_flow",
+                orderFlow: active,
+                message: active.message ?? "Continuing your order.",
+            };
+        }
     }
 
     const message = input.message?.trim();
@@ -125,12 +129,28 @@ export async function ensureOrderSession(input: {
     };
 }
 
+async function guardActiveSession(
+    sessionId: string,
+    familyId: string,
+): Promise<Record<string, unknown> | null> {
+    const { isActiveOrderSession, sessionExpiredPayload } = await import(
+        "./orderSessionRecovery.service"
+    );
+    if (!(await isActiveOrderSession(sessionId, familyId))) {
+        return sessionExpiredPayload();
+    }
+    return null;
+}
+
 export async function searchOrderCatalog(input: {
     sessionId: string;
     familyId: string;
     actorUserId: string;
     query: string;
 }): Promise<Record<string, unknown>> {
+    const expired = await guardActiveSession(input.sessionId, input.familyId);
+    if (expired) return expired;
+
     const session = await OrderSession.findOne({ sessionId: input.sessionId, familyId: input.familyId });
     if (!session) throw new AppError("Order session not found", 404);
     if (!session.selectedAddressId) {
@@ -230,6 +250,9 @@ export async function addToOrderCart(input: {
     if (!input.items.length) {
         throw new AppError("items[] is required", 400);
     }
+
+    const expired = await guardActiveSession(input.sessionId, input.familyId);
+    if (expired) return expired;
 
     let flow: OrderFlowPayload | null = null;
     const added: string[] = [];
