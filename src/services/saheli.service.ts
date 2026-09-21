@@ -1022,6 +1022,22 @@ export async function sendSaheliMessage(
         });
     }
 
+    if (pipelineResult.skippedAi && text.length >= 12) {
+        void (async () => {
+            try {
+                const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+                const { aiEnqueueMemoryExtract } = await import("../clients/aiEngine.client");
+                await aiEnqueueMemoryExtract({
+                    aiFamilyId: ctx.aiFamilyId,
+                    aiElderId: ctx.aiElderId,
+                    message: text,
+                });
+            } catch {
+                /* best-effort memory capture when AI path skipped */
+            }
+        })();
+    }
+
     if (order?.kind === "connect_required" || order?.kind === "prompt") {
         reply = applyOrderChatResult(reply, order);
     } else if (order?.kind === "order") {

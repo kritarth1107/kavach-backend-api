@@ -1,5 +1,6 @@
 import { appendCareRecordEvent, listCareRecordEvents } from "./careRecord.service";
-import { aiPostCareBrief } from "../clients/aiEngine.client";
+import { aiListStaleHealthMemory, aiPostCareBrief } from "../clients/aiEngine.client";
+import { ensureAiContext } from "./aiTenant.service";
 import { getFamilyMembersList } from "./familyMember.service";
 import {
     CareRecordEventType,
@@ -33,15 +34,35 @@ export async function generateCareBrief(
         .map((e) => `${e.type}: ${e.title} — ${e.detail.slice(0, 160)}`)
         .join("\n");
 
+    let staleHealthBlock = "";
+    try {
+        const ctx = await ensureAiContext(familyId, subjectUserId, subjectName);
+        const stale = await aiListStaleHealthMemory({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+        });
+        if (stale.entities.length) {
+            staleHealthBlock = stale.entities
+                .map(
+                    (e) =>
+                        `- ${e.title} (${e.kind}) review by ${e.review_by ?? "unknown"} — status ${e.status}`,
+                )
+                .join("\n");
+        }
+    } catch {
+        staleHealthBlock = "";
+    }
+
     let narrative = "";
     try {
         const result = await aiPostCareBrief({
             subjectName,
             timeline,
+            staleHealth: staleHealthBlock,
         });
         narrative = result.brief;
     } catch {
-        narrative = buildFallbackBrief(subjectName, events);
+        narrative = buildFallbackBrief(subjectName, events, staleHealthBlock);
     }
 
     return {
@@ -60,8 +81,12 @@ export async function generateCareBrief(
 function buildFallbackBrief(
     subjectName: string,
     events: Awaited<ReturnType<typeof listCareRecordEvents>>,
+    staleHealth = "",
 ): string {
     const lines = [`Care Brief for ${subjectName}`, ""];
+    if (staleHealth.trim()) {
+        lines.push("Health memory needs review:", staleHealth, "");
+    }
     const latestVital = events.find((e) => e.type === CareRecordEventType.VITAL);
     if (latestVital) lines.push(`Latest vitals: ${latestVital.detail}`);
     const latestCheckIn = events.find((e) => e.type === CareRecordEventType.CHECK_IN);

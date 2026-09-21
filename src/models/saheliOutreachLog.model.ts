@@ -22,7 +22,11 @@ const saheliOutreachLogSchema = new Schema<ISaheliOutreachLogDocument>(
         logId: { type: String, required: true, unique: true, index: true },
         familyId: { type: String, required: true, index: true },
         recipientUserId: { type: String, required: true, index: true },
-        slot: { type: String, enum: ["morning", "afternoon", "evening"], required: true },
+        slot: {
+            type: String,
+            enum: ["morning", "afternoon", "evening", "random", "memory"],
+            required: true,
+        },
         slotDate: { type: String, required: true, index: true },
         outreachKind: { type: String, default: "casual" },
         topicBucket: { type: String },

@@ -147,7 +147,6 @@ export async function aiFamilyExists(aiFamilyId: string): Promise<boolean> {
     try {
         const res = await aiFetch(`/v1/families/${aiFamilyId}`, {
             method: "GET",
-            headers: aiHeaders(),
         });
         return res.ok;
     } catch {
@@ -165,7 +164,6 @@ export async function aiCreateFamily(payload: {
         "/v1/families",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 name: payload.name,
                 owner_external_id: payload.ownerExternalId,
@@ -194,7 +192,6 @@ export async function aiCreateElder(payload: {
         `/v1/families/${payload.aiFamilyId}/elders`,
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 display_name: payload.displayName,
                 slug: payload.slug,
@@ -229,7 +226,6 @@ export async function aiSyncConversationHistory(payload: {
         "/v1/chat/sync-history",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
@@ -269,7 +265,6 @@ export async function aiPostChat(payload: {
         "/v1/chat",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
@@ -370,7 +365,6 @@ export async function aiPostCaregiverChat(payload: {
         "/v1/chat/caregiver",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify(caregiverChatBody(payload)),
         },
         config.aiEngine.writeTimeoutMs,
@@ -531,7 +525,6 @@ export async function aiGetCaregiverChatHistory(payload: {
 
     const res = await aiFetch(`/v1/chat/caregiver/history?${params.toString()}`, {
         method: "GET",
-        headers: aiHeaders(),
     });
 
     if (!res.ok) {
@@ -555,7 +548,6 @@ export async function aiGetChatHistory(payload: {
 
     const res = await aiFetch(`/v1/chat/history?${params.toString()}`, {
         method: "GET",
-        headers: aiHeaders(),
     });
 
     if (!res.ok) {
@@ -583,7 +575,6 @@ export async function aiPostCheckIn(payload: {
         "/v1/chat/check-in",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
@@ -620,7 +611,6 @@ export async function aiAnalyzeDocument(payload: {
         "/v1/documents/analyze",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 title: payload.title,
                 raw_text: payload.rawText,
@@ -652,7 +642,6 @@ export async function aiIngestDocument(payload: {
         "/v1/documents/ingest",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId ?? null,
@@ -693,7 +682,6 @@ export async function aiListDocuments(payload: {
 
     const res = await aiFetch(`/v1/documents/list?${params.toString()}`, {
         method: "GET",
-        headers: aiHeaders(),
     });
 
     if (!res.ok) {
@@ -707,15 +695,16 @@ export async function aiListDocuments(payload: {
 export async function aiPostCareBrief(payload: {
     subjectName: string;
     timeline: string;
+    staleHealth?: string;
 }): Promise<{ brief: string }> {
     const res = await aiFetch(
         "/v1/care-brief/generate",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 subject_name: payload.subjectName,
                 timeline: payload.timeline,
+                stale_health: payload.staleHealth ?? "",
             }),
         },
         config.aiEngine.writeTimeoutMs,
@@ -742,6 +731,7 @@ export async function aiPostOutreach(payload: {
     outreachKind?: string;
     topicBucket?: string;
     topicHint?: string;
+    memoryHint?: string;
     careRecordContext?: string;
     companionProfile?: Record<string, unknown>;
     scheduleItems?: Array<{
@@ -756,7 +746,6 @@ export async function aiPostOutreach(payload: {
         "/v1/chat/outreach",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
@@ -764,6 +753,7 @@ export async function aiPostOutreach(payload: {
                 outreach_kind: payload.outreachKind ?? "casual",
                 topic_bucket: payload.topicBucket ?? null,
                 topic_hint: payload.topicHint ?? null,
+                memory_hint: payload.memoryHint ?? null,
                 care_record_context: payload.careRecordContext ?? null,
                 companion_profile: payload.companionProfile ?? null,
                 schedule_items: payload.scheduleItems ?? [],
@@ -791,7 +781,6 @@ export async function aiPostFamilyShare(payload: {
         "/v1/chat/family-share",
         {
             method: "POST",
-            headers: aiHeaders(),
             body: JSON.stringify({
                 family_id: payload.aiFamilyId,
                 elder_id: payload.aiElderId,
@@ -823,7 +812,10 @@ export async function aiListFamilyMemories(payload: {
         content: string;
         share_with_family: boolean;
         importance: number;
+        source_role?: string | null;
         created_at: string | null;
+        entity_id?: string | null;
+        superseded_by?: string | null;
     }>;
 }> {
     const params = new URLSearchParams({
@@ -835,12 +827,224 @@ export async function aiListFamilyMemories(payload: {
 
     const res = await aiFetch(`/v1/memory/list?${params.toString()}`, {
         method: "GET",
-        headers: aiHeaders(),
     });
 
     if (!res.ok) {
         const body = await res.text();
         throw new AppError(body || "Failed to list family memories", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+export async function aiEnqueueMemoryExtract(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    message: string;
+    sourceRole?: string;
+}): Promise<{ queued: boolean }> {
+    const res = await aiFetch("/v1/memory/extract", {
+        method: "POST",
+        body: JSON.stringify({
+            family_id: payload.aiFamilyId,
+            elder_id: payload.aiElderId,
+            message: payload.message,
+            source_role: payload.sourceRole ?? "elder",
+        }),
+    });
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to queue memory extract", res.status);
+    }
+
+    return parseAiJson<{ queued: boolean }>(res);
+}
+
+export async function aiInboxMemory(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    content: string;
+    category?: string;
+    topic?: string;
+    sourceRole?: string;
+}): Promise<{ saved: boolean; fact_id: string }> {
+    const res = await aiFetch(
+        "/v1/memory/inbox",
+        {
+            method: "POST",
+            body: JSON.stringify({
+                family_id: payload.aiFamilyId,
+                elder_id: payload.aiElderId,
+                content: payload.content,
+                category: payload.category ?? "casual",
+                topic: payload.topic ?? "general",
+                source_role: payload.sourceRole ?? "saheli",
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to save memory", res.status);
+    }
+
+    return parseAiJson<{ saved: boolean; fact_id: string }>(res);
+}
+
+export async function aiForgetMemory(payload: {
+    factId: string;
+    forgottenBy?: string;
+}): Promise<Record<string, unknown>> {
+    const res = await aiFetch(
+        `/v1/memory/${payload.factId}/forget`,
+        {
+            method: "POST",
+            body: JSON.stringify({ forgotten_by: payload.forgottenBy ?? null }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to forget memory", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+export async function aiCorrectMemory(payload: {
+    factId: string;
+    replacementContent: string;
+    actorUserId?: string;
+    sourceRole?: string;
+}): Promise<Record<string, unknown>> {
+    const res = await aiFetch(
+        `/v1/memory/${payload.factId}/correct`,
+        {
+            method: "POST",
+            body: JSON.stringify({
+                replacement_content: payload.replacementContent,
+                actor_user_id: payload.actorUserId ?? null,
+                source_role: payload.sourceRole ?? "family",
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to correct memory", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+export async function aiGrepMemory(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    query: string;
+    limit?: number;
+}): Promise<{
+    hits: Array<{
+        slug: string;
+        kind: string;
+        title: string;
+        snippet: string;
+        score: number;
+        match_type: string;
+    }>;
+}> {
+    const res = await aiFetch("/v1/memory/grep", {
+        method: "POST",
+        body: JSON.stringify({
+            family_id: payload.aiFamilyId,
+            elder_id: payload.aiElderId,
+            query: payload.query,
+            limit: payload.limit ?? 5,
+        }),
+    });
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Memory grep failed", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+export async function aiGetMemoryEntity(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    slug: string;
+}): Promise<{
+    entity: {
+        slug: string;
+        kind: string;
+        title: string;
+        status: string;
+        body_md: string;
+        review_by: string | null;
+        version: number;
+    } | null;
+}> {
+    const params = new URLSearchParams({
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+    });
+    const res = await aiFetch(
+        `/v1/memory/entity/${encodeURIComponent(payload.slug)}?${params.toString()}`,
+        { method: "GET" },
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to load memory entity", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+export async function aiGetMemoryProfile(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+}): Promise<{ profile_md: string }> {
+    const params = new URLSearchParams({
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+    });
+    const res = await aiFetch(`/v1/memory/profile?${params.toString()}`, { method: "GET" });
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to load memory profile", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+export async function aiListStaleHealthMemory(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+}): Promise<{
+    entities: Array<{
+        slug: string;
+        kind: string;
+        title: string;
+        review_by: string | null;
+        status: string;
+    }>;
+}> {
+    const params = new URLSearchParams({
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+    });
+    const res = await aiFetch(`/v1/memory/stale-health?${params.toString()}`, { method: "GET" });
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to list stale health memory", res.status);
     }
 
     return parseAiJson(res);

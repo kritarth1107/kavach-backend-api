@@ -145,6 +145,7 @@ export function dueOutreachSlot(
     void date;
 
     for (const slot of companion.outreachSlots) {
+        if (slot !== "morning" && slot !== "afternoon" && slot !== "evening") continue;
         const target = OUTREACH_SLOT_HOURS[slot];
         if (hour >= target && hour < target + 2) return slot;
     }

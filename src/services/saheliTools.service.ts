@@ -499,7 +499,7 @@ export async function executeSaheliTool(input: {
                 : { error: "Could not start reorder flow" };
         }
         case "save_memory": {
-            const { aiPostFamilyShare } = await import("../clients/aiEngine.client");
+            const { aiInboxMemory } = await import("../clients/aiEngine.client");
             const { ensureAiContext } = await import("./aiTenant.service");
             const ctx = await ensureAiContext(
                 input.familyId,
@@ -508,12 +508,13 @@ export async function executeSaheliTool(input: {
             );
             const content = String(input.args.content ?? input.args.memory ?? "");
             if (!content.trim()) return { error: "content is required" };
-            await aiPostFamilyShare({
+            const result = await aiInboxMemory({
                 aiFamilyId: ctx.aiFamilyId,
                 aiElderId: ctx.aiElderId,
-                shareSummary: content.slice(0, 500),
+                content: content.slice(0, 500),
+                sourceRole: "saheli",
             });
-            return { saved: true };
+            return { saved: true, fact_id: result.fact_id, message: "I'll remember that." };
         }
         case "mark_schedule_completed": {
             const { markScheduleCompleted } = await import("./saheliCareAction.service");

@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from "mongoose";
 
-export type OutreachSlot = "morning" | "afternoon" | "evening";
+export type OutreachSlot = "morning" | "afternoon" | "evening" | "random" | "memory";
 
 export type NudgeIntensity = "gentle" | "standard" | "persistent";
 
@@ -94,7 +94,7 @@ export default mongoose.model<ISaheliCompanionDocument>(
     saheliCompanionSchema,
 );
 
-export const OUTREACH_SLOT_HOURS: Record<OutreachSlot, number> = {
+export const OUTREACH_SLOT_HOURS: Record<"morning" | "afternoon" | "evening", number> = {
     morning: 10,
     afternoon: 16,
     evening: 19,

@@ -57,7 +57,7 @@ export async function runMemoryConsolidationTick(): Promise<{ consolidated: numb
 }
 
 export function startMemoryConsolidationScheduler() {
-    if (process.env.SAHELI_MEMORY_CONSOLIDATION_ENABLED === "false") return;
+    if (process.env.SAHELI_MEMORY_CONSOLIDATION_ENABLED !== "true") return;
     if (timer) return;
     timer = setInterval(() => void runMemoryConsolidationTick(), TICK_MS);
 }

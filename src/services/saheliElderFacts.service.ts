@@ -10,9 +10,24 @@ export function messageIsGreeting(text: string): boolean {
     );
 }
 
-export function buildGreetingReply(displayName: string): string {
+export function buildGreetingReply(displayName: string, memoryHook?: string | null): string {
     const name = displayName.split(/\s+/)[0]?.trim() || displayName;
-    return `Hi ${name}! Good to hear from you. How are you doing today?`;
+    const base = `Hi ${name}! Good to hear from you. How are you doing today?`;
+    if (memoryHook?.trim()) {
+        return `${base} ${memoryHook.trim()}`;
+    }
+    return base;
+}
+
+export function messageAsksMemory(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    if (!t || messageLooksLikeOrder(text)) return false;
+    return (
+        /\b(remember|recall|you know|bataya tha|yaad|who is|kaun hai|tell me about|mera|meri|family|grand|beta|beti|didi|bhai|medicine|dawai|tablet|doctor)\b/i.test(
+            t,
+        ) ||
+        /\b(kya yaad|what do you know|what did i say|kya jaanti)\b/i.test(t)
+    );
 }
 
 export function messageIsCasualOffer(text: string): boolean {

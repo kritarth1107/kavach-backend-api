@@ -8,6 +8,7 @@ import {
     buildElderHelpReply,
     buildGreetingReply,
     messageAsksHelp,
+    messageAsksMemory,
     messageIsCasualOffer,
     messageIsGreeting,
     buildCasualOfferReply,
@@ -68,9 +69,31 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
-    if (messageIsGreeting(input.message)) {
+    if (messageIsGreeting(input.message) && !messageAsksMemory(input.message)) {
+        let memoryHook: string | null = null;
+        try {
+            const { ensureAiContext } = await import("./aiTenant.service");
+            const { aiGrepMemory } = await import("../clients/aiEngine.client");
+            const ctx = await ensureAiContext(
+                input.familyId,
+                input.recipientUserId,
+                input.displayName,
+            );
+            const grep = await aiGrepMemory({
+                aiFamilyId: ctx.aiFamilyId,
+                aiElderId: ctx.aiElderId,
+                query: "family hobby food mood memories",
+                limit: 1,
+            });
+            const hit = grep.hits[0];
+            if (hit?.title) {
+                memoryHook = `By the way — how is ${hit.title} these days?`;
+            }
+        } catch {
+            memoryHook = null;
+        }
         return {
-            reply: buildGreetingReply(input.displayName),
+            reply: buildGreetingReply(input.displayName, memoryHook),
             replySource: "scheduleFacts",
             conversationId,
             order: null,
@@ -81,7 +104,9 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
-    if (messageIsCasualOffer(input.message)) {
+    const wantsMemoryAi = messageAsksMemory(input.message);
+
+    if (!wantsMemoryAi && messageIsCasualOffer(input.message)) {
         return {
             reply: buildCasualOfferReply(input.displayName),
             replySource: "scheduleFacts",
@@ -94,23 +119,25 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
-    const scheduleReply = tryHandleElderScheduleQuery({
-        message: input.message,
-        context: input.contextBundle,
-    });
-    if (scheduleReply) {
-        return {
-            reply: scheduleReply,
-            replySource: "scheduleFacts",
-            conversationId,
-            order: null,
-            orderFlow: null,
-            orderPreview: null,
-            skippedAi: true,
-        };
+    if (!wantsMemoryAi) {
+        const scheduleReply = tryHandleElderScheduleQuery({
+            message: input.message,
+            context: input.contextBundle,
+        });
+        if (scheduleReply) {
+            return {
+                reply: scheduleReply,
+                replySource: "scheduleFacts",
+                conversationId,
+                order: null,
+                orderFlow: null,
+                orderPreview: null,
+                skippedAi: true,
+            };
+        }
     }
 
-    if (messageAsksHelp(input.message)) {
+    if (!wantsMemoryAi && messageAsksHelp(input.message)) {
         return {
             reply: buildElderHelpReply(input.displayName),
             replySource: "scheduleFacts",

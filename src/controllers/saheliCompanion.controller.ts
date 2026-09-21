@@ -110,6 +110,112 @@ export async function getFamilyMemories(
     }
 }
 
+export async function forgetFamilyMemory(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const { familyId, recipientUserId, factId } = req.params;
+        const actorUserId = req.user!.userId;
+        await ensureRecipientInFamily(familyId, recipientUserId);
+        const family = await Family.findOne({ familyId, status: "ACTIVE" });
+        assertCaregiverAccess(family, actorUserId);
+
+        const { aiForgetMemory } = await import("../clients/aiEngine.client");
+        const result = await aiForgetMemory({ factId, forgottenBy: actorUserId });
+        res.json({ data: result });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function correctFamilyMemory(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const { familyId, recipientUserId, factId } = req.params;
+        const actorUserId = req.user!.userId;
+        await ensureRecipientInFamily(familyId, recipientUserId);
+        const family = await Family.findOne({ familyId, status: "ACTIVE" });
+        assertCaregiverAccess(family, actorUserId);
+
+        const replacement = String(req.body?.replacementContent ?? "").trim();
+        if (replacement.length < 4) {
+            throw new AppError("replacementContent is required (min 4 chars)", 400);
+        }
+
+        const { aiCorrectMemory } = await import("../clients/aiEngine.client");
+        const result = await aiCorrectMemory({
+            factId,
+            replacementContent: replacement,
+            actorUserId,
+            sourceRole: "family",
+        });
+        res.json({ data: result });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function getSaheliMemoryProfile(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const { familyId, recipientUserId } = req.params;
+        const actorUserId = req.user!.userId;
+        const membersPayload = await getFamilyMembersList(familyId, actorUserId);
+        const displayName =
+            membersPayload.members.find((m) => m.userId === recipientUserId)?.name?.trim() ||
+            "Care recipient";
+        const { ensureAiContext } = await import("../services/aiTenant.service");
+        const { aiGetMemoryProfile, aiGrepMemory } = await import("../clients/aiEngine.client");
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const [profile, grep] = await Promise.all([
+            aiGetMemoryProfile({ aiFamilyId: ctx.aiFamilyId, aiElderId: ctx.aiElderId }),
+            aiGrepMemory({
+                aiFamilyId: ctx.aiFamilyId,
+                aiElderId: ctx.aiElderId,
+                query: "health medicine person preference",
+                limit: 10,
+            }),
+        ]);
+        res.json({ data: { profile_md: profile.profile_md, entities: grep.hits } });
+    } catch (err) {
+        next(err);
+    }
+}
+
+export async function getSaheliMemoryEntity(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const { familyId, recipientUserId, slug } = req.params;
+        const actorUserId = req.user!.userId;
+        const membersPayload = await getFamilyMembersList(familyId, actorUserId);
+        const displayName =
+            membersPayload.members.find((m) => m.userId === recipientUserId)?.name?.trim() ||
+            "Care recipient";
+        const { ensureAiContext } = await import("../services/aiTenant.service");
+        const { aiGetMemoryEntity } = await import("../clients/aiEngine.client");
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const result = await aiGetMemoryEntity({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            slug,
+        });
+        res.json({ data: result.entity });
+    } catch (err) {
+        next(err);
+    }
+}
+
 export async function getCompanionActivity(
     req: Request,
     res: Response,

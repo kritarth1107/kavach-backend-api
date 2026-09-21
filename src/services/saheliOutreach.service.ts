@@ -75,20 +75,33 @@ export async function deliverSaheliOutreach(payload: {
     familyId: string;
     recipientUserId: string;
     slot?: OutreachSlot;
-    outreachKind?: "casual" | "care" | "mixed";
+    outreachSlot?: OutreachSlot;
+    outreachKind?: "casual" | "care" | "mixed" | "memory";
+    topicBucket?: string;
+    topicHint?: string;
     force?: boolean;
 }): Promise<{ reply: string; delivered: boolean; topicBucket?: string } | null> {
     const companion = await getCompanionProfile(payload.familyId, payload.recipientUserId);
     if (!companion.enabled && !payload.force) return null;
     if (isWithinQuietHours(companion) && !payload.force) return null;
 
-    const slot = payload.slot ?? dueOutreachSlot(companion);
+    const slot = payload.slot ?? payload.outreachSlot ?? dueOutreachSlot(companion);
     if (!slot && !payload.force) return null;
 
     const timezone = companion.timezone || "Asia/Kolkata";
     const dateKey = slotDateKey(timezone);
 
     if (slot && !payload.force) {
+        const existing = await SaheliOutreachLog.findOne({
+            familyId: payload.familyId,
+            recipientUserId: payload.recipientUserId,
+            slotDate: dateKey,
+            slot,
+        }).lean();
+        if (existing) return null;
+    }
+
+    if (payload.force && (slot === "random" || slot === "memory")) {
         const existing = await SaheliOutreachLog.findOne({
             familyId: payload.familyId,
             recipientUserId: payload.recipientUserId,
@@ -116,9 +129,10 @@ export async function deliverSaheliOutreach(payload: {
     if (!payload.outreachKind && slot === "morning" && hasCareToday) {
         outreachKind = "mixed";
     }
-
     let reply = "";
-    let topicBucket = slot === "morning" && hasCareToday ? "care" : "casual";
+    let topicBucket =
+        payload.topicBucket ??
+        (outreachKind === "memory" ? "memory_recall" : slot === "morning" && hasCareToday ? "care" : "casual");
     const todayDate = localDateParts(companion.timezone || "Asia/Kolkata").date;
     const mmdd = todayDate.slice(5);
     const specialDate =
@@ -126,23 +140,49 @@ export async function deliverSaheliOutreach(payload: {
             ? "birthday"
             : companion.importantDates?.find((d) => d.date.slice(5) === mmdd)?.label;
 
-    let topicHint: string | undefined = specialDate
-        ? `special_day:${specialDate}`
-        : companion.outreachTopics?.length && companion.outreachTopics.length > 0
-          ? companion.outreachTopics[Math.floor(Math.random() * companion.outreachTopics.length)]
-          : undefined;
+    let topicHint: string | undefined = payload.topicHint
+        ? payload.topicHint
+        : specialDate
+          ? `special_day:${specialDate}`
+          : companion.outreachTopics?.length && companion.outreachTopics.length > 0
+            ? companion.outreachTopics[Math.floor(Math.random() * companion.outreachTopics.length)]
+            : undefined;
+
+    let memoryHint: string | undefined;
+    if (outreachKind === "memory" || topicBucket === "memory_recall" || topicHint === "memories") {
+        try {
+            const { aiGrepMemory } = await import("../clients/aiEngine.client");
+            const grep = await aiGrepMemory({
+                aiFamilyId: ctx.aiFamilyId,
+                aiElderId: ctx.aiElderId,
+                query: "family person hobby food mood medicine memories",
+                limit: 3,
+            });
+            const hit = grep.hits[Math.floor(Math.random() * Math.max(grep.hits.length, 1))];
+            if (hit) {
+                memoryHint = `${hit.title}: ${hit.snippet}`;
+                topicBucket = "memory_recall";
+                topicHint = hit.title;
+            }
+        } catch {
+            memoryHint = undefined;
+        }
+    }
+
     try {
         const result = await aiPostOutreach({
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             conversationId: ctx.conversationId,
             outreachKind,
+            topicBucket,
             topicHint,
+            memoryHint,
             careRecordContext: careContext,
             companionProfile: profile,
             outreachTopics: companion.outreachTopics ?? [],
             scheduleItems:
-                outreachKind !== "casual"
+                outreachKind !== "casual" && outreachKind !== "memory"
                     ? todayItems.map((s) => ({
                           title: s.title,
                           time: s.time,
@@ -255,7 +295,7 @@ export async function deliverSaheliOutreach(payload: {
             topicHint,
             channel: channelTarget?.channel ?? "dashboard",
             delivered,
-        });
+        }).catch(() => undefined);
     }
 
     await markCompanionOutreach(payload.familyId, payload.recipientUserId);

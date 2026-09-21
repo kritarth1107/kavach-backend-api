@@ -32,6 +32,10 @@ import {
     patchCompanionSettings,
     triggerOutreach,
     getFamilyMemories,
+    forgetFamilyMemory,
+    correctFamilyMemory,
+    getSaheliMemoryProfile,
+    getSaheliMemoryEntity,
 } from "../controllers/saheliCompanion.controller";
 import {
     getActiveOrderSessionHandler,
@@ -156,6 +160,26 @@ router.post(
     "/:familyId/recipients/:recipientUserId/saheli/memory/refresh",
     protect,
     postSaheliMemoryRefreshHandler,
+);
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/memories/:factId/forget",
+    protect,
+    forgetFamilyMemory,
+);
+router.post(
+    "/:familyId/recipients/:recipientUserId/saheli/memories/:factId/correct",
+    protect,
+    correctFamilyMemory,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/memory/profile",
+    protect,
+    getSaheliMemoryProfile,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/memory/entity/:slug",
+    protect,
+    getSaheliMemoryEntity,
 );
 router.get(
     "/:familyId/recipients/:recipientUserId/saheli/insights",
