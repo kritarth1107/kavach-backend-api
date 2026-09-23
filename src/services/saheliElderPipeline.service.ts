@@ -181,6 +181,27 @@ export async function resolveElderWhatsappReply(input: {
                 skippedAi: true,
             };
         }
+
+        const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+        const kernel = await tryStartOrderFromMessage({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.recipientUserId,
+            message: input.message,
+            saheliSessionId: input.sessionId,
+        });
+        if (kernel) {
+            return {
+                reply: kernel.reply,
+                replySource: "kernelFallback",
+                conversationId,
+                order: null,
+                orderFlow: kernel.orderFlow ?? null,
+                orderPreview: null,
+                skippedAi: true,
+                guardAction: "order_kernel_first",
+            };
+        }
     }
 
     const ai = await input.runAi();

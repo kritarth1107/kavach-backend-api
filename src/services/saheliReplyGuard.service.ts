@@ -152,5 +152,17 @@ export async function guardElderReply(
         }
     }
 
+    if (orderFlow?.sessionId && replySource === "ai") {
+        const flowMessage = orderFlow.message?.trim();
+        if (flowMessage) {
+            return {
+                reply: flowMessage,
+                replySource: "kernelFallback",
+                orderFlow,
+                guardAction: "order_flow_message_only",
+            };
+        }
+    }
+
     return { reply, replySource, orderFlow: orderFlow ?? null };
 }

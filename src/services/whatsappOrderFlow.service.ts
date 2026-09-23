@@ -231,15 +231,37 @@ async function handleActiveOrderTurn(input: {
         actorUserId: input.actorUserId,
     });
 
-    if (flow.phase === "select_address" && idx != null && flow.addresses?.[idx]) {
-        flow = await selectOrderFlowAddress({
-            sessionId: input.orderSessionId,
-            familyId: input.familyId,
-            actorUserId: input.actorUserId,
-            addressId: flow.addresses[idx]!.id,
-        });
-        await syncWhatsappOrderSession(input.phone, flow);
-        return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
+    if (flow.phase === "select_address" && flow.addresses?.length) {
+        if (idx != null && flow.addresses[idx]) {
+            flow = await selectOrderFlowAddress({
+                sessionId: input.orderSessionId,
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                addressId: flow.addresses[idx]!.id,
+            });
+            await syncWhatsappOrderSession(input.phone, flow);
+            return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
+        }
+
+        const labelMatch =
+            text.match(/\b(?:pick\s+)?(?:address\s+)?(home|office|work|other)\b/i) ??
+            text.match(/\b(?:to|at|for|use)\s+(home|office|work|other)\b/i);
+        const label = labelMatch?.[1]?.toLowerCase();
+        if (label) {
+            const matched = flow.addresses.find((addr) =>
+                addr.label.toLowerCase().includes(label),
+            );
+            if (matched) {
+                flow = await selectOrderFlowAddress({
+                    sessionId: input.orderSessionId,
+                    familyId: input.familyId,
+                    actorUserId: input.actorUserId,
+                    addressId: matched.id,
+                });
+                await syncWhatsappOrderSession(input.phone, flow);
+                return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
+            }
+        }
     }
 
     if (flow.disambiguation?.candidates?.length && idx != null) {
@@ -459,6 +481,23 @@ export async function tryHandleWhatsAppOrderTurn(input: {
         }
     }
 
-    // New orders are AI-first — Saheli agent starts flows via tools when appropriate.
-    return null;
+    const { isHighConfidenceOrderIntent } = await import("./saheliOrder.service");
+    if (!isHighConfidenceOrderIntent(text)) {
+        return null;
+    }
+
+    const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+    const kernel = await tryStartOrderFromMessage({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        message: text,
+        saheliSessionId: input.saheliSessionId ?? waSession?.saheliSessionId,
+    });
+    if (!kernel) return null;
+
+    if (kernel.orderFlow?.sessionId) {
+        await syncWhatsappOrderSession(input.phone, kernel.orderFlow);
+    }
+    return orderTurn(kernel.reply, kernel.orderFlow);
 }

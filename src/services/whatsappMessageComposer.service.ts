@@ -141,6 +141,39 @@ export function buildRecipientPickMessages(
 export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayload[] {
     const messages: MetaWhatsAppPayload[] = [];
 
+    if (flow.phase === "select_address" && flow.addresses?.length) {
+        const intro =
+            flow.message?.trim() ||
+            `Choose a delivery address for your ${flow.partnerLabel} order ("${flow.query}").`;
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "list",
+                body: {
+                    text: truncate(intro, 1024),
+                },
+                footer: { text: "Or type cancel to stop." },
+                action: {
+                    button: "Pick address",
+                    sections: [
+                        {
+                            title: "Saved addresses",
+                            rows: flow.addresses.slice(0, 10).map((addr, i) => ({
+                                id: `addr:${i}`,
+                                title: truncate(addr.label, 24),
+                                description: truncate(
+                                    [addr.line1, addr.city, addr.pincode].filter(Boolean).join(", "),
+                                    72,
+                                ),
+                            })),
+                        },
+                    ],
+                },
+            },
+        });
+        return messages;
+    }
+
     if (flow.message) {
         messages.push({
             type: "text",
@@ -166,39 +199,6 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
                         display_text: `Connect ${flow.partnerLabel}`,
                         url: flow.connectUrl,
                     },
-                },
-            },
-        });
-        return messages;
-    }
-
-    if (flow.phase === "select_address" && flow.addresses?.length) {
-        messages.push({
-            type: "interactive",
-            interactive: {
-                type: "list",
-                body: {
-                    text: truncate(
-                        `Choose a delivery address for your ${flow.partnerLabel} order ("${flow.query}").`,
-                        1024,
-                    ),
-                },
-                footer: { text: "Or type cancel to stop." },
-                action: {
-                    button: "Pick address",
-                    sections: [
-                        {
-                            title: "Saved addresses",
-                            rows: flow.addresses.slice(0, 10).map((addr, i) => ({
-                                id: `addr:${i}`,
-                                title: truncate(addr.label, 24),
-                                description: truncate(
-                                    [addr.line1, addr.city, addr.pincode].filter(Boolean).join(", "),
-                                    72,
-                                ),
-                            })),
-                        },
-                    ],
                 },
             },
         });

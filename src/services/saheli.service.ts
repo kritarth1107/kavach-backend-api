@@ -1284,6 +1284,56 @@ export async function sendCaregiverSaheliMessage(
         session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
     if (contactReply) {
         reply = contactReply;
+    } else if (messageLooksLikeOrder(text)) {
+        const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+        const kernel = await tryStartOrderFromMessage({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            message: text,
+            saheliSessionId: sessionId,
+        });
+        if (kernel) {
+            reply = kernel.reply;
+            orderFlow = kernel.orderFlow ?? null;
+        } else {
+            const ai = await caregiverReplyWithAi(
+                familyId,
+                recipientUserId,
+                displayName,
+                text,
+                {
+                    elderLines,
+                    sessionLines,
+                    labs: labs.map((d) => ({
+                        title: d.title,
+                        recordDate: d.recordDate,
+                        rawText: d.rawText,
+                        kind: d.kind,
+                    })),
+                },
+                aiConversationId(session.aiConversationId),
+                {
+                    sessionId,
+                    actorUserId,
+                    useAgent: true,
+                    scheduleContext,
+                    familyRosterContext: formatFamilyRosterForAi(membersPayload.members),
+                    channel: opts?.channel,
+                },
+            );
+            conversationId = ai.conversationId;
+            reply = ai.reply;
+            if (ai.orderFromAgent) {
+                order = ai.orderFromAgent;
+            }
+            if (ai.orderPreview) {
+                orderPreview = ai.orderPreview;
+            }
+            if (ai.orderFlow) {
+                orderFlow = ai.orderFlow;
+            }
+        }
     } else {
         const ai = await caregiverReplyWithAi(
             familyId,

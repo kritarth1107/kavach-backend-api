@@ -10,7 +10,7 @@ import {
 } from "./partnerAddress.service";
 
 const GROCERY_KEYWORDS =
-    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri|coke|cola|pepsi|soda|sprite|fanta|diet coke|diet cole|beverage|drinks?)\b/i;
+    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri|coke|cola|pepsi|soda|sprite|fanta|diet coke|diet cole|beverage|drinks?|protein|protien|protein bar|protien bar|energy bar|granola bar|nutrition bar)\b/i;
 
 const GROCERY_WITH_UNIT =
     /\b(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\s*(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\b|\b(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\s+(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\b/i;
@@ -22,10 +22,16 @@ const EXPLICIT_PARTNER =
     /\b(?:from|on|via|using|through)\s+(swiggy(?:\s+food)?|instamart|zepto)\b|\b(swiggy(?:\s+food)?|instamart|zepto)\s+(?:food|groceries|grocery|se|pe)\b/i;
 
 const ORDER_VERBS =
-    /\b(order|orders?|ordered|mangao|manga|mangwa|bhej|deliver|delivery|lana|la do|get me|bring me|buy)\b/i;
+    /\b(order|orders?|ordered|mangao|manga|mangwa|bhej|deliver|delivery|lana|la do|get me|bring me|buy|wanna)\b/i;
 
 const ORDER_VERBS_WITH_OBJECT =
     /\b(need|want|chahiye)\s+(to\s+)?(order|buy|get|eat)\b/i;
+
+const ORDER_QUESTION_PREFIX =
+    /\b(can|could|shall)\s+(we|you|i)\s+(please\s+)?(order|buy|get)\b|\b(let'?s|lets)\s+(order|buy|get)\b/gi;
+
+const ORDER_NOISE_WORDS =
+    /\b(or|and|from|via|on|through|using|swiggy|instamart|zepto|food|groceries|grocery|please|mujhe|for|lunch|dinner|breakfast)\b/gi;
 
 const CASUAL_NON_ORDER =
     /\b(want to know|anything you want|do you need any|need any information|update in (the )?system|need help|need anything|i'?m (doing )?fine|i am fine|theek|how are you|what can you|tell me about|share updates|care co-?pilot|talk to me|change to|switch to)\b/i;
@@ -36,7 +42,7 @@ const PARTNER_NOISE =
     /\b(from|on|via|using|through)\s+(swiggy|instamart|zepto)\b|\b(swiggy|instamart|zepto)\s+(food|groceries|grocery|se|pe)\b/gi;
 
 const FOOD_QUERY_STOP =
-    /\b(i|we|me|my|want|to|eat|order|get|have|some|please|food|khana|the|a|an|would|like|need|bring|mujhe|hungry|craving|feel)\b/gi;
+    /\b(i|we|me|my|want|to|eat|order|get|have|some|please|food|khana|the|a|an|would|like|need|bring|mujhe|hungry|craving|feel|can|could|shall|lets|let'?s|or|and|hey|hi|hello|wanna)\b/gi;
 
 const ADDRESS_FOLLOWUP =
     /\b(address|addr|location|delivery|deliver to|home|office)\b/i;
@@ -104,6 +110,15 @@ export function normalizeOrderText(text: string): string {
 
 export function isCasualNonOrderMessage(text: string): boolean {
     const t = normalizeOrderText(text);
+    if (
+        ORDER_VERBS.test(t) ||
+        ORDER_VERBS_WITH_OBJECT.test(t) ||
+        EXPLICIT_PARTNER.test(t) ||
+        GROCERY_KEYWORDS.test(t) ||
+        FOOD_KEYWORDS.test(t)
+    ) {
+        return false;
+    }
     if (CASUAL_NON_ORDER.test(t)) return true;
     if (/^(hi|hello|hey|ok|okay|thanks|thank you|yes|no)\b/i.test(t) && t.length < 40) return true;
     return false;
@@ -149,13 +164,26 @@ export function messageIsAddressFollowUp(text: string): boolean {
     return ADDRESS_FOLLOWUP.test(t) && ADDRESS_ACTION.test(t);
 }
 
-function normalizeOrderItemName(text: string): string {
-    const cleaned = text
+function fixCommonOrderTypos(text: string): string {
+    return text.replace(/\bprotien\b/gi, "protein");
+}
+
+function stripOrderIntentWords(text: string): string {
+    return fixCommonOrderTypos(text)
+        .replace(/^(hi|hello|hey)[,!.\s]+/i, " ")
+        .replace(ORDER_QUESTION_PREFIX, " ")
         .replace(PARTNER_NOISE, " ")
+        .replace(ORDER_VERBS_WITH_OBJECT, " ")
+        .replace(ORDER_VERBS, " ")
         .replace(FOOD_QUERY_STOP, " ")
+        .replace(ORDER_NOISE_WORDS, " ")
         .replace(/\s+/g, " ")
         .trim();
-    return cleaned.length >= 2 ? cleaned.slice(0, 120) : text.trim().slice(0, 120);
+}
+
+function normalizeOrderItemName(text: string): string {
+    const cleaned = stripOrderIntentWords(text);
+    return cleaned.length >= 2 ? cleaned.slice(0, 120) : fixCommonOrderTypos(text.trim()).slice(0, 120);
 }
 
 function formatAddressList(
@@ -205,7 +233,16 @@ function extractItems(text: string): ParsedOrderLine[] {
             continue;
         }
 
-        if (GROCERY_KEYWORDS.test(bit) || FOOD_KEYWORDS.test(bit) || ORDER_VERBS.test(bit)) {
+        const hasOrderIntent =
+            ORDER_VERBS.test(bit) ||
+            ORDER_VERBS_WITH_OBJECT.test(bit) ||
+            /\b(can|could|shall)\s+(we|you|i)\s+(please\s+)?(order|buy|get)\b/i.test(bit) ||
+            /\b(let'?s|lets)\s+(order|buy|get)\b/i.test(bit);
+        if (
+            GROCERY_KEYWORDS.test(bit) ||
+            FOOD_KEYWORDS.test(bit) ||
+            hasOrderIntent
+        ) {
             const cleaned = normalizeOrderItemName(bit);
             if (cleaned.length >= 2 && !/^(from|swiggy|instamart|zepto)$/i.test(cleaned)) {
                 items.push({ name: cleaned, quantity: 1, unitPricePaise: 0 });
@@ -250,15 +287,8 @@ export function classifyOrderIntent(message: string): "food" | "grocery" {
 export function extractOrderQuery(message: string): string {
     const items = extractItems(message);
     if (items.length) return items.map((i) => i.name).join(", ");
-    const cleaned = message
-        .replace(PARTNER_NOISE, " ")
-        .replace(ORDER_VERBS, " ")
-        .replace(FOOD_KEYWORDS, " ")
-        .replace(GROCERY_KEYWORDS, " ")
-        .replace(/\b(for|lunch|dinner|breakfast|please|mujhe)\b/gi, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    return cleaned.slice(0, 120) || message.trim().slice(0, 120);
+    const cleaned = stripOrderIntentWords(normalizeOrderText(message));
+    return cleaned.slice(0, 120) || fixCommonOrderTypos(message.trim()).slice(0, 120);
 }
 
 export async function pickOrderPartner(
