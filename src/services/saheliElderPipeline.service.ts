@@ -15,6 +15,7 @@ import {
     messageIsAcknowledgment,
     tryHandleElderScheduleQuery,
 } from "./saheliElderFacts.service";
+import { stampCompanionVoice } from "./saheliCompanionVoice.service";
 import { guardElderReply } from "./saheliReplyGuard.service";
 
 export type ElderPipelineResult = {
@@ -60,7 +61,10 @@ export async function resolveElderWhatsappReply(input: {
 
     if (input.careActionReply) {
         return {
-            reply: input.careActionReply,
+            reply: await stampCompanionVoice(input.careActionReply, {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "careAction",
             conversationId,
             order: null,
@@ -109,7 +113,10 @@ export async function resolveElderWhatsappReply(input: {
 
     if (!wantsMemoryAi && messageIsCasualOffer(input.message)) {
         return {
-            reply: buildCasualOfferReply(input.displayName),
+            reply: await stampCompanionVoice(buildCasualOfferReply(input.displayName), {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "scheduleFacts",
             conversationId,
             order: null,
@@ -122,7 +129,10 @@ export async function resolveElderWhatsappReply(input: {
 
     if (!wantsMemoryAi && messageIsAcknowledgment(input.message)) {
         return {
-            reply: "Anytime! I'm here whenever you need me.",
+            reply: await stampCompanionVoice("Anytime! I'm here whenever you need me.", {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "scheduleFacts",
             conversationId,
             order: null,
@@ -140,7 +150,10 @@ export async function resolveElderWhatsappReply(input: {
         });
         if (scheduleReply) {
             return {
-                reply: scheduleReply,
+                reply: await stampCompanionVoice(scheduleReply, {
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                }),
                 replySource: "scheduleFacts",
                 conversationId,
                 order: null,
@@ -153,7 +166,10 @@ export async function resolveElderWhatsappReply(input: {
 
     if (!wantsMemoryAi && messageAsksHelp(input.message)) {
         return {
-            reply: buildElderHelpReply(input.displayName),
+            reply: await stampCompanionVoice(buildElderHelpReply(input.displayName), {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "scheduleFacts",
             conversationId,
             order: null,
@@ -172,7 +188,10 @@ export async function resolveElderWhatsappReply(input: {
         });
         if (orderComms) {
             return {
-                reply: orderComms,
+                reply: await stampCompanionVoice(orderComms, {
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                }),
                 replySource: "orderComms",
                 conversationId,
                 order: null,
@@ -192,7 +211,10 @@ export async function resolveElderWhatsappReply(input: {
         });
         if (kernel) {
             return {
-                reply: kernel.reply,
+                reply: await stampCompanionVoice(kernel.reply, {
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                }),
                 replySource: "kernelFallback",
                 conversationId,
                 order: null,
@@ -274,7 +296,10 @@ export async function resolveElderDashboardReply(input: {
 }): Promise<ElderPipelineResult> {
     if (input.careActionReply) {
         return {
-            reply: input.careActionReply,
+            reply: await stampCompanionVoice(input.careActionReply, {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "careAction",
             conversationId: input.conversationId,
             order: null,
@@ -286,7 +311,10 @@ export async function resolveElderDashboardReply(input: {
 
     if (messageIsGreeting(input.message)) {
         return {
-            reply: buildGreetingReply(input.displayName),
+            reply: await stampCompanionVoice(buildGreetingReply(input.displayName), {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "scheduleFacts",
             conversationId: input.conversationId,
             order: null,
@@ -303,7 +331,10 @@ export async function resolveElderDashboardReply(input: {
     });
     if (scheduleReply) {
         return {
-            reply: scheduleReply,
+            reply: await stampCompanionVoice(scheduleReply, {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
             replySource: "scheduleFacts",
             conversationId: input.conversationId,
             order: null,

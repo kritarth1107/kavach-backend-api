@@ -10,7 +10,7 @@ import {
 } from "./partnerAddress.service";
 
 const GROCERY_KEYWORDS =
-    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri|coke|cola|pepsi|soda|sprite|fanta|diet coke|diet cole|beverage|drinks?|protein|protien|protein bar|protien bar|energy bar|granola bar|nutrition bar)\b/i;
+    /\b(grocery|groceries|instamart|doodh|milk|bread|atta|rice|sabzi|vegetable|fruit|fruits|phal|doodh|maggi|oil|ghee|curd|dahi|eggs|shampoo|soap|detergent|toilet|tissue|snack|biscuit|tea|coffee|sugar|salt|onion|potato|tomato|banana|apple|orange juice|juice|water bottle|bisleri|coke|cola|pepsi|soda|sprite|fanta|diet coke|diet cole|beverage|drinks?|protein|protien|protein bar|protien bar|energy bar|granola bar|nutrition bar)\b/i;
 
 const GROCERY_WITH_UNIT =
     /\b(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\s*(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\b|\b(dal|paneer|atta|rice|milk|doodh|bread|eggs|onion|potato|tomato|banana|apple)\s+(\d+\s*(kg|g|gm|gram|grams|l|ltr|litre|liters|ml|pack|packet|pcs|piece|pieces|dozen))\b/i;
@@ -129,6 +129,25 @@ export function isHighConfidenceOrderIntent(text: string): boolean {
     if (t.length < 4 || isCasualNonOrderMessage(t)) return false;
     if (messageIsAddressFollowUp(t)) return true;
     if (EXPLICIT_PARTNER.test(t)) return true;
+    // Soft Hinglish / polite asks ("doodh mangwa do", "order milk", "zepto pe fruits")
+    if (
+        /\b(mangwa|mangao|manga|bhej|la do|lana|dilwa|karwa)\b/i.test(t) &&
+        (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t))
+    ) {
+        return true;
+    }
+    if (
+        /\b(order|get|buy|bring)\b/i.test(t) &&
+        (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t))
+    ) {
+        return true;
+    }
+    if (
+        /\b(swiggy(?:\s+food)?|instamart|zepto)\b/i.test(t) &&
+        (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t) || /\b(fruits?|phal|items?|stuff|samaan)\b/i.test(t))
+    ) {
+        return true;
+    }
     if (ORDER_VERBS.test(t) || ORDER_TYPOS.test(text)) {
         if (extractItems(t).length > 0) return true;
         if (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t)) return true;
@@ -140,14 +159,22 @@ export function isHighConfidenceOrderIntent(text: string): boolean {
     if (GROCERY_WITH_UNIT.test(t)) return true;
     if (/\b(want to eat|feel like eating|craving|hungry for)\b/i.test(t)) return true;
     if (FOOD_KEYWORDS.test(t) && /\b(want|eat|order|get|hungry|craving|like)\b/i.test(t)) return true;
-    if (
-        /\b(swiggy(?:\s+food)?|instamart|zepto)\b/i.test(t) &&
-        (GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t))
-    ) {
+    if (GROCERY_KEYWORDS.test(t) && /\d|\b(kg|g|l|ltr|litre|packet|pack|bottle)\b/i.test(t)) {
         return true;
     }
     return false;
 }
+
+/** Soft grocery/food ask — used with last-used partner gate. */
+export function isSoftOrderIntent(text: string): boolean {
+    const t = normalizeOrderText(text);
+    if (t.length < 3 || isCasualNonOrderMessage(t)) return false;
+    if (isHighConfidenceOrderIntent(t)) return true;
+    if ((GROCERY_KEYWORDS.test(t) || FOOD_KEYWORDS.test(t)) && t.split(/\s+/).length >= 1) return true;
+    if (/\b(swiggy|instamart|zepto)\b/i.test(t) && t.split(/\s+/).length >= 2) return true;
+    return false;
+}
+
 
 /** Looser check — used only after AI could not handle the turn. */
 export function messageLooksLikeOrder(text: string): boolean {

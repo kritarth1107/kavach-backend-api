@@ -31,6 +31,8 @@ export type SaheliToolName =
     | "place_cod_order"
     | "suggest_order"
     | "ensure_order_session"
+    | "quick_order"
+    | "confirm_and_place_order"
     | "search_catalog"
     | "resolve_catalog_item"
     | "add_to_order_cart"
@@ -229,6 +231,27 @@ export async function executeSaheliTool(input: {
                 items: search.items.slice(0, 10),
                 candidates,
             };
+        }
+        case "quick_order": {
+            const { quickOrder } = await import("./orderKernel.service");
+            return quickOrder({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                message: String(input.args.message ?? ""),
+                saheliSessionId: input.args.saheliSessionId
+                    ? String(input.args.saheliSessionId)
+                    : undefined,
+            }) as Promise<Record<string, unknown>>;
+        }
+        case "confirm_and_place_order": {
+            const { confirmAndPlaceOrder } = await import("./orderKernel.service");
+            return confirmAndPlaceOrder({
+                sessionId: String(input.args.sessionId ?? ""),
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                recipientUserId: input.recipientUserId,
+            }) as Promise<Record<string, unknown>>;
         }
         case "ensure_order_session": {
             const { ensureOrderSession } = await import("./orderKernel.service");

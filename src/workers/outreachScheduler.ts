@@ -6,6 +6,8 @@ import {
     localDateParts,
 } from "../services/saheliCompanion.service";
 import SaheliOutreachLog from "../models/saheliOutreachLog.model";
+import Order from "../models/order.model";
+import { OrderStatus } from "../types/careRecord.types";
 
 const TICK_MS = 60_000;
 const RANDOM_OUTREACH_CHANCE = 0.12;
@@ -31,6 +33,42 @@ async function hadOutreachToday(
     return Boolean(existing);
 }
 
+
+
+async function maybeSendOrderDeliveredFollowup(companion: {
+    familyId: string;
+    recipientUserId: string;
+}): Promise<boolean> {
+    const since = new Date(Date.now() - 36 * 60 * 60 * 1000);
+    const delivered = await Order.findOne({
+        familyId: companion.familyId,
+        subjectUserId: companion.recipientUserId,
+        status: OrderStatus.DELIVERED,
+        updatedAt: { $gte: since },
+    })
+        .sort({ updatedAt: -1 })
+        .lean();
+    if (!delivered) return false;
+
+    const already = await SaheliOutreachLog.findOne({
+        familyId: companion.familyId,
+        recipientUserId: companion.recipientUserId,
+        topicHint: `order_delivered:${delivered.orderId}`,
+    }).lean();
+    if (already) return false;
+
+    await deliverSaheliOutreach({
+        familyId: companion.familyId,
+        recipientUserId: companion.recipientUserId,
+        outreachKind: "casual",
+        topicBucket: "order_delivered",
+        topicHint: `order_delivered:${(delivered as { orderId?: string }).orderId}`,
+        force: true,
+        outreachSlot: "random",
+    });
+    return true;
+}
+
 export async function runOutreachTick() {
     if (running) return;
     running = true;
@@ -40,10 +78,11 @@ export async function runOutreachTick() {
         for (const companion of companions) {
             const timezone = companion.timezone || "Asia/Kolkata";
             const dateKey = localDateParts(timezone).date;
+                        // Soft check-in when elder has been quiet for 2+ days (respect quiet hours).
             const lonely =
                 companion.lastWhatsAppInboundAt &&
                 Date.now() - new Date(companion.lastWhatsAppInboundAt).getTime() >
-                    48 * 60 * 60 * 1000;
+                    2 * 24 * 60 * 60 * 1000;
 
             if (lonely && !dueOutreachSlot(companion, now) && !isWithinQuietHours(companion, now)) {
                 try {
@@ -51,6 +90,8 @@ export async function runOutreachTick() {
                         familyId: companion.familyId,
                         recipientUserId: companion.recipientUserId,
                         outreachKind: "mixed",
+                        topicBucket: "check_in",
+                        topicHint: "soft_lonely_check_in",
                         force: true,
                         outreachSlot: "random",
                     });
@@ -61,6 +102,20 @@ export async function runOutreachTick() {
                     );
                 }
                 continue;
+            }
+
+            
+            // High-signal: order just delivered → short companion follow-up (once per order).
+            if (!isWithinQuietHours(companion, now)) {
+                try {
+                    const sent = await maybeSendOrderDeliveredFollowup(companion);
+                    if (sent) continue;
+                } catch (err) {
+                    console.warn(
+                        `Order-delivered follow-up failed for ${companion.familyId}/${companion.recipientUserId}:`,
+                        err,
+                    );
+                }
             }
 
             const slot = dueOutreachSlot(companion, now);

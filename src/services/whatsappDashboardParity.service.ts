@@ -652,6 +652,199 @@ export async function tryHandleCaregiverBrief(input: {
 /**
  * Main dispatcher for Phase 3 WhatsApp handlers
  */
+
+/**
+ * Wave 2 parity: recent labs / "any new reports?"
+ */
+export async function tryHandleLabsQuery(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+}): Promise<DashboardParityResult> {
+    const text = input.text.trim();
+    const isLabs =
+        /\b(labs?|lab\s*reports?|blood\s*report|reports?|test\s*results?)\b/i.test(text) &&
+        /\b(new|latest|recent|any|show|list|kya|naya|report)\b/i.test(text);
+    const isSimple =
+        /^(any\s+new\s+reports?\??|new\s+labs?\??|lab\s*reports?\??)$/i.test(text);
+    if (!isLabs && !isSimple) return { handled: false };
+
+    const LabDocument = (await import("../models/labDocument.model")).default;
+    const labs = await LabDocument.find({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+    })
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .lean();
+
+    if (!labs.length) {
+        return {
+            handled: true,
+            reply: "No lab reports saved yet. Caregivers can upload them from the Kavach dashboard.",
+        };
+    }
+
+    const lines = labs.map((d: any, i: number) => {
+        const when = d.recordDate || (d.createdAt ? new Date(d.createdAt).toISOString().slice(0, 10) : "");
+        return `${i + 1}. *${d.title || "Lab report"}*${when ? ` (${when})` : ""}`;
+    });
+    return {
+        handled: true,
+        reply: `*Recent lab reports*\n${lines.join("\n")}\n\nAsk about a specific test (e.g. "TSH") for values.`,
+    };
+}
+
+/**
+ * Wave 2 parity: today's care schedule / next meds
+ */
+export async function tryHandleCareScheduleQuery(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+}): Promise<DashboardParityResult> {
+    const text = input.text.trim();
+    const isSchedule =
+        /\b(schedule|today'?s?\s+(meds?|medicines?|care)|next\s+(med|medicine|dose|reminder)|kya\s+lena|aaj\s+ki\s+dawai|medicine\s+list)\b/i.test(
+            text,
+        ) || /^(today'?s?\s+schedule|my\s+schedule|aaj\s+ka\s+schedule)\??$/i.test(text);
+    if (!isSchedule) return { handled: false };
+
+    const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
+    try {
+        const day = await getScheduleDayStatuses(
+            input.familyId,
+            input.recipientUserId,
+            input.actorUserId,
+        );
+        const items = day?.items ?? [];
+        if (!items.length) {
+            return {
+                handled: true,
+                reply: "No care schedule items for today. Caregivers can add medicines from the dashboard.",
+            };
+        }
+        const upcoming = items.filter((i: any) => i.status === "upcoming" || i.status === "due");
+        const done = items.filter((i: any) => i.status === "completed");
+        const missed = items.filter((i: any) => i.status === "missed");
+        const fmt = (arr: any[]) =>
+            arr
+                .slice(0, 6)
+                .map((i) => `• ${i.time || "?"} — ${i.title}${i.status === "completed" ? " ✓" : ""}`)
+                .join("\n");
+        const parts: string[] = ["*Today's care schedule*"];
+        if (upcoming.length) parts.push(`*Up next*\n${fmt(upcoming)}`);
+        if (missed.length) parts.push(`*Missed*\n${fmt(missed)}`);
+        if (done.length) parts.push(`*Done*\n${fmt(done)}`);
+        if (parts.length === 1) parts.push(fmt(items));
+        return { handled: true, reply: parts.join("\n\n") };
+    } catch (err) {
+        console.warn("Care schedule WA query failed:", err);
+        return { handled: true, reply: "Couldn't load today's schedule right now. Try again in a bit." };
+    }
+}
+
+/**
+ * Wave 2 parity: list pending approvals (broader than one order)
+ */
+export async function tryHandlePendingApprovalsList(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+}): Promise<DashboardParityResult> {
+    const text = input.text.trim();
+    const isList =
+        /\b(pending\s+approvals?|approvals?\s+pending|what'?s?\s+pending|list\s+approvals?|awaiting\s+approval|pending\s+orders?)\b/i.test(
+            text,
+        );
+    if (!isList) return { handled: false };
+
+    const { listPendingApprovals } = await import("./order.service");
+    try {
+        const pending = await listPendingApprovals(input.familyId, input.actorUserId);
+        const rows = Array.isArray(pending) ? pending : [];
+        if (!rows.length) {
+            return { handled: true, reply: "No pending approvals right now. You're all caught up." };
+        }
+        const lines = rows.slice(0, 5).map((o: any, i: number) => {
+            const items = (o.items || []).map((it: any) => it.name).join(", ");
+            const total = `₹${((o.totalPaise || 0) / 100).toFixed(0)}`;
+            return `${i + 1}. ${o.partner || "Order"} — ${items || "basket"} (${total})`;
+        });
+        const first = rows[0];
+        return {
+            handled: true,
+            reply: `*Pending approvals (${rows.length})*\n${lines.join("\n")}`,
+            interactiveButtons: first?.orderId
+                ? [
+                      { id: `approve_order:${first.orderId}`, title: "✅ Approve 1st" },
+                      { id: `reject_order:${first.orderId}`, title: "❌ Reject 1st" },
+                  ]
+                : undefined,
+        };
+    } catch (err) {
+        console.warn("Pending approvals WA list failed:", err);
+        return { handled: true, reply: "Couldn't load pending approvals right now." };
+    }
+}
+
+/**
+ * Wave 2 parity: simple set reminder via care schedule API
+ */
+export async function tryHandleSetReminder(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+}): Promise<DashboardParityResult> {
+    const text = input.text.trim();
+    const m =
+        text.match(
+            /\b(?:set|add|create)\s+(?:a\s+)?reminder\s+(?:for\s+)?(.+?)(?:\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?$/i,
+        ) ||
+        text.match(/\bremind\s+(?:me\s+)?(?:to\s+)?(.+?)(?:\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?$/i);
+    if (!m) return { handled: false };
+
+    const title = (m[1] || "").trim().replace(/[!.]+$/, "");
+    if (!title || title.length < 2) return { handled: false };
+    let time = (m[2] || "9:00").trim().toLowerCase();
+    // normalize to HH:MM 24h-ish string care schedule expects
+    const tm = time.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (tm) {
+        let h = parseInt(tm[1], 10);
+        const min = tm[2] || "00";
+        const ap = (tm[3] || "").toLowerCase();
+        if (ap === "pm" && h < 12) h += 12;
+        if (ap === "am" && h === 12) h = 0;
+        time = `${String(h).padStart(2, "0")}:${min}`;
+    }
+
+    const { createCareSchedule } = await import("./careSchedule.service");
+    try {
+        await createCareSchedule(input.familyId, input.recipientUserId, input.actorUserId, {
+            type: "CUSTOM",
+            title,
+            time,
+            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            active: true,
+        });
+        return {
+            handled: true,
+            reply: `Reminder set: *${title}* at ${time}. I'll nudge when it's time.`,
+        };
+    } catch (err) {
+        console.warn("Set reminder WA failed:", err);
+        return {
+            handled: true,
+            reply: "Couldn't set that reminder. Try from the dashboard, or say e.g. \"remind me to take Shelcal at 9pm\".",
+        };
+    }
+}
+
+
 export async function tryHandleWhatsAppDashboardAction(input: {
     familyId: string;
     recipientUserId: string;
@@ -684,7 +877,39 @@ export async function tryHandleWhatsAppDashboardAction(input: {
     });
     if (quietHours.handled) return quietHours;
 
+    const labsQuery = await tryHandleLabsQuery({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        text: input.text,
+    });
+    if (labsQuery.handled) return labsQuery;
+
+    const scheduleQuery = await tryHandleCareScheduleQuery({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        text: input.text,
+    });
+    if (scheduleQuery.handled) return scheduleQuery;
+
+    const setReminder = await tryHandleSetReminder({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        text: input.text,
+    });
+    if (setReminder.handled) return setReminder;
+
     if (input.role === "caregiver") {
+        const pendingApprovalsList = await tryHandlePendingApprovalsList({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            text: input.text,
+        });
+        if (pendingApprovalsList.handled) return pendingApprovalsList;
+
         const pendingOrder = await tryHandlePendingOrderAction({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,

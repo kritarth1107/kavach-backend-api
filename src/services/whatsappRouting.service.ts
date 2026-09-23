@@ -20,6 +20,7 @@ import {
 import type { WhatsAppReplyContext } from "../types/whatsappMessage.types";
 import { messageLooksLikeEmergency } from "./saheliEmergency.service";
 import { tryHandleWhatsAppDashboardAction } from "./whatsappDashboardParity.service";
+import { stampCompanionVoice } from "./saheliCompanionVoice.service";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -318,7 +319,11 @@ export async function handleWhatsAppInbound(body: {
             replySource: "quickOrder",
             fallbackUsed: "confirmAndPlaceOrder",
         });
-        return outbound(phone, result.message, {
+        const stampedConfirm = await stampCompanionVoice(result.message, {
+            familyId: identity.familyId,
+            recipientUserId: subjectUserId,
+        });
+        return outbound(phone, stampedConfirm, {
             kind: result.orderFlow ? "order_flow" : "plain",
             orderFlow: result.orderFlow,
         });
@@ -354,6 +359,10 @@ export async function handleWhatsAppInbound(body: {
             .members.find(m => m.userId === subjectUserId)?.name,
     });
     if (dashboardAction.handled && dashboardAction.reply) {
+        const stampedParityReply = await stampCompanionVoice(dashboardAction.reply, {
+            familyId: identity.familyId,
+            recipientUserId: subjectUserId,
+        });
         const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
         recordWhatsAppAiDebug({
             familyId: identity.familyId,
@@ -365,7 +374,7 @@ export async function handleWhatsAppInbound(body: {
         
         if (dashboardAction.interactiveButtons?.length) {
             const payloads = buildInteractiveButtonMessages(
-                dashboardAction.reply,
+                stampedParityReply,
                 dashboardAction.interactiveButtons,
             );
             return {
@@ -377,7 +386,7 @@ export async function handleWhatsAppInbound(body: {
             };
         }
         
-        return outbound(phone, dashboardAction.reply);
+        return outbound(phone, stampedParityReply);
     }
 
     const orderFlowReply = await tryHandleWhatsAppOrderTurn({

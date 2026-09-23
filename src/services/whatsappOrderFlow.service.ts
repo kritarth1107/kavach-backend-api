@@ -553,8 +553,25 @@ export async function tryHandleWhatsAppOrderTurn(input: {
         }
     }
 
-    const { isHighConfidenceOrderIntent } = await import("./saheliOrder.service");
-    if (!isHighConfidenceOrderIntent(text)) {
+    const { isHighConfidenceOrderIntent, isSoftOrderIntent } = await import("./saheliOrder.service");
+    let allowQuick = isHighConfidenceOrderIntent(text);
+    if (!allowQuick && isSoftOrderIntent(text)) {
+        // Soft ask — still enter quickOrder when a last-used partner address exists.
+        try {
+            const { getLastSuccessfulAddress } = await import("./elderPartnerAddress.service");
+            const partners = ["instamart", "zepto", "swiggy"] as const;
+            for (const p of partners) {
+                const last = await getLastSuccessfulAddress(input.familyId, input.recipientUserId, p);
+                if (last?.addressId) {
+                    allowQuick = true;
+                    break;
+                }
+            }
+        } catch {
+            /* ignore — fall through */
+        }
+    }
+    if (!allowQuick) {
         return null;
     }
 
@@ -590,6 +607,18 @@ export async function tryHandleWhatsAppOrderTurn(input: {
     }
 
     if (quick.status === "partner_error") {
+        return orderTurn(quick.message, quick.orderFlow);
+    }
+
+    // Prefer one confirm that asks address once — not the full multi-step wizard.
+    if (quick.status === "needs_address") {
+        if (quick.orderFlow?.sessionId) {
+            await syncWhatsappOrderSession(input.phone, quick.orderFlow);
+        }
+        return orderTurn(quick.message, quick.orderFlow);
+    }
+
+    if (quick.status === "no_results") {
         return orderTurn(quick.message, quick.orderFlow);
     }
 
