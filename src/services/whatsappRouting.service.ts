@@ -14,9 +14,12 @@ import { getFamilyMembersList } from "./familyMember.service";
 import {
     composeWhatsAppReply,
     flattenWhatsAppPayloads,
+    buildQuickOrderConfirmMessages,
+    buildInteractiveButtonMessages,
 } from "./whatsappMessageComposer.service";
 import type { WhatsAppReplyContext } from "../types/whatsappMessage.types";
 import { messageLooksLikeEmergency } from "./saheliEmergency.service";
+import { tryHandleWhatsAppDashboardAction } from "./whatsappDashboardParity.service";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -294,6 +297,89 @@ export async function handleWhatsAppInbound(body: {
     }
 
     const waSession = await WhatsappSession.findOne({ phone }).lean();
+
+    const quickConfirmMatch = body.interactiveId?.match(/^quick_confirm:(.+)$/);
+    const quickChangeAddrMatch = body.interactiveId?.match(/^quick_change_addr:(.+)$/);
+    
+    if (quickConfirmMatch) {
+        const sessionId = quickConfirmMatch[1];
+        const { confirmAndPlaceOrder } = await import("./orderKernel.service");
+        const result = await confirmAndPlaceOrder({
+            sessionId,
+            familyId: identity.familyId,
+            actorUserId: identity.userId,
+            recipientUserId: subjectUserId,
+        });
+        const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
+        recordWhatsAppAiDebug({
+            familyId: identity.familyId,
+            recipientUserId: subjectUserId,
+            actorUserId: identity.userId,
+            replySource: "quickOrder",
+            fallbackUsed: "confirmAndPlaceOrder",
+        });
+        return outbound(phone, result.message, {
+            kind: result.orderFlow ? "order_flow" : "plain",
+            orderFlow: result.orderFlow,
+        });
+    }
+
+    if (quickChangeAddrMatch) {
+        const sessionId = quickChangeAddrMatch[1];
+        const { getOrderFlowSession } = await import("./orderOrchestrator.service");
+        const OrderSession = (await import("../models/orderSession.model")).default;
+        await OrderSession.updateOne(
+            { sessionId, familyId: identity.familyId },
+            { $set: { phase: "select_address" }, $unset: { selectedAddressId: "" } },
+        );
+        const flow = await getOrderFlowSession({
+            sessionId,
+            familyId: identity.familyId,
+            actorUserId: identity.userId,
+        });
+        return outbound(phone, "Pick a different delivery address:", {
+            kind: "order_flow",
+            orderFlow: flow,
+        });
+    }
+
+    const dashboardAction = await tryHandleWhatsAppDashboardAction({
+        familyId: identity.familyId,
+        recipientUserId: subjectUserId,
+        actorUserId: identity.userId,
+        text,
+        interactiveId: body.interactiveId,
+        role: isCaregiver(identity.role) ? "caregiver" : "elder",
+        recipientName: (await getFamilyMembersList(identity.familyId, identity.userId))
+            .members.find(m => m.userId === subjectUserId)?.name,
+    });
+    if (dashboardAction.handled && dashboardAction.reply) {
+        const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
+        recordWhatsAppAiDebug({
+            familyId: identity.familyId,
+            recipientUserId: subjectUserId,
+            actorUserId: identity.userId,
+            replySource: "dashboardParity",
+            fallbackUsed: "tryHandleWhatsAppDashboardAction",
+        });
+        
+        if (dashboardAction.interactiveButtons?.length) {
+            const payloads = buildInteractiveButtonMessages(
+                dashboardAction.reply,
+                dashboardAction.interactiveButtons,
+            );
+            return {
+                channelType: ChannelType.WHATSAPP,
+                channelIdentifier: phone,
+                modality: "text",
+                content: flattenWhatsAppPayloads(payloads),
+                whatsappPayloads: payloads,
+            };
+        }
+        
+        return outbound(phone, dashboardAction.reply);
+    }
+
     const orderFlowReply = await tryHandleWhatsAppOrderTurn({
         phone,
         familyId: identity.familyId,
@@ -309,9 +395,28 @@ export async function handleWhatsAppInbound(body: {
             familyId: identity.familyId,
             recipientUserId: subjectUserId,
             actorUserId: identity.userId,
-            replySource: "orderSession",
+            replySource: orderFlowReply.quickConfirm ? "quickOrder" : "orderSession",
             fallbackUsed: "tryHandleWhatsAppOrderTurn",
         });
+
+        if (orderFlowReply.quickConfirm) {
+            const payloads = buildQuickOrderConfirmMessages({
+                sessionId: orderFlowReply.quickConfirm.sessionId,
+                partner: orderFlowReply.quickConfirm.partner,
+                partnerLabel: orderFlowReply.quickConfirm.partnerLabel,
+                items: orderFlowReply.quickConfirm.items,
+                totalPaise: orderFlowReply.quickConfirm.totalPaise,
+                address: orderFlowReply.quickConfirm.address,
+            });
+            return {
+                channelType: ChannelType.WHATSAPP,
+                channelIdentifier: phone,
+                modality: "text",
+                content: flattenWhatsAppPayloads(payloads),
+                whatsappPayloads: payloads,
+            };
+        }
+
         return outbound(phone, orderFlowReply.text, {
             kind: "order_flow",
             orderFlow: orderFlowReply.orderFlow,

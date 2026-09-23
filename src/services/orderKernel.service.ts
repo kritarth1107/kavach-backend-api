@@ -1,5 +1,7 @@
 /**
  * Unified order kernel — AI tools call these; channel UIs render OrderFlowPayload.
+ * 
+ * Phase 2 addition: quickOrder / confirmOrPlace for one-message ordering.
  */
 import { AppError } from "../middleware/error.middleware";
 import type { McpCatalogHit } from "../partners/mcp/mcpClient.service";
@@ -12,7 +14,7 @@ import {
     rankCatalogHits,
     resolveCatalogFromHits,
 } from "./catalogResolver.service";
-import { resolveFamilyMcpUserId } from "./commerceConnection.service";
+import { resolveFamilyMcpUserId, listFamilyConnectedPartners } from "./commerceConnection.service";
 import {
     addOrderFlowCartItem,
     getOrderFlowSession,
@@ -23,6 +25,15 @@ import {
     type OrderFlowPayload,
 } from "./orderOrchestrator.service";
 import OrderSession from "../models/orderSession.model";
+import { getLastSuccessfulAddress, recordSuccessfulAddress } from "./elderPartnerAddress.service";
+import { partnerErrorPayload, isPartnerError } from "./orderSessionRecovery.service";
+import {
+    extractOrderQuery,
+    pickOrderPartner,
+    partnerLabel,
+    isHighConfidenceOrderIntent,
+} from "./saheliOrder.service";
+import { OrderPartner } from "../types/careRecord.types";
 
 export type OrderDisambiguation = {
     query: string;
@@ -411,4 +422,298 @@ export async function selectOrderSessionAddress(input: {
 }): Promise<Record<string, unknown>> {
     const flow = await selectOrderFlowAddress(input);
     return { status: "order_flow", kind: "order_flow", orderFlow: flow, message: flow.message };
+}
+
+function orderPartnerToMcp(partner: OrderPartner): McpPartnerKey | null {
+    if (partner === OrderPartner.SWIGGY) return "swiggy";
+    if (partner === OrderPartner.INSTAMART) return "instamart";
+    if (partner === OrderPartner.ZEPTO) return "zepto";
+    return null;
+}
+
+export type QuickOrderResult = {
+    status: "confirm_ready" | "needs_confirm" | "needs_address" | "partner_not_connected" | "partner_error" | "no_results" | "order_placed";
+    sessionId?: string;
+    partner: McpPartnerKey;
+    partnerLabel: string;
+    query: string;
+    address?: { id: string; label: string; line1?: string };
+    items?: Array<{ name: string; pricePaise: number; itemId?: string; quantity: number }>;
+    totalPaise?: number;
+    message: string;
+    orderFlow?: OrderFlowPayload;
+    connectUrl?: string | null;
+    orderId?: string;
+};
+
+/**
+ * Phase 2: Quick order flow - one message + one confirm.
+ * 
+ * E.g., "2L milk Instamart" → system picks partner, reuses last successful address,
+ * searches catalog, returns ONE confirm card. On confirm → place order.
+ */
+export async function quickOrder(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    message: string;
+    saheliSessionId?: string;
+}): Promise<QuickOrderResult> {
+    const orderMessage = input.message.trim();
+    const query = extractOrderQuery(orderMessage);
+    
+    const partner = await pickOrderPartner(orderMessage, input.familyId, input.actorUserId);
+    const mcpPartner = orderPartnerToMcp(partner);
+    if (!mcpPartner) {
+        return {
+            status: "partner_error",
+            partner: "zepto",
+            partnerLabel: "Zepto",
+            query,
+            message: "Couldn't determine which delivery partner to use. Try 'milk from Instamart' or 'pizza from Swiggy'.",
+        };
+    }
+
+    const label = partnerLabel(partner);
+    const connected = await listFamilyConnectedPartners(input.familyId, input.actorUserId);
+    const isConnected =
+        (partner === OrderPartner.SWIGGY && connected.swiggy) ||
+        (partner === OrderPartner.INSTAMART && connected.instamart) ||
+        (partner === OrderPartner.ZEPTO && connected.zepto);
+
+    if (!isConnected) {
+        const { startMcpConnect } = await import("../partners/mcp/mcpClient.service");
+        let connectUrl: string | null = null;
+        try {
+            const started = await startMcpConnect(mcpPartner, input.familyId, input.actorUserId);
+            connectUrl = started.authorizationUrl ?? null;
+        } catch {
+            connectUrl = null;
+        }
+        return {
+            status: "partner_not_connected",
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            message: `Connect ${label} first to place this order.${connectUrl ? " Tap below to connect." : " Ask your caregiver to connect it in Integrations."}`,
+            connectUrl,
+        };
+    }
+
+    const lastAddress = await getLastSuccessfulAddress(input.familyId, input.recipientUserId, mcpPartner);
+    const commerceUserId =
+        (await resolveFamilyMcpUserId(input.familyId, mcpPartner, input.actorUserId)) ??
+        input.actorUserId;
+
+    let searchHits: McpCatalogHit[] = [];
+    let searchAddressId: string | undefined;
+    let searchError: string | undefined;
+
+    if (lastAddress) {
+        try {
+            const search = await searchMcpProduct(
+                mcpPartner,
+                input.familyId,
+                commerceUserId,
+                query,
+                { addressId: lastAddress.addressId },
+            );
+            searchHits = search.items;
+            searchAddressId = search.addressId ?? lastAddress.addressId;
+            searchError = search.error;
+        } catch (err) {
+            if (isPartnerError(err)) {
+                return {
+                    status: "partner_error",
+                    partner: mcpPartner,
+                    partnerLabel: label,
+                    query,
+                    message: `${label} search is slow right now. Try again in a moment.`,
+                };
+            }
+            searchError = err instanceof Error ? err.message : "Search failed";
+        }
+    }
+
+    if (!lastAddress || searchError === "no_address" || !searchAddressId) {
+        const flow = await startOrderFlow({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            message: orderMessage,
+            saheliSessionId: input.saheliSessionId,
+            aiInitiated: true,
+        });
+
+        if (!flow) {
+            return {
+                status: "no_results",
+                partner: mcpPartner,
+                partnerLabel: label,
+                query,
+                message: "Couldn't start your order. Try being more specific about what you want.",
+            };
+        }
+
+        return {
+            status: "needs_address",
+            sessionId: flow.sessionId,
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            message: flow.message ?? `Pick a delivery address to order from ${label}.`,
+            orderFlow: flow,
+        };
+    }
+
+    const ranked = rankCatalogHits(query, searchHits, mcpPartner, 5);
+    if (!ranked.length || !ranked[0]?.pricePaise) {
+        const flow = await startOrderFlow({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            message: orderMessage,
+            saheliSessionId: input.saheliSessionId,
+            aiInitiated: true,
+        });
+
+        return {
+            status: "no_results",
+            sessionId: flow?.sessionId,
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            address: { id: searchAddressId, label: lastAddress.label ?? "Saved address", line1: lastAddress.line1 },
+            message: `I couldn't find "${query}" on ${label}. Try a different search or browse the catalog.`,
+            orderFlow: flow ?? undefined,
+        };
+    }
+
+    const bestMatch = ranked[0];
+    const items = [{
+        name: bestMatch.name,
+        pricePaise: bestMatch.pricePaise!,
+        itemId: bestMatch.itemId ?? bestMatch.spinId ?? bestMatch.productId,
+        quantity: 1,
+        restaurantId: bestMatch.restaurantId,
+        restaurantName: bestMatch.restaurantName,
+    }];
+
+    const flow = await startOrderFlow({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        message: orderMessage,
+        saheliSessionId: input.saheliSessionId,
+        aiInitiated: true,
+    });
+
+    if (!flow?.sessionId) {
+        return {
+            status: "partner_error",
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            message: "Couldn't start the order. Try again.",
+        };
+    }
+
+    await OrderSession.updateOne(
+        { sessionId: flow.sessionId, familyId: input.familyId },
+        { $set: { selectedAddressId: searchAddressId } },
+    );
+
+    try {
+        const addResult = await addOrderFlowCartItem({
+            sessionId: flow.sessionId,
+            familyId: input.familyId,
+            actorUserId: input.actorUserId,
+            item: {
+                itemId: items[0].itemId,
+                name: items[0].name,
+                quantity: 1,
+                pricePaise: items[0].pricePaise,
+                restaurantId: items[0].restaurantId,
+                restaurantName: items[0].restaurantName,
+            },
+        });
+
+        return {
+            status: "confirm_ready",
+            sessionId: flow.sessionId,
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            address: { id: searchAddressId, label: lastAddress.label ?? "Saved address", line1: lastAddress.line1 },
+            items: items.map(i => ({ name: i.name, pricePaise: i.pricePaise, itemId: i.itemId, quantity: i.quantity })),
+            totalPaise: items.reduce((sum, i) => sum + i.pricePaise * i.quantity, 0),
+            message: `${items[0].name} · ₹${(items[0].pricePaise / 100).toFixed(0)} from ${label}\nTo: ${lastAddress.label ?? "Saved address"}`,
+            orderFlow: addResult,
+        };
+    } catch (err) {
+        console.warn("Quick order add to cart failed:", err);
+        return {
+            status: "partner_error",
+            sessionId: flow.sessionId,
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            message: `Couldn't add item to cart. ${err instanceof Error ? err.message : "Try again."}`,
+            orderFlow: flow,
+        };
+    }
+}
+
+/**
+ * Phase 2: Confirm and place order from quick order flow.
+ */
+export async function confirmAndPlaceOrder(input: {
+    sessionId: string;
+    familyId: string;
+    actorUserId: string;
+    recipientUserId: string;
+}): Promise<{
+    status: "placed" | "awaiting_approval" | "error";
+    orderId?: string;
+    message: string;
+    orderFlow?: OrderFlowPayload;
+}> {
+    try {
+        const { flow, order } = await submitOrderFlowCart({
+            sessionId: input.sessionId,
+            familyId: input.familyId,
+            actorUserId: input.actorUserId,
+        });
+
+        const session = await OrderSession.findOne({ sessionId: input.sessionId, familyId: input.familyId }).lean();
+        if (session?.selectedAddressId) {
+            const address = session.addresses?.find(a => a.id === session.selectedAddressId);
+            await recordSuccessfulAddress({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                partner: session.partner,
+                addressId: session.selectedAddressId,
+                addressLabel: address?.label,
+                addressLine1: address?.line1,
+            });
+        }
+
+        const orderId = typeof order.orderId === "string" ? order.orderId : flow.orderId;
+        const isPending = String(order.status ?? "") === "awaiting_approval";
+
+        return {
+            status: isPending ? "awaiting_approval" : "placed",
+            orderId,
+            message: isPending
+                ? "Basket ready — waiting for your family to approve before checkout."
+                : `Order placed! ₹${((order.totalPaise as number) / 100).toFixed(0)} from ${flow.partnerLabel}. I'll update you when it's on the way.`,
+            orderFlow: flow,
+        };
+    } catch (err) {
+        console.warn("Confirm and place order failed:", err);
+        return {
+            status: "error",
+            message: err instanceof Error ? err.message : "Order failed. Try again.",
+        };
+    }
 }

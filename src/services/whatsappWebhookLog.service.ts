@@ -9,7 +9,9 @@ export type SaheliReplySource =
     | "careAction"
     | "orderSession"
     | "kernelFallback"
-    | "scheduleFacts";
+    | "scheduleFacts"
+    | "quickOrder"
+    | "dashboardParity";
 
 export type WhatsAppAiDebug = {
     at: string;
