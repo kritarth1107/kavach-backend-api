@@ -9,6 +9,7 @@ import OrderSession, {
 } from "../models/orderSession.model";
 import {
     getMcpRestaurantMenu,
+    probeInstamartAddressServiceability,
     searchMcpProduct,
     startMcpConnect,
     type McpCatalogHit,
@@ -61,6 +62,8 @@ export type OrderFlowPayload = {
     cartItems?: OrderSessionCartItem[];
     orderId?: string;
     message?: string;
+    /** Grocery partner closed / not delivering at selected address (even if search returned hits). */
+    deliveryUnavailable?: boolean;
     disambiguation?: {
         query: string;
         candidates: Array<
@@ -136,7 +139,11 @@ async function loadAddresses(
     }));
 }
 
-function flowFromSession(session: IOrderSessionDocument, message?: string): OrderFlowPayload {
+function flowFromSession(
+    session: IOrderSessionDocument,
+    message?: string,
+    extras?: Partial<Pick<OrderFlowPayload, "deliveryUnavailable" | "connectPartner" | "connectUrl">>,
+): OrderFlowPayload {
     return {
         sessionId: session.sessionId,
         phase: session.phase,
@@ -149,6 +156,9 @@ function flowFromSession(session: IOrderSessionDocument, message?: string): Orde
         cartItems: session.cartItems,
         orderId: session.orderId,
         message,
+        deliveryUnavailable: extras?.deliveryUnavailable,
+        connectPartner: extras?.connectPartner,
+        connectUrl: extras?.connectUrl,
         disambiguation: session.pendingDisambiguation
             ? {
                   query: session.pendingDisambiguation.query,
@@ -156,6 +166,131 @@ function flowFromSession(session: IOrderSessionDocument, message?: string): Orde
               }
             : undefined,
     };
+}
+
+function groceryCatalogIsEmpty(session: IOrderSessionDocument): boolean {
+    const products = session.catalog?.products?.length ?? 0;
+    const dishes = session.catalog?.dishes?.length ?? 0;
+    // Instamart/Zepto browse is product-led; ignore stray restaurant rows.
+    return products + dishes === 0;
+}
+
+function pickCheapestSpinId(session: IOrderSessionDocument): string | undefined {
+    const rawHits = Array.isArray(session.lastCatalogHits)
+        ? (session.lastCatalogHits as Array<Record<string, unknown>>)
+        : [];
+    const fromHits = rawHits
+        .map((h) => ({
+            spinId: String(h.spinId ?? h.productId ?? h.itemId ?? ""),
+            pricePaise:
+                typeof h.pricePaise === "number"
+                    ? h.pricePaise
+                    : Number.MAX_SAFE_INTEGER,
+        }))
+        .filter((h) => h.spinId);
+    if (fromHits.length) {
+        fromHits.sort((a, b) => a.pricePaise - b.pricePaise);
+        return fromHits[0]?.spinId;
+    }
+    const products = [...(session.catalog?.products ?? []), ...(session.catalog?.dishes ?? [])];
+    const withId = products.filter((p) => p.itemId || p.id);
+    if (!withId.length) return undefined;
+    withId.sort(
+        (a, b) => (a.pricePaise ?? Number.MAX_SAFE_INTEGER) - (b.pricePaise ?? Number.MAX_SAFE_INTEGER),
+    );
+    return withId[0]?.itemId ?? withId[0]?.id;
+}
+
+function looksLikeAuthSearchError(err: unknown): boolean {
+    const msg = err instanceof AppError ? err.message : err instanceof Error ? err.message : String(err);
+    return /401|unauthori[sz]ed|re-?auth|reconnect|token.*(expired|invalid)|not authenticated|login required|session expired/i.test(
+        msg,
+    );
+}
+
+async function zeptoAltHintIfConnected(familyId: string, actorUserId: string, failedPartner: McpPartnerKey): Promise<string> {
+    if (failedPartner !== "instamart") return "";
+    try {
+        const connected = await listFamilyConnectedPartners(familyId, actorUserId);
+        if (connected.zepto) {
+            return " I can try Zepto instead — just say *order on Zepto*.";
+        }
+    } catch {
+        // ignore — alt hint is optional
+    }
+    return "";
+}
+
+async function finalizeGroceryAddressCatalog(
+    session: IOrderSessionDocument,
+    address: OrderSessionAddress,
+): Promise<OrderFlowPayload> {
+    const label = partnerLabel(mcpToOrderPartner(session.partner));
+    const addressLabel = address.label || "that address";
+
+    if (session.partner !== "instamart" && session.partner !== "zepto") {
+        return flowFromSession(
+            session,
+            `Delivery to ${addressLabel}. Browse ${label} options for "${session.query}" below.`,
+        );
+    }
+
+    if (groceryCatalogIsEmpty(session)) {
+        const zeptoHint = await zeptoAltHintIfConnected(session.familyId, session.actorUserId, session.partner);
+        session.phase = "browse";
+        session.catalog = { restaurants: [], dishes: [], products: [] };
+        session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+        await session.save();
+        return flowFromSession(
+            session,
+            `${label} isn't delivering to ${addressLabel} right now (or nothing is available there). Reply *change address* to pick another address, or *cancel* to stop.${zeptoHint}`,
+            { deliveryUnavailable: true },
+        );
+    }
+
+    if (session.partner === "instamart" && session.selectedAddressId) {
+        const commerceUserId =
+            (await resolveFamilyMcpUserId(session.familyId, session.partner, session.actorUserId)) ??
+            session.actorUserId;
+        const spinId = pickCheapestSpinId(session);
+        try {
+            const probe = await probeInstamartAddressServiceability(
+                session.familyId,
+                commerceUserId,
+                session.selectedAddressId,
+                { spinId },
+            );
+            if (!probe.serviceable) {
+                const zeptoHint = await zeptoAltHintIfConnected(
+                    session.familyId,
+                    session.actorUserId,
+                    session.partner,
+                );
+                session.phase = "browse";
+                session.catalog = { restaurants: [], dishes: [], products: [] };
+                session.cartItems = [];
+                session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+                await session.save();
+                return flowFromSession(
+                    session,
+                    `Instamart isn't delivering to ${addressLabel} right now — it looks closed or not serviceable there. Reply *change address* to pick another address, or *cancel* to stop.${zeptoHint}`,
+                    { deliveryUnavailable: true },
+                );
+            }
+        } catch (err) {
+            console.warn("Instamart cart serviceability probe failed:", err);
+            // Fail open to browse, but be honest that checkout might still fail.
+            return flowFromSession(
+                session,
+                `Delivery to ${addressLabel}. Here are ${label} options for "${session.query}". If checkout fails, Instamart may be closed at this address — say *change address* to try another.`,
+            );
+        }
+    }
+
+    return flowFromSession(
+        session,
+        `Delivery to ${addressLabel}. Browse ${label} options for "${session.query}" below.`,
+    );
 }
 
 async function getActiveSession(
@@ -374,10 +509,11 @@ export async function startOrderFlow(input: {
             session.selectedAddressId = matched.id;
             await session.save();
             await searchCatalogForSession(session);
-            return flowFromSession(
-                session,
-                `Using ${matched.label}. Here are ${label} options for "${query}". Pick an item below.`,
-            );
+            const autoFlow = await finalizeGroceryAddressCatalog(session, matched);
+            if (!autoFlow.deliveryUnavailable) {
+                autoFlow.message = `Using ${matched.label}. Here are ${label} options for "${query}". Pick an item below.`;
+            }
+            return autoFlow;
         }
     }
 
@@ -385,10 +521,7 @@ export async function startOrderFlow(input: {
         session.selectedAddressId = addresses[0].id;
         await session.save();
         await searchCatalogForSession(session);
-        return flowFromSession(
-            session,
-            `Delivering to ${addresses[0].label}. Browse ${label} options for "${query}" below.`,
-        );
+        return finalizeGroceryAddressCatalog(session, addresses[0]);
     }
 
     return flowFromSession(
@@ -413,16 +546,20 @@ export async function selectOrderFlowAddress(input: {
     const label = partnerLabel(mcpToOrderPartner(session.partner));
     try {
         await searchCatalogForSession(session);
-        return flowFromSession(
-            session,
-            `Delivery to ${address.label}. Browse ${label} options for "${session.query}" below.`,
-        );
+        return finalizeGroceryAddressCatalog(session, address);
     } catch (err) {
         console.warn("Catalog search after address select failed:", err);
         session.phase = "browse";
         session.catalog = session.catalog ?? { restaurants: [], dishes: [], products: [] };
         session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
         await session.save();
+        if (looksLikeAuthSearchError(err)) {
+            return flowFromSession(
+                session,
+                `${label} needs a reconnect before I can shop for "${session.query}". Ask your caregiver to reconnect ${label} in Integrations, or reply *cancel* to stop.`,
+                { deliveryUnavailable: true },
+            );
+        }
         const hint =
             err instanceof AppError
                 ? err.message
@@ -442,6 +579,17 @@ export async function searchOrderFlowCatalog(input: {
 }): Promise<OrderFlowPayload> {
     const session = await loadSessionForActor(input.sessionId, input.familyId, input.actorUserId);
     await searchCatalogForSession(session, input.query);
+    const address =
+        session.addresses.find((a) => a.id === session.selectedAddressId) ??
+        ({
+            id: session.selectedAddressId ?? "",
+            label: "that address",
+            line1: "",
+        } satisfies OrderSessionAddress);
+    if (session.partner === "instamart" || session.partner === "zepto") {
+        const finalized = await finalizeGroceryAddressCatalog(session, address);
+        if (finalized.deliveryUnavailable) return finalized;
+    }
     return flowFromSession(session, `Updated results for "${session.query}".`);
 }
 

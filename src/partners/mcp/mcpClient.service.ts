@@ -778,6 +778,222 @@ export async function searchMcpProduct(
     });
 }
 
+
+export type McpCartServiceability = {
+    serviceable: boolean;
+    /** closed_or_unavailable | address_not_serviceable | probe_failed | no_sku | tools_missing */
+    reason?: string;
+    warning?: string;
+};
+
+function collectClosedSignalText(payload: unknown): string {
+    const chunks: string[] = [];
+    const visit = (node: unknown, depth = 0) => {
+        if (node == null || depth > 6) return;
+        if (typeof node === "string") {
+            chunks.push(node);
+            return;
+        }
+        if (typeof node === "number" || typeof node === "boolean") return;
+        if (Array.isArray(node)) {
+            for (const row of node.slice(0, 20)) visit(row, depth + 1);
+            return;
+        }
+        if (typeof node !== "object") return;
+        const obj = node as Record<string, unknown>;
+        for (const key of [
+            "message",
+            "addressWarning",
+            "cartAbsentReason",
+            "code",
+            "errorCode",
+            "status",
+            "reason",
+        ]) {
+            if (obj[key] != null) chunks.push(String(obj[key]));
+        }
+        if (obj.cartWarning && typeof obj.cartWarning === "object") {
+            const warn = obj.cartWarning as Record<string, unknown>;
+            if (warn.message != null) chunks.push(String(warn.message));
+            if (warn.statusCode != null) chunks.push(String(warn.statusCode));
+        }
+        if (obj.error && typeof obj.error === "object") {
+            visit(obj.error, depth + 1);
+        }
+        const data = digData(obj);
+        if (data && data !== obj) visit(data, depth + 1);
+    };
+    visit(payload);
+    return chunks.join(" \n ");
+}
+
+function detectInstamartClosedFromPayload(payload: unknown, rawText = ""): {
+    closed: boolean;
+    warning?: string;
+} {
+    const data = digData(payload) ?? (payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null);
+    const haystack = `${collectClosedSignalText(payload)}\n${rawText}`.toLowerCase();
+
+    const addressWarning =
+        data && typeof data.addressWarning === "string" ? data.addressWarning.trim() : "";
+    const cartAbsentReason =
+        data && typeof data.cartAbsentReason === "string" ? data.cartAbsentReason.trim() : "";
+    const cartWarningMsg =
+        data && data.cartWarning && typeof data.cartWarning === "object"
+            ? String((data.cartWarning as Record<string, unknown>).message ?? "").trim()
+            : "";
+    const unserviceableCount = Array.isArray(data?.unserviceableItems)
+        ? (data!.unserviceableItems as unknown[]).length
+        : 0;
+
+    const explicitClosed =
+        /address[_ ]?not[_ ]?serviceable|not[_ ]serviceable|unserviceable|not\s+deliver(?:ing|able)|store\s+closed|closed\s+for\s+(?:the\s+)?(?:day|now|orders)|currently\s+closed|outlet\s+closed|service\s+unavailable|doesn'?t\s+deliver|cannot\s+deliver|can'?t\s+deliver/i.test(
+            haystack,
+        );
+
+    if (addressWarning) {
+        return { closed: true, warning: addressWarning };
+    }
+    if (cartWarningMsg && /serviceable|closed|deliver|unavailable|address/i.test(cartWarningMsg)) {
+        return { closed: true, warning: cartWarningMsg };
+    }
+    if (cartAbsentReason && /serviceable|closed|deliver|unavailable|address|absent/i.test(cartAbsentReason)) {
+        return { closed: true, warning: cartAbsentReason };
+    }
+    if (explicitClosed) {
+        const warning =
+            addressWarning ||
+            cartWarningMsg ||
+            cartAbsentReason ||
+            rawText.trim().slice(0, 180) ||
+            "Address not serviceable or store closed";
+        return { closed: true, warning };
+    }
+    // Many unserviceable items with empty/zero cart often means the store won't fulfill.
+    if (unserviceableCount > 0 && Array.isArray(data?.items) && (data!.items as unknown[]).length === 0) {
+        return {
+            closed: true,
+            warning: "Items unserviceable at this address",
+        };
+    }
+    return { closed: false };
+}
+
+/**
+ * Cart-path serviceability probe for Instamart.
+ * search_products can return catalogue even when the store is closed for an address —
+ * real signals live on update_cart / get_cart (addressWarning, cartWarning, ADDRESS_NOT_SERVICEABLE).
+ */
+export async function probeInstamartAddressServiceability(
+    familyId: string,
+    userId: string,
+    addressId: string,
+    opts?: { spinId?: string },
+): Promise<McpCartServiceability> {
+    if (!addressId) {
+        return { serviceable: false, reason: "address_not_serviceable", warning: "No address selected" };
+    }
+
+    return withMcpClient("instamart", familyId, userId, async (client) => {
+        const tools = (await client.listTools()).tools;
+        const clearTool = tools.find((t) => t.name === "clear_cart")?.name;
+        const updateTool =
+            tools.find((t) => t.name === "update_cart")?.name ??
+            pickToolFromNeedles(tools, [["update", "cart"], ["add", "cart"]]);
+        const getCartTool = tools.find((t) => t.name === "get_cart")?.name;
+
+        if (!updateTool || !getCartTool) {
+            return { serviceable: true, reason: "tools_missing" };
+        }
+        if (!opts?.spinId) {
+            return { serviceable: true, reason: "no_sku" };
+        }
+
+        const clearQuietly = async () => {
+            if (!clearTool) return;
+            try {
+                await client.callTool({ name: clearTool, arguments: {} });
+            } catch {
+                // best-effort cleanup
+            }
+        };
+
+        try {
+            await clearQuietly();
+
+            const updateResult = await client.callTool({
+                name: updateTool,
+                arguments: {
+                    selectedAddressId: addressId,
+                    addressId,
+                    items: [{ spinId: opts.spinId, quantity: 1 }],
+                },
+            });
+            const updateRaw = extractToolText(updateResult);
+            const updateParsed = extractToolJson(updateResult);
+            const updateSignal = detectInstamartClosedFromPayload(updateParsed, updateRaw);
+            if (updateSignal.closed) {
+                await clearQuietly();
+                return {
+                    serviceable: false,
+                    reason: "closed_or_unavailable",
+                    warning: updateSignal.warning,
+                };
+            }
+
+            // Some failures only surface as success:false / error.message on the tool result.
+            if (
+                updateParsed &&
+                typeof updateParsed === "object" &&
+                (updateParsed as Record<string, unknown>).success === false
+            ) {
+                const errObj = (updateParsed as Record<string, unknown>).error;
+                const errMsg =
+                    errObj && typeof errObj === "object"
+                        ? String((errObj as Record<string, unknown>).message ?? "")
+                        : String((updateParsed as Record<string, unknown>).message ?? updateRaw);
+                const failSignal = detectInstamartClosedFromPayload(updateParsed, errMsg);
+                if (failSignal.closed) {
+                    await clearQuietly();
+                    return {
+                        serviceable: false,
+                        reason: "closed_or_unavailable",
+                        warning: failSignal.warning ?? errMsg,
+                    };
+                }
+            }
+
+            const cartResult = await client.callTool({ name: getCartTool, arguments: {} });
+            const cartRaw = extractToolText(cartResult);
+            const cartParsed = extractToolJson(cartResult);
+            const cartSignal = detectInstamartClosedFromPayload(cartParsed, cartRaw);
+            await clearQuietly();
+
+            if (cartSignal.closed) {
+                return {
+                    serviceable: false,
+                    reason: "closed_or_unavailable",
+                    warning: cartSignal.warning,
+                };
+            }
+            return { serviceable: true };
+        } catch (err) {
+            await clearQuietly();
+            const msg = err instanceof Error ? err.message : String(err);
+            const thrown = detectInstamartClosedFromPayload({ error: { message: msg } }, msg);
+            if (thrown.closed) {
+                return {
+                    serviceable: false,
+                    reason: "closed_or_unavailable",
+                    warning: thrown.warning ?? msg,
+                };
+            }
+            return { serviceable: true, reason: "probe_failed", warning: msg.slice(0, 180) };
+        }
+    });
+}
+
+
 export async function getMcpRestaurantMenu(
     partner: McpPartnerKey,
     familyId: string,

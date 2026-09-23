@@ -198,6 +198,32 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
         return messages;
     }
 
+    if (flow.deliveryUnavailable) {
+        const body =
+            flow.message?.trim() ||
+            `${flow.partnerLabel} isn't delivering to that address right now. Reply change address or cancel.`;
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: truncate(body, 1024) },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: { id: "change_address", title: "Change address" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "cancel_order", title: "Cancel" },
+                        },
+                    ],
+                },
+            },
+        });
+        return messages;
+    }
+
     if (flow.phase === "browse") {
         const restaurants = flow.catalog?.restaurants ?? [];
         const items = catalogItems(flow);

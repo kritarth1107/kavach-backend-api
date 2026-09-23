@@ -46,7 +46,7 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
             lines.push(`${i + 1}. ${item.name}${price}`);
         });
         lines.push('\nReply with a number (e.g. "1").');
-    } else if (flow.phase === "browse") {
+    } else if (flow.phase === "browse" && !flow.deliveryUnavailable) {
         const restaurants = flow.catalog?.restaurants ?? [];
         const restaurantOnly =
             restaurants.length > 0 &&
@@ -275,6 +275,7 @@ function isActiveSessionCancel(text: string): boolean {
 
 function isChangeAddressIntent(text: string): boolean {
     const t = text.trim();
+    if (/^change_address$/i.test(t) || /^quick_change_addr:/i.test(t)) return true;
     return (
         /\b(?:change|chahge|chang|chage|chnage)\s+(?:my\s+)?(?:delivery\s+)?address\b/i.test(t) ||
         /\bi\s+(?:want|wanna|need)\s+to\s+change\s+(?:my\s+)?(?:delivery\s+)?address\b/i.test(t) ||

@@ -1,4 +1,7 @@
-import { searchMcpProduct } from "../partners/mcp/mcpClient.service";
+import {
+    probeInstamartAddressServiceability,
+    searchMcpProduct,
+} from "../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../partners/mcp/types";
 import { OrderPartner } from "../types/careRecord.types";
 import { listFamilyConnectedPartners, resolveFamilyMcpUserId } from "./commerceConnection.service";
@@ -49,6 +52,23 @@ async function probeCatalogServiceability(
         }
         if (!search.items.length) {
             return { serviceable: false, reason: "unavailable" };
+        }
+        // Instamart search_products can return catalogue while the store is closed.
+        // Prefer cart-path signals when we have a SKU.
+        if (partner === "instamart" && addressId) {
+            const spinId =
+                search.items.find((h) => h.spinId)?.spinId ??
+                search.items.find((h) => h.productId)?.productId ??
+                search.items[0]?.itemId;
+            const cartProbe = await probeInstamartAddressServiceability(familyId, userId, addressId, {
+                spinId,
+            });
+            if (!cartProbe.serviceable) {
+                return {
+                    serviceable: false,
+                    reason: cartProbe.reason ?? "closed_or_unavailable",
+                };
+            }
         }
         return { serviceable: true };
     } catch {
