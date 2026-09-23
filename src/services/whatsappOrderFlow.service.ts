@@ -742,8 +742,24 @@ export async function tryHandleWhatsAppOrderTurn(input: {
                     "That order session expired. Say what you'd like to order and we'll start fresh.",
                 );
             }
+            const phase = waSession?.orderPhase;
+            if (err instanceof AppError) {
+                if (phase === "select_address") {
+                    return orderTurn(
+                        `Couldn't continue (${err.message}). Tap *Pick address* again, reply with *1*/*2*/*3*, or type *Home*, or say *cancel*.`,
+                    );
+                }
+                return orderTurn(
+                    `Couldn't add that item (${err.message}). Tap *Browse items* again or pick another, or say *cancel*.`,
+                );
+            }
+            if (phase === "select_address") {
+                return orderTurn(
+                    "I hit a snag on that order step — your basket is still open. Tap *Pick address* again, reply with *1*/*2*/*3*, or type *Home*.",
+                );
+            }
             return orderTurn(
-                "I hit a snag on that order step — your basket is still open. Tap *Pick address* again, reply with *1*/*2*/*3*, or type *Home*.",
+                "I hit a snag on that order step — your basket is still open. Tap *Browse items* again, pick another item, or say *cancel*.",
             );
         }
     }

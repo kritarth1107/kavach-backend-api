@@ -95,7 +95,36 @@ function parsePricePaise(value: unknown): number | undefined {
         const match = value.match(/₹?\s*([\d,]+(?:\.\d+)?)/);
         if (match) return Math.round(Number(match[1].replace(/,/g, "")) * 100);
     }
+    // Instamart variations[].price is often { mrp, offerPrice, unitLevelPrice? }
+    if (typeof value === "object" && !Array.isArray(value)) {
+        const obj = value as Record<string, unknown>;
+        return (
+            parsePricePaise(obj.offerPrice) ??
+            parsePricePaise(obj.mrp) ??
+            parsePricePaise(obj.unitLevelPrice) ??
+            parsePricePaise(obj.finalPrice) ??
+            parsePricePaise(obj.sellingPrice)
+        );
+    }
     return undefined;
+}
+
+/** Instamart MCP: price may be nested on variation.price or top-level mrp/offerPrice. */
+function instamartPricePaise(
+    variant: Record<string, unknown>,
+    product?: Record<string, unknown>,
+): number | undefined {
+    return (
+        parsePricePaise(variant.price) ??
+        parsePricePaise(variant.offerPrice) ??
+        parsePricePaise(variant.mrp) ??
+        parsePricePaise(variant.unitLevelPrice) ??
+        (product
+            ? parsePricePaise(product.price) ??
+              parsePricePaise(product.offerPrice) ??
+              parsePricePaise(product.mrp)
+            : undefined)
+    );
 }
 
 function fuzzyMatch(name: string, query: string): boolean {
@@ -213,11 +242,15 @@ function hitsFromInstamartProducts(products: Array<Record<string, unknown>>): Mc
         const name = String(
             variant.displayName ?? variant.name ?? product.name ?? product.displayName ?? "Product",
         );
+        // Prefer variation spinId/id so cart add uses the live SKU id.
         const spinId = variant.spinId ?? variant.id ?? product.spinId ?? product.id;
+        const pricePaise = instamartPricePaise(variant, product);
+        // Skip unpriced rows so WhatsApp list indices stay aligned with addable items.
+        if (!pricePaise || pricePaise <= 0) continue;
         hits.push({
             kind: "product",
             name,
-            pricePaise: parsePricePaise(variant.price ?? variant.mrp ?? product.price),
+            pricePaise,
             spinId: spinId ? String(spinId) : undefined,
             productId: spinId ? String(spinId) : undefined,
         });

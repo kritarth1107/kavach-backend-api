@@ -629,6 +629,46 @@ export async function loadOrderFlowRestaurantMenu(input: {
     return flowFromSession(session, `Menu from ${restaurantName} — tap a dish to add.`);
 }
 
+function resolveCartItemPricePaise(
+    session: IOrderSessionDocument,
+    item: { itemId?: string; name: string },
+): number | undefined {
+    const id = item.itemId?.trim();
+    const nameLower = item.name.trim().toLowerCase();
+
+    const catalogRows = [
+        ...(session.catalog?.products ?? []),
+        ...(session.catalog?.dishes ?? []),
+    ];
+    for (const row of catalogRows) {
+        const matchId = Boolean(id && (row.itemId === id || row.id === id));
+        const matchName = Boolean(nameLower && row.name.toLowerCase() === nameLower);
+        if ((matchId || matchName) && row.pricePaise && row.pricePaise > 0) {
+            return row.pricePaise;
+        }
+    }
+
+    const rawHits = Array.isArray(session.lastCatalogHits)
+        ? (session.lastCatalogHits as Array<Record<string, unknown>>)
+        : [];
+    for (const hit of rawHits) {
+        const hitId = String(hit.spinId ?? hit.productId ?? hit.itemId ?? hit.id ?? "").trim();
+        const hitName = String(hit.name ?? hit.matchedName ?? "")
+            .trim()
+            .toLowerCase();
+        const matchId = Boolean(id && hitId && hitId === id);
+        const matchName = Boolean(nameLower && hitName && hitName === nameLower);
+        const price =
+            typeof hit.pricePaise === "number" && Number.isFinite(hit.pricePaise)
+                ? hit.pricePaise
+                : undefined;
+        if ((matchId || matchName) && price && price > 0) {
+            return price;
+        }
+    }
+    return undefined;
+}
+
 export async function addOrderFlowCartItem(input: {
     sessionId: string;
     familyId: string;
@@ -644,10 +684,13 @@ export async function addOrderFlowCartItem(input: {
 }): Promise<OrderFlowPayload> {
     const session = await loadSessionForActor(input.sessionId, input.familyId, input.actorUserId);
     const qty = Math.min(Math.max(input.item.quantity ?? 1, 1), 20);
-    if (!input.item.pricePaise || input.item.pricePaise <= 0) {
+    let price = input.item.pricePaise;
+    if (!price || price <= 0) {
+        price = resolveCartItemPricePaise(session, input.item);
+    }
+    if (!price || price <= 0) {
         throw new AppError("Live price required — pick an item from catalog search results.", 400);
     }
-    const price = input.item.pricePaise;
 
     const existing = session.cartItems.find(
         (row) =>
