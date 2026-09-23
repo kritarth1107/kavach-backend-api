@@ -429,7 +429,7 @@ export async function selectOrderFlowAddress(input: {
                 : "Partner search is slow right now.";
         return flowFromSession(
             session,
-            `Delivery to ${address.label}. I couldn't load ${label} results for "${session.query}" yet (${hint}). Reply *retry* to search again.`,
+            `Delivery to ${address.label}. I couldn't load ${label} results for "${session.query}" yet (${hint}). Reply *retry* to search again, *change address* to pick another address, or *cancel* to stop.`,
         );
     }
 }
@@ -728,12 +728,22 @@ export async function handleOrderFlowChatMessage(input: {
 
     const text = input.message.trim().toLowerCase();
 
-    if (/\b(change address|pick address|other address|different address)\b/i.test(text)) {
+    if (
+        /\b(?:change|chahge|chang|chage|chnage)\s+(?:my\s+)?(?:delivery\s+)?address\b/i.test(text) ||
+        /\b(?:pick|other|different|new)\s+(?:delivery\s+)?address\b/i.test(text)
+    ) {
         active.phase = "select_address";
         active.selectedAddressId = undefined;
+        active.cartItems = [];
         active.catalog = { restaurants: [], dishes: [], products: [] };
+        active.pendingDisambiguation = undefined;
         await active.save();
-        return flowFromSession(active, "Pick a delivery address to continue.");
+        return flowFromSession(
+            active,
+            active.query
+                ? `Ok — cancelled this basket. Still looking for "${active.query}". Pick a delivery address to continue.`
+                : "Ok — cancelled this basket. Pick a delivery address to continue.",
+        );
     }
 
     const addressHint = parseAddressLabelFromMessage(input.message);

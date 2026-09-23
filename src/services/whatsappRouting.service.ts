@@ -398,6 +398,21 @@ export async function handleWhatsAppInbound(body: {
         interactiveId: body.interactiveId,
         saheliSessionId: waSession?.saheliSessionId,
     });
+    if (orderFlowReply?.reprocessText) {
+        const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
+        recordWhatsAppAiDebug({
+            familyId: identity.familyId,
+            recipientUserId: subjectUserId,
+            actorUserId: identity.userId,
+            replySource: "orderSession",
+            fallbackUsed: "cancelAndSwitchReprocess",
+        });
+        return handleWhatsAppInbound({
+            ...body,
+            text: orderFlowReply.reprocessText,
+            interactiveId: undefined,
+        });
+    }
     if (orderFlowReply) {
         const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
         recordWhatsAppAiDebug({

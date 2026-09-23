@@ -109,7 +109,12 @@ export async function syncWhatsappOrderSession(
         await WhatsappSession.findOneAndUpdate(
             { phone },
             {
-                $unset: { orderSessionId: "", orderPhase: "", pendingOrderId: "" },
+                $unset: {
+                    orderSessionId: "",
+                    orderPhase: "",
+                    pendingOrderId: "",
+                    pendingOrderSwitchText: "",
+                },
                 $set: { expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
             },
         );
@@ -202,17 +207,99 @@ function isConfirm(text: string): boolean {
     return /\b(yes|confirm|ok|okay|place|submit|checkout|done|haan|ha|ji)\b/i.test(text.trim());
 }
 
+function isDecline(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    return (
+        /^(no|nope|nah|nahi|nai|stay|keep|continue|don't|dont)([!.]?|\s+.*)?$/i.test(t) ||
+        /\b(no\s+thanks|stay\s+in\s+(the\s+)?order|keep\s+(the\s+)?(basket|order)|don't\s+cancel|dont\s+cancel)\b/i.test(
+            t,
+        )
+    );
+}
+
+const CANCEL_WORD =
+    String.raw`cancel|cencel|cancle|canel|cnacel|stop|exit|exitt|quit|leave|abort|nevermind|never\s*mind`;
+
 function isExplicitOrderCancel(text: string): boolean {
     const t = text.trim().toLowerCase();
     return (
-        /^cancel(\s+order)?$/.test(t) ||
-        /\bcancel\s+(the\s+)?order\b/.test(t) ||
-        /\bstop\s+order\b/.test(t)
+        new RegExp(String.raw`^(?:${CANCEL_WORD})(?:\s+order)?[!?.]*$`, "i").test(t) ||
+        /\b(?:cancel|cencel|cancle|canel)\s+(?:the\s+)?order\b/i.test(t) ||
+        /\bstop\s+order\b/i.test(t)
     );
 }
 
 function isActiveSessionCancel(text: string): boolean {
-    return /\b(cancel|stop|nevermind|never mind|abort)\b/i.test(text.trim());
+    const t = text.trim();
+    if (new RegExp(String.raw`^(?:${CANCEL_WORD})(?:\s+order)?[!?.]*$`, "i").test(t)) return true;
+    return new RegExp(
+        String.raw`\b(?:cancel|cencel|cancle|canel|cnacel|stop(?:\s+order)?|exit|exitt|quit|leave|abort|nevermind|never\s*mind)\b`,
+        "i",
+    ).test(t);
+}
+
+function isChangeAddressIntent(text: string): boolean {
+    const t = text.trim();
+    return (
+        /\b(?:change|chahge|chang|chage|chnage)\s+(?:my\s+)?(?:delivery\s+)?address\b/i.test(t) ||
+        /\bi\s+(?:want|wanna|need)\s+to\s+change\s+(?:my\s+)?(?:delivery\s+)?address\b/i.test(t) ||
+        /\b(?:pick|other|different|new)\s+(?:delivery\s+)?address\b/i.test(t) ||
+        /\b(?:delivery\s+)?address\s+change\b/i.test(t)
+    );
+}
+
+async function setPendingOrderSwitchText(phone: string, text: string | null): Promise<void> {
+    if (text == null || !text.trim()) {
+        await WhatsappSession.findOneAndUpdate(
+            { phone },
+            {
+                $unset: { pendingOrderSwitchText: "" },
+                $set: { expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
+            },
+        );
+        return;
+    }
+    await WhatsappSession.findOneAndUpdate(
+        { phone },
+        {
+            $set: {
+                pendingOrderSwitchText: text.trim(),
+                expiresAt: new Date(Date.now() + SESSION_TTL_MS),
+            },
+        },
+        { upsert: true },
+    );
+}
+
+async function resetOrderFlowToAddressPick(input: {
+    phone: string;
+    familyId: string;
+    actorUserId: string;
+    orderSessionId: string;
+}): Promise<WhatsAppOrderTurnResult> {
+    await OrderSession.updateOne(
+        { sessionId: input.orderSessionId, familyId: input.familyId },
+        {
+            $set: {
+                phase: "select_address",
+                cartItems: [],
+                catalog: { restaurants: [], dishes: [], products: [] },
+            },
+            $unset: { selectedAddressId: "", pendingDisambiguation: "" },
+        },
+    );
+    await setPendingOrderSwitchText(input.phone, null);
+    const { getOrderFlowSession } = await import("./orderOrchestrator.service");
+    const flow = await getOrderFlowSession({
+        sessionId: input.orderSessionId,
+        familyId: input.familyId,
+        actorUserId: input.actorUserId,
+    });
+    await syncWhatsappOrderSession(input.phone, flow);
+    const intro = flow.query
+        ? `Ok — cancelled this basket. Still looking for "${flow.query}". Pick a new delivery address.`
+        : "Ok — cancelled this basket. Pick a new delivery address.";
+    return orderTurn(`${intro}\n\n${formatOrderFlowForWhatsApp({ ...flow, message: undefined })}`, flow);
 }
 
 async function cancelElderOrderSession(input: {
@@ -265,7 +352,11 @@ async function handleActiveOrderTurn(input: {
     saheliSessionId?: string;
 }): Promise<WhatsAppOrderTurnResult> {
     const text = normalizeWhatsAppOrderReplyText(input.text, input.interactiveId);
+    const waMeta = await WhatsappSession.findOne({ phone: input.phone }).lean();
+    const pendingSwitch = waMeta?.pendingOrderSwitchText?.trim() || "";
+
     if (isActiveSessionCancel(text)) {
+        await setPendingOrderSwitchText(input.phone, null);
         const { cancelledPendingOrder } = await cancelElderOrderSession({
             phone: input.phone,
             familyId: input.familyId,
@@ -278,6 +369,33 @@ async function handleActiveOrderTurn(input: {
                 ? "Order cancelled — your basket was removed."
                 : "Order cancelled. Tell me anytime if you'd like to order again.",
         );
+    }
+
+    if (pendingSwitch) {
+        if (isConfirm(text)) {
+            await setPendingOrderSwitchText(input.phone, null);
+            await cancelElderOrderSession({
+                phone: input.phone,
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                orderSessionId: input.orderSessionId,
+            });
+            return { text: "", reprocessText: pendingSwitch };
+        }
+        if (isDecline(text)) {
+            await setPendingOrderSwitchText(input.phone, null);
+            return orderTurn("Okay — staying with this order. What would you like next?");
+        }
+    }
+
+    if (isChangeAddressIntent(text)) {
+        return resetOrderFlowToAddressPick({
+            phone: input.phone,
+            familyId: input.familyId,
+            actorUserId: input.actorUserId,
+            orderSessionId: input.orderSessionId,
+        });
     }
 
     const idx = parseNumberChoice(text);
@@ -297,6 +415,7 @@ async function handleActiveOrderTurn(input: {
                 actorUserId: input.actorUserId,
                 addressId: matched.id,
             });
+            await setPendingOrderSwitchText(input.phone, null);
             await syncWhatsappOrderSession(input.phone, flow);
             return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
         }
@@ -310,12 +429,13 @@ async function handleActiveOrderTurn(input: {
                 familyId: input.familyId,
                 actorUserId: input.actorUserId,
             });
+            await setPendingOrderSwitchText(input.phone, null);
             await syncWhatsappOrderSession(input.phone, flow);
             return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
         } catch (err) {
             console.warn("WhatsApp order catalog retry failed:", err);
             return orderTurn(
-                `Still having trouble searching ${flow.partnerLabel}. Try again in a moment or say *cancel* and start a fresh order.`,
+                `Still having trouble searching ${flow.partnerLabel}. Reply *retry* to search again, *change address* to pick another address, or *cancel* to stop.`,
                 flow,
             );
         }
@@ -330,6 +450,7 @@ async function handleActiveOrderTurn(input: {
             items: [{ candidateIndex: idx, quantity: 1 }],
         });
         flow = (result.orderFlow as typeof flow) ?? flow;
+        await setPendingOrderSwitchText(input.phone, null);
         await syncWhatsappOrderSession(input.phone, flow);
         return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
     }
@@ -343,6 +464,7 @@ async function handleActiveOrderTurn(input: {
                 actorUserId: input.actorUserId,
                 restaurantId: restaurants[idx]!.restaurantId!,
             });
+            await setPendingOrderSwitchText(input.phone, null);
             await syncWhatsappOrderSession(input.phone, flow);
             return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
         }
@@ -363,6 +485,7 @@ async function handleActiveOrderTurn(input: {
                     restaurantName: picked.restaurantName,
                 },
             });
+            await setPendingOrderSwitchText(input.phone, null);
             await syncWhatsappOrderSession(input.phone, flow);
             return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
         }
@@ -370,6 +493,7 @@ async function handleActiveOrderTurn(input: {
 
     if (flow.phase === "review_cart") {
         if (isConfirm(text)) {
+            await setPendingOrderSwitchText(input.phone, null);
             const { flow: submitted, order } = await submitOrderFlowCart({
                 sessionId: input.orderSessionId,
                 familyId: input.familyId,
@@ -408,12 +532,14 @@ async function handleActiveOrderTurn(input: {
                     restaurantName: picked.restaurantName,
                 },
             });
+            await setPendingOrderSwitchText(input.phone, null);
             await syncWhatsappOrderSession(input.phone, flow);
             return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
         }
     }
 
     if (isConfirm(text) && flow.cartItems?.length) {
+        await setPendingOrderSwitchText(input.phone, null);
         const { flow: submitted, order } = await submitOrderFlowCart({
             sessionId: input.orderSessionId,
             familyId: input.familyId,
@@ -429,8 +555,10 @@ async function handleActiveOrderTurn(input: {
         return orderTurn(formatOrderFlowForWhatsApp(submitted) || "Order placed!", submitted);
     }
 
+    // Non-order ask while session is open — offer cancel-and-switch instead of a hard lock.
+    await setPendingOrderSwitchText(input.phone, text);
     return orderTurn(
-        `Still in your ${flow.partnerLabel} order. ${formatOrderFlowForWhatsApp(flow)}`,
+        `You're in the middle of a ${flow.partnerLabel} order. Should I cancel this basket and do what you just asked instead? Reply *yes* or *no*.`,
         flow,
     );
 }
@@ -438,6 +566,8 @@ async function handleActiveOrderTurn(input: {
 export type WhatsAppOrderTurnResult = {
     text: string;
     orderFlow?: OrderFlowPayload;
+    /** After cancel-and-switch confirm: routing should re-run this as a fresh inbound. */
+    reprocessText?: string;
     quickConfirm?: {
         sessionId: string;
         partner: string;

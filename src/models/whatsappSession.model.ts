@@ -19,6 +19,8 @@ export interface IWhatsappSession {
     orderSessionId?: string;
     orderPhase?: WhatsappOrderPhase;
     pendingOrderId?: string;
+    /** Mid-order ask waiting for cancel-and-switch confirm */
+    pendingOrderSwitchText?: string;
     expiresAt: Date;
 }
 
@@ -42,6 +44,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         orderSessionId: { type: String },
         orderPhase: { type: String },
         pendingOrderId: { type: String },
+        pendingOrderSwitchText: { type: String },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },
