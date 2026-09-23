@@ -154,12 +154,24 @@ export async function tryHandlePendingOrderAction(input: {
     const text = input.text.trim().toLowerCase();
     const interactiveId = input.interactiveId?.trim() ?? "";
 
-    const isConfirmIntent = /\b(approve|confirm|yes|haan|ha|ok|okay|accept|allow|ji)\b/i.test(text) ||
-        interactiveId.startsWith("approve_order:");
+    // "approved?", "is it approved", "approval status" → status query, NEVER auto-approve.
+    const isApprovalStatusQuestion =
+        /\b(approved\?|is\s+it\s+approved|was\s+it\s+approved|approval\s+status|order\s+approved\?|has\s+it\s+been\s+approved)\b/i.test(
+            text,
+        ) ||
+        (/\bapproved\b/i.test(text) && /\?/.test(text)) ||
+        (/^(approved|approval)\??$/i.test(text.trim()));
+
+    const isConfirmIntent =
+        !isApprovalStatusQuestion &&
+        (/\b(approve|confirm|yes|haan|ha|ok|okay|accept|allow|ji)\b/i.test(text) ||
+            interactiveId.startsWith("approve_order:"));
     const isRejectIntent = /\b(reject|decline|cancel|no|nahi|naa|deny|refuse)\b/i.test(text) ||
         interactiveId.startsWith("reject_order:");
-    const isPendingQuery = /\b(pending|waiting|approval|awaiting)\b/i.test(text) &&
-        /\b(order|basket|approval)\b/i.test(text);
+    const isPendingQuery =
+        isApprovalStatusQuestion ||
+        (/\b(pending|waiting|approval|awaiting|approved)\b/i.test(text) &&
+            /\b(order|basket|approval|status|approved)\b/i.test(text));
 
     if (!isConfirmIntent && !isRejectIntent && !isPendingQuery && !interactiveId.includes("order:")) {
         return { handled: false };
@@ -202,14 +214,36 @@ export async function tryHandlePendingOrderAction(input: {
     }
 
     if (isConfirmIntent) {
-        const { approveOrder } = await import("./order.service");
+        const { approveOrder, payOrder } = await import("./order.service");
         try {
             await approveOrder(input.familyId, pendingOrder.orderId, input.actorUserId);
             const items = pendingOrder.items.map(i => i.name).join(", ");
-            return {
-                handled: true,
-                reply: `✅ Order approved! ${items} — ₹${(pendingOrder.totalPaise / 100).toFixed(0)}. Placing now...`,
-            };
+            const amount = `₹${(pendingOrder.totalPaise / 100).toFixed(0)}`;
+            try {
+                const paid = await payOrder(
+                    input.familyId,
+                    pendingOrder.orderId,
+                    input.actorUserId,
+                    { partnerAddressId: pendingOrder.partnerAddressId },
+                );
+                if (paid.payment.paymentLink) {
+                    return {
+                        handled: true,
+                        reply: `✅ Approved ${amount} (${items}). Complete payment here: ${paid.payment.paymentLink}`,
+                    };
+                }
+                return {
+                    handled: true,
+                    reply: `✅ Approved and placed (${items}, ${amount}). I'll update you when it's on the way.`,
+                };
+            } catch (payErr) {
+                return {
+                    handled: true,
+                    reply: `✅ Approved ${amount} (${items}), but checkout failed: ${
+                        payErr instanceof Error ? payErr.message : "Try Pay from the dashboard."
+                    }`,
+                };
+            }
         } catch (err) {
             return {
                 handled: true,
@@ -247,9 +281,14 @@ export async function tryHandleOrderStatusQuery(input: {
 }): Promise<DashboardParityResult> {
     const text = input.text.trim().toLowerCase();
 
-    const isStatusQuery = /\b(where|status|track|tracking|update)\b/i.test(text) &&
-        /\b(order|delivery|food|groceries|my)\b/i.test(text);
-    const isSimpleStatus = /^(status|order\s*status|where'?s?\s+my\s+order)$/i.test(text.trim());
+    const isStatusQuery =
+        (/\b(where|status|track|tracking|update)\b/i.test(text) &&
+            /\b(order|delivery|food|groceries|my)\b/i.test(text)) ||
+        /\b(approved\?|is\s+it\s+approved|was\s+it\s+approved|approval\s+status)\b/i.test(text) ||
+        (/\bapproved\b/i.test(text) && /\?/.test(text));
+    const isSimpleStatus = /^(status|order\s*status|where'?s?\s+my\s+order|approved\??)$/i.test(
+        text.trim(),
+    );
 
     if (!isStatusQuery && !isSimpleStatus) {
         return { handled: false };
@@ -757,9 +796,10 @@ export async function tryHandlePendingApprovalsList(input: {
 }): Promise<DashboardParityResult> {
     const text = input.text.trim();
     const isList =
-        /\b(pending\s+approvals?|approvals?\s+pending|what'?s?\s+pending|list\s+approvals?|awaiting\s+approval|pending\s+orders?)\b/i.test(
+        /\b(pending\s+approvals?|approvals?\s+pending|what'?s?\s+pending|list\s+approvals?|awaiting\s+approval|pending\s+orders?|approval\s+status|is\s+it\s+approved|was\s+it\s+approved)\b/i.test(
             text,
-        );
+        ) ||
+        (/^(approved)\??$/i.test(text.trim()));
     if (!isList) return { handled: false };
 
     const { listPendingApprovals } = await import("./order.service");

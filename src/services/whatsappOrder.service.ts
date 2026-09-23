@@ -30,11 +30,20 @@ export async function tryHandleCaregiverWhatsAppOrderCommand(input: {
 
     if (!pending.length) return null;
 
+    const isApprovalStatusQuestion =
+        /\b(approved\?|is\s+it\s+approved|was\s+it\s+approved|approval\s+status)\b/i.test(
+            input.text,
+        ) ||
+        (/\bapproved\b/i.test(input.text) && /\?/.test(input.text)) ||
+        (/^(approved|approval)\??$/i.test(input.text.trim()));
+
     const wantsApproveReject =
-        APPROVE_RE.test(input.text) || REJECT_RE.test(input.text);
+        !isApprovalStatusQuestion &&
+        (APPROVE_RE.test(input.text) || REJECT_RE.test(input.text));
     const wantsPendingStatus =
-        /\b(pending|status|basket|approve|reject)\b/i.test(input.text) &&
-        ORDER_CONTEXT_RE.test(input.text);
+        isApprovalStatusQuestion ||
+        (/\b(pending|status|basket|approve|reject|approved)\b/i.test(input.text) &&
+            (ORDER_CONTEXT_RE.test(input.text) || isApprovalStatusQuestion));
 
     if (!wantsApproveReject && !wantsPendingStatus) {
         return null;
@@ -53,7 +62,9 @@ export async function tryHandleCaregiverWhatsAppOrderCommand(input: {
         if (order.status === OrderStatus.AWAITING_APPROVAL) {
             await approveOrder(input.familyId, order.orderId, input.actorUserId);
         }
-        const paid = await payOrder(input.familyId, order.orderId, input.actorUserId);
+        const paid = await payOrder(input.familyId, order.orderId, input.actorUserId, {
+            partnerAddressId: order.partnerAddressId,
+        });
         if (paid.payment.paymentLink) {
             return `Approved ${amount} ${order.partner} order (${itemList}). Complete payment here: ${paid.payment.paymentLink}`;
         }

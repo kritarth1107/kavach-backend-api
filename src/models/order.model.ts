@@ -24,6 +24,17 @@ export interface IOrder {
     partnerRef?: string;
     deepLink?: string;
     notes?: string;
+    billBreakdown?: {
+        itemSubtotalPaise?: number;
+        deliveryFeePaise?: number;
+        platformFeePaise?: number;
+        packingFeePaise?: number;
+        taxPaise?: number;
+        discountPaise?: number;
+        tipPaise?: number;
+        otherFeesPaise?: number;
+        grandTotalPaise?: number;
+    };
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -56,6 +67,22 @@ const orderSchema = new Schema<IOrderDocument>(
         partnerRef: { type: String, trim: true },
         deepLink: { type: String, trim: true },
         notes: { type: String, trim: true, maxlength: 500 },
+        billBreakdown: {
+            type: new Schema(
+                {
+                    itemSubtotalPaise: { type: Number },
+                    deliveryFeePaise: { type: Number },
+                    platformFeePaise: { type: Number },
+                    packingFeePaise: { type: Number },
+                    taxPaise: { type: Number },
+                    discountPaise: { type: Number },
+                    tipPaise: { type: Number },
+                    otherFeesPaise: { type: Number },
+                    grandTotalPaise: { type: Number },
+                },
+                { _id: false },
+            ),
+        },
     },
     { timestamps: true },
 );

@@ -53,7 +53,21 @@ export interface IOrderSession {
         products: OrderSessionCatalogItem[];
     };
     cartItems: OrderSessionCartItem[];
+    /** Partner cart fee lines (Instamart get_cart etc.) — present keys only. */
+    billBreakdown?: {
+        itemSubtotalPaise?: number;
+        deliveryFeePaise?: number;
+        platformFeePaise?: number;
+        packingFeePaise?: number;
+        taxPaise?: number;
+        discountPaise?: number;
+        tipPaise?: number;
+        otherFeesPaise?: number;
+        grandTotalPaise?: number;
+    };
     orderId?: string;
+    /** Last known order status after submit (awaiting_approval / approved / paid…). */
+    orderStatus?: string;
     saheliSessionId?: string;
     lastCatalogQuery?: string;
     lastCatalogHits?: unknown[];
@@ -133,7 +147,24 @@ const orderSessionSchema = new Schema<IOrderSessionDocument>(
             products: { type: [catalogItemSchema], default: [] },
         },
         cartItems: { type: [cartItemSchema], default: [] },
+        billBreakdown: {
+            type: new Schema(
+                {
+                    itemSubtotalPaise: { type: Number },
+                    deliveryFeePaise: { type: Number },
+                    platformFeePaise: { type: Number },
+                    packingFeePaise: { type: Number },
+                    taxPaise: { type: Number },
+                    discountPaise: { type: Number },
+                    tipPaise: { type: Number },
+                    otherFeesPaise: { type: Number },
+                    grandTotalPaise: { type: Number },
+                },
+                { _id: false },
+            ),
+        },
         orderId: { type: String },
+        orderStatus: { type: String },
         saheliSessionId: { type: String, index: true },
         lastCatalogQuery: { type: String },
         lastCatalogHits: { type: [Schema.Types.Mixed], default: undefined },

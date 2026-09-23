@@ -20,6 +20,7 @@ import {
 import { upsertChannelIdentity, listChannelIdentities } from "../services/identityResolver.service";
 import { getFamilyIntegrations } from "../services/integration.service";
 import { getFamilyForActor, requirePermission } from "../services/careRecordAuth.service";
+import { partnerLabel } from "../services/saheliOrder.service";
 
 export async function getCareRecordEventsHandler(req: Request, res: Response) {
     const { familyId, subjectUserId } = req.params;
@@ -80,6 +81,9 @@ export async function getPendingApprovalsHandler(req: Request, res: Response) {
             orders: orders.map((o) => ({
                 order_id: o.orderId,
                 status: o.status,
+                partner: o.partner,
+                partner_label: partnerLabel(o.partner),
+                partner_address_id: o.partnerAddressId ?? null,
                 total_paise: o.totalPaise,
                 items: o.items,
                 deep_link: o.deepLink,
@@ -131,6 +135,9 @@ export async function getOrderHistoryHandler(req: Request, res: Response) {
             orders: orders.map((o) => ({
                 order_id: o.orderId,
                 status: o.status,
+                partner: o.partner,
+                partner_label: partnerLabel(o.partner),
+                partner_address_id: o.partnerAddressId ?? null,
                 total_paise: o.totalPaise,
                 items: o.items,
                 deep_link: o.deepLink,

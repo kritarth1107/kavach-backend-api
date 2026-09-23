@@ -8,11 +8,13 @@ import OrderSession, {
     type OrderSessionPhase,
 } from "../models/orderSession.model";
 import {
+    fetchInstamartCartBill,
     getMcpRestaurantMenu,
     probeInstamartAddressServiceability,
     searchMcpProduct,
     startMcpConnect,
     type McpCatalogHit,
+    type PartnerBillBreakdown,
 } from "../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../partners/mcp/types";
 import { OrderPartner } from "../types/careRecord.types";
@@ -22,7 +24,7 @@ import {
     getMemberRole,
     requireCareRecipient,
 } from "./careRecordAuth.service";
-import { approveOrder, suggestOrder } from "./order.service";
+import { approveOrder, payOrder, suggestOrder } from "./order.service";
 import {
     getPartnerOrderSettings,
     orderRequiresCaregiverApproval,
@@ -60,7 +62,10 @@ export type OrderFlowPayload = {
         products?: OrderSessionCatalogItem[];
     };
     cartItems?: OrderSessionCartItem[];
+    billBreakdown?: PartnerBillBreakdown;
     orderId?: string;
+    /** Order status after submit — drives truthful WA "placed" vs "awaiting approval" copy. */
+    orderStatus?: string;
     message?: string;
     /** Grocery partner closed / not delivering at selected address (even if search returned hits). */
     deliveryUnavailable?: boolean;
@@ -154,7 +159,9 @@ function flowFromSession(
         addresses: session.addresses,
         catalog: session.catalog,
         cartItems: session.cartItems,
+        billBreakdown: session.billBreakdown,
         orderId: session.orderId,
+        orderStatus: session.orderStatus,
         message,
         deliveryUnavailable: extras?.deliveryUnavailable,
         connectPartner: extras?.connectPartner,
@@ -669,6 +676,29 @@ function resolveCartItemPricePaise(
     return undefined;
 }
 
+
+async function refreshSessionBillBreakdown(session: IOrderSessionDocument): Promise<void> {
+    if (session.partner !== "instamart" || !session.cartItems.length) return;
+    try {
+        const mcpUserId =
+            (await resolveFamilyMcpUserId(session.familyId, session.partner, session.actorUserId)) ??
+            session.actorUserId;
+        const bill = await fetchInstamartCartBill({
+            familyId: session.familyId,
+            userId: mcpUserId,
+            addressId: session.selectedAddressId,
+            items: session.cartItems.map((item) => ({
+                name: item.name,
+                quantity: item.quantity,
+                itemId: item.itemId,
+            })),
+        });
+        if (bill) session.billBreakdown = bill;
+    } catch (err) {
+        console.warn("Instamart bill breakdown refresh failed:", err);
+    }
+}
+
 export async function addOrderFlowCartItem(input: {
     sessionId: string;
     familyId: string;
@@ -728,6 +758,7 @@ export async function addOrderFlowCartItem(input: {
     session.pendingDisambiguation = undefined;
     session.phase = "review_cart";
     session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+    await refreshSessionBillBreakdown(session);
     await session.save();
 
     return flowFromSession(
@@ -799,8 +830,45 @@ export async function submitOrderFlowCart(input: {
         settings: partnerSettings,
     });
 
+    if (selected?.id) {
+        order.partnerAddressId = selected.id;
+        await order.save();
+    }
+
+    // Best-effort fee snapshot before approval/checkout messaging.
+    await refreshSessionBillBreakdown(session);
+    if (session.billBreakdown) {
+        order.billBreakdown = session.billBreakdown;
+        if (
+            typeof session.billBreakdown.grandTotalPaise === "number" &&
+            session.billBreakdown.grandTotalPaise > 0
+        ) {
+            order.totalPaise = session.billBreakdown.grandTotalPaise;
+        }
+        await order.save();
+    }
+
     if (!needsApproval) {
         order = await approveOrder(session.familyId, order.orderId, session.actorUserId);
+        // Auto-approved path: actually place via MCP/COD pay (truthful "Order placed").
+        try {
+            const paid = await payOrder(session.familyId, order.orderId, session.actorUserId, {
+                partnerAddressId: order.partnerAddressId ?? selected?.id,
+            });
+            order = paid.order;
+        } catch (err) {
+            // Leave as approved — do not claim placed. Surface error to caller.
+            session.phase = "submitted";
+            session.orderId = order.orderId;
+            session.orderStatus = String(order.status);
+            await session.save();
+            throw err instanceof AppError
+                ? err
+                : new AppError(
+                      err instanceof Error ? err.message : "Checkout failed",
+                      400,
+                  );
+        }
     } else {
         void createFamilyNotification(session.familyId, {
             kind: "order_pending",
@@ -812,13 +880,9 @@ export async function submitOrderFlowCart(input: {
         });
     }
 
-    if (selected?.id) {
-        order.partnerAddressId = selected.id;
-        await order.save();
-    }
-
     session.phase = "submitted";
     session.orderId = order.orderId;
+    session.orderStatus = String(order.status);
     await session.save();
 
     const searchResults = [
@@ -867,11 +931,14 @@ export async function submitOrderFlowCart(input: {
         addresses: session.addresses,
     };
 
+    const paidOk = String(order.status) === "paid" || String(order.status) === "delivered";
     const flow = flowFromSession(
         session,
-        !needsApproval
-            ? `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Place COD when you're ready.`
-            : `Basket ready — ₹${(order.totalPaise / 100).toFixed(0)} total. Family approval required before checkout.`,
+        paidOk
+            ? `Order placed on ${partnerLabel(orderPartner)} — ₹${(order.totalPaise / 100).toFixed(0)}. I'll update you when it's on the way.`
+            : needsApproval
+              ? `Basket submitted — ₹${(order.totalPaise / 100).toFixed(0)} total. Waiting for family approval before checkout.`
+              : `Basket approved — ₹${(order.totalPaise / 100).toFixed(0)}. Placing with ${partnerLabel(orderPartner)}…`,
     );
 
     return { flow, order: orderPayload };

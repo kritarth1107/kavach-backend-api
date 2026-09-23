@@ -17,6 +17,43 @@ function formatRupee(paise: number): string {
     return `₹${(paise / 100).toFixed(0)}`;
 }
 
+function formatBillBreakdownLines(
+    bill: import("./orderOrchestrator.service").OrderFlowPayload["billBreakdown"],
+    itemSubtotalPaise: number,
+): string[] {
+    const lines: string[] = [];
+    const sub =
+        typeof bill?.itemSubtotalPaise === "number" && bill.itemSubtotalPaise > 0
+            ? bill.itemSubtotalPaise
+            : itemSubtotalPaise;
+    if (sub > 0) lines.push(`Item subtotal: ${formatRupee(sub)}`);
+
+    const feeLines: Array<[string, number | undefined]> = [
+        ["Delivery fee", bill?.deliveryFeePaise],
+        ["Platform fee", bill?.platformFeePaise],
+        ["Packing fee", bill?.packingFeePaise],
+        ["Tax", bill?.taxPaise],
+        ["Discount", bill?.discountPaise],
+        ["Tip", bill?.tipPaise],
+        ["Other fees", bill?.otherFeesPaise],
+    ];
+    for (const [label, paise] of feeLines) {
+        if (typeof paise === "number" && paise !== 0) {
+            const sign = paise < 0 || label === "Discount" ? "-" : "";
+            const abs = Math.abs(paise);
+            lines.push(`${label}: ${sign}${formatRupee(abs)}`);
+        }
+    }
+
+    const total =
+        typeof bill?.grandTotalPaise === "number" && bill.grandTotalPaise > 0
+            ? bill.grandTotalPaise
+            : sub;
+    lines.push(`\n*Total:* ${formatRupee(total)}`);
+    return lines;
+}
+
+
 function catalogItems(flow: OrderFlowPayload): OrderSessionCatalogItem[] {
     const cat = flow.catalog;
     if (!cat) return [];
@@ -83,31 +120,52 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
 
     if (flow.phase === "review_cart" && flow.cartItems?.length) {
         lines.push("\n*Your basket:*");
-        let total = 0;
+        let itemSubtotal = 0;
         flow.cartItems.forEach((item) => {
             const lineTotal = item.pricePaise * item.quantity;
-            total += lineTotal;
+            itemSubtotal += lineTotal;
             lines.push(`• ${item.name} ×${item.quantity} — ${formatRupee(lineTotal)}`);
         });
-        lines.push(`\n*Total:* ${formatRupee(total)}`);
+        lines.push(...formatBillBreakdownLines(flow.billBreakdown, itemSubtotal));
         lines.push(
             "\nReply *place*/*confirm* to order, or pick another number to add more. Say *cancel* to stop.",
         );
     }
 
     if (flow.phase === "submitted") {
-        lines.push(`\n✅ *Order placed on ${flow.partnerLabel}*`);
+        const status = String(flow.orderStatus ?? "").toLowerCase();
+        const placed = status === "paid" || status === "delivered";
+        const awaiting = status === "awaiting_approval" || (!status && !placed);
+        if (placed) {
+            lines.push(`\n✅ *Order placed on ${flow.partnerLabel}*`);
+        } else if (awaiting) {
+            lines.push(
+                `\n🛒 *Basket submitted on ${flow.partnerLabel}* — waiting for family approval`,
+            );
+        } else if (status === "approved") {
+            lines.push(
+                `\n✅ *Basket approved* — placing with ${flow.partnerLabel}…`,
+            );
+        } else {
+            lines.push(`\n🛒 *Basket submitted on ${flow.partnerLabel}*`);
+        }
         if (flow.orderId) lines.push(`Reference: ${flow.orderId}`);
         if (flow.cartItems?.length) {
-            let total = 0;
+            let itemSubtotal = 0;
             flow.cartItems.forEach((item) => {
                 const lineTotal = item.pricePaise * item.quantity;
-                total += lineTotal;
+                itemSubtotal += lineTotal;
                 lines.push(`• ${item.name} ×${item.quantity}`);
             });
-            lines.push(`*Total:* ${formatRupee(total)}`);
+            lines.push(...formatBillBreakdownLines(flow.billBreakdown, itemSubtotal));
         }
-        lines.push("\nI'll update you when it's on the way. Reply *status* anytime to check.");
+        if (placed) {
+            lines.push("\nI'll update you when it's on the way. Reply *status* anytime to check.");
+        } else if (awaiting) {
+            lines.push(
+                "\nYour family can approve on WhatsApp or the dashboard. Reply *status* anytime.",
+            );
+        }
     }
 
     return lines.filter(Boolean).join("\n").trim();
@@ -574,11 +632,12 @@ async function handleActiveOrderTurn(input: {
                     submitted,
                 );
             }
-            return orderTurn(
-                formatOrderFlowForWhatsApp(submitted) ||
-                    "Order placed! You'll get updates when it's on the way.",
-                submitted,
-            );
+            const st = String(order.status ?? submitted.orderStatus ?? "");
+            const placedMsg =
+                st === "paid" || st === "delivered"
+                    ? "Order placed! You'll get updates when it's on the way."
+                    : "Basket submitted. You'll get updates after checkout.";
+            return orderTurn(formatOrderFlowForWhatsApp(submitted) || placedMsg, submitted);
         }
 
         const items = catalogItems(flow);
@@ -617,7 +676,12 @@ async function handleActiveOrderTurn(input: {
                 submitted,
             );
         }
-        return orderTurn(formatOrderFlowForWhatsApp(submitted) || "Order placed!", submitted);
+        const st2 = String(order.status ?? submitted.orderStatus ?? "");
+        const placedMsg2 =
+            st2 === "paid" || st2 === "delivered"
+                ? "Order placed! You'll get updates when it's on the way."
+                : "Basket submitted. You'll get updates after checkout.";
+        return orderTurn(formatOrderFlowForWhatsApp(submitted) || placedMsg2, submitted);
     }
 
     // Non-order ask while session is open — offer cancel-and-switch instead of a hard lock.

@@ -1148,6 +1148,217 @@ export async function syncPartnerAddressesFromMcp(
     });
 }
 
+
+/** Defensive cart/checkout bill lines (Instamart get_cart / update_cart; similar nested bill/charges). */
+export type PartnerBillBreakdown = {
+    itemSubtotalPaise?: number;
+    deliveryFeePaise?: number;
+    platformFeePaise?: number;
+    packingFeePaise?: number;
+    taxPaise?: number;
+    discountPaise?: number;
+    tipPaise?: number;
+    otherFeesPaise?: number;
+    grandTotalPaise?: number;
+};
+
+/**
+ * Parse fee lines from partner cart payloads.
+ * Swiggy Instamart cart often nests amounts under `bill` / `charges` / top-level fee keys
+ * (see partner order-groceries docs). Prefer present non-zero lines; never invent zeros.
+ */
+export function parsePartnerBillBreakdown(payload: unknown): PartnerBillBreakdown | undefined {
+    if (!payload || typeof payload !== "object") return undefined;
+    const root = digData(payload) ?? (payload as Record<string, unknown>);
+    const nested: Record<string, unknown>[] = [root];
+    for (const key of ["bill", "charges", "billing", "paymentSummary", "fareBreakup", "breakup"]) {
+        const v = root[key];
+        if (v && typeof v === "object" && !Array.isArray(v)) nested.push(v as Record<string, unknown>);
+    }
+
+    const toPaise = (value: unknown): number | undefined => {
+        if (value == null) return undefined;
+        if (typeof value === "number" && Number.isFinite(value)) {
+            // Heuristic: large ints are already paise; small/decimals are rupees.
+            if (Number.isInteger(value) && Math.abs(value) >= 1000) return Math.round(value);
+            return Math.round(value * 100);
+        }
+        if (typeof value === "string") {
+            const m = value.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+            if (!m) return undefined;
+            const n = Number(m[0]);
+            if (!Number.isFinite(n)) return undefined;
+            if (n >= 1000 && !m[0].includes(".")) return Math.round(n);
+            return Math.round(n * 100);
+        }
+        if (typeof value === "object" && !Array.isArray(value)) {
+            const obj = value as Record<string, unknown>;
+            return (
+                toPaise(obj.amount) ??
+                toPaise(obj.value) ??
+                toPaise(obj.paise) ??
+                toPaise(obj.offerPrice) ??
+                toPaise(obj.price)
+            );
+        }
+        return undefined;
+    };
+
+    const pick = (...keys: string[]): number | undefined => {
+        for (const obj of nested) {
+            for (const key of keys) {
+                if (key in obj) {
+                    const n = toPaise(obj[key]);
+                    if (n != null) return n;
+                }
+            }
+            // case-insensitive fallback
+            const lowerMap = new Map(Object.keys(obj).map((k) => [k.toLowerCase(), k]));
+            for (const key of keys) {
+                const real = lowerMap.get(key.toLowerCase());
+                if (real) {
+                    const n = toPaise(obj[real]);
+                    if (n != null) return n;
+                }
+            }
+        }
+        return undefined;
+    };
+
+    const out: PartnerBillBreakdown = {
+        itemSubtotalPaise: pick(
+            "itemTotal",
+            "item_total",
+            "itemsTotal",
+            "items_total",
+            "subTotal",
+            "sub_total",
+            "subtotal",
+            "itemSubtotal",
+            "cartTotal",
+        ),
+        deliveryFeePaise: pick(
+            "deliveryFee",
+            "delivery_fee",
+            "deliveryCharges",
+            "delivery_charges",
+            "deliveryCharge",
+            "shippingFee",
+        ),
+        platformFeePaise: pick(
+            "platformFee",
+            "platform_fee",
+            "convenienceFee",
+            "convenience_fee",
+            "smallOrderFee",
+        ),
+        packingFeePaise: pick(
+            "packingFee",
+            "packing_fee",
+            "packagingFee",
+            "packaging_fee",
+            "bagFee",
+            "rainFee",
+        ),
+        taxPaise: pick("tax", "taxes", "gst", "vat", "taxAmount"),
+        discountPaise: pick(
+            "discount",
+            "discountAmount",
+            "couponDiscount",
+            "promoDiscount",
+            "totalDiscount",
+        ),
+        tipPaise: pick("tip", "driverTip", "deliveryTip"),
+        grandTotalPaise: pick(
+            "grandTotal",
+            "grand_total",
+            "toPay",
+            "to_pay",
+            "payableAmount",
+            "payable",
+            "totalPayable",
+            "totalBill",
+            "billTotal",
+            "finalTotal",
+            "total",
+            "totalAmount",
+        ),
+    };
+
+    const hasAny = Object.values(out).some((v) => typeof v === "number");
+    return hasAny ? out : undefined;
+}
+
+function extractCheckoutOrderId(parsed: unknown): string | undefined {
+    if (!parsed || typeof parsed !== "object") return undefined;
+    const root = parsed as Record<string, unknown>;
+    const data = digData(parsed);
+    for (const c of [
+        root.orderId,
+        root.order_id,
+        root.orderID,
+        data?.orderId,
+        data?.order_id,
+        data?.orderID,
+    ]) {
+        if (c != null && String(c).trim()) return String(c).trim();
+    }
+    return undefined;
+}
+
+function extractCheckoutErrorMessage(parsed: unknown, raw: string): string | undefined {
+    if (parsed && typeof parsed === "object") {
+        const root = parsed as Record<string, unknown>;
+        const err = root.error;
+        if (typeof err === "string" && err.trim()) return err.trim().slice(0, 240);
+        if (err && typeof err === "object") {
+            const msg = (err as Record<string, unknown>).message;
+            if (msg != null && String(msg).trim()) return String(msg).trim().slice(0, 240);
+        }
+        if (typeof root.message === "string" && root.message.trim()) {
+            return root.message.trim().slice(0, 240);
+        }
+    }
+    const closed = detectInstamartClosedFromPayload(parsed, raw);
+    if (closed.warning) return closed.warning;
+    const snippet = raw.replace(/\s+/g, " ").trim();
+    return snippet ? snippet.slice(0, 240) : undefined;
+}
+
+/** Throw when MCP checkout did not actually place an order (no invented partnerRef). */
+function assertMcpCheckoutSucceeded(
+    partner: string,
+    parsed: unknown,
+    rawSummary: string,
+): string {
+    const closed =
+        partner === "instamart" || partner === "swiggy"
+            ? detectInstamartClosedFromPayload(parsed, rawSummary)
+            : { closed: false, warning: undefined as string | undefined };
+    const root = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+    const successFalse = root?.success === false;
+    if (
+        closed.closed ||
+        successFalse ||
+        /ADDRESS_NOT_SERVICEABLE|checkout\s+failed|unable\s+to\s+(?:place|checkout)|order\s+failed/i.test(
+            rawSummary,
+        )
+    ) {
+        throw new Error(
+            closed.warning ||
+                extractCheckoutErrorMessage(parsed, rawSummary) ||
+                `${partner} checkout failed — address may not be serviceable.`,
+        );
+    }
+    const orderId = extractCheckoutOrderId(parsed);
+    if (!orderId) {
+        throw new Error(
+            `${partner} checkout did not return an order id. The order was not placed.`,
+        );
+    }
+    return orderId;
+}
+
 export async function placeMcpOrder(input: {
     partner: McpPartnerKey;
     familyId: string;
@@ -1208,16 +1419,12 @@ export async function placeMcpOrder(input: {
             });
 
             const rawSummary = `${extractToolText(cartUpdate)}\n${extractToolText(placed)}`;
-            const parsed = parseToolJson(extractToolText(placed));
-            const orderId =
-                (parsed &&
-                    typeof parsed === "object" &&
-                    ((parsed as Record<string, unknown>).orderId ??
-                        digData(parsed)?.orderId)) ||
-                undefined;
+            const parsed =
+                extractToolJson(placed) ?? parseToolJson(extractToolText(placed));
+            const orderId = assertMcpCheckoutSucceeded("swiggy", parsed, rawSummary);
 
             return {
-                partnerRef: orderId ? String(orderId) : `swiggy-mcp-${Date.now()}`,
+                partnerRef: orderId,
                 deepLink: extractUrl(rawSummary) ?? config.deepLink,
                 paymentLink: extractUrl(rawSummary),
                 rawSummary,
@@ -1249,6 +1456,34 @@ export async function placeMcpOrder(input: {
                 name: updateCartTool,
                 arguments: imCartArgs,
             });
+            const cartUpdateRaw = extractToolText(cartUpdate);
+            const cartUpdateParsed = extractToolJson(cartUpdate);
+            const cartUpdateClosed = detectInstamartClosedFromPayload(
+                cartUpdateParsed,
+                cartUpdateRaw,
+            );
+            if (cartUpdateClosed.closed) {
+                throw new Error(
+                    cartUpdateClosed.warning ||
+                        "Instamart cart update failed — address may not be serviceable.",
+                );
+            }
+
+            // Re-check serviceability / cart warnings before checkout.
+            const getCartTool = tools.find((t) => t.name === "get_cart")?.name;
+            if (getCartTool) {
+                const cartSnap = await client.callTool({ name: getCartTool, arguments: {} });
+                const cartRaw = extractToolText(cartSnap);
+                const cartParsed = extractToolJson(cartSnap);
+                const cartClosed = detectInstamartClosedFromPayload(cartParsed, cartRaw);
+                if (cartClosed.closed) {
+                    throw new Error(
+                        cartClosed.warning ||
+                            "Instamart cart is not serviceable at this address.",
+                    );
+                }
+            }
+
             const imCheckoutArgs: Record<string, unknown> = { paymentMethod };
             if (addressId) imCheckoutArgs.addressId = addressId;
 
@@ -1257,17 +1492,13 @@ export async function placeMcpOrder(input: {
                 arguments: imCheckoutArgs,
             });
 
-            const rawSummary = `${extractToolText(cartUpdate)}\n${extractToolText(placed)}`;
-            const parsed = parseToolJson(extractToolText(placed));
-            const orderId =
-                (parsed &&
-                    typeof parsed === "object" &&
-                    ((parsed as Record<string, unknown>).orderId ??
-                        digData(parsed)?.orderId)) ||
-                undefined;
+            const placedRaw = extractToolText(placed);
+            const rawSummary = `${cartUpdateRaw}\n${placedRaw}`;
+            const parsed = extractToolJson(placed) ?? parseToolJson(placedRaw);
+            const orderId = assertMcpCheckoutSucceeded("instamart", parsed, rawSummary);
 
             return {
-                partnerRef: orderId ? String(orderId) : `instamart-mcp-${Date.now()}`,
+                partnerRef: orderId,
                 deepLink: extractUrl(rawSummary) ?? config.deepLink,
                 paymentLink: extractUrl(rawSummary),
                 rawSummary,
@@ -1332,6 +1563,58 @@ export async function placeMcpOrder(input: {
             paymentLink: paymentLink ?? undefined,
             rawSummary,
         };
+    });
+}
+
+
+/**
+ * Sync Instamart cart via update_cart + get_cart and parse fee breakdown for WA review.
+ * Best-effort: returns undefined when tools/payloads are unavailable.
+ */
+export async function fetchInstamartCartBill(input: {
+    familyId: string;
+    userId: string;
+    addressId?: string;
+    items: Array<{ name: string; quantity: number; itemId?: string }>;
+}): Promise<PartnerBillBreakdown | undefined> {
+    if (!input.items.length) return undefined;
+    return withMcpClient("instamart", input.familyId, input.userId, async (client) => {
+        const tools = (await client.listTools()).tools;
+        const addressId = await resolveMcpAddressId(
+            client,
+            tools,
+            input.familyId,
+            "instamart",
+            input.userId,
+            input.addressId,
+        );
+        const updateCartTool =
+            tools.find((t) => t.name === "update_cart")?.name ??
+            pickToolFromNeedles(tools, [["update", "cart"], ["add", "cart"]]);
+        const getCartTool = tools.find((t) => t.name === "get_cart")?.name;
+        if (!updateCartTool || !getCartTool) return undefined;
+
+        const cartItems: Array<{ spinId: string; quantity: number }> = [];
+        for (const item of input.items) {
+            if (item.itemId) {
+                cartItems.push({ spinId: item.itemId, quantity: item.quantity });
+                continue;
+            }
+            const resolved = await resolveInstamartCartItems(client, tools, addressId, [
+                { name: item.name, quantity: item.quantity },
+            ]);
+            cartItems.push(...resolved);
+        }
+
+        const args: Record<string, unknown> = { items: cartItems };
+        if (addressId) {
+            args.addressId = addressId;
+            args.selectedAddressId = addressId;
+        }
+        const updated = await client.callTool({ name: updateCartTool, arguments: args });
+        const updateBreakdown = parsePartnerBillBreakdown(extractToolJson(updated));
+        const cart = await client.callTool({ name: getCartTool, arguments: {} });
+        return parsePartnerBillBreakdown(extractToolJson(cart)) ?? updateBreakdown;
     });
 }
 

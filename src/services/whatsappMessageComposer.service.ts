@@ -330,17 +330,37 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
     }
 
     if (flow.phase === "review_cart" && flow.cartItems?.length) {
-        let total = 0;
+        let itemSubtotal = 0;
         const lines = flow.cartItems.map((item) => {
             const lineTotal = item.pricePaise * item.quantity;
-            total += lineTotal;
+            itemSubtotal += lineTotal;
             return `• ${item.name} ×${item.quantity} — ${formatRupee(lineTotal)}`;
         });
+        const bill = flow.billBreakdown;
+        const feeLines: string[] = [`Item subtotal: ${formatRupee(itemSubtotal)}`];
+        const feePairs: Array<[string, number | undefined]> = [
+            ["Delivery fee", bill?.deliveryFeePaise],
+            ["Platform fee", bill?.platformFeePaise],
+            ["Packing fee", bill?.packingFeePaise],
+            ["Tax", bill?.taxPaise],
+            ["Discount", bill?.discountPaise],
+            ["Tip", bill?.tipPaise],
+        ];
+        for (const [label, paise] of feePairs) {
+            if (typeof paise === "number" && paise !== 0) {
+                feeLines.push(`${label}: ${formatRupee(Math.abs(paise))}`);
+            }
+        }
+        const total =
+            typeof bill?.grandTotalPaise === "number" && bill.grandTotalPaise > 0
+                ? bill.grandTotalPaise
+                : itemSubtotal;
+        feeLines.push(`*Total:* ${formatRupee(total)}`);
         messages.push({
             type: "text",
             text: {
                 body: truncate(
-                    `*Your ${flow.partnerLabel} basket*\n\n${lines.join("\n")}\n\n*Total:* ${formatRupee(total)}`,
+                    `*Your ${flow.partnerLabel} basket*\n\n${lines.join("\n")}\n\n${feeLines.join("\n")}`,
                     4096,
                 ),
             },
@@ -383,22 +403,53 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
     }
 
     if (flow.phase === "submitted") {
-        let total = 0;
+        let itemSubtotal = 0;
         const itemLines =
             flow.cartItems?.map((item) => {
                 const lineTotal = item.pricePaise * item.quantity;
-                total += lineTotal;
+                itemSubtotal += lineTotal;
                 return `• ${item.name} ×${item.quantity}`;
             }) ?? [];
+        const status = String(flow.orderStatus ?? "").toLowerCase();
+        const placed = status === "paid" || status === "delivered";
+        const awaiting = status === "awaiting_approval" || (!status && !placed);
+        const headline = placed
+            ? `✅ Order placed on ${flow.partnerLabel}`
+            : awaiting
+              ? `🛒 Basket submitted on ${flow.partnerLabel} — waiting for family approval`
+              : status === "approved"
+                ? `✅ Basket approved — placing with ${flow.partnerLabel}…`
+                : `🛒 Basket submitted on ${flow.partnerLabel}`;
+        const bill = flow.billBreakdown;
+        const feeBits: string[] = [];
+        if (itemSubtotal > 0) feeBits.push(`Item subtotal: ${formatRupee(itemSubtotal)}`);
+        const feePairs: Array<[string, number | undefined]> = [
+            ["Delivery fee", bill?.deliveryFeePaise],
+            ["Platform fee", bill?.platformFeePaise],
+            ["Packing fee", bill?.packingFeePaise],
+            ["Tax", bill?.taxPaise],
+            ["Discount", bill?.discountPaise],
+            ["Tip", bill?.tipPaise],
+        ];
+        for (const [label, paise] of feePairs) {
+            if (typeof paise === "number" && paise !== 0) {
+                feeBits.push(`${label}: ${formatRupee(Math.abs(paise))}`);
+            }
+        }
+        const totalPaise =
+            typeof bill?.grandTotalPaise === "number" && bill.grandTotalPaise > 0
+                ? bill.grandTotalPaise
+                : itemSubtotal;
         messages.push({
             type: "text",
             text: {
                 body: truncate(
                     [
-                        `✅ Order placed on ${flow.partnerLabel}`,
+                        headline,
                         flow.orderId ? `Ref: ${flow.orderId}` : "",
                         itemLines.length ? `\n${itemLines.join("\n")}` : "",
-                        total > 0 ? `\nTotal: ${formatRupee(total)}` : "",
+                        feeBits.length ? `\n${feeBits.join("\n")}` : "",
+                        totalPaise > 0 ? `\nTotal: ${formatRupee(totalPaise)}` : "",
                     ]
                         .filter(Boolean)
                         .join("\n"),

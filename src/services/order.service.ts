@@ -149,19 +149,35 @@ export async function payOrder(
         order.deliveryAddress = opts.deliveryAddress.slice(0, 300);
     }
 
-    const payment = await payCommerceOrder({
-        partner: order.partner,
-        orderId: order.orderId,
-        amountPaise: order.totalPaise,
-        payerUserId: actorUserId,
-        familyId,
-        items: order.items.map((i) => ({ name: i.name, quantity: i.quantity })),
-        paymentMethod: "COD",
-        addressId: opts?.partnerAddressId,
-    });
+    const addressId =
+        opts?.partnerAddressId?.trim() ||
+        order.partnerAddressId?.trim() ||
+        undefined;
+
+    let payment;
+    try {
+        payment = await payCommerceOrder({
+            partner: order.partner,
+            orderId: order.orderId,
+            amountPaise: order.totalPaise,
+            payerUserId: actorUserId,
+            familyId,
+            items: order.items.map((i) => ({ name: i.name, quantity: i.quantity })),
+            paymentMethod: "COD",
+            addressId,
+        });
+    } catch (err) {
+        const msg =
+            err instanceof Error ? err.message : "Partner checkout failed";
+        // Do NOT invent partnerRef or mark PAID on MCP/checkout failure.
+        throw new AppError(msg, 400);
+    }
 
     order.status = OrderStatus.PAID;
     order.partnerRef = payment.partnerRef ?? order.partnerRef;
+    if (addressId && !order.partnerAddressId) {
+        order.partnerAddressId = addressId;
+    }
     await order.save();
 
     await appendCareRecordEvent({

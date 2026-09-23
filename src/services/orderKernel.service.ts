@@ -699,14 +699,18 @@ export async function confirmAndPlaceOrder(input: {
         }
 
         const orderId = typeof order.orderId === "string" ? order.orderId : flow.orderId;
-        const isPending = String(order.status ?? "") === "awaiting_approval";
+        const status = String(order.status ?? "");
+        const isPending = status === "awaiting_approval";
+        const isPlaced = status === "paid" || status === "delivered";
 
         return {
-            status: isPending ? "awaiting_approval" : "placed",
+            status: isPending ? "awaiting_approval" : isPlaced ? "placed" : "awaiting_approval",
             orderId,
             message: isPending
-                ? "Basket ready — waiting for your family to approve before checkout."
-                : `Order placed! ₹${((order.totalPaise as number) / 100).toFixed(0)} from ${flow.partnerLabel}. I'll update you when it's on the way.`,
+                ? "Basket submitted — waiting for your family to approve before checkout."
+                : isPlaced
+                  ? `Order placed! ₹${((order.totalPaise as number) / 100).toFixed(0)} from ${flow.partnerLabel}. I'll update you when it's on the way.`
+                  : `Basket approved — placing with ${flow.partnerLabel}…`,
             orderFlow: flow,
         };
     } catch (err) {
