@@ -194,6 +194,7 @@ async function resolveCaregiverSubject(input: {
 export async function handleWhatsAppInbound(body: {
     from?: string;
     text?: string;
+    interactiveId?: string;
     modality?: "text" | "voice";
     audioBase64?: string;
     mediaUrl?: string;
@@ -299,6 +300,7 @@ export async function handleWhatsAppInbound(body: {
         recipientUserId: subjectUserId,
         actorUserId: identity.userId,
         text,
+        interactiveId: body.interactiveId,
         saheliSessionId: waSession?.saheliSessionId,
     });
     if (orderFlowReply) {

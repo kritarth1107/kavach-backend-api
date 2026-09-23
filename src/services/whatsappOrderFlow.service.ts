@@ -1,5 +1,7 @@
 import WhatsappSession, { type WhatsappOrderPhase } from "../models/whatsappSession.model";
 import OrderSession from "../models/orderSession.model";
+import type { OrderSessionAddress } from "../models/orderSession.model";
+import { AppError } from "../middleware/error.middleware";
 import {
     addOrderFlowCartItem,
     loadOrderFlowRestaurantMenu,
@@ -142,6 +144,60 @@ function parseNumberChoice(text: string): number | null {
     return Number(match[1]) - 1;
 }
 
+function normalizeWhatsAppOrderReplyText(text: string, interactiveId?: string): string {
+    if (interactiveId?.trim()) return interactiveId.trim();
+    const lines = text
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    if (
+        lines.length > 1 &&
+        /pick a delivery|saved .* addresses|instamart|swiggy|zepto/i.test(lines[0] ?? "")
+    ) {
+        return lines.slice(1).join("\n").trim();
+    }
+    return text.trim();
+}
+
+function resolveAddressFromInbound(
+    text: string,
+    interactiveId: string | undefined,
+    addresses: OrderSessionAddress[],
+): OrderSessionAddress | null {
+    const raw = interactiveId?.trim() || text.trim();
+    const addrIdx = raw.match(/^addr:(\d+)$/i);
+    if (addrIdx) {
+        const picked = addresses[Number(addrIdx[1])];
+        if (picked) return picked;
+    }
+
+    const numericIdx = parseNumberChoice(raw);
+    if (numericIdx != null && addresses[numericIdx]) {
+        return addresses[numericIdx]!;
+    }
+
+    const firstLine = raw.split("\n")[0]?.trim() ?? raw;
+    const labelMatch =
+        firstLine.match(/^(home|office|work|other)\b/i) ??
+        raw.match(/\b(?:pick\s+)?(?:address\s+)?(home|office|work|other)\b/i) ??
+        raw.match(/\b(?:to|at|for|use)\s+(home|office|work|other)\b/i);
+    const label = labelMatch?.[1]?.toLowerCase();
+    if (label) {
+        const byLabel = addresses.find((addr) => addr.label.toLowerCase().includes(label));
+        if (byLabel) return byLabel;
+    }
+
+    const haystack = raw.toLowerCase();
+    for (const addr of addresses) {
+        const labelNeedle = addr.label.toLowerCase();
+        const lineNeedle = addr.line1.toLowerCase().slice(0, 24);
+        if (labelNeedle && haystack.includes(labelNeedle)) return addr;
+        if (lineNeedle.length >= 8 && haystack.includes(lineNeedle)) return addr;
+    }
+
+    return null;
+}
+
 function isConfirm(text: string): boolean {
     return /\b(yes|confirm|ok|okay|place|submit|checkout|done|haan|ha|ji)\b/i.test(text.trim());
 }
@@ -204,10 +260,11 @@ async function handleActiveOrderTurn(input: {
     recipientUserId: string;
     actorUserId: string;
     text: string;
+    interactiveId?: string;
     orderSessionId: string;
     saheliSessionId?: string;
 }): Promise<WhatsAppOrderTurnResult> {
-    const text = input.text.trim();
+    const text = normalizeWhatsAppOrderReplyText(input.text, input.interactiveId);
     if (isActiveSessionCancel(text)) {
         const { cancelledPendingOrder } = await cancelElderOrderSession({
             phone: input.phone,
@@ -232,35 +289,35 @@ async function handleActiveOrderTurn(input: {
     });
 
     if (flow.phase === "select_address" && flow.addresses?.length) {
-        if (idx != null && flow.addresses[idx]) {
+        const matched = resolveAddressFromInbound(text, input.interactiveId, flow.addresses);
+        if (matched) {
             flow = await selectOrderFlowAddress({
                 sessionId: input.orderSessionId,
                 familyId: input.familyId,
                 actorUserId: input.actorUserId,
-                addressId: flow.addresses[idx]!.id,
+                addressId: matched.id,
             });
             await syncWhatsappOrderSession(input.phone, flow);
             return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
         }
+    }
 
-        const labelMatch =
-            text.match(/\b(?:pick\s+)?(?:address\s+)?(home|office|work|other)\b/i) ??
-            text.match(/\b(?:to|at|for|use)\s+(home|office|work|other)\b/i);
-        const label = labelMatch?.[1]?.toLowerCase();
-        if (label) {
-            const matched = flow.addresses.find((addr) =>
-                addr.label.toLowerCase().includes(label),
+    if (/\bretry\b/i.test(text) && flow.selectedAddressId) {
+        try {
+            const { searchOrderFlowCatalog } = await import("./orderOrchestrator.service");
+            flow = await searchOrderFlowCatalog({
+                sessionId: input.orderSessionId,
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+            });
+            await syncWhatsappOrderSession(input.phone, flow);
+            return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
+        } catch (err) {
+            console.warn("WhatsApp order catalog retry failed:", err);
+            return orderTurn(
+                `Still having trouble searching ${flow.partnerLabel}. Try again in a moment or say *cancel* and start a fresh order.`,
+                flow,
             );
-            if (matched) {
-                flow = await selectOrderFlowAddress({
-                    sessionId: input.orderSessionId,
-                    familyId: input.familyId,
-                    actorUserId: input.actorUserId,
-                    addressId: matched.id,
-                });
-                await syncWhatsappOrderSession(input.phone, flow);
-                return orderTurn(formatOrderFlowForWhatsApp(flow), flow);
-            }
         }
     }
 
@@ -426,10 +483,11 @@ export async function tryHandleWhatsAppOrderTurn(input: {
     recipientUserId: string;
     actorUserId: string;
     text: string;
+    interactiveId?: string;
     saheliSessionId?: string;
 }): Promise<WhatsAppOrderTurnResult | null> {
     const waSession = await WhatsappSession.findOne({ phone: input.phone }).lean();
-    const text = input.text.trim();
+    const text = normalizeWhatsAppOrderReplyText(input.text, input.interactiveId);
     if (!text) return null;
 
     const statusReply = await tryHandleOrderStatusQuery({
@@ -469,14 +527,20 @@ export async function tryHandleWhatsAppOrderTurn(input: {
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 text,
+                interactiveId: input.interactiveId,
                 orderSessionId,
                 saheliSessionId: input.saheliSessionId ?? waSession?.saheliSessionId,
             });
         } catch (err) {
             console.warn("WhatsApp order turn failed:", err);
-            await clearWhatsAppOrderSession(input.phone);
+            if (err instanceof AppError && err.statusCode === 410) {
+                await clearWhatsAppOrderSession(input.phone);
+                return orderTurn(
+                    "That order session expired. Say what you'd like to order and we'll start fresh.",
+                );
+            }
             return orderTurn(
-                "That order session expired. Say what you'd like to order and we'll start fresh.",
+                "I hit a snag on that order step — your basket is still open. Tap *Pick address* again, reply with *1*/*2*/*3*, or type *Home*.",
             );
         }
     }

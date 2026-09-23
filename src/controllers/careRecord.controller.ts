@@ -361,6 +361,7 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             const reply = await handleWhatsAppInbound({
                 from: inbound.from,
                 text: inbound.text,
+                interactiveId: inbound.interactiveId,
                 modality: inbound.mediaType === "voice" || inbound.mediaType === "audio" ? "voice" : "text",
                 mediaType: inbound.mediaType,
                 mediaUrl: inbound.mediaId,

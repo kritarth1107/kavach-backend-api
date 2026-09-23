@@ -4,6 +4,7 @@ import { handleWhatsAppInbound as routeWhatsAppInbound } from "./whatsappRouting
 export async function handleWhatsAppInbound(body: {
     from?: string;
     text?: string;
+    interactiveId?: string;
     modality?: "text" | "voice";
     audioBase64?: string;
     mediaUrl?: string;

@@ -409,13 +409,29 @@ export async function selectOrderFlowAddress(input: {
 
     session.selectedAddressId = input.addressId;
     await session.save();
-    await searchCatalogForSession(session);
 
     const label = partnerLabel(mcpToOrderPartner(session.partner));
-    return flowFromSession(
-        session,
-        `Delivery to ${address.label}. Browse ${label} options for "${session.query}" below.`,
-    );
+    try {
+        await searchCatalogForSession(session);
+        return flowFromSession(
+            session,
+            `Delivery to ${address.label}. Browse ${label} options for "${session.query}" below.`,
+        );
+    } catch (err) {
+        console.warn("Catalog search after address select failed:", err);
+        session.phase = "browse";
+        session.catalog = session.catalog ?? { restaurants: [], dishes: [], products: [] };
+        session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+        await session.save();
+        const hint =
+            err instanceof AppError
+                ? err.message
+                : "Partner search is slow right now.";
+        return flowFromSession(
+            session,
+            `Delivery to ${address.label}. I couldn't load ${label} results for "${session.query}" yet (${hint}). Reply *retry* to search again.`,
+        );
+    }
 }
 
 export async function searchOrderFlowCatalog(input: {
