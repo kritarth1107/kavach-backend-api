@@ -306,7 +306,8 @@ export type MetaInboundMessage = {
 
 function normalizeInteractiveInboundId(id: string): string {
     const lower = id.toLowerCase();
-    if (lower === "confirm_order" || lower === "add_more") return "confirm";
+    if (lower === "confirm_order") return "confirm";
+    if (lower === "add_more") return "add more";
     if (lower === "cancel_order") return "cancel";
     if (lower === "approve_order") return "approve";
     if (lower === "reject_order") return "reject";

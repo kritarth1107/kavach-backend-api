@@ -47,26 +47,37 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
         });
         lines.push('\nReply with a number (e.g. "1").');
     } else if (flow.phase === "browse") {
-        const items = catalogItems(flow);
-        if (items.length) {
-            lines.push(`\n*${flow.partnerLabel} options for "${flow.query}":*`);
-            items.slice(0, 8).forEach((item, i) => {
-                const price =
-                    item.pricePaise && item.pricePaise > 0
-                        ? ` — ${formatRupee(item.pricePaise)}`
-                        : "";
-                const venue = item.restaurantName ? ` (${item.restaurantName})` : "";
-                lines.push(`${i + 1}. ${item.name}${venue}${price}`);
-            });
-            lines.push('\nReply with a number to add to cart, or *confirm* when ready.');
-        }
         const restaurants = flow.catalog?.restaurants ?? [];
-        if (restaurants.length && !(flow.catalog?.dishes?.length || flow.catalog?.products?.length)) {
-            lines.push("\n*Restaurants:*");
+        const restaurantOnly =
+            restaurants.length > 0 &&
+            !(flow.catalog?.dishes?.length || flow.catalog?.products?.length);
+        if (restaurantOnly) {
+            lines.push(`\n*Restaurants for "${flow.query}" on ${flow.partnerLabel}:*`);
             restaurants.slice(0, 6).forEach((r, i) => {
                 lines.push(`${i + 1}. ${r.name}`);
             });
-            lines.push('\nReply with a number to see the menu.');
+            lines.push("\nTap a number or use the list to see the menu.");
+        } else {
+            const items = catalogItems(flow);
+            if (items.length) {
+                lines.push(`\n*${flow.partnerLabel} picks for "${flow.query}":*`);
+                items.slice(0, 8).forEach((item, i) => {
+                    const price =
+                        item.pricePaise && item.pricePaise > 0
+                            ? ` — ${formatRupee(item.pricePaise)}`
+                            : "";
+                    const venue = item.restaurantName ? ` (${item.restaurantName})` : "";
+                    lines.push(`${i + 1}. ${item.name}${venue}${price}`);
+                });
+                const cartCount = flow.cartItems?.length ?? 0;
+                if (cartCount > 0) {
+                    lines.push(
+                        "\nTap a number or use the list to add more. Reply *place*/*confirm* to order, or *cancel* to stop.",
+                    );
+                } else {
+                    lines.push("\nTap a number or use the list to add.");
+                }
+            }
         }
     }
 
@@ -79,7 +90,9 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
             lines.push(`• ${item.name} ×${item.quantity} — ${formatRupee(lineTotal)}`);
         });
         lines.push(`\n*Total:* ${formatRupee(total)}`);
-        lines.push('\nReply *confirm* to place the order, or pick another item number to add more.');
+        lines.push(
+            "\nReply *place*/*confirm* to order, or pick another number to add more. Say *cancel* to stop.",
+        );
     }
 
     if (flow.phase === "submitted") {
@@ -149,6 +162,24 @@ function parseNumberChoice(text: string): number | null {
     return Number(match[1]) - 1;
 }
 
+/** Prefer interactive list/button ids; fall back to plain 1-based numbers. */
+function parseItemChoice(text: string): number | null {
+    const tagged = text.trim().match(/^item:(\d+)$/i);
+    if (tagged) return Number(tagged[1]);
+    return parseNumberChoice(text);
+}
+
+function parseRestaurantChoice(text: string): number | null {
+    const tagged = text.trim().match(/^restaurant:(\d+)$/i);
+    if (tagged) return Number(tagged[1]);
+    return parseNumberChoice(text);
+}
+
+function isAddMore(text: string): boolean {
+    const t = text.trim();
+    return /^add_more$/i.test(t) || /^add\s+more$/i.test(t);
+}
+
 function normalizeWhatsAppOrderReplyText(text: string, interactiveId?: string): string {
     if (interactiveId?.trim()) return interactiveId.trim();
     const lines = text
@@ -204,7 +235,9 @@ function resolveAddressFromInbound(
 }
 
 function isConfirm(text: string): boolean {
-    return /\b(yes|confirm|ok|okay|place|submit|checkout|done|haan|ha|ji)\b/i.test(text.trim());
+    const t = text.trim();
+    if (/^confirm_order$/i.test(t)) return true;
+    return /\b(yes|confirm|ok|okay|place|submit|checkout|done|haan|ha|ji)\b/i.test(t);
 }
 
 function isDecline(text: string): boolean {
@@ -222,6 +255,7 @@ const CANCEL_WORD =
 
 function isExplicitOrderCancel(text: string): boolean {
     const t = text.trim().toLowerCase();
+    if (t === "cancel_order") return true;
     return (
         new RegExp(String.raw`^(?:${CANCEL_WORD})(?:\s+order)?[!?.]*$`, "i").test(t) ||
         /\b(?:cancel|cencel|cancle|canel)\s+(?:the\s+)?order\b/i.test(t) ||
@@ -231,6 +265,7 @@ function isExplicitOrderCancel(text: string): boolean {
 
 function isActiveSessionCancel(text: string): boolean {
     const t = text.trim();
+    if (/^cancel_order$/i.test(t)) return true;
     if (new RegExp(String.raw`^(?:${CANCEL_WORD})(?:\s+order)?[!?.]*$`, "i").test(t)) return true;
     return new RegExp(
         String.raw`\b(?:cancel|cencel|cancle|canel|cnacel|stop(?:\s+order)?|exit|exitt|quit|leave|abort|nevermind|never\s*mind)\b`,
@@ -398,13 +433,30 @@ async function handleActiveOrderTurn(input: {
         });
     }
 
-    const idx = parseNumberChoice(text);
+    const itemIdx = parseItemChoice(text);
+    const restaurantIdx = parseRestaurantChoice(text);
+    const plainIdx = parseNumberChoice(text);
     const { getOrderFlowSession } = await import("./orderOrchestrator.service");
     let flow = await getOrderFlowSession({
         sessionId: input.orderSessionId,
         familyId: input.familyId,
         actorUserId: input.actorUserId,
     });
+
+    if (isAddMore(text) && (flow.phase === "review_cart" || flow.phase === "browse")) {
+        await OrderSession.updateOne(
+            { sessionId: input.orderSessionId, familyId: input.familyId },
+            { $set: { phase: "browse" } },
+        );
+        flow = await getOrderFlowSession({
+            sessionId: input.orderSessionId,
+            familyId: input.familyId,
+            actorUserId: input.actorUserId,
+        });
+        await setPendingOrderSwitchText(input.phone, null);
+        await syncWhatsappOrderSession(input.phone, flow);
+        return orderTurn(formatOrderFlowForWhatsApp({ ...flow, message: undefined }), flow);
+    }
 
     if (flow.phase === "select_address" && flow.addresses?.length) {
         const matched = resolveAddressFromInbound(text, input.interactiveId, flow.addresses);
@@ -441,13 +493,13 @@ async function handleActiveOrderTurn(input: {
         }
     }
 
-    if (flow.disambiguation?.candidates?.length && idx != null) {
+    if (flow.disambiguation?.candidates?.length && plainIdx != null) {
         const { addToOrderCart } = await import("./orderKernel.service");
         const result = await addToOrderCart({
             sessionId: input.orderSessionId,
             familyId: input.familyId,
             actorUserId: input.actorUserId,
-            items: [{ candidateIndex: idx, quantity: 1 }],
+            items: [{ candidateIndex: plainIdx, quantity: 1 }],
         });
         flow = (result.orderFlow as typeof flow) ?? flow;
         await setPendingOrderSwitchText(input.phone, null);
@@ -457,12 +509,24 @@ async function handleActiveOrderTurn(input: {
 
     if (flow.phase === "browse") {
         const restaurants = flow.catalog?.restaurants ?? [];
-        if (idx != null && restaurants[idx]?.restaurantId) {
+        const taggedRestaurant = /^restaurant:\d+$/i.test(text.trim());
+        const taggedItem = /^item:\d+$/i.test(text.trim());
+        const restaurantOnly =
+            restaurants.length > 0 &&
+            !(flow.catalog?.dishes?.length || flow.catalog?.products?.length);
+
+        // restaurant:N, or plain number on a restaurant-only catalog
+        const rIdx = taggedRestaurant
+            ? restaurantIdx
+            : restaurantOnly && !taggedItem
+              ? plainIdx
+              : null;
+        if (rIdx != null && restaurants[rIdx]?.restaurantId) {
             flow = await loadOrderFlowRestaurantMenu({
                 sessionId: input.orderSessionId,
                 familyId: input.familyId,
                 actorUserId: input.actorUserId,
-                restaurantId: restaurants[idx]!.restaurantId!,
+                restaurantId: restaurants[rIdx]!.restaurantId!,
             });
             await setPendingOrderSwitchText(input.phone, null);
             await syncWhatsappOrderSession(input.phone, flow);
@@ -470,8 +534,8 @@ async function handleActiveOrderTurn(input: {
         }
 
         const items = catalogItems(flow);
-        if (idx != null && items[idx]) {
-            const picked = items[idx]!;
+        if (itemIdx != null && items[itemIdx] && !taggedRestaurant) {
+            const picked = items[itemIdx]!;
             flow = await addOrderFlowCartItem({
                 sessionId: input.orderSessionId,
                 familyId: input.familyId,
@@ -517,8 +581,8 @@ async function handleActiveOrderTurn(input: {
         }
 
         const items = catalogItems(flow);
-        if (idx != null && items[idx]) {
-            const picked = items[idx]!;
+        if (itemIdx != null && items[itemIdx] && !/^restaurant:/i.test(text.trim())) {
+            const picked = items[itemIdx]!;
             flow = await addOrderFlowCartItem({
                 sessionId: input.orderSessionId,
                 familyId: input.familyId,

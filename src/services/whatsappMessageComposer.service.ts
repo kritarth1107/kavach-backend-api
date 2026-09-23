@@ -174,13 +174,6 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
         return messages;
     }
 
-    if (flow.message) {
-        messages.push({
-            type: "text",
-            text: { body: truncate(flow.message, 4096) },
-        });
-    }
-
     if (!flow.sessionId && flow.connectUrl) {
         messages.push({
             type: "interactive",
@@ -208,14 +201,20 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
     if (flow.phase === "browse") {
         const restaurants = flow.catalog?.restaurants ?? [];
         const items = catalogItems(flow);
+        const cartHasItems = (flow.cartItems?.length ?? 0) > 0;
+        const restaurantOnly =
+            restaurants.length > 0 && !(flow.catalog?.dishes?.length || flow.catalog?.products?.length);
 
-        if (restaurants.length && !items.length) {
+        if (restaurantOnly) {
             messages.push({
                 type: "interactive",
                 interactive: {
                     type: "list",
                     body: {
-                        text: truncate(`Restaurants for "${flow.query}" on ${flow.partnerLabel}.`, 1024),
+                        text: truncate(
+                            `Here are restaurants for "${flow.query}" on ${flow.partnerLabel}. Tap one to see the menu.`,
+                            1024,
+                        ),
                     },
                     action: {
                         button: "See restaurants",
@@ -238,18 +237,18 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
         }
 
         if (items.length) {
+            const listBody = cartHasItems
+                ? `Want to add more? Here are ${flow.partnerLabel} picks for "${flow.query}". Tap one to add.`
+                : `Here are ${flow.partnerLabel} picks for "${flow.query}". Tap one to add to your basket.`;
             messages.push({
                 type: "interactive",
                 interactive: {
                     type: "list",
                     body: {
-                        text: truncate(
-                            `${flow.partnerLabel} options for "${flow.query}". Tap to add to your basket.`,
-                            1024,
-                        ),
+                        text: truncate(listBody, 1024),
                     },
                     action: {
-                        button: "Browse items",
+                        button: cartHasItems ? "See items" : "Browse items",
                         sections: [
                             {
                                 title: "Available now",
@@ -262,7 +261,7 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
                                         id: `item:${i}`,
                                         title: truncate(item.name, 24),
                                         description: truncate(
-                                            [item.restaurantName, price].filter(Boolean).join(" · "),
+                                            [price, item.restaurantName].filter(Boolean).join(" · "),
                                             72,
                                         ),
                                     };
@@ -272,25 +271,34 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
                     },
                 },
             });
-            messages.push({
-                type: "interactive",
-                interactive: {
-                    type: "button",
-                    body: { text: "Happy with your basket?" },
-                    action: {
-                        buttons: [
-                            {
-                                type: "reply",
-                                reply: { id: "confirm_order", title: "Review basket" },
-                            },
-                            {
-                                type: "reply",
-                                reply: { id: "cancel_order", title: "Cancel order" },
-                            },
-                        ],
+            // Empty cart: list only — no "Happy with your basket?" CTA.
+            // Cart already has items (e.g. Add more): short Place order / Cancel.
+            if (cartHasItems) {
+                messages.push({
+                    type: "interactive",
+                    interactive: {
+                        type: "button",
+                        body: {
+                            text: truncate(
+                                `Basket has ${flow.cartItems!.length} item${flow.cartItems!.length === 1 ? "" : "s"}. Ready when you are.`,
+                                1024,
+                            ),
+                        },
+                        action: {
+                            buttons: [
+                                {
+                                    type: "reply",
+                                    reply: { id: "confirm_order", title: "Place order" },
+                                },
+                                {
+                                    type: "reply",
+                                    reply: { id: "cancel_order", title: "Cancel" },
+                                },
+                            ],
+                        },
                     },
-                },
-            });
+                });
+            }
             return messages;
         }
     }
@@ -315,27 +323,37 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
             type: "interactive",
             interactive: {
                 type: "button",
-                body: { text: "Ready to place this order?" },
+                body: {
+                    text: truncate(`Ready to place this ${flow.partnerLabel} order?`, 1024),
+                },
                 footer: { text: "Family approval may be needed for some orders." },
                 action: {
                     buttons: [
                         {
                             type: "reply",
-                            reply: { id: "confirm_order", title: "Confirm order" },
-                        },
-                        {
-                            type: "reply",
-                            reply: { id: "cancel_order", title: "Cancel" },
+                            reply: { id: "confirm_order", title: "Place order" },
                         },
                         {
                             type: "reply",
                             reply: { id: "add_more", title: "Add more" },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "cancel_order", title: "Cancel" },
                         },
                     ],
                 },
             },
         });
         return messages;
+    }
+
+    // Other phases: include flow.message when present (avoid duplicating browse/review bodies).
+    if (flow.message) {
+        messages.push({
+            type: "text",
+            text: { body: truncate(flow.message, 4096) },
+        });
     }
 
     if (flow.phase === "submitted") {
