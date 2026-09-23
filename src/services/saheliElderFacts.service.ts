@@ -30,6 +30,14 @@ export function messageAsksMemory(text: string): boolean {
     );
 }
 
+export function messageIsAcknowledgment(text: string): boolean {
+    const t = text.trim().toLowerCase();
+    if (!t || t.length > 32) return false;
+    return /^(thanks|thank you|thx|ok|okay|k|got it|noted|cool|sure|great|perfect|understood|theek|thik|ji|haan|han)[!.?\s]*$/i.test(
+        t,
+    );
+}
+
 export function messageIsCasualOffer(text: string): boolean {
     const t = text.trim().toLowerCase();
     return (

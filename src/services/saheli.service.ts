@@ -456,7 +456,11 @@ function buildElderSmartReply(opts: {
         return buildElderSafeReply(opts.displayName);
     }
 
-    if (/^(thanks|thank you|ok|okay|bye|goodbye|good night)[!.?\s]*$/i.test(qLower)) {
+    if (
+        /^(thanks|thank you|thx|ok|okay|k|got it|noted|cool|sure|great|perfect|understood|theek|thik|ji|haan|han|bye|goodbye|good night)[!.?\s]*$/i.test(
+            qLower,
+        )
+    ) {
         return "Anytime! I'm here whenever you need me.";
     }
 
@@ -743,6 +747,7 @@ async function caregiverReplyWithAi(
     conversationId: string;
     orderFromAgent?: OrderChatResult | null;
     orderPreview?: Record<string, unknown> | null;
+    orderFlow?: OrderFlowPayload | null;
 }> {
     const careContextRaw = await getCareRecordContextForSaheli(familyId, recipientUserId, 40);
     const careContext = [
@@ -822,11 +827,23 @@ async function caregiverReplyWithAi(
         throw new Error("Empty AI reply");
     } catch (err) {
         console.warn("Saheli AI caregiver failed:", err);
-        if (!isAiEngineOfflineError(err)) {
-            return {
-                reply: `I'm having trouble forming a full answer right now. ${offlineSaheliMessage()}`,
-                conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
-            };
+        if (messageLooksLikeOrder(message)) {
+            const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+            const kernel = await tryStartOrderFromMessage({
+                familyId,
+                recipientUserId,
+                actorUserId: opts?.actorUserId ?? recipientUserId,
+                message,
+                saheliSessionId: opts?.sessionId,
+            });
+            if (kernel) {
+                return {
+                    reply: kernel.reply,
+                    conversationId:
+                        conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
+                    orderFlow: kernel.orderFlow ?? null,
+                };
+            }
         }
         const fallback = buildCaregiverSmartReply({
             recipientName: displayName,
@@ -837,7 +854,10 @@ async function caregiverReplyWithAi(
             sessionLines: context.sessionLines,
         });
         return {
-            reply: fallback,
+            reply:
+                isAiEngineOfflineError(err) && !messageLooksLikeOrder(message)
+                    ? offlineSaheliMessage()
+                    : fallback,
             conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:caregiver`,
         };
     }
@@ -1156,6 +1176,7 @@ export async function sendCaregiverSaheliMessage(
         channel?: ChannelType;
         source?: CareRecordSource;
         sessionId?: string;
+        whatsappPhone?: string;
     },
 ) {
     const family = await getFamilyAndRecipientLocal(familyId, recipientUserId);
@@ -1257,6 +1278,7 @@ export async function sendCaregiverSaheliMessage(
 
     let order: OrderChatResult | null = null;
     let orderPreview: Record<string, unknown> | null = null;
+    let orderFlow: OrderFlowPayload | null = null;
     let reply = "";
     let conversationId =
         session.aiConversationId ?? `${familyId}:${recipientUserId}:caregiver`;
@@ -1296,6 +1318,9 @@ export async function sendCaregiverSaheliMessage(
         if (ai.orderPreview) {
             orderPreview = ai.orderPreview;
         }
+        if (ai.orderFlow) {
+            orderFlow = ai.orderFlow;
+        }
     }
 
     if (order?.kind === "connect_required") {
@@ -1312,11 +1337,18 @@ export async function sendCaregiverSaheliMessage(
 
     const finalReply = reply;
     const chatExtras = saheliChatExtras(order);
+    const orderFlowPayload = serializeOrderFlow(orderFlow);
+
+    if (waChannel && opts?.whatsappPhone && orderFlow?.sessionId) {
+        const { syncWhatsappOrderSession } = await import("./whatsappOrderFlow.service");
+        await syncWhatsappOrderSession(opts.whatsappPhone, orderFlow);
+    }
 
     await appendMessage(familyId, recipientUserId, "caregiver", "saheli", finalReply, sessionId, {
         orderPayload: chatExtras.orderPayload,
         orderPreviewPayload: orderPreview ?? undefined,
         connectPayload: chatExtras.connectPayload,
+        orderFlowPayload,
     });
     await appendCareRecordEvent({
         familyId,
@@ -1335,6 +1367,7 @@ export async function sendCaregiverSaheliMessage(
         conversationId,
         sessionId,
         orderPreview: orderPreview ?? undefined,
+        orderFlow: orderFlow ?? undefined,
         ...chatExtras.clientPayload,
     };
 }
@@ -1530,21 +1563,38 @@ export async function* streamCaregiverSaheliMessage(
     } catch (err) {
         console.warn("Saheli AI caregiver stream failed:", err);
         if (!replyBuffer.trim()) {
-            replyBuffer = isAiEngineOfflineError(err)
-                ? buildCaregiverSmartReply({
-                      recipientName: displayName,
-                      question: text,
-                      elderLines,
-                      labs: labs.map((d) => ({
-                          title: d.title,
-                          recordDate: d.recordDate,
-                          rawText: d.rawText,
-                          kind: d.kind,
-                      })),
-                      careContext,
-                      sessionLines,
-                  })
-                : `I'm having trouble forming a full answer right now. ${offlineSaheliMessage()}`;
+            if (messageLooksLikeOrder(text)) {
+                const { tryStartOrderFromMessage } = await import("./orderKernel.service");
+                const kernel = await tryStartOrderFromMessage({
+                    familyId,
+                    recipientUserId,
+                    actorUserId,
+                    message: text,
+                    saheliSessionId: sessionId,
+                });
+                if (kernel?.reply) {
+                    replyBuffer = kernel.reply;
+                }
+            }
+            if (!replyBuffer.trim()) {
+                const fallback = buildCaregiverSmartReply({
+                    recipientName: displayName,
+                    question: text,
+                    elderLines,
+                    labs: labs.map((d) => ({
+                        title: d.title,
+                        recordDate: d.recordDate,
+                        rawText: d.rawText,
+                        kind: d.kind,
+                    })),
+                    careContext,
+                    sessionLines,
+                });
+                replyBuffer =
+                    isAiEngineOfflineError(err) && !messageLooksLikeOrder(text)
+                        ? offlineSaheliMessage()
+                        : fallback;
+            }
             yield { type: "token", delta: replyBuffer };
         }
     }

@@ -12,6 +12,7 @@ import {
     messageIsCasualOffer,
     messageIsGreeting,
     buildCasualOfferReply,
+    messageIsAcknowledgment,
     tryHandleElderScheduleQuery,
 } from "./saheliElderFacts.service";
 import { guardElderReply } from "./saheliReplyGuard.service";
@@ -116,6 +117,19 @@ export async function resolveElderWhatsappReply(input: {
             orderPreview: null,
             skippedAi: true,
             guardAction: "casual_offer",
+        };
+    }
+
+    if (!wantsMemoryAi && messageIsAcknowledgment(input.message)) {
+        return {
+            reply: "Anytime! I'm here whenever you need me.",
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+            guardAction: "acknowledgment",
         };
     }
 

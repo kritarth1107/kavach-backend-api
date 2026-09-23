@@ -53,7 +53,7 @@ async function handleTurn(
         text,
         channelOpts,
     );
-    return { reply: result.reply };
+    return { reply: result.reply, orderFlow: result.orderFlow };
 }
 
 export class ChannelMockAdapter implements ChannelAdapter {
