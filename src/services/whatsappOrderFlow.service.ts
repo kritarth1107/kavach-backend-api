@@ -438,6 +438,14 @@ async function handleActiveOrderTurn(input: {
 export type WhatsAppOrderTurnResult = {
     text: string;
     orderFlow?: OrderFlowPayload;
+    quickConfirm?: {
+        sessionId: string;
+        partner: string;
+        partnerLabel: string;
+        items: Array<{ name: string; pricePaise: number; quantity: number }>;
+        totalPaise: number;
+        address: { id: string; label: string; line1?: string };
+    };
 };
 
 export async function tryHandleOrderStatusQuery(input: {
@@ -548,6 +556,41 @@ export async function tryHandleWhatsAppOrderTurn(input: {
     const { isHighConfidenceOrderIntent } = await import("./saheliOrder.service");
     if (!isHighConfidenceOrderIntent(text)) {
         return null;
+    }
+
+    const { quickOrder } = await import("./orderKernel.service");
+    const quick = await quickOrder({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        message: text,
+        saheliSessionId: input.saheliSessionId ?? waSession?.saheliSessionId,
+    });
+
+    if (quick.status === "confirm_ready" && quick.sessionId && quick.items?.length && quick.address) {
+        if (quick.orderFlow?.sessionId) {
+            await syncWhatsappOrderSession(input.phone, quick.orderFlow);
+        }
+        return {
+            text: quick.message,
+            orderFlow: quick.orderFlow,
+            quickConfirm: {
+                sessionId: quick.sessionId,
+                partner: quick.partner,
+                partnerLabel: quick.partnerLabel,
+                items: quick.items,
+                totalPaise: quick.totalPaise ?? 0,
+                address: quick.address,
+            },
+        };
+    }
+
+    if (quick.status === "partner_not_connected") {
+        return orderTurn(quick.message, quick.orderFlow);
+    }
+
+    if (quick.status === "partner_error") {
+        return orderTurn(quick.message, quick.orderFlow);
     }
 
     const { tryStartOrderFromMessage } = await import("./orderKernel.service");

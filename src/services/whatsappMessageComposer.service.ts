@@ -420,6 +420,161 @@ export function buildPendingApprovalMessages(pending: {
     ];
 }
 
+/**
+ * Phase 2: Quick order confirmation card
+ */
+export function buildQuickOrderConfirmMessages(input: {
+    sessionId: string;
+    partner: string;
+    partnerLabel: string;
+    items: Array<{ name: string; pricePaise: number; quantity: number }>;
+    totalPaise: number;
+    address: { label: string; line1?: string };
+}): MetaWhatsAppPayload[] {
+    const itemLines = input.items.map(
+        (item) => `• ${item.name} ×${item.quantity} — ${formatRupee(item.pricePaise * item.quantity)}`,
+    );
+
+    return [
+        {
+            type: "text",
+            text: {
+                body: truncate(
+                    [
+                        `*${input.partnerLabel} order ready*`,
+                        "",
+                        ...itemLines,
+                        "",
+                        `*Total:* ${formatRupee(input.totalPaise)}`,
+                        "",
+                        `📍 *Deliver to:* ${input.address.label}${input.address.line1 ? ` — ${input.address.line1}` : ""}`,
+                    ].join("\n"),
+                    4096,
+                ),
+            },
+        },
+        {
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: "Place this order?" },
+                action: {
+                    buttons: [
+                        {
+                            type: "reply",
+                            reply: {
+                                id: `quick_confirm:${input.sessionId}`,
+                                title: "✅ Confirm",
+                            },
+                        },
+                        {
+                            type: "reply",
+                            reply: {
+                                id: `quick_change_addr:${input.sessionId}`,
+                                title: "📍 Change address",
+                            },
+                        },
+                        {
+                            type: "reply",
+                            reply: { id: "cancel_order", title: "Cancel" },
+                        },
+                    ],
+                },
+            },
+        },
+    ];
+}
+
+/**
+ * Phase 3: Interactive buttons from dashboard parity handlers
+ */
+export function buildInteractiveButtonMessages(
+    text: string,
+    buttons: Array<{ id: string; title: string }>,
+): MetaWhatsAppPayload[] {
+    if (buttons.length > 3) {
+        return [
+            { type: "text", text: { body: truncate(text, 4096) } },
+            {
+                type: "interactive",
+                interactive: {
+                    type: "list",
+                    body: { text: "Choose an option" },
+                    action: {
+                        button: "Options",
+                        sections: [
+                            {
+                                title: "Actions",
+                                rows: buttons.slice(0, 10).map((b) => ({
+                                    id: b.id,
+                                    title: truncate(b.title, 24),
+                                })),
+                            },
+                        ],
+                    },
+                },
+            },
+        ];
+    }
+
+    const messages: MetaWhatsAppPayload[] = [];
+    
+    const urlButton = buttons.find(b => b.id.startsWith("connect_url:"));
+    if (urlButton) {
+        const url = urlButton.id.replace("connect_url:", "");
+        const otherButtons = buttons.filter(b => !b.id.startsWith("connect_url:"));
+        
+        messages.push({
+            type: "interactive",
+            interactive: {
+                type: "cta_url",
+                body: { text: truncate(text, 1024) },
+                action: {
+                    name: "cta_url",
+                    parameters: {
+                        display_text: truncate(urlButton.title, 20),
+                        url,
+                    },
+                },
+            },
+        });
+        
+        if (otherButtons.length) {
+            messages.push({
+                type: "interactive",
+                interactive: {
+                    type: "button",
+                    body: { text: "Other options" },
+                    action: {
+                        buttons: otherButtons.slice(0, 3).map((b) => ({
+                            type: "reply" as const,
+                            reply: { id: b.id, title: truncate(b.title, 20) },
+                        })),
+                    },
+                },
+            });
+        }
+        
+        return messages;
+    }
+
+    return [
+        {
+            type: "interactive",
+            interactive: {
+                type: "button",
+                body: { text: truncate(text, 1024) },
+                action: {
+                    buttons: buttons.slice(0, 3).map((b) => ({
+                        type: "reply" as const,
+                        reply: { id: b.id, title: truncate(b.title, 20) },
+                    })),
+                },
+            },
+        },
+    ];
+}
+
 export function buildCareNudgeMessages(input: {
     text: string;
     nudgeKind: "pre_reminder" | "missed_followup" | "completion_praise" | "appointment_prep";
