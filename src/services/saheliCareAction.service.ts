@@ -469,7 +469,7 @@ export async function tryApplyElderCareActionFromMessage(input: {
 
     // Pending notify consent after a recent symptom note.
     const consentYes =
-        /^(yes|yeah|yep|haan|han|ji|sure|please|ok|okay|bata do|batao|tell them|inform them|notify them)[!.?\s]*$/i.test(
+        /^(yes|yeah|yep|haan|han|ji|sure|please|bata do|batao|tell them|inform them|notify them)[!.?\s]*$/i.test(
             q,
         ) || /\b(yes[, ]+)?(tell|inform|notify)\s+(them|my\s+family|son|beta|kritarth)\b/i.test(qLower);
     const consentNo =

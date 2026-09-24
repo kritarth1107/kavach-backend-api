@@ -310,14 +310,14 @@ export function messageCompletesReminder(
     if (stop && (msg.includes(stop) || stop.includes(msg))) return true;
 
     const filled =
-        /\b(i\s+)?(filled|fill(ed)?\s+it|done|finished|complete(d)?|le\s+liya|le\s+li|kar\s+diya|ho\s+gaya|i'?ve\s+called|i\s+called|called\s+(them|him|her))\b/.test(
+        /\b(i\s+)?(filled|fill(ed)?\s+it|done|finished|complete(d)?|drank|drink|pi\s+liya|pi\s+li|le\s+liya|le\s+li|kar\s+diya|ho\s+gaya|i'?ve\s+called|i\s+called|called\s+(them|him|her))\b/.test(
             msg,
         );
     if (!filled) return false;
 
     // If reminder mentions medicine / fill / call, accept generic done phrases.
     const topic = normalizePhrase(reminder.text);
-    if (/\b(fill|medicine|tablet|dose|pill|call|remind)\b/.test(topic) || !topic) {
+    if (/\b(fill|medicine|tablet|dose|pill|call|remind|water|paani|drink)\b/.test(topic) || !topic) {
         return true;
     }
     // Soft overlap between reminder topic and message
