@@ -223,13 +223,14 @@ export async function touchWhatsAppInbound(familyId: string, recipientUserId: st
     );
 }
 
-export type SaheliLanguage = "english" | "hinglish" | "hindi" | "tamil";
+export type SaheliLanguage = "english" | "hinglish" | "hindi" | "tamil" | "kannada";
 
 const LANGUAGE_LABELS: Record<SaheliLanguage, string> = {
     english: "English",
     hindi: "Hindi",
     hinglish: "Hinglish",
     tamil: "Tamil",
+    kannada: "Kannada",
 };
 
 export function languageInstruction(lang: SaheliLanguage): string {
@@ -240,6 +241,8 @@ export function languageInstruction(lang: SaheliLanguage): string {
             return "Reply in natural Hinglish (simple Hindi-English mix).";
         case "tamil":
             return "Reply in simple Tamil only.";
+        case "kannada":
+            return "Reply in simple Kannada only.";
         default:
             return "Reply in clear, simple English only.";
     }
@@ -263,7 +266,7 @@ export function parseLanguageChangeMessage(text: string): SaheliLanguage | null 
         !/\b(change|switch|set|use|speak|talk|reply|respond|language|lang|bhasha|bolo|baat)\b/i.test(
             q,
         ) &&
-        !/\b(english|hindi|hinglish|tamil|tamizh)\b/i.test(q)
+        !/\b(english|hindi|hinglish|tamil|tamizh|kannada|kanada)\b/i.test(q)
     ) {
         return null;
     }
@@ -271,6 +274,7 @@ export function parseLanguageChangeMessage(text: string): SaheliLanguage | null 
     if (/\b(english|angrezi|angreji)\b/i.test(q)) return "english";
     if (/\b(hinglish|mix(ed)?)\b/i.test(q)) return "hinglish";
     if (/\b(tamil|tamizh|thamizh)\b/i.test(q)) return "tamil";
+    if (/\b(kannada|kanada|ಕನ್ನಡ)\b/i.test(q)) return "kannada";
     if (/\b(hindi|devanagari)\b/i.test(q)) return "hindi";
     return null;
 }

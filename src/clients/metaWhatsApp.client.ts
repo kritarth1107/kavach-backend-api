@@ -274,6 +274,99 @@ export async function sendViaMetaWhatsApp(
     }
 }
 
+/** Download inbound media bytes from Meta Graph (media id -> CDN URL -> bytes). */
+export async function downloadMedia(mediaId: string): Promise<{
+    buffer: Buffer;
+    mimeType: string;
+    fileSize?: number;
+}> {
+    const meta = config.whatsapp.meta;
+    if (!meta.accessToken) {
+        throw new Error("Meta WhatsApp access token missing");
+    }
+    const id = mediaId.trim();
+    if (!id) throw new Error("mediaId required");
+
+    const metaRes = await fetch(`${graphBase()}/${id}`, {
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+    });
+    if (!metaRes.ok) {
+        const body = await metaRes.text().catch(() => "");
+        throw new Error(`Meta media lookup failed (${metaRes.status}): ${body.slice(0, 200)}`);
+    }
+    const metaJson = (await metaRes.json()) as {
+        url?: string;
+        mime_type?: string;
+        file_size?: number;
+    };
+    if (!metaJson.url) throw new Error("Meta media lookup returned no URL");
+
+    const binRes = await fetch(metaJson.url, {
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+    });
+    if (!binRes.ok) {
+        throw new Error(`Meta media download failed (${binRes.status})`);
+    }
+    const ab = await binRes.arrayBuffer();
+    return {
+        buffer: Buffer.from(ab),
+        mimeType: metaJson.mime_type || binRes.headers.get("content-type") || "application/octet-stream",
+        fileSize: metaJson.file_size,
+    };
+}
+
+/** Upload raw bytes to Meta media, returns media id for outbound messages. */
+export async function uploadMediaBuffer(input: {
+    buffer: Buffer;
+    mimeType: string;
+    filename?: string;
+}): Promise<string> {
+    const meta = config.whatsapp.meta;
+    if (!meta.phoneNumberId || !meta.accessToken) {
+        throw new Error("Meta WhatsApp is not configured");
+    }
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", input.mimeType);
+    const blob = new Blob([new Uint8Array(input.buffer)], { type: input.mimeType });
+    form.append("file", blob, input.filename || "audio.ogg");
+
+    const res = await fetch(`${graphBase()}/${meta.phoneNumberId}/media`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+        body: form,
+    });
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`Meta media upload failed (${res.status}): ${body.slice(0, 200)}`);
+    }
+    const json = (await res.json()) as { id?: string };
+    if (!json.id) throw new Error("Meta media upload returned no id");
+    return json.id;
+}
+
+/** Send WhatsApp voice note (audio with voice:true) optionally with a text caption first. */
+export async function sendMetaWhatsAppVoice(input: {
+    to: string;
+    audioBuffer: Buffer;
+    mimeType?: string;
+    caption?: string;
+}): Promise<void> {
+    if (input.caption?.trim()) {
+        await sendSingleMetaWhatsAppText(input.to, input.caption.trim());
+    }
+    const mimeType = input.mimeType || "audio/ogg";
+    const mediaId = await uploadMediaBuffer({
+        buffer: input.audioBuffer,
+        mimeType,
+        filename: mimeType.includes("mpeg") ? "reply.mp3" : "reply.ogg",
+    });
+    await sendSingleMetaWhatsAppPayload(input.to, {
+        type: "audio",
+        audio: { id: mediaId },
+    } as MetaWhatsAppPayload);
+}
+
 export function formatMetaSendError(status: number, body: string): string {
     let detail = body.slice(0, 300);
     try {

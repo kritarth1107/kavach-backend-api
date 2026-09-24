@@ -19,7 +19,7 @@ export interface ISaheliCompanion {
     quietHoursStart?: string;
     quietHoursEnd?: string;
     nudgeIntensity?: NudgeIntensity;
-    preferredLanguage?: "english" | "hinglish" | "hindi" | "tamil";
+    preferredLanguage?: "english" | "hinglish" | "hindi" | "tamil" | "kannada";
     birthday?: string;
     importantDates?: Array<{ label: string; date: string }>;
     lastOutreachAt?: Date;
@@ -71,7 +71,7 @@ const saheliCompanionSchema = new Schema<ISaheliCompanionDocument>(
         },
         preferredLanguage: {
             type: String,
-            enum: ["english", "hinglish", "hindi", "tamil"],
+            enum: ["english", "hinglish", "hindi", "tamil", "kannada"],
             default: "english",
         },
         birthday: { type: String },

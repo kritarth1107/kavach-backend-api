@@ -83,13 +83,22 @@ export type MetaWhatsAppDocumentPayload = {
     };
 };
 
+export type MetaWhatsAppAudioPayload = {
+    type: "audio";
+    audio: {
+        id?: string;
+        link?: string;
+    };
+};
+
 export type MetaWhatsAppPayload =
     | MetaWhatsAppTextPayload
     | MetaWhatsAppInteractiveButtonsPayload
     | MetaWhatsAppInteractiveListPayload
     | MetaWhatsAppInteractiveCtaPayload
     | MetaWhatsAppImagePayload
-    | MetaWhatsAppDocumentPayload;
+    | MetaWhatsAppDocumentPayload
+    | MetaWhatsAppAudioPayload;
 
 /** Hints for composing rich WhatsApp replies from routing / Saheli. */
 export type WhatsAppReplyKind =

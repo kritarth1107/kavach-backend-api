@@ -375,12 +375,25 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
                 mediaCaption: inbound.mediaCaption,
             });
             replyPreview = reply.content?.slice(0, 200);
-            if (isMetaWhatsAppEnabled() && reply.content) {
-                await sendViaMetaWhatsApp(
-                    reply.channelIdentifier,
-                    reply.content,
-                    reply.whatsappPayloads,
-                );
+            if (isMetaWhatsAppEnabled() && (reply.content || reply.audioBuffer || reply.audioBase64)) {
+                if (reply.audioBuffer || reply.audioBase64) {
+                    const { sendMetaWhatsAppVoice } = await import("../clients/metaWhatsApp.client");
+                    const audioBuffer =
+                        reply.audioBuffer ||
+                        Buffer.from(reply.audioBase64 || "", "base64");
+                    await sendMetaWhatsAppVoice({
+                        to: reply.channelIdentifier,
+                        audioBuffer,
+                        mimeType: reply.audioMimeType || "audio/mpeg",
+                        caption: reply.content,
+                    });
+                } else {
+                    await sendViaMetaWhatsApp(
+                        reply.channelIdentifier,
+                        reply.content,
+                        reply.whatsappPayloads,
+                    );
+                }
                 replySent = true;
                 console.log(`Meta WhatsApp reply sent to ${inbound.from.slice(0, 6)}…`);
             } else if (!isMetaWhatsAppEnabled()) {

@@ -258,6 +258,41 @@ export async function handleWhatsAppInbound(body: {
         }
     }
 
+    // Voice/audio: download from Meta + STT, then continue into elder AI with transcript.
+    const isVoiceMedia =
+        body.mediaType === "voice" ||
+        body.mediaType === "audio" ||
+        body.modality === "voice";
+    let voiceTranscript: string | undefined;
+    if (isVoiceMedia && body.mediaUrl && identity.role === FamilyRole.CARE_RECIPIENT) {
+        try {
+            const { downloadMedia } = await import("../clients/metaWhatsApp.client");
+            const { speechToText } = await import("../channels/voicePipeline");
+            const media = await downloadMedia(body.mediaUrl);
+            voiceTranscript = await speechToText({
+                audioBuffer: media.buffer,
+                mimeType: media.mimeType,
+                fallbackText:
+                    text && !/^\[(voice|audio) (message|shared)\]$/i.test(text)
+                        ? text
+                        : undefined,
+            });
+            if (voiceTranscript.trim()) {
+                text = voiceTranscript.trim();
+                console.log(
+                    `WhatsApp voice STT ok (${voiceTranscript.length} chars) from ${phone.slice(0, 6)}…`,
+                );
+            } else {
+                console.warn("WhatsApp voice STT returned empty transcript");
+            }
+        } catch (err) {
+            console.warn(
+                "WhatsApp voice STT failed:",
+                err instanceof Error ? err.message : err,
+            );
+        }
+    }
+
     if (
         body.mediaType &&
         identity.role === FamilyRole.CARE_RECIPIENT &&
@@ -271,12 +306,21 @@ export async function handleWhatsAppInbound(body: {
             mediaType: body.mediaType,
             mediaUrl: body.mediaUrl,
             caption: body.mediaCaption ?? (text.startsWith("[") ? undefined : text),
+            transcript: voiceTranscript,
         });
+        const isVoice = body.mediaType === "voice" || body.mediaType === "audio";
         const isMediaOnly =
             !text ||
             /^\[(image|document|voice|audio|video) (message|shared)\]$/i.test(text);
-        if (isMediaOnly) {
+        // Voice with transcript continues to elder AI; other media-only still short-circuits.
+        if (isMediaOnly && !isVoice) {
             return outbound(phone, mediaReply);
+        }
+        if (isMediaOnly && isVoice && !text) {
+            return outbound(
+                phone,
+                "I couldn't catch that voice note clearly — could you type it or try again?",
+            );
         }
     }
 
@@ -486,12 +530,37 @@ export async function handleWhatsAppInbound(body: {
         },
     });
 
+    let out: ReturnType<typeof outbound>;
     if (reply.orderFlow?.sessionId) {
-        return outbound(phone, reply.content, {
+        out = outbound(phone, reply.content, {
             kind: "order_flow",
             orderFlow: reply.orderFlow,
         });
+    } else {
+        out = outbound(phone, reply.content, { kind: "plain" });
     }
 
-    return outbound(phone, reply.content, { kind: "plain" });
+    // Voice replies: synthesize ElevenLabs audio when key present (else text-only).
+    if (isVoiceMedia && out.content?.trim()) {
+        try {
+            const { textToSpeech } = await import("../channels/voicePipeline");
+            const spoken = await textToSpeech(out.content);
+            if (spoken.audioBuffer || spoken.audioBase64) {
+                out = {
+                    ...out,
+                    modality: "voice",
+                    audioBuffer: spoken.audioBuffer,
+                    audioBase64: spoken.audioBase64,
+                    audioMimeType: spoken.mimeType || "audio/mpeg",
+                };
+            }
+        } catch (err) {
+            console.warn(
+                "WhatsApp reply TTS failed (sending text only):",
+                err instanceof Error ? err.message : err,
+            );
+        }
+    }
+
+    return out;
 }
