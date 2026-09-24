@@ -1,7 +1,7 @@
 /**
  * Deterministic Apollo / PharmEasy / 1mg login bootstrap (Playwright).
  * Prefer this over burning Gemini steps just to click Login + enter phone.
- * Returns need_otp once the OTP field is visible; otherwise a typed failure.
+ * Returns need_otp only after Continue/Send OTP ran AND (generateOtp success OR real OTP UI).
  *
  * EMERGENCY: live Continue/Send-OTP is OFF unless BROWSER_PHARMACY_LOGIN=on|1|true.
  * One OTP request per login attempt max — never re-click Continue/resend while waiting.
@@ -104,28 +104,66 @@ async function looksLoggedIn(page: Page): Promise<boolean> {
 async function otpFieldVisible(page: Page): Promise<boolean> {
     const sel =
         'input[autocomplete="one-time-code"], input[name*="otp" i], input[id*="otp" i], input[placeholder*="OTP" i], input[placeholder*="one time" i], input[placeholder*="verification" i], input[aria-label*="otp" i]';
+    let found = false;
     try {
         const el = page.locator(sel).first();
-        if ((await el.count()) && (await el.isVisible().catch(() => false))) return true;
+        if ((await el.count()) && (await el.isVisible().catch(() => false))) found = true;
     } catch {
         /* ignore */
     }
-    try {
-        const boxes = page.locator('input[maxlength="1"]');
-        const n = await boxes.count();
-        if (n >= 4 && n <= 8) return true;
-    } catch {
-        /* ignore */
+    if (!found) {
+        try {
+            const boxes = page.locator('input[maxlength="1"]');
+            const n = await boxes.count();
+            // Require at least one visible box — hidden maxlength=1 inputs are common false positives
+            if (n >= 4 && n <= 8) {
+                let vis = 0;
+                for (let i = 0; i < Math.min(n, 8); i++) {
+                    if (await boxes.nth(i).isVisible().catch(() => false)) vis++;
+                }
+                if (vis >= 4) found = true;
+            }
+        } catch {
+            /* ignore */
+        }
     }
-    // Apollo: digit1..digit6 (type=tel, autocomplete=one-time-code, no maxlength=1)
+    if (!found) {
+        // Apollo: digit1..digit6 (type=tel, autocomplete=one-time-code, no maxlength=1)
+        try {
+            const digits = page.locator(
+                'input[name^="digit"], input[id^="digit"], input[name*="otpDigit" i], input[data-testid*="otp" i]',
+            );
+            const n = await digits.count();
+            if (n >= 4 && n <= 8) {
+                let vis = 0;
+                for (let i = 0; i < Math.min(n, 8); i++) {
+                    if (await digits.nth(i).isVisible().catch(() => false)) vis++;
+                }
+                if (vis >= 4) found = true;
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+    if (!found) return false;
+    // Guard: digit inputs alone can exist off-screen; require OTP copy on page
+    const blob = await pageBlob(page);
+    if (
+        /enter\s*otp|otp\s*sent|verification\s*code|one[-\s]?time|paste\s*(the\s*)?otp|login\s*code/i.test(
+            blob,
+        )
+    ) {
+        return true;
+    }
+    // Apollo digit1..digit6 with autocomplete=one-time-code is strong enough without copy
     try {
-        const digits = page.locator(
-            'input[name^="digit"], input[id^="digit"], input[name*="otpDigit" i], input[data-testid*="otp" i]',
+        const apolloDigits = page.locator(
+            'input[name^="digit"][autocomplete="one-time-code"], input[id^="digit"][autocomplete="one-time-code"]',
         );
-        const n = await digits.count();
-        if (n >= 4 && n <= 8) {
-            const firstVisible = await digits.first().isVisible().catch(() => false);
-            if (firstVisible) return true;
+        const n = await apolloDigits.count();
+        if (n >= 4) {
+            const vis = await apolloDigits.first().isVisible().catch(() => false);
+            if (vis) return true;
         }
     } catch {
         /* ignore */
@@ -308,13 +346,16 @@ export async function bootstrapPharmacyLogin(input: {
     }
 
     if (await otpFieldVisible(page)) {
-        // Already on OTP screen — NEVER click Continue/resend
-        await notify("otp_ready", `*${label}* login code screen is open — *paste the SMS OTP here*.`);
+        // Leftover OTP UI from a prior attempt — do NOT ask user (no Continue this turn → no new SMS)
+        console.warn(`[pharmacy-login] OTP UI already open before Continue for ${label} — refusing false need_otp`);
         return {
-            ok: true,
-            status: "need_otp",
-            stage: "otp_ready",
-            message: `*${label}* is waiting for your login code — *paste the SMS OTP here*.\n(I never read your device SMS — only what you send me on WhatsApp.)`,
+            ok: false,
+            status: "error",
+            stage: "failed",
+            failureReason: "site_slow",
+            message:
+                `${label} couldn't send a login code — a leftover code screen was open but SMS was not requested this attempt. ` +
+                `Reply *retry* or *cancel* — nothing was ordered.`,
         };
     }
 
@@ -358,12 +399,16 @@ export async function bootstrapPharmacyLogin(input: {
     }
 
     if (await otpFieldVisible(page)) {
-        await notify("otp_ready", `*${label}* login code screen is open — *paste the SMS OTP here*.`);
+        // Login click surfaced OTP UI without us sending — still no verified SMS this attempt
+        console.warn(`[pharmacy-login] OTP UI after Login click without Continue for ${label}`);
         return {
-            ok: true,
-            status: "need_otp",
-            stage: "otp_ready",
-            message: `*${label}* is waiting for your login code — *paste the SMS OTP here*.\n(I never read your device SMS — only what you send me on WhatsApp.)`,
+            ok: false,
+            status: "error",
+            stage: "failed",
+            failureReason: "site_slow",
+            message:
+                `${label} couldn't send a login code — code screen appeared before Continue. ` +
+                `Reply *retry* or *cancel* — nothing was ordered.`,
         };
     }
 
@@ -376,20 +421,23 @@ export async function bootstrapPharmacyLogin(input: {
                 status: "error",
                 stage: "no_login_button",
                 failureReason: "no_login_button",
-                message: `${label} page loaded but I couldn't find a Login / phone field (layout changed or blocked). Reply *retry* or *cancel* — nothing was ordered.`,
+                message: `${label} page loaded but I couldn't find a Login / phone field (layout changed or unavailable). Reply *retry* or *cancel* — nothing was ordered.`,
             };
         }
         await page.waitForTimeout(1500);
         const retryPhone = await findPhoneInput(page);
         if (!retryPhone) {
-            // OTP UI without us clicking Continue this turn — only accept if field is truly open
+            // OTP UI without Continue this turn — never claim SMS / ask for paste
             if (await otpFieldVisible(page)) {
-                await notify("otp_ready", `*${label}* login code screen is open — *paste the SMS OTP here*.`);
+                console.warn(`[pharmacy-login] OTP UI without phone Continue for ${label}`);
                 return {
-                    ok: true,
-                    status: "need_otp",
-                    stage: "otp_ready",
-                    message: `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
+                    ok: false,
+                    status: "error",
+                    stage: "failed",
+                    failureReason: "site_slow",
+                    message:
+                        `${label} couldn't send a login code — code screen without Continue this attempt. ` +
+                        `Reply *retry* or *cancel* — nothing was ordered.`,
                 };
             }
             return {
@@ -454,20 +502,34 @@ export async function bootstrapPharmacyLogin(input: {
             };
         }
         if (await otpFieldVisible(page)) {
-            await notify("otp_ready", `*${label}* login code screen is open — *paste the SMS OTP here*.`);
+            // Continue already ran — OTP UI after click is sufficient to ask; "Sent to" only if API confirmed
+            if (sendAttempt.apiConfirmed) {
+                await notify(
+                    "otp_ready",
+                    `*${label}* login code sent to ${maskPhone(loginPhone)} — *paste the SMS OTP here*.`,
+                );
+                return {
+                    ok: true,
+                    status: "need_otp",
+                    stage: "otp_ready",
+                    message: [
+                        `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
+                        `(Sent to ${maskPhone(loginPhone)} — I never read your device SMS, only what you paste here.)`,
+                    ].join("\n"),
+                };
+            }
+            await notify(
+                "otp_ready",
+                `*${label}* code screen is open — *paste the SMS OTP here* (send not API-confirmed).`,
+            );
             return {
                 ok: true,
                 status: "need_otp",
                 stage: "otp_ready",
                 message: [
                     `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
-                    `(Sent to ${maskPhone(loginPhone)} — I never read your device SMS, only what you paste here.)`,
-                    sendAttempt.apiConfirmed
-                        ? ``
-                        : `(If no SMS arrives in ~30s, reply *retry* — the code screen opened but send wasn't confirmed.)`,
-                ]
-                    .filter((l) => l !== undefined && l !== "")
-                    .join("\n"),
+                    `(Code screen opened after Continue, but SMS send wasn't confirmed — if no SMS in ~30s, reply *retry*.)`,
+                ].join("\n"),
             };
         }
         // Explicitly do NOT click RESEND_TEXTS / CONTINUE_TEXTS here
@@ -482,7 +544,7 @@ export async function bootstrapPharmacyLogin(input: {
         failureReason: "site_slow",
         message:
             `${label} didn't send a login code — Continue was tapped but the OTP screen never appeared ` +
-            `(site slow, blocked, or SMS not dispatched). Reply *retry* or *cancel* — nothing was ordered.`,
+            `(site slow, unavailable, or SMS not dispatched). Reply *retry* or *cancel* — nothing was ordered.`,
     };
 }
 
@@ -534,15 +596,25 @@ async function fillPhoneAndContinueOnce(
     const onResponse = async (resp: import("playwright").Response) => {
         try {
             const u = resp.url();
-            if (!/generateOtp|sendOtp|send_otp|requestOtp|otp\/send|auth-service\/generate/i.test(u)) {
+            // Match real send endpoints only (not auth-service/accessToken etc.)
+            if (
+                !/generateOtp|sendOtp|send_otp|requestOtp|otp\/send|auth-service\/generateOtp/i.test(
+                    u,
+                )
+            ) {
                 return;
             }
             if (resp.status() < 200 || resp.status() >= 300) return;
             const body = await resp.text().catch(() => "");
+            // Reject soft-fail bodies even on HTTP 200
+            if (/success["']?\s*:\s*false|"success"\s*:\s*false|otp\s*not\s*sent|failed to send/i.test(body)) {
+                return;
+            }
+            // Require explicit success evidence — never bare 200 / empty body
             if (
-                /otp sent|success["']?\s*:\s*true|successfully/i.test(body) ||
-                body.trim() === "" ||
-                resp.status() === 200
+                /otp\s*sent|sent to the mobile|success["']?\s*:\s*true|"sucess"\s*:\s*true|successfully/i.test(
+                    body,
+                )
             ) {
                 apiConfirmed = true;
             }

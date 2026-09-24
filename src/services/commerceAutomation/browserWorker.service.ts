@@ -348,15 +348,17 @@ function dryRunRideFaresMessage(goal: string, partnerLabelStr: string): {
 
 function extractItemGuess(goal: string): string[] {
     const cleaned = goal
+        .replace(/\|\s*login_phone=\S*/gi, " ")
+        .replace(/\blogin_phone=\S*/gi, " ")
         .replace(/https?:\/\/\S+/gi, " ")
-        .replace(/\b(order|buy|get|purchase|from|on|via|please|for me)\b/gi, " ")
+        .replace(/\b(order|buy|get|purchase|from|on|via|please|for me|exact sku)\b/gi, " ")
         .replace(
             /\b(amazon|flipkart|myntra|bigbasket|big basket|jiomart|dmart|blinkit|apollo|instamart|swiggy|zepto|pharmeasy|1mg)\b/gi,
             " ",
         )
         .replace(/\s+/g, " ")
         .trim();
-    return cleaned ? [cleaned.slice(0, 80)] : [goal.slice(0, 80)];
+    return cleaned ? [cleaned.slice(0, 80)] : ["your item"];
 }
 
 
@@ -906,6 +908,172 @@ class PlaywrightBrowserWorker implements BrowserWorker {
         }
     }
 
+    /**
+     * After OTP is filled on a parked page: run Gemini search/cart until confirm/done.
+     * Keeps the same Chromium session (no re-login / no second SMS).
+     */
+    async continueParkedAfterOtp(args: {
+        browser: import("playwright").Browser;
+        context: import("playwright").BrowserContext;
+        page: import("playwright").Page;
+        input: RunBrowserTaskInput;
+        partner: string;
+        generation: number;
+        goal: string;
+    }): Promise<{ result: BrowserTaskResult; retainBrowser: boolean }> {
+        const { page, context, browser, input } = args;
+        const playbook = resolvePlaybook(
+            input.partner || (args.partner as CommercePartnerKey),
+            args.goal,
+            input.startUrl,
+        );
+        const maxSteps = Math.min(input.maxSteps ?? 18, 24);
+        let steps = 0;
+        let modelUsed: string | undefined;
+        let userConfirmed = Boolean(input.userConfirmed);
+        let retainBrowser = false;
+
+        await page.waitForTimeout(800).catch(() => undefined);
+
+        while (steps < maxSteps) {
+            if (
+                args.generation != null &&
+                !isBrowserGenerationCurrent(input.familyId, input.userId, args.generation)
+            ) {
+                return {
+                    retainBrowser: false,
+                    result: {
+                        status: "cancelled",
+                        mode: "playwright",
+                        partner: args.partner,
+                        steps,
+                        message: "Cancelled.",
+                    },
+                };
+            }
+            steps += 1;
+            const screenshot = await page.screenshot({ type: "png", fullPage: false });
+            const url = page.url();
+            const title = await page.title().catch(() => "");
+            let accessibilityHint = "";
+            try {
+                accessibilityHint = await page.evaluate(() => {
+                    const texts = Array.from(
+                        document.querySelectorAll("h1,h2,button,a,[role=button]"),
+                    )
+                        .slice(0, 40)
+                        .map((n) => (n.textContent || "").trim().slice(0, 60))
+                        .filter(Boolean);
+                    return texts.join(" | ").slice(0, 800);
+                });
+            } catch {
+                /* ignore */
+            }
+
+            const midBlock = await detectCommerceSiteBlock(
+                page,
+                String(playbook.partner),
+                input.goal,
+            ).catch(() => null);
+            if (midBlock) {
+                await this.persist(context, input, playbook.partner, page.url());
+                return {
+                    retainBrowser: false,
+                    result: {
+                        status: "error",
+                        message: midBlock,
+                        steps,
+                        url: page.url(),
+                        modelUsed,
+                        mode: "playwright",
+                        partner: String(playbook.partner),
+                        failureReason: "captcha",
+                    },
+                };
+            }
+
+            const planned = await planBrowserActions({
+                screenshotBase64: screenshot.toString("base64"),
+                mimeType: "image/png",
+                url,
+                title,
+                accessibilityHint,
+                goal: input.goal,
+                playbookHint: `${playbook.searchHint} ${playbook.otpHint} ${playbook.confirmHint}${
+                    input.loginPhone ? ` login_phone=${input.loginPhone}` : ""
+                }. Already signed in — search SKU, add to cart, stop at confirm-before-pay. NEVER click Send OTP/Resend.`,
+                step: steps,
+                maxSteps,
+                otpProvided: true,
+                userConfirmed,
+            });
+            modelUsed = planned.modelUsed;
+
+            for (const action of planned.actions) {
+                const gated = await this.applyAction(page, action, {
+                    userConfirmed,
+                    goal: input.goal,
+                    blockPharmacyOtpSend: true,
+                });
+                if (gated.halt) {
+                    await this.persist(context, input, playbook.partner, page.url());
+                    let msg = gated.message!;
+                    if (gated.status === "need_user_confirm") {
+                        msg = await attachHealthHints(
+                            input,
+                            msg,
+                            gated.confirm?.items ?? extractItemGuess(input.goal),
+                        );
+                    }
+                    if (gated.status === "need_otp") {
+                        parkBrowserForOtp({
+                            familyId: input.familyId,
+                            userId: input.userId,
+                            partner: String(playbook.partner),
+                            goal: input.goal,
+                            generation: args.generation,
+                            browser,
+                            context,
+                            page,
+                            taskInput: input,
+                        });
+                        retainBrowser = true;
+                    }
+                    return {
+                        retainBrowser,
+                        result: {
+                            status: gated.status!,
+                            message: msg,
+                            steps,
+                            url: page.url(),
+                            modelUsed,
+                            mode: "playwright",
+                            confirm: gated.confirm,
+                            partner: String(playbook.partner),
+                        },
+                    };
+                }
+            }
+        }
+
+        await this.persist(context, input, playbook.partner, page.url());
+        return {
+            retainBrowser: false,
+            result: {
+                status: "error",
+                message:
+                    `Signed in to *${partnerLabel(args.partner)}* but couldn't finish finding the item in time. ` +
+                    `Reply *retry* or *cancel* — nothing was ordered.`,
+                steps,
+                url: page.url(),
+                modelUsed,
+                mode: "playwright",
+                partner: args.partner,
+                failureReason: "site_slow",
+            },
+        };
+    }
+
     private async persist(
         context: import("playwright").BrowserContext | null,
         input: RunBrowserTaskInput,
@@ -1208,7 +1376,7 @@ export async function runBrowserTask(input: RunBrowserTaskInput): Promise<Browse
 
 
 
-/** Inject WA-pasted OTP into a parked live Playwright page. Null if no park. */
+/** Inject WA-pasted OTP into a parked live Playwright page, then continue search/cart. */
 export async function submitParkedBrowserOtp(input: {
     familyId: string;
     userId: string;
@@ -1226,6 +1394,7 @@ export async function submitParkedBrowserOtp(input: {
         await closeTakenPark(parked);
         return null;
     }
+    let retain = false;
     try {
         const filled = await fillOtpOnPage(parked.page, input.otp.trim());
         if (!filled.filled) {
@@ -1240,6 +1409,7 @@ export async function submitParkedBrowserOtp(input: {
                 page: parked.page,
                 taskInput: parked.input,
             });
+            retain = true;
             return {
                 status: "need_otp",
                 mode: "playwright",
@@ -1250,6 +1420,62 @@ export async function submitParkedBrowserOtp(input: {
                     `Paste the code again, or reply *retry* / *cancel*.`,
             };
         }
+
+        // Wait for Apollo to accept OTP before saving cookies / searching
+        const settleUntil = Date.now() + 12_000;
+        while (Date.now() < settleUntil) {
+            if (
+                parked.generation != null &&
+                !isBrowserGenerationCurrent(input.familyId, input.userId, parked.generation)
+            ) {
+                return {
+                    status: "cancelled",
+                    mode: "playwright",
+                    partner: parked.partner,
+                    steps: 1,
+                    message: "Cancelled.",
+                };
+            }
+            const stillOtp = await parked.page
+                .locator(
+                    'input[name^="digit"], input[id^="digit"], input[autocomplete="one-time-code"]',
+                )
+                .first()
+                .isVisible()
+                .catch(() => false);
+            if (!stillOtp) break;
+            const blob = await parked.page
+                .evaluate(() => (document.body?.innerText || "").slice(0, 2000).toLowerCase())
+                .catch(() => "");
+            if (/invalid|incorrect|wrong\s*otp|expired/i.test(blob)) {
+                parkBrowserForOtp({
+                    familyId: parked.familyId,
+                    userId: parked.userId,
+                    partner: parked.partner,
+                    goal: parked.goal,
+                    generation: parked.generation,
+                    browser: parked.browser,
+                    context: parked.context,
+                    page: parked.page,
+                    taskInput: parked.input,
+                });
+                retain = true;
+                return {
+                    status: "need_otp",
+                    mode: "playwright",
+                    partner: parked.partner,
+                    steps: 1,
+                    message:
+                        `That code wasn't accepted by *${partnerLabel(parked.partner)}*. ` +
+                        `Paste a fresh SMS OTP, or reply *retry* / *cancel*.`,
+                };
+            }
+            if (/log\s*out|sign\s*out|hello,\s*[a-z]/i.test(blob) && !/enter\s*otp/i.test(blob)) {
+                break;
+            }
+            await parked.page.waitForTimeout(500);
+        }
+
         try {
             const state = await parked.context.storageState();
             await saveBrowserProfileState({
@@ -1262,25 +1488,31 @@ export async function submitParkedBrowserOtp(input: {
         } catch {
             /* ignore */
         }
-        const items = extractItemGuess(parked.goal);
-        return {
-            status: "need_user_confirm",
-            mode: "playwright",
-            partner: parked.partner,
-            steps: 1,
-            url: parked.page.url(),
-            message: [
-                `Got the code — signed in to *${partnerLabel(parked.partner)}*.`,
-                `Next I'll find: ${items[0] || parked.goal.slice(0, 80)}`,
-                ``,
-                `Reply *confirm* when I show item+total+address (no silent pay), or *cancel*.`,
-            ].join("\n"),
-            confirm: {
-                items,
-                totalLabel: "TBD",
-                addressLabel: "saved address",
-            },
+
+        // Continue search → cart → confirm on the SAME live page (do not close early)
+        const taskInput: RunBrowserTaskInput = {
+            ...parked.input,
+            otp: input.otp.trim(),
+            familyId: input.familyId,
+            userId: input.userId,
+            goal: parked.goal,
+            partner: (parked.input.partner || parked.partner) as RunBrowserTaskInput["partner"],
+            browserGeneration: parked.generation,
         };
+        const worker = new PlaywrightBrowserWorker();
+        const continued = await worker.continueParkedAfterOtp({
+            browser: parked.browser,
+            context: parked.context,
+            page: parked.page,
+            input: taskInput,
+            partner: parked.partner,
+            generation: parked.generation,
+            goal: parked.goal,
+        });
+        if (continued.retainBrowser) {
+            retain = true;
+        }
+        return continued.result;
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
@@ -1292,7 +1524,7 @@ export async function submitParkedBrowserOtp(input: {
             message: `OTP submit failed: ${msg.slice(0, 160)}. Reply *retry* or *cancel*.`,
         };
     } finally {
-        if (!hasParkedBrowserOtpSession(input.familyId, input.userId)) {
+        if (!retain && !hasParkedBrowserOtpSession(input.familyId, input.userId)) {
             await closeTakenPark(parked);
         }
     }

@@ -62,7 +62,9 @@ export function formatPharmacyBrowserFollowUp(
         const base = result.message?.trim() || `${label} browser hit a problem.`;
         const reason = result.failureReason;
         const blocked =
-            reason === "captcha" || /captcha|bot check|blocked|access denied/i.test(base);
+            reason === "captcha" ||
+            /captcha|bot check|access denied|bot wall/i.test(base) ||
+            (/blocked the browser/i.test(base) && reason !== "no_login_button");
         const tip =
             reason === "captcha" || blocked
                 ? `${label} looks blocked (CAPTCHA / bot wall).`
@@ -99,7 +101,8 @@ export function formatPharmacyBrowserFollowUp(
             // Keep draft (except kill-switch) so *retry* still works; phase awaiting_otp
             // is gated in WA handler — digits ignored unless OTP was actually requested/parked.
             clearSession: reason === "disabled",
-            phase: reason === "disabled" ? "idle" : "awaiting_otp",
+            // Never leave awaiting_otp when SMS was not verified — digits must not count as OTP.
+            phase: reason === "disabled" ? "idle" : smsNeverExpected ? "running" : "awaiting_otp",
         };
     }
 
@@ -147,7 +150,7 @@ export function formatPharmacyBrowserFollowUp(
                 .filter(Boolean)
                 .join("\n"),
             clearSession: false,
-            phase: "awaiting_otp",
+            phase: "running",
         };
     }
 
