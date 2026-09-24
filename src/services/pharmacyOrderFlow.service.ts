@@ -63,7 +63,7 @@ const PARTNER_PICK =
     /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|tata)\b/i;
 
 const OTC_HINT =
-    /\b(vita\w*\s*c|vit\s*c|vitamin\s*d|paracetamol|crocin|dolo|ors|electral|band[\s-]?aid|antiseptic|cough\s*syrup\s*otc)\b/i;
+    /\b(vita\w*\s*c|vit\s*c|vitamin\s*d|paracetamol|crocin|dolo|limcee|celin|shelcal|becosules|zincovit|revital|ors|electral|band[\s-]?aid|antiseptic|cough\s*syrup\s*otc)\b/i;
 
 function partnerFromText(text: string): CommercePartnerKey | undefined {
     const t = text.toLowerCase();
@@ -88,7 +88,7 @@ export function parseMedicineList(text: string): Array<{ name: string; quantity:
         .replace(PARTNER_PICK, " ")
         .replace(PHARMACY_INTENT, " ")
         .replace(
-            /\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc|capsules?|tablets?|tabs?|pills?|from|on|via|at|using|with|the|a|an)\b/gi,
+            /\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc|capsules?|tablets?|tabs?|pills?|from|on|via|at|using|with|the|a|an|se|pe|par|mein|me|ko|ki|ka|ke|manga|mangao|mangwa|do|dena|de|chahiye|chahie|mujhe|mere|liye|krdo|kardo|kar\s*do|pls)\b/gi,
             " ",
         )
         .replace(/\s+/g, " ")
@@ -155,6 +155,16 @@ function partnerLabel(p: CommercePartnerKey): string {
     if (p === "pharmeasy") return "PharmEasy";
     if (p === "apollo") return "Apollo";
     return p;
+}
+
+const ELECTRONICS_ON_PHARMACY =
+    /\b(iphones?|ipads?|macbooks?|laptops?|airpods|playstations?|ps5|xbox(?:es)?|televisions?|tvs?|samsung\s*galaxy|oneplus|pixel\s*phones?)\b/i;
+
+function refuseElectronicsOnPharmacy(): string {
+    return (
+        "Apollo / PharmEasy / 1mg are for *medicines*, not phones or electronics. " +
+        "Say *order … from amazon* / *flipkart* (or paste a link) for those — or name a medicine to search."
+    );
 }
 
 export function messageLooksLikePharmacyOrder(text: string): boolean {
@@ -348,6 +358,11 @@ export async function handlePharmacyWhatsAppTurn(input: {
         };
     }
 
+    // Phones/electronics on a pharmacy partner → refuse (do not soft-basket "iphone").
+    if (ELECTRONICS_ON_PHARMACY.test(text) && (messageLooksLikePharmacyOrder(text) || partnerFromText(text) || (draft && draft.phase !== "idle"))) {
+        return { text: refuseElectronicsOnPharmacy() };
+    }
+
     // Seed from Rx photo while in pharmacy flow or explicit Rx attach
     if (input.isRxPhoto || (draft && draft.phase === "awaiting_rx_photo" && input.mediaUrl)) {
         draft = draft ?? { phase: "ask_list_or_rx", items: [] };
@@ -426,27 +441,30 @@ export async function handlePharmacyWhatsAppTurn(input: {
                 draft,
             };
         }
-        if (draft.items.some((i) => i.requiresRx)) {
-            draft.phase = "awaiting_rx_photo";
-            await saveDraft(input.phone, draft);
-            return {
-                text:
-                    `Some items may need a prescription. Please send a *photo of the Rx*, or say *OTC only* if none need it.\n\n` +
-                    `Listed so far: ${draft.items.map((i) => i.name).join(", ")}`,
-                draft,
-            };
-        }
-        // SEARCH FIRST (guest catalog) — never open login until elder confirms exact SKU+price.
+        // SEARCH FIRST (guest catalog) — never open login / never Rx-gate before live results.
         draft = await attachGuestCatalog(draft, {
             familyId: input.familyId,
             userId: input.actorUserId,
         });
+        const hasLiveFresh = draft.items.some((i) => typeof i.pricePaise === "number");
+        const noMatchFresh =
+            !hasLiveFresh &&
+            typeof draft.notes === "string" &&
+            /no .+ matches|no apollo matches|no pharmeasy matches/i.test(draft.notes);
+        if (noMatchFresh) {
+            draft.phase = "confirm_basket";
+            await saveDraft(input.phone, draft);
+            return {
+                text:
+                    `${draft.notes}\n\n` +
+                    `I won't invent a product or price. Send another name, or *cancel*.`,
+                draft,
+            };
+        }
         draft.phase = "confirm_basket";
         await saveDraft(input.phone, draft);
         const freshNote =
-            draft.notes && !draft.items.some((i) => typeof i.pricePaise === "number")
-                ? `\n\n_${draft.notes}_`
-                : "";
+            draft.notes && !hasLiveFresh ? `\n\n_${draft.notes}_` : "";
         return { text: confirmCopy(draft) + freshNote, draft };
     }
 
@@ -476,24 +494,28 @@ export async function handlePharmacyWhatsAppTurn(input: {
             await saveDraft(input.phone, draft);
             return { text: "Please send the medicine list or a prescription photo.", draft };
         }
-        if (draft.items.some((i) => i.requiresRx)) {
-            draft.phase = "awaiting_rx_photo";
-            await saveDraft(input.phone, draft);
-            return {
-                text: "Please send a *prescription photo* for Rx items, or reply *OTC only*.",
-                draft,
-            };
-        }
         draft = await attachGuestCatalog(draft, {
             familyId: input.familyId,
             userId: input.actorUserId,
         });
+        const hasLiveMid = draft.items.some((i) => typeof i.pricePaise === "number");
+        const noMatchMid =
+            !hasLiveMid &&
+            typeof draft.notes === "string" &&
+            /no .+ matches|no apollo matches|no pharmeasy matches/i.test(draft.notes);
+        if (noMatchMid) {
+            draft.phase = "confirm_basket";
+            await saveDraft(input.phone, draft);
+            return {
+                text:
+                    `${draft.notes}\n\n` +
+                    `I won't invent a product or price. Send another name, or *cancel*.`,
+                draft,
+            };
+        }
         draft.phase = "confirm_basket";
         await saveDraft(input.phone, draft);
-        const midNote =
-            draft.notes && !draft.items.some((i) => typeof i.pricePaise === "number")
-                ? `\n\n_${draft.notes}_`
-                : "";
+        const midNote = draft.notes && !hasLiveMid ? `\n\n_${draft.notes}_` : "";
         return { text: confirmCopy(draft) + midNote, draft };
     }
 
@@ -514,6 +536,32 @@ export async function handlePharmacyWhatsAppTurn(input: {
         };
     }
 
+    // Status during SKU confirm — stay on Apollo basket; never claim Instamart.
+    if (draft.phase === "confirm_basket" && /^(status|order\s*status)$/i.test(text)) {
+        const partner = draft.partner ? partnerLabel(draft.partner) : "pharmacy";
+        return {
+            text:
+                `You're still choosing a *${partner}* item (not Instamart).\n\n` +
+                confirmCopy(draft),
+            draft,
+        };
+    }
+
+    // Bare ok / vague ack while multiple SKUs listed — do NOT open login/OTP.
+    if (
+        draft.phase === "confirm_basket" &&
+        draft.catalogOptions &&
+        draft.catalogOptions.length > 1 &&
+        /^(ok|okay|okk|k)$/i.test(text)
+    ) {
+        return {
+            text:
+                `Please reply *1* / *2* / *3* or *confirm* for #1 — I won't open login on *ok* alone.\n\n` +
+                confirmCopy(draft),
+            draft,
+        };
+    }
+
     // Pick numbered guest-search option before login
     if (
         draft.phase === "confirm_basket" &&
@@ -529,10 +577,26 @@ export async function handlePharmacyWhatsAppTurn(input: {
         return { text: confirmCopy(draft), draft };
     }
 
+    // Invalid list pick (e.g. 9) — re-ask, no login.
+    if (
+        draft.phase === "confirm_basket" &&
+        draft.catalogOptions &&
+        draft.catalogOptions.length > 1 &&
+        /^\d+$/.test(text) &&
+        !/^[123]$/.test(text)
+    ) {
+        return {
+            text:
+                `That number isn't on the list. Reply *1* / *2* / *3* (or *confirm* for #1).\n\n` +
+                confirmCopy(draft),
+            draft,
+        };
+    }
+
     // New product name while confirming — re-search without login
     if (
         draft.phase === "confirm_basket" &&
-        !/^(confirm|place|yes|haan|ok|cancel|stop)$/i.test(text) &&
+        !/^(confirm|place|yes|haan|ok|okay|cancel|stop|status|order\s*status)$/i.test(text) &&
         !/^[123]$/.test(text) &&
         text.length >= 3 &&
         !/^\d{4,8}$/.test(text)
@@ -557,8 +621,12 @@ export async function handlePharmacyWhatsAppTurn(input: {
         }
     }
 
-    if (draft.phase === "confirm_basket" && /^(confirm|place|yes|haan|ok)$/i.test(text)) {
-        // If multiple options still listed, default to #1
+    if (
+        draft.phase === "confirm_basket" &&
+        (/^(confirm|place|yes|haan)$/i.test(text) ||
+            (/^(ok|okay)$/i.test(text) && !(draft.catalogOptions && draft.catalogOptions.length > 1)))
+    ) {
+        // If multiple options still listed, default to #1 (explicit confirm/yes only)
         if (draft.catalogOptions && draft.catalogOptions.length > 1) {
             applyCatalogPick(draft, 0);
         }
