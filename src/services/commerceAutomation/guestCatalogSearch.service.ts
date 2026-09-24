@@ -56,6 +56,36 @@ function formatInr(paise?: number): string {
     return Number.isInteger(rupees) ? `₹${rupees}` : `₹${rupees.toFixed(2)}`;
 }
 
+/** Prefer names that contain query tokens (e.g. vitamin+c → Limcee Vit C, not Evion Vit E). */
+function rankGuestHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[] {
+    const tokens = query
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((t) => t.length >= 1 && !["mg", "ml", "the", "and", "for"].includes(t));
+    const score = (name: string): number => {
+        const n = name.toLowerCase();
+        let s = 0;
+        for (const tok of tokens) {
+            if (n.includes(tok)) s += tok.length >= 3 ? 3 : 1;
+        }
+        // Boost classic OTC Vit C brands / SKUs (Limcee name has no "vitamin" token)
+        if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+            if (/\blimcee\b/i.test(n) && !/zinc/i.test(n)) s += 20;
+            else if (/\bcelin\b|\bsukcee\b|\blimcee\b/i.test(n)) s += 14;
+            if (/vitamin[-\s]*c|ascorbic/i.test(n) && /500/i.test(n) && /tablet|chewable/i.test(n)) s += 6;
+            // Prefer compact tablet strips over large bottles for default "vitamin c"
+            if (/\b(15|10|20)\b/.test(n) && /tablet|strip|chewable/i.test(n) && !/bottle|60|effervescent/i.test(n)) {
+                s += 4;
+            }
+            if (/vitamin\s*e\b|\bevion\b/i.test(n) && !/vitamin\s*c/i.test(n)) s -= 12;
+        }
+        if (typeof hits.find((h) => h.name === name)?.pricePaise === "number") s += 1;
+        return s;
+    };
+    return [...hits].sort((a, b) => score(b.name) - score(a.name) || a.name.length - b.name.length);
+}
+
 async function fetchJson(
     url: string,
     init: RequestInit & { timeoutMs?: number } = {},
@@ -121,7 +151,7 @@ async function searchApolloPublic(query: string): Promise<GuestCatalogHit[]> {
         body: JSON.stringify({
             query,
             page: 1,
-            productsPerPage: 8,
+            productsPerPage: 16,
             selSortBy: "relevance",
             filters: [],
             pincode: "",
@@ -154,7 +184,7 @@ async function searchApolloPublic(query: string): Promise<GuestCatalogHit[]> {
             productUrl: urlKey ? `https://www.apollopharmacy.in/otc/${urlKey}` : undefined,
             source: "apollo_public",
         });
-        if (hits.length >= 5) break;
+        if (hits.length >= 8) break;
     }
     return hits;
 }
@@ -193,7 +223,7 @@ async function searchPharmeasyPublic(query: string): Promise<GuestCatalogHit[]> 
             productUrl: slug ? `https://pharmeasy.in/p/${slug}` : undefined,
             source: "pharmeasy_public",
         });
-        if (hits.length >= 5) break;
+        if (hits.length >= 8) break;
     }
     return hits;
 }
@@ -256,7 +286,7 @@ export async function searchGuestCatalog(input: {
 
     try {
         if (partner === "apollo") {
-            const hits = await searchApolloPublic(query);
+            const hits = rankGuestHits(query, await searchApolloPublic(query));
             return {
                 hits,
                 searched: true,
@@ -269,7 +299,7 @@ export async function searchGuestCatalog(input: {
             };
         }
         if (partner === "pharmeasy") {
-            const hits = await searchPharmeasyPublic(query);
+            const hits = rankGuestHits(query, await searchPharmeasyPublic(query));
             return {
                 hits,
                 searched: true,
@@ -300,7 +330,7 @@ export async function searchGuestCatalog(input: {
                 query,
             });
             if (hits.length) {
-                return { hits, searched: true, partner, query };
+                return { hits: rankGuestHits(query, hits), searched: true, partner, query };
             }
             return {
                 hits: [],
