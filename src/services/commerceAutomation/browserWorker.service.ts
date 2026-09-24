@@ -28,6 +28,7 @@ import {
     takeParkedBrowserOtpSession,
     claimPharmacyOtpSend,
     hasPharmacyOtpSendBeenClaimed,
+    releasePharmacyOtpSendClaim,
     clearActiveBrowserTask,
     currentBrowserGeneration,
 } from "./parkedOtpSession.service";
@@ -703,6 +704,13 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     }
                 }
                 if (!boot.ok) {
+                    // Continue may have been claimed but SMS never confirmed — don't accept WA digits as OTP
+                    releasePharmacyOtpSendClaim(
+                        input.familyId,
+                        input.userId,
+                        input.browserGeneration ??
+                            currentBrowserGeneration(input.familyId, input.userId),
+                    );
                     const shot =
                         boot.failureReason === "disabled"
                             ? undefined

@@ -117,6 +117,75 @@ async function otpFieldVisible(page: Page): Promise<boolean> {
     } catch {
         /* ignore */
     }
+    // Apollo: digit1..digit6 (type=tel, autocomplete=one-time-code, no maxlength=1)
+    try {
+        const digits = page.locator(
+            'input[name^="digit"], input[id^="digit"], input[name*="otpDigit" i], input[data-testid*="otp" i]',
+        );
+        const n = await digits.count();
+        if (n >= 4 && n <= 8) {
+            const firstVisible = await digits.first().isVisible().catch(() => false);
+            if (firstVisible) return true;
+        }
+    } catch {
+        /* ignore */
+    }
+    return false;
+}
+
+/** Tick visible WhatsApp / T&C / consent checkboxes that gate Continue. */
+async function tickLoginConsentCheckboxes(page: Page): Promise<void> {
+    try {
+        const boxes = page.locator('input[type="checkbox"]');
+        const n = await boxes.count();
+        for (let i = 0; i < Math.min(n, 12); i++) {
+            const box = boxes.nth(i);
+            if (!(await box.isVisible().catch(() => false))) continue;
+            const meta = await box.evaluate((el: HTMLInputElement) => {
+                const label =
+                    (el.labels && el.labels[0] && el.labels[0].innerText) ||
+                    el.parentElement?.innerText ||
+                    el.getAttribute("aria-label") ||
+                    el.name ||
+                    "";
+                return { checked: el.checked, label: label.slice(0, 160).toLowerCase() };
+            });
+            // Skip FAQ accordion checkboxes
+            if (/faq|accordion|how to|delivery status/i.test(meta.label)) continue;
+            const looksConsent =
+                /whats?app|terms|t&c|privacy|agree|consent|otp|notify|sms|communication/i.test(
+                    meta.label,
+                );
+            if (looksConsent && !meta.checked) {
+                await box.check({ timeout: 2000 }).catch(() => box.click({ timeout: 2000 }));
+            }
+        }
+    } catch {
+        /* ignore */
+    }
+}
+
+/**
+ * Wait until Continue/Get OTP is enabled after phone fill (React validation).
+ * Returns the locator if clickable, else null.
+ */
+async function waitContinueEnabled(page: Page, ms = 6000): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+        for (const role of ["button", "link"] as const) {
+            try {
+                const loc = page.getByRole(role, { name: CONTINUE_TEXTS }).first();
+                if ((await loc.count()) && (await loc.isVisible().catch(() => false))) {
+                    const disabled = await loc.isDisabled().catch(() => false);
+                    const ariaDisabled = await loc.getAttribute("aria-disabled").catch(() => null);
+                    if (!disabled && ariaDisabled !== "true") return true;
+                }
+            } catch {
+                /* next */
+            }
+        }
+        await page.waitForTimeout(250);
+    }
     return false;
 }
 
@@ -146,16 +215,18 @@ async function clickByName(page: Page, re: RegExp): Promise<boolean> {
 
 async function findPhoneInput(page: Page) {
     const selectors = [
-        'input[type="tel"]',
+        '#user-mobile-number',
+        'input[name="user-mobile-number"]',
         'input[name*="mobile" i]',
         'input[name*="phone" i]',
         'input[id*="mobile" i]',
         'input[id*="phone" i]',
+        'input[type="tel"]:not([name^="digit"]):not([id^="digit"]):not([autocomplete="one-time-code"])',
         'input[placeholder*="mobile" i]',
         'input[placeholder*="phone" i]',
         'input[placeholder*="10" i]',
         'input[autocomplete="tel"]',
-        'input[inputmode="numeric"]',
+        'input[inputmode="numeric"]:not([name^="digit"]):not([autocomplete="one-time-code"])',
     ];
     for (const sel of selectors) {
         try {
@@ -296,7 +367,7 @@ export async function bootstrapPharmacyLogin(input: {
         };
     }
 
-    let otpRequestSent = false;
+    let sendAttempt: OtpSendAttempt = { clicked: false, apiConfirmed: false };
     const phoneInput = await findPhoneInput(page);
     if (!phoneInput) {
         if (!clickedLogin) {
@@ -311,7 +382,9 @@ export async function bootstrapPharmacyLogin(input: {
         await page.waitForTimeout(1500);
         const retryPhone = await findPhoneInput(page);
         if (!retryPhone) {
+            // OTP UI without us clicking Continue this turn — only accept if field is truly open
             if (await otpFieldVisible(page)) {
+                await notify("otp_ready", `*${label}* login code screen is open — *paste the SMS OTP here*.`);
                 return {
                     ok: true,
                     status: "need_otp",
@@ -327,9 +400,36 @@ export async function bootstrapPharmacyLogin(input: {
                 message: `${label} login opened but no phone field appeared. Reply *retry* or *cancel* — nothing was ordered.`,
             };
         }
-        otpRequestSent = await fillPhoneAndContinueOnce(page, retryPhone, loginPhone, label, notify, input.claimOtpSend);
+        sendAttempt = await fillPhoneAndContinueOnce(
+            page,
+            retryPhone,
+            loginPhone,
+            label,
+            notify,
+            input.claimOtpSend,
+        );
     } else {
-        otpRequestSent = await fillPhoneAndContinueOnce(page, phoneInput, loginPhone, label, notify, input.claimOtpSend);
+        sendAttempt = await fillPhoneAndContinueOnce(
+            page,
+            phoneInput,
+            loginPhone,
+            label,
+            notify,
+            input.claimOtpSend,
+        );
+    }
+
+    // Continue never happened — do NOT ask user for an OTP (SMS was never requested)
+    if (!sendAttempt.clicked) {
+        return {
+            ok: false,
+            status: "error",
+            stage: "failed",
+            failureReason: "site_slow",
+            message:
+                `${label} login paused — I couldn't tap Continue / Send OTP (button disabled or already used this attempt). ` +
+                `No SMS is expected. Reply *retry* or *cancel* — nothing was ordered.`,
+        };
     }
 
     // Wait for OTP UI — poll ONLY; never click Continue/resend again
@@ -362,9 +462,11 @@ export async function bootstrapPharmacyLogin(input: {
                 message: [
                     `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
                     `(Sent to ${maskPhone(loginPhone)} — I never read your device SMS, only what you paste here.)`,
-                    otpRequestSent ? `` : ``,
+                    sendAttempt.apiConfirmed
+                        ? ``
+                        : `(If no SMS arrives in ~30s, reply *retry* — the code screen opened but send wasn't confirmed.)`,
                 ]
-                    .filter((l) => l !== undefined)
+                    .filter((l) => l !== undefined && l !== "")
                     .join("\n"),
             };
         }
@@ -378,11 +480,20 @@ export async function bootstrapPharmacyLogin(input: {
         status: "error",
         stage: "failed",
         failureReason: "site_slow",
-        message: `${label} accepted the phone but the login-code screen didn't appear in time (site slow or blocked). Reply *retry* or *cancel* — nothing was ordered.`,
+        message:
+            `${label} didn't send a login code — Continue was tapped but the OTP screen never appeared ` +
+            `(site slow, blocked, or SMS not dispatched). Reply *retry* or *cancel* — nothing was ordered.`,
     };
 }
 
-/** Fill phone + click Continue/Get OTP at most ONCE. Returns true if Continue was clicked. */
+export type OtpSendAttempt = {
+    /** True only when Continue/Get OTP was clicked (or Enter after enabled Continue). */
+    clicked: boolean;
+    /** True when Apollo/PharmEasy-style generateOtp (or equivalent) returned success. */
+    apiConfirmed: boolean;
+};
+
+/** Fill phone + click Continue/Get OTP at most ONCE. Never pretends SMS was sent. */
 async function fillPhoneAndContinueOnce(
     page: Page,
     phoneInput: import("playwright").Locator,
@@ -390,25 +501,81 @@ async function fillPhoneAndContinueOnce(
     label: string,
     notify: (stage: PharmacyLoginStage, detail: string) => void | Promise<void>,
     claimOtpSend?: () => boolean,
-): Promise<boolean> {
+): Promise<OtpSendAttempt> {
     const national = indiaMobile10(loginPhone) || loginPhone.replace(/\D/g, "").slice(-10);
+    if (!/^[6-9]\d{9}$/.test(national)) {
+        console.warn(`[pharmacy-login] phone not a valid IN mobile 10: ${national.slice(0, 4)}…`);
+    }
     await phoneInput.click({ timeout: 5000 }).catch(() => undefined);
     await phoneInput.fill("");
     await phoneInput.fill(national);
-    // Generation-level one-shot — never re-click Continue/Send OTP for this attempt
+    // React controlled inputs sometimes ignore fill() for enabling Continue
+    const current = await phoneInput.inputValue().catch(() => "");
+    if (current.replace(/\D/g, "").slice(-10) !== national) {
+        await phoneInput.fill("");
+        await phoneInput.pressSequentially(national, { delay: 35 }).catch(async () => {
+            await phoneInput.fill(national);
+        });
+    }
+    await tickLoginConsentCheckboxes(page);
+    const enabled = await waitContinueEnabled(page, 7000);
+    if (!enabled) {
+        console.warn(`[pharmacy-login] Continue still disabled after phone fill for ${label}`);
+        return { clicked: false, apiConfirmed: false };
+    }
+    // Generation-level one-shot — claim BEFORE click to block Gemini double-send
     if (claimOtpSend && !claimOtpSend()) {
         console.warn(`[pharmacy-login] OTP send already claimed — not re-clicking Continue for ${label}`);
-        await notify("phone_entered", `*${label}* login code already requested — waiting for paste…`);
-        await page.waitForTimeout(400);
-        return false;
+        return { clicked: false, apiConfirmed: false };
     }
-    await notify("phone_entered", `requested *${label}* login code for ${maskPhone(loginPhone)}…`);
-    // One-shot only — never call this twice per bootstrap
+
+    // Watch partner OTP APIs so we only tell WA "requested" after a real send
+    let apiConfirmed = false;
+    const onResponse = async (resp: import("playwright").Response) => {
+        try {
+            const u = resp.url();
+            if (!/generateOtp|sendOtp|send_otp|requestOtp|otp\/send|auth-service\/generate/i.test(u)) {
+                return;
+            }
+            if (resp.status() < 200 || resp.status() >= 300) return;
+            const body = await resp.text().catch(() => "");
+            if (
+                /otp sent|success["']?\s*:\s*true|successfully/i.test(body) ||
+                body.trim() === "" ||
+                resp.status() === 200
+            ) {
+                apiConfirmed = true;
+            }
+        } catch {
+            /* ignore */
+        }
+    };
+    page.on("response", onResponse);
+
     const continued = await clickByName(page, CONTINUE_TEXTS);
+    let clicked = continued;
     if (!continued) {
-        // Enter only if we own the claim (first send). Never fall through to Resend.
+        // Enter only when Continue was enabled — never hammer Resend
         await page.keyboard.press("Enter").catch(() => undefined);
+        clicked = true;
     }
-    await page.waitForTimeout(1200);
-    return true;
+    // Brief wait for OTP UI / generateOtp XHR
+    const waitUntil = Date.now() + 5000;
+    while (Date.now() < waitUntil && !apiConfirmed) {
+        if (await otpFieldVisible(page)) break;
+        await page.waitForTimeout(300);
+    }
+    page.off("response", onResponse);
+
+    if (!clicked) {
+        return { clicked: false, apiConfirmed: false };
+    }
+    // ONLY now tell the user we requested a code (after Continue)
+    await notify(
+        "phone_entered",
+        apiConfirmed
+            ? `requested *${label}* login code for ${maskPhone(loginPhone)}…`
+            : `tapped Continue on *${label}* for ${maskPhone(loginPhone)} — waiting for the code screen…`,
+    );
+    return { clicked: true, apiConfirmed };
 }

@@ -21,6 +21,9 @@ import {
     clearOtpAskDedupe,
     hasParkedBrowserOtpSession,
     queuePendingBrowserOtp,
+    claimGotCodeAck,
+    currentBrowserGeneration,
+    hasPharmacyOtpSendBeenClaimed,
 } from "./parkedOtpSession.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
@@ -31,6 +34,7 @@ import {
     resolveSiteFromMessage,
     siteKeyToPartnerKey,
 } from "./siteResolve";
+import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 
 export type BrowserTaskPhase =
     | "idle"
@@ -60,7 +64,7 @@ const BROWSE_INTENT =
 
 /** Site-explicit browser orders only — Vit C / medicines go to pharmacy conversational path. */
 const ORDER_VIA_BROWSER_LEGACY =
-    /\b(order\s+.+\s+from\s+(apollo|pharmeasy|1\s*mg|tata|blinkit|amazon|flipkart|bigbasket|big\s*basket))\b/i;
+    /\b(order\s+.+\s+from\s+(apollo|pharmeasy|1\s*mg|tata|blinkit|amazon|flipkart|bigbasket|big\s*basket|instamart|swiggy|zepto|zomato))\b/i;
 
 const PharmacyLike =
     /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg)\b/i;
@@ -79,7 +83,17 @@ export function messageLooksLikeBrowserTask(text: string): boolean {
     if (BROWSE_INTENT.test(t) && t.split(/\s+/).length >= 3) return true;
     // Medicine / Vit C without an explicit "from <site>" URL → pharmacy path, not Playwright.
     if (/\border\b/i.test(t) && PharmacyLike.test(t) && /\bfrom\b/i.test(t)) return true;
-    // Explicit force-browser for MCP partners
+    // Browser-first partners (default ON): Instamart / Swiggy / Zepto / Blinkit / Zomato
+    if (
+        /\b(order|buy|get|purchase|shop)\b/i.test(t) &&
+        /\b(instamart|swiggy|zepto|blinkit|zomato)\b/i.test(t)
+    ) {
+        const partner = partnerFromText(t);
+        if (partner !== "generic" && shouldPreferBrowserForPartner(partner)) return true;
+        // Blinkit/Zomato always browser (no MCP); catch even if flag list trimmed
+        if (partner === "blinkit" || partner === "zomato") return true;
+    }
+    // Explicit force-browser for MCP partners (when flag off)
     if (
         /\b(via\s+browser|any\s*site|browse)\b/i.test(t) &&
         /\b(instamart|swiggy|zepto)\b/i.test(t)
@@ -257,10 +271,26 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         };
     }
 
+    // OTP paste: ONLY pure 4–8 digits while awaiting_otp AND SMS was actually requested
+    // (parked page or Continu/Send claimed). Never from order text / empty park / soft failures.
     if (draft && draft.phase === "awaiting_otp" && /^\d{4,8}$/.test(text)) {
+        const gen = currentBrowserGeneration(input.familyId, input.actorUserId);
+        const parked = hasParkedBrowserOtpSession(input.familyId, input.actorUserId);
+        const sendClaimed = hasPharmacyOtpSendBeenClaimed(input.familyId, input.actorUserId, gen);
+        if (!parked && !sendClaimed) {
+            return {
+                text:
+                    "I don't have a login-code screen open yet (or the last attempt didn't request an SMS). " +
+                    "Reply *retry* to open again, or *cancel* — don't paste a code until I ask.",
+                draft,
+            };
+        }
+        const ackOnce = claimGotCodeAck(input.familyId, input.actorUserId, gen);
+        const ackText = "Got the code — signing in…";
+
         // Fast path: inject into parked live page (never relaunch → never re-Send OTP)
-        if (hasParkedBrowserOtpSession(input.familyId, input.actorUserId)) {
-            draft.lastMessage = "Got the code — signing in…";
+        if (parked) {
+            draft.lastMessage = ackText;
             draft.phase = "running";
             await saveDraft(input.phone, draft);
             void (async () => {
@@ -311,15 +341,33 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                     );
                 }
             })();
-            return { text: "Got the code — signing in…", draft };
+            // Duplicate inbound (Meta retry) after first ACK: silent / short noop
+            if (!ackOnce) {
+                return { text: "Still signing in with that code…", draft };
+            }
+            return { text: ackText, draft };
         }
 
-        // Browser not ready yet — queue digits for when OTP page parks
+        // No live park yet — only queue if we already asked for OTP (awaiting_otp).
+        // Do NOT emit "Got the code" from empty/stale park on the same turn as need_otp.
         queuePendingBrowserOtp(input.familyId, input.actorUserId, text);
-        draft.lastMessage = "Got the code — signing in as soon as the login screen is ready…";
+        draft.lastMessage = ackText;
         await saveDraft(input.phone, draft);
+        if (!ackOnce) {
+            return { text: "Still signing in with that code…", draft };
+        }
         return {
             text: "Got the code — signing in as soon as the login screen is ready…",
+            draft,
+        };
+    }
+
+    // Digits while still opening (phase running): do NOT pretend we got an OTP.
+    if (draft && draft.phase === "running" && /^\d{4,8}$/.test(text)) {
+        return {
+            text:
+                "I'm still opening the login page — hang tight. " +
+                "*Paste the SMS OTP only after I ask* for it (or reply *cancel*).",
             draft,
         };
     }

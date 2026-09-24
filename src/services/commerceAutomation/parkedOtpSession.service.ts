@@ -35,6 +35,8 @@ const generationByKey = new Map<string, number>();
 const lastOtpAskByKey = new Map<string, { text: string; at: number }>();
 /** One Continue/Send-OTP click per browserGeneration — blocks Gemini + relaunch spam. */
 const otpSendClaimedByKey = new Map<string, number>();
+/** One "Got the code — signing in" ACK per generation (dedupe webhook retries). */
+const otpGotCodeAckByKey = new Map<string, number>();
 /** Soft cancel marker so SLA "still working" cannot fire after cancel. */
 const cancelledAtByKey = new Map<string, number>();
 const cancelledAtByPhone = new Map<string, number>();
@@ -55,6 +57,8 @@ export function beginBrowserGeneration(familyId: string, userId: string): number
     const next = (generationByKey.get(key) ?? 0) + 1;
     generationByKey.set(key, next);
     otpSendClaimedByKey.delete(key);
+    otpGotCodeAckByKey.delete(key);
+    pendingOtps.delete(key); // never consume stale digits from a prior attempt
     cancelledAtByKey.delete(key);
     activeTaskGenerationByKey.set(key, next);
     void disposeParked(key);
@@ -162,6 +166,7 @@ export async function abortBrowserSessionForUser(
     pendingOtps.delete(key);
     lastOtpAskByKey.delete(key);
     otpSendClaimedByKey.delete(key);
+    otpGotCodeAckByKey.delete(key);
     activeTaskGenerationByKey.delete(key);
     const now = Date.now();
     cancelledAtByKey.set(key, now);
@@ -233,6 +238,43 @@ export async function fillOtpOnPage(
     otp: string,
 ): Promise<{ filled: boolean; reason?: string }> {
     try {
+        const code = otp.replace(/\D/g, "").slice(0, 8);
+        if (!code) return { filled: false, reason: "empty_otp" };
+
+        // Apollo (and similar): separate digit1..digitN boxes without maxlength=1
+        const namedDigits = page.locator(
+            'input[name^="digit"], input[id^="digit"], input[name*="otpDigit" i]',
+        );
+        const namedCount = await namedDigits.count().catch(() => 0);
+        if (namedCount >= 4 && namedCount <= 8) {
+            for (let i = 0; i < Math.min(namedCount, code.length); i++) {
+                const box = namedDigits.nth(i);
+                await box.click({ timeout: 3000 }).catch(() => undefined);
+                await box.fill("").catch(() => undefined);
+                await box.fill(code[i]!).catch(() => undefined);
+            }
+            await page.keyboard.press("Enter").catch(() => undefined);
+            const verify = page.getByRole("button", {
+                name: /^(verify|continue|submit|confirm|login|log in)$/i,
+            });
+            if (await verify.count()) {
+                await verify.first().click({ timeout: 3000 }).catch(() => undefined);
+            }
+            await page.waitForTimeout(1500);
+            return { filled: true };
+        }
+
+        const boxes = page.locator('input[maxlength="1"], input[aria-label*="digit" i]');
+        const boxCount = await boxes.count().catch(() => 0);
+        if (boxCount >= 4 && boxCount <= 8) {
+            for (let i = 0; i < Math.min(boxCount, code.length); i++) {
+                await boxes.nth(i).fill(code[i]!).catch(() => undefined);
+            }
+            await page.keyboard.press("Enter").catch(() => undefined);
+            await page.waitForTimeout(1500);
+            return { filled: true };
+        }
+
         const dedicated =
             'input[autocomplete="one-time-code"], input[name*="otp" i], input[id*="otp" i], input[placeholder*="OTP" i], input[placeholder*="one time" i], input[placeholder*="verification" i], input[aria-label*="otp" i]';
         let el = page.locator(dedicated).first();
@@ -242,14 +284,7 @@ export async function fillOtpOnPage(
         if (!(await el.count())) return { filled: false, reason: "no_otp_field" };
         await el.click({ timeout: 5000 }).catch(() => undefined);
         await el.fill("");
-        await el.fill(otp);
-        const boxes = page.locator('input[maxlength="1"], input[aria-label*="digit" i]');
-        const boxCount = await boxes.count().catch(() => 0);
-        if (boxCount >= 4 && boxCount <= 8 && otp.length === boxCount) {
-            for (let i = 0; i < boxCount; i++) {
-                await boxes.nth(i).fill(otp[i]!).catch(() => undefined);
-            }
-        }
+        await el.fill(code);
         await page.keyboard.press("Enter").catch(() => undefined);
         const verify = page.getByRole("button", {
             name: /^(verify|continue|submit|confirm|login|log in)$/i,
@@ -292,6 +327,36 @@ export function hasPharmacyOtpSendBeenClaimed(
 ): boolean {
     const key = browserSessionKey(familyId, userId);
     return otpSendClaimedByKey.get(key) === generation;
+}
+
+/** Drop send-claim after a failed bootstrap so WA won't treat digits as a real OTP paste. */
+export function releasePharmacyOtpSendClaim(
+    familyId: string,
+    userId: string,
+    generation: number,
+): void {
+    const key = browserSessionKey(familyId, userId);
+    if (otpSendClaimedByKey.get(key) === generation) {
+        otpSendClaimedByKey.delete(key);
+    }
+}
+
+/**
+ * Claim the single "Got the code — signing in" WhatsApp ACK for this generation.
+ * Returns true only once — duplicate inbound OTP / webhook retries get false.
+ */
+export function claimGotCodeAck(
+    familyId: string,
+    userId: string,
+    generation?: number,
+): boolean {
+    const key = browserSessionKey(familyId, userId);
+    const gen = generation ?? currentBrowserGeneration(familyId, userId);
+    if (gen <= 0) return false;
+    if (!isBrowserGenerationCurrent(familyId, userId, gen)) return false;
+    if (otpGotCodeAckByKey.get(key) === gen) return false;
+    otpGotCodeAckByKey.set(key, gen);
+    return true;
 }
 
 export function markBrowserCancelledForPhone(phone: string): void {

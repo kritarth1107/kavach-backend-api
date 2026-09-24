@@ -363,26 +363,28 @@ export async function handlePharmacyWhatsAppTurn(input: {
             otpChallengeId: challenge,
         }).catch(() => undefined);
 
+        // phase "running" until bootstrap actually requests SMS + OTP UI.
+        // Premature awaiting_otp lets digit-ish noise / stale pending queue fire false "Got the code".
         await WhatsappSession.findOneAndUpdate(
             { phone: input.phone },
             {
                 $set: {
-                    pendingCommerceOtp: { partner, challengeId: challenge },
                     browserTaskDraft: {
-                        phase: "awaiting_otp",
+                        phase: "running",
                         goal: `Order from ${partnerLabel(partner)}: ${summary}`,
                         partner,
                         otpChallengeId: challenge,
+                        lastMessage: `Opening ${partnerLabel(partner)}…`,
                     },
                     pharmacyDraft: null,
                     updatedAt: new Date(),
                 },
+                $unset: { pendingCommerceOtp: 1 },
             },
             { upsert: true },
         );
 
         const goal = `Order from ${partnerLabel(partner)}: ${summary}`;
-        draft.phase = "awaiting_otp";
         await saveDraft(input.phone, null);
 
         // Do not block WhatsApp on Chromium — kick off browser async; always push a
@@ -469,9 +471,9 @@ export async function handlePharmacyWhatsAppTurn(input: {
         return {
             text:
                 `Opening *${partnerLabel(partner)}* for: ${summary}\n\n` +
-                `I'll use your WhatsApp number for the *${partnerLabel(partner)}* login code.\n` +
-                `Watch for updates (still opening… / on login page…) — then *paste the SMS OTP here*.\n` +
-                `(I never read your device SMS — only what you send me on WhatsApp.)\n\n` +
+                `I'll sign in with your WhatsApp number when *${partnerLabel(partner)}* asks.\n` +
+                `Watch for updates (still opening… / on login page… / requested code…).\n` +
+                `*Paste the SMS OTP only after I ask* — I never read your device SMS.\n\n` +
                 `No silent pay — I'll ask you to confirm item+total+address before checkout.\n` +
                 `Reply *cancel* to stop.`,
             draft,

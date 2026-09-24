@@ -3,6 +3,7 @@
  * Run: BROWSER_WORKER_MODE=dry_run npx tsx scripts/smoke-private-browser.ts
  */
 process.env.BROWSER_WORKER_MODE = process.env.BROWSER_WORKER_MODE || "dry_run";
+process.env.COMMERCE_BROWSER_FIRST = process.env.COMMERCE_BROWSER_FIRST || "1";
 process.env.COMMERCE_SESSION_ENCRYPTION_KEY =
     process.env.COMMERCE_SESSION_ENCRYPTION_KEY || "smoke-test-key-not-for-prod";
 
@@ -89,6 +90,15 @@ async function main() {
     assert(!messageLooksLikeUnsupportedCommerce("buy iphone from amazon"), "amazon phone not unsupported");
     assert(messageLooksLikeBrowserTask("order oats from bigbasket"), "bigbasket browser intent");
     assert(messageLooksLikeBrowserTask("buy this from amazon"), "amazon browser intent");
+    assert(messageLooksLikeBrowserTask("order milk from instamart"), "instamart browser-first intent");
+    assert(messageLooksLikeBrowserTask("order milk from zepto"), "zepto browser-first intent");
+    assert(messageLooksLikeBrowserTask("order milk from blinkit"), "blinkit browser-first intent");
+    assert(messageLooksLikeBrowserTask("order pizza from swiggy"), "swiggy browser-first intent");
+    assert(messageLooksLikeBrowserTask("order biryani from zomato"), "zomato browser-first intent");
+    assert(resolveSiteFromMessage("order milk from instamart").preferMcp === false, "instamart preferMcp false when browser-first");
+    assert(resolvePlaybook(undefined, "order milk from instamart").partner === "instamart", "instamart playbook");
+    assert(resolvePlaybook(undefined, "order biryani from zomato").partner === "zomato", "zomato playbook");
+    assert(resolvePlaybook(undefined, "order milk from zepto").startUrl.includes("zepto"), "zepto startUrl");
 
     const sites = listSupportedBrowserSites();
     assert(sites.some((s) => /BigBasket/i.test(s)), "sites list has BigBasket");
@@ -98,6 +108,11 @@ async function main() {
     await flow("order vit c from apollo", "apollo");
     await flow("order oats from bigbasket");
     await flow("buy this from amazon");
+    await flow("order milk from instamart", "instamart");
+    await flow("order milk from zepto", "zepto");
+    await flow("order milk from blinkit", "blinkit");
+    await flow("order pizza from swiggy", "swiggy");
+    await flow("order biryani from zomato", "zomato");
 
     // Pharmacy async follow-up copy must never be empty / silent
     {
@@ -188,9 +203,11 @@ async function main() {
             beginBrowserGeneration,
             claimPharmacyOtpSend,
             hasPharmacyOtpSendBeenClaimed,
+            claimGotCodeAck,
             abortBrowserSessionForUser,
             shouldSuppressStillWorkingFallback,
             wasBrowserCancelledRecently,
+            queuePendingBrowserOtp,
         } = await import("../src/services/commerceAutomation/parkedOtpSession.service");
         const fam = "fam-otp-smoke";
         const user = "user-otp-smoke";
@@ -198,6 +215,13 @@ async function main() {
         assert(claimPharmacyOtpSend(fam, user, gen) === true, "first OTP send claim wins");
         assert(claimPharmacyOtpSend(fam, user, gen) === false, "second OTP send claim blocked");
         assert(hasPharmacyOtpSendBeenClaimed(fam, user, gen) === true, "otp send marked claimed");
+        assert(claimGotCodeAck(fam, user, gen) === true, "first got-code ACK wins");
+        assert(claimGotCodeAck(fam, user, gen) === false, "duplicate got-code ACK blocked");
+        queuePendingBrowserOtp(fam, user, "123456");
+        const gen2 = beginBrowserGeneration(fam, user);
+        assert(gen2 === gen + 1, "generation increments");
+        // New generation must allow a fresh ACK (stale pending cleared)
+        assert(claimGotCodeAck(fam, user, gen2) === true, "new generation allows fresh got-code ACK");
         await abortBrowserSessionForUser(fam, user, { phone: "+919999000111" });
         assert(wasBrowserCancelledRecently(fam, user) === true, "cancel sticks recently");
         assert(
@@ -213,7 +237,7 @@ async function main() {
             }) === true,
             "still-working suppressed after cancel-by-phone",
         );
-        console.log("OK: otp one-shot + cancel + still-working suppress");
+        console.log("OK: otp one-shot + got-code ACK dedupe + cancel + still-working suppress");
     }
 
     console.log("\nSmoke private browser / any-site:", process.exitCode ? "FAILED" : "PASSED");

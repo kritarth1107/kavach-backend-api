@@ -77,6 +77,17 @@ export function formatPharmacyBrowserFollowUp(
                         : reason === "site_slow"
                           ? `${label} was too slow to show the login-code screen.`
                           : `${label} didn't finish opening the order.`;
+        // site_slow / no_login / captcha / crash: SMS was NOT reliably requested — don't ask for OTP
+        const smsNeverExpected =
+            reason === "disabled" ||
+            reason === "site_slow" ||
+            reason === "no_login_button" ||
+            reason === "captcha" ||
+            reason === "chromium_crash" ||
+            reason === "busy" ||
+            /didn't send a login code|couldn't tap Continue|No SMS is expected|login paused/i.test(
+                base,
+            );
         return {
             text: [
                 tip,
@@ -85,6 +96,8 @@ export function formatPharmacyBrowserFollowUp(
                 `Nothing was ordered or paid.`,
                 `Reply *retry* to try again, or *cancel* to stop.`,
             ].join("\n"),
+            // Keep draft (except kill-switch) so *retry* still works; phase awaiting_otp
+            // is gated in WA handler — digits ignored unless OTP was actually requested/parked.
             clearSession: reason === "disabled",
             phase: reason === "disabled" ? "idle" : "awaiting_otp",
         };
@@ -130,7 +143,6 @@ export function formatPharmacyBrowserFollowUp(
                     : "",
                 ``,
                 `Reply *retry* to try again, or *cancel* to stop.`,
-                `If a code arrives later, you can still *paste the OTP here*.`,
             ]
                 .filter(Boolean)
                 .join("\n"),
