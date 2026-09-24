@@ -14,7 +14,10 @@ ARG GIT_BRANCH=unknown
 ARG BUILD_TIME=unknown
 ARG IMAGE_TAG=latest
 
+# Chromium is NOT installed in this alpine image — BROWSER_WORKER_MODE=dry_run on Cloud Run.
+# Local/dev: npm i && npx playwright install chromium; BROWSER_WORKER_MODE=playwright|auto.
 ENV NODE_ENV=production \
+    BROWSER_WORKER_MODE=dry_run \
     GIT_COMMIT_SHA=$GIT_COMMIT_SHA \
     GIT_BRANCH=$GIT_BRANCH \
     BUILD_TIME=$BUILD_TIME \

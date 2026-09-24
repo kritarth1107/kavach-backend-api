@@ -75,3 +75,4 @@ coverage/
 *.key
 *.p12
 *.crt
+.saheli-browser-profiles/

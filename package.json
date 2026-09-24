@@ -9,7 +9,8 @@
     "start": "node dist/app.js",
     "db:reset": "tsx scripts/reset-cosmos-db.ts --yes",
     "seed:vish": "tsx scripts/seed-vish-demo.ts",
-    "eval:elder-facts": "tsx eval/run-elder-facts.ts"
+    "eval:elder-facts": "tsx eval/run-elder-facts.ts",
+    "browser:install": "npx playwright install chromium"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",
@@ -27,6 +28,7 @@
     "multer": "^2.1.1",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
+    "playwright": "^1.63.0",
     "resend": "^6.18.1",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",

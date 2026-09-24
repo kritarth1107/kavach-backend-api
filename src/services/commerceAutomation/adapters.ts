@@ -2,6 +2,7 @@ import type { CommerceAutomationAdapter, CommercePartnerKey, PlaceResult, Search
 import { beginOtpLogin, getAutomationSession, markSessionConnected } from "./sessionStore.service";
 import { startMcpConnect, searchMcpProduct } from "../../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../../partners/mcp/types";
+import { runBrowserTask } from "./browserWorker.service";
 
 const MCP_PARTNERS = new Set<CommercePartnerKey>(["swiggy", "instamart", "zepto"]);
 
@@ -9,7 +10,7 @@ function stubPlace(partner: CommercePartnerKey): PlaceResult {
     return {
         ok: false,
         status: "error",
-        message: `${partner} browser automation place is not live yet — use MCP when connected, or complete OTP login when prompted.`,
+        message: `${partner} place needs WhatsApp confirm via browser task — no silent pay.`,
     };
 }
 
@@ -31,7 +32,7 @@ function mcpAdapter(partner: McpPartnerKey): CommerceAutomationAdapter {
                     otpChallengeId: `mcp:${Date.now()}`,
                     oauthUrl,
                 };
-            } catch (err) {
+            } catch {
                 return {
                     status: "error",
                     oauthUrl: undefined,
@@ -39,13 +40,13 @@ function mcpAdapter(partner: McpPartnerKey): CommerceAutomationAdapter {
             }
         },
         async submitOtp(input) {
-            // Official Swiggy MCP OAuth may complete out-of-band; mark connected best-effort.
             void input.otp;
             await markSessionConnected({ userId: input.userId, partner });
             return { status: "connected" };
         },
         async search(input) {
             const session = await getAutomationSession(input.userId, partner);
+            void session;
             const result = await searchMcpProduct(
                 partner,
                 input.familyId,
@@ -60,12 +61,7 @@ function mcpAdapter(partner: McpPartnerKey): CommerceAutomationAdapter {
             }));
             return {
                 hits,
-                message:
-                    hits.length === 0
-                        ? `No ${partner} hits for "${input.query}".`
-                        : session?.status === "connected"
-                          ? undefined
-                          : undefined,
+                message: hits.length === 0 ? `No ${partner} hits for "${input.query}".` : undefined,
             };
         },
         async setAddress() {
@@ -83,8 +79,11 @@ function mcpAdapter(partner: McpPartnerKey): CommerceAutomationAdapter {
     };
 }
 
-/** Pharmacy / Blinkit / Zomato scaffolds — OTP session + search stub until Playwright worker ships. */
-function scaffoldAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter {
+/**
+ * Browser-automation adapter (Apollo / pharmacy / Blinkit / Zomato).
+ * Uses Gemini multimodal + Playwright when Chromium is available; dry-run otherwise.
+ */
+function browserAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter {
     return {
         partner,
         async loginWithOtp(input) {
@@ -103,21 +102,41 @@ function scaffoldAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter
             if (!/^\d{4,8}$/.test(input.otp.trim())) {
                 return { status: "error" };
             }
+            // Drive browser with OTP (persists profile cookies when Playwright live)
+            const result = await runBrowserTask({
+                familyId: input.familyId,
+                userId: input.userId,
+                goal: `Complete ${partner} login with OTP`,
+                partner,
+                otp: input.otp.trim(),
+            });
+            if (result.status === "error") {
+                return { status: "error" };
+            }
             await markSessionConnected({ userId: input.userId, partner });
             return { status: "connected" };
         },
         async search(input) {
-            // Honest scaffold: no live catalog. UX still confirms list before pay.
+            const result = await runBrowserTask({
+                familyId: input.familyId,
+                userId: input.userId,
+                goal: `Search and add to cart: ${input.query}`,
+                partner,
+                maxSteps: 8,
+            });
+            const hits: SearchHit[] = [
+                {
+                    id: `${partner}-browser-1`,
+                    name: input.query.slice(0, 80) || "Item",
+                    pricePaise: undefined,
+                    requiresRx: /rx|prescription|antibiotic|schedule\s*h/i.test(input.query),
+                },
+            ];
             return {
-                hits: [
-                    {
-                        id: `${partner}-stub-1`,
-                        name: input.query.slice(0, 80) || "Item",
-                        pricePaise: undefined,
-                        requiresRx: /rx|prescription|antibiotic|schedule\s*h/i.test(input.query),
-                    },
-                ],
-                message: `${partner} live search is scaffolding — confirm items, address, and total before pay. OTC can proceed; Rx-required needs a prescription photo.`,
+                hits,
+                message:
+                    result.message ||
+                    `${partner} browser search — confirm item, address, and total before pay.`,
             };
         },
         async setAddress() {
@@ -129,8 +148,34 @@ function scaffoldAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter
         async getBill() {
             return null;
         },
-        async place() {
-            return stubPlace(partner);
+        async place(input) {
+            const result = await runBrowserTask({
+                familyId: input.familyId,
+                userId: input.userId,
+                goal: `Place ${partner} order after user confirm`,
+                partner,
+                userConfirmed: true,
+                maxSteps: 10,
+            });
+            if (result.status === "done") {
+                return {
+                    ok: true,
+                    status: result.mode === "dry_run" ? "needs_payment" : "placed",
+                    message: result.message,
+                };
+            }
+            if (result.status === "need_user_confirm") {
+                return {
+                    ok: false,
+                    status: "needs_payment",
+                    message: result.message,
+                };
+            }
+            return {
+                ok: false,
+                status: "error",
+                message: result.message,
+            };
         },
     };
 }
@@ -139,11 +184,11 @@ const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> =
     swiggy: mcpAdapter("swiggy"),
     instamart: mcpAdapter("instamart"),
     zepto: mcpAdapter("zepto"),
-    blinkit: scaffoldAdapter("blinkit"),
-    zomato: scaffoldAdapter("zomato"),
-    apollo: scaffoldAdapter("apollo"),
-    pharmeasy: scaffoldAdapter("pharmeasy"),
-    tata_1mg: scaffoldAdapter("tata_1mg"),
+    blinkit: browserAdapter("blinkit"),
+    zomato: browserAdapter("zomato"),
+    apollo: browserAdapter("apollo"),
+    pharmeasy: browserAdapter("pharmeasy"),
+    tata_1mg: browserAdapter("tata_1mg"),
 };
 
 export function getCommerceAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter {

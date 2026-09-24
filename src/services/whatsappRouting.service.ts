@@ -436,18 +436,47 @@ export async function handleWhatsAppInbound(body: {
         return outbound(phone, stampedParityReply);
     }
 
-    // Pharmacy (Apollo / PharmEasy / Tata 1mg) — elder places, caregivers notify-only.
+    // Private browser + pharmacy (Apollo / Instamart browse) — elder & caregiver.
     {
+        const {
+            handleBrowserTaskWhatsAppTurn,
+            messageLooksLikeBrowserTask,
+        } = await import("./commerceAutomation/browserTaskWhatsApp.service");
         const { handlePharmacyWhatsAppTurn, messageLooksLikePharmacyOrder } = await import(
             "./pharmacyOrderFlow.service"
         );
         const { getCommerceAdapter } = await import("./commerceAutomation");
-        const waForPharmacy = await WhatsappSession.findOne({ phone }).lean();
-        const pendingOtp = (waForPharmacy as { pendingCommerceOtp?: { partner: string; challengeId?: string } } | null)
+        const waForCommerce = await WhatsappSession.findOne({ phone }).lean();
+        const browserDraft = (waForCommerce as { browserTaskDraft?: { phase?: string } } | null)
+            ?.browserTaskDraft;
+        const pendingOtp = (waForCommerce as { pendingCommerceOtp?: { partner: string; challengeId?: string } } | null)
             ?.pendingCommerceOtp;
-        if (pendingOtp && /^\d{4,8}$/.test(text.trim())) {
+
+        // Prefer browser-task OTP/confirm state machine when a draft is active.
+        if (
+            browserDraft &&
+            (browserDraft.phase === "awaiting_otp" ||
+                browserDraft.phase === "awaiting_confirm" ||
+                browserDraft.phase === "running")
+        ) {
+            const browserReply = await handleBrowserTaskWhatsAppTurn({
+                phone,
+                text,
+                familyId: identity.familyId,
+                actorUserId: identity.userId,
+                recipientUserId: subjectUserId,
+                actorRole: identity.role,
+            });
+            if (browserReply) {
+                return outbound(phone, browserReply.text);
+            }
+        }
+
+        if (pendingOtp && /^\d{4,8}$/.test(text.trim()) && !browserDraft) {
             try {
-                const adapter = getCommerceAdapter(pendingOtp.partner as import("./commerceAutomation").CommercePartnerKey);
+                const adapter = getCommerceAdapter(
+                    pendingOtp.partner as import("./commerceAutomation").CommercePartnerKey,
+                );
                 const result = await adapter.submitOtp({
                     userId: identity.userId,
                     familyId: identity.familyId,
@@ -468,10 +497,29 @@ export async function handleWhatsAppInbound(body: {
                 console.warn("Commerce OTP submit failed:", err);
             }
         }
+
+        // New browser / browse-help intents (elder + caregiver personal assistant).
         if (
-            identity.role === FamilyRole.CARE_RECIPIENT &&
-            (messageLooksLikePharmacyOrder(text) ||
-                (waForPharmacy as { pharmacyDraft?: unknown } | null)?.pharmacyDraft)
+            messageLooksLikeBrowserTask(text) ||
+            (waForCommerce as { browserTaskDraft?: unknown } | null)?.browserTaskDraft
+        ) {
+            const browserReply = await handleBrowserTaskWhatsAppTurn({
+                phone,
+                text,
+                familyId: identity.familyId,
+                actorUserId: identity.userId,
+                recipientUserId: subjectUserId,
+                actorRole: identity.role,
+            });
+            if (browserReply) {
+                return outbound(phone, browserReply.text);
+            }
+        }
+
+        // Pharmacy conversational path (elder + caregiver).
+        if (
+            messageLooksLikePharmacyOrder(text) ||
+            (waForCommerce as { pharmacyDraft?: unknown } | null)?.pharmacyDraft
         ) {
             const pharmacyReply = await handlePharmacyWhatsAppTurn({
                 phone,

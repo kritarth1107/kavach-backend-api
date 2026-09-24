@@ -1,13 +1,12 @@
 /**
  * Pharmacy commerce path for elder WhatsApp (Instinct parity).
- * Partners: Apollo, PharmEasy, Tata 1mg — adapters are scaffolded until live API/automation.
+ * Partners: Apollo, PharmEasy, Tata 1mg — confirm handoff to private browser worker (Gemini+Playwright/dry-run).
  * Rules: elder places (no caregiver approval); caregivers notify-only; confirm total+address before pay;
  * never diagnose; OTC can proceed; Rx-required asks for prescription photo.
  */
 import WhatsappSession from "../models/whatsappSession.model";
 import { FamilyRole } from "../types/family.types";
-import { getCommerceAdapter, PHARMACY_PARTNERS, type CommercePartnerKey } from "./commerceAutomation";
-import { notifyCaregivers } from "./saheliCaregiverAlert.service";
+import { PHARMACY_PARTNERS, type CommercePartnerKey } from "./commerceAutomation";
 
 export type PharmacyPhase =
     | "idle"
@@ -28,7 +27,7 @@ export type PharmacyDraft = {
 };
 
 const PHARMACY_INTENT =
-    /\b(order\s+medicines?|order\s+medicine|medicines?\s+for\s+me|pharmacy|apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|dawai\s+(mangao|order|bhej)|order\s+dawai)\b/i;
+    /\b(order\s+medicines?|order\s+medicine|medicines?\s+for\s+me|pharmacy|apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|dawai\s+(mangao|order|bhej)|order\s+dawai|order\s+vit(?:amin)?\s*c|vit(?:amin)?\s*c\s+from\s+apollo)\b/i;
 
 const PARTNER_PICK =
     /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|tata)\b/i;
@@ -245,37 +244,53 @@ export async function handlePharmacyWhatsAppTurn(input: {
     }
 
     if (draft.phase === "confirm_basket" && /^(confirm|place|yes|haan|ok)$/i.test(text)) {
-        // Elder path: no caregiver approval. Scaffold place — notify caregivers with summary.
+        // Hand off to private browser worker (Gemini + Playwright / dry-run) — OTP + confirm UX.
         const partner = draft.partner ?? "apollo";
-        const adapter = getCommerceAdapter(partner);
-        const search = await adapter.search({
+        const summary = draft.items.map((i) => `${i.name}×${i.quantity}`).join(", ");
+        const { runBrowserTask } = await import("./commerceAutomation/browserWorker.service");
+        const { beginOtpLogin } = await import("./commerceAutomation/sessionStore.service");
+
+        const challenge = `pharmacy-${partner}-${Date.now()}`;
+        await beginOtpLogin({
             userId: input.actorUserId,
+            partner,
+            otpChallengeId: challenge,
+        }).catch(() => undefined);
+
+        await WhatsappSession.findOneAndUpdate(
+            { phone: input.phone },
+            {
+                $set: {
+                    pendingCommerceOtp: { partner, challengeId: challenge },
+                    browserTaskDraft: {
+                        phase: "awaiting_otp",
+                        goal: `Order from ${partnerLabel(partner)}: ${summary}`,
+                        partner,
+                        otpChallengeId: challenge,
+                    },
+                    pharmacyDraft: null,
+                    updatedAt: new Date(),
+                },
+            },
+            { upsert: true },
+        );
+
+        const result = await runBrowserTask({
             familyId: input.familyId,
-            query: draft.items.map((i) => i.name).join(", "),
+            userId: input.actorUserId,
+            goal: `Order from ${partnerLabel(partner)}: ${summary}`,
+            partner,
         });
 
-        const summary = draft.items.map((i) => `${i.name}×${i.quantity}`).join(", ");
-        const notifyBody = `Amma placed a medicine order on ${partnerLabel(partner)} — ${summary}. Notify only — no approval needed. (Pharmacy path: scaffold until live partner place.)`;
-
-        if (input.actorRole === FamilyRole.CARE_RECIPIENT) {
-            void notifyCaregivers({
-                familyId: input.familyId,
-                recipientUserId: input.recipientUserId,
-                actorUserId: input.actorUserId,
-                message: notifyBody,
-                urgency: "low",
-                kind: "order_placed",
-            });
-        }
-
-        draft.phase = "placed";
+        // Elder notify-only after eventual done is handled by browserTaskWhatsApp.
+        draft.phase = "awaiting_otp";
         await saveDraft(input.phone, null);
 
         return {
             text:
-                `Got it — ${partnerLabel(partner)} order noted for: ${summary}.\n\n` +
-                `${search.message ?? "I'll confirm live total + address before final pay when the pharmacy connection is live."}\n\n` +
-                `Your family has been notified. _No diagnosis — only fulfilling your request._`,
+                result.message ||
+                `${partnerLabel(partner)} may text a login code — paste the SMS OTP here.\n` +
+                    `(Basket: ${summary}. No silent pay — I'll ask you to confirm item+total+address before checkout.)`,
             draft,
         };
     }
