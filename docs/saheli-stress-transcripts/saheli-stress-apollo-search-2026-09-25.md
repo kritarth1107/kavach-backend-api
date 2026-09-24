@@ -5,6 +5,7 @@
 - **Care recipient from:** `917694829888` (+917694829888)
 - **Focus:** Apollo pharmacy guest catalog + search-before-login; OTP hard-capped
 - **Baseline backend SHA (at test time):** `f49d9f2df19c9945d612a73cdf7688301de0372e`
+- **Fix + transcript SHA (pushed main):** `451692f0a5ff19517a43329522b6f40e295966aa`
 - **AI / LLM stack:** unchanged (no Co-authored-by; no model/stack edits)
 - **OTP / SMS:** **1** controlled kickoff only — bare `ok` mid multi-SKU list unexpectedly opened Apollo login (C18). Immediately `cancel`. No fake OTPs, no resend. C8 `2` stayed on SKU confirm (did not open login). C9 `confirm` skipped to avoid a 2nd SMS.
 
