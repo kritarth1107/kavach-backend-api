@@ -2,6 +2,7 @@
  * Deterministic Apollo / PharmEasy / 1mg login bootstrap (Playwright).
  * Prefer this over burning Gemini steps just to click Login + enter phone.
  * Returns need_otp only after Continue/Send OTP ran AND (generateOtp success OR real OTP UI).
+ * "Sent to" ONLY when generateOtp JSON succeeds for the SAME national-10 as filled.
  *
  * EMERGENCY: live Continue/Send-OTP is OFF unless BROWSER_PHARMACY_LOGIN=on|1|true.
  * One OTP request per login attempt max — never re-click Continue/resend while waiting.
@@ -502,7 +503,29 @@ export async function bootstrapPharmacyLogin(input: {
             };
         }
         if (await otpFieldVisible(page)) {
-            // Continue already ran — OTP UI after click is sufficient to ask; "Sent to" only if API confirmed
+            if (sendAttempt.rateLimited) {
+                return {
+                    ok: false,
+                    status: "error",
+                    stage: "failed",
+                    failureReason: "site_slow",
+                    message:
+                        `${label} asked me to wait / try again later (OTP rate-limit or already-sent). ` +
+                        `No new SMS is expected. Reply *retry* later or *cancel* — nothing was ordered.`,
+                };
+            }
+            if (sendAttempt.phoneMismatch) {
+                return {
+                    ok: false,
+                    status: "error",
+                    stage: "failed",
+                    failureReason: "site_slow",
+                    message:
+                        `${label} generateOtp echoed a different mobile than the one I filled. ` +
+                        `I won't claim SMS was sent. Reply *retry* or *cancel* — nothing was ordered.`,
+                };
+            }
+            // "Sent to" ONLY when generateOtp JSON clearly succeeded for the SAME national-10
             if (sendAttempt.apiConfirmed) {
                 await notify(
                     "otp_ready",
@@ -515,9 +538,11 @@ export async function bootstrapPharmacyLogin(input: {
                     message: [
                         `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
                         `(Sent to ${maskPhone(loginPhone)} — I never read your device SMS, only what you paste here.)`,
+                        `If no SMS in ~60s, reply *cancel* (don't resend).`,
                     ].join("\n"),
                 };
             }
+            // OTP digit UI after Continue but API not confirmed — ask without "Sent to"
             await notify(
                 "otp_ready",
                 `*${label}* code screen is open — *paste the SMS OTP here* (send not API-confirmed).`,
@@ -527,14 +552,27 @@ export async function bootstrapPharmacyLogin(input: {
                 status: "need_otp",
                 stage: "otp_ready",
                 message: [
-                    `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
-                    `(Code screen opened after Continue, but SMS send wasn't confirmed — if no SMS in ~30s, reply *retry*.)`,
+                    `I tapped Continue on *${label}*; if no SMS in 60s reply *cancel*.`,
+                    `*Paste the SMS OTP here* if it arrives (I never read your device SMS).`,
+                    `Don't ask me to resend — one Continue max this attempt.`,
                 ].join("\n"),
             };
         }
         // Explicitly do NOT click RESEND_TEXTS / CONTINUE_TEXTS here
         void RESEND_TEXTS;
         await page.waitForTimeout(800);
+    }
+
+    if (sendAttempt.rateLimited) {
+        return {
+            ok: false,
+            status: "error",
+            stage: "failed",
+            failureReason: "site_slow",
+            message:
+                `${label} hit an OTP rate-limit / try-again-later after Continue. ` +
+                `No SMS is expected. Reply *retry* later or *cancel* — nothing was ordered.`,
+        };
     }
 
     return {
@@ -551,9 +589,136 @@ export async function bootstrapPharmacyLogin(input: {
 export type OtpSendAttempt = {
     /** True only when Continue/Get OTP was clicked (or Enter after enabled Continue). */
     clicked: boolean;
-    /** True when Apollo/PharmEasy-style generateOtp (or equivalent) returned success. */
+    /**
+     * True only when generateOtp (or equiv) JSON clearly succeeds for the SAME national-10
+     * that was filled into the phone field. Never from bare HTTP 200 / OTP UI alone.
+     */
     apiConfirmed: boolean;
+    /** Partner said try-again-later / already-sent / rate-limit. */
+    rateLimited?: boolean;
+    /** generateOtp echoed a mobile that does not match the filled national-10. */
+    phoneMismatch?: boolean;
 };
+
+const OTP_SEND_URL_RE =
+    /generateOtp|sendOtp|send_otp|requestOtp|otp\/send|auth-service\/generateOtp/i;
+
+const OTP_RATE_LIMIT_RE =
+    /try\s*again\s*later|too\s*many\s*(requests|attempts|otp)|rate\s*limit|otp\s*already\s*sent|already\s*sent|please\s*wait|wait\s*\d+\s*(sec|min|second|minute)|cooldown|frequently|after\s*some\s*time/i;
+
+function sanitizeOtpLogSnippet(body: string): string {
+    return body
+        .replace(/"(accessToken|authToken|token|jwt|idToken|refreshToken)"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 280);
+}
+
+function nationalFromMaybePhone(raw: unknown): string {
+    if (raw == null) return "";
+    return String(raw).replace(/\D/g, "").slice(-10);
+}
+
+/** Parse partner OTP-send JSON; require same national-10 when mobile is echoed. */
+function evaluateGenerateOtpBody(
+    body: string,
+    national: string,
+): { confirmed: boolean; rateLimited: boolean; phoneMismatch: boolean; snippet: string } {
+    const snippet = sanitizeOtpLogSnippet(body);
+    if (OTP_RATE_LIMIT_RE.test(body)) {
+        return { confirmed: false, rateLimited: true, phoneMismatch: false, snippet };
+    }
+    if (/success["']?\s*:\s*false|"success"\s*:\s*false|otp\s*not\s*sent|failed to send|unable to send/i.test(body)) {
+        return { confirmed: false, rateLimited: false, phoneMismatch: false, snippet };
+    }
+
+    try {
+        const j = JSON.parse(body) as Record<string, unknown>;
+        const resp = (j.response && typeof j.response === "object" ? j.response : j) as Record<
+            string,
+            unknown
+        >;
+        const topCode = typeof j.code === "number" ? j.code : undefined;
+        if (topCode != null && topCode !== 200) {
+            const rate = OTP_RATE_LIMIT_RE.test(String(j.message ?? resp.message ?? "")) || topCode === 429;
+            return {
+                confirmed: false,
+                rateLimited: rate || OTP_RATE_LIMIT_RE.test(body),
+                phoneMismatch: false,
+                snippet,
+            };
+        }
+        const success =
+            resp.success === true || j.success === true || (j as { sucess?: boolean }).sucess === true;
+        const msg = String(resp.message ?? j.message ?? "");
+        const mobileNat = nationalFromMaybePhone(
+            resp.mobileNumber ?? resp.mobile ?? resp.phone ?? resp.phoneNumber,
+        );
+        const looksSent = /otp\s*sent|sent to the mobile/i.test(msg);
+
+        if (!success || !looksSent) {
+            return { confirmed: false, rateLimited: false, phoneMismatch: false, snippet };
+        }
+        if (mobileNat && mobileNat !== national) {
+            return { confirmed: false, rateLimited: false, phoneMismatch: true, snippet };
+        }
+        // Apollo always echoes mobileNumber — require match when present; else require national in body
+        if (mobileNat === national) {
+            return { confirmed: true, rateLimited: false, phoneMismatch: false, snippet };
+        }
+        if (body.includes(national) || body.includes(`+91${national}`)) {
+            return { confirmed: true, rateLimited: false, phoneMismatch: false, snippet };
+        }
+        return { confirmed: false, rateLimited: false, phoneMismatch: true, snippet };
+    } catch {
+        // Non-JSON: require explicit sent wording + national echo + success-ish
+        const hasSent = /otp\s*sent|sent to the mobile/i.test(body);
+        const hasSuccess = /"sucess"\s*:\s*true|success["']?\s*:\s*true/i.test(body);
+        const hasPhone = body.includes(national) || body.includes(`+91${national}`);
+        if (hasSent && hasSuccess && hasPhone) {
+            return { confirmed: true, rateLimited: false, phoneMismatch: false, snippet };
+        }
+        if (hasSent && hasSuccess && !hasPhone) {
+            return { confirmed: false, rateLimited: false, phoneMismatch: true, snippet };
+        }
+        return { confirmed: false, rateLimited: false, phoneMismatch: false, snippet };
+    }
+}
+
+async function pageLooksOtpRateLimited(page: Page): Promise<boolean> {
+    const blob = await pageBlob(page);
+    return OTP_RATE_LIMIT_RE.test(blob);
+}
+
+/** Ensure the visible phone field holds exactly the 10-digit national (no +91 / 91 prefix). */
+async function fillNationalPhoneOnly(
+    phoneInput: import("playwright").Locator,
+    national: string,
+): Promise<string> {
+    await phoneInput.click({ timeout: 5000 }).catch(() => undefined);
+    await phoneInput.fill("");
+    await phoneInput.fill(national);
+    let current = (await phoneInput.inputValue().catch(() => "")).replace(/\D/g, "");
+    // Reject +91 double-prefix / E.164 dumped into national field
+    if (current !== national) {
+        await phoneInput.fill("");
+        await phoneInput.pressSequentially(national, { delay: 35 }).catch(async () => {
+            await phoneInput.fill(national);
+        });
+        current = (await phoneInput.inputValue().catch(() => "")).replace(/\D/g, "");
+    }
+    if (current === `91${national}` || current.length > 10) {
+        console.warn(
+            `[pharmacy-login] phone field had non-national digits (len=${current.length}) — clearing to 10-digit`,
+        );
+        await phoneInput.fill("");
+        await phoneInput.pressSequentially(national, { delay: 40 }).catch(async () => {
+            await phoneInput.fill(national);
+        });
+        current = (await phoneInput.inputValue().catch(() => "")).replace(/\D/g, "");
+    }
+    return current;
+}
 
 /** Fill phone + click Continue/Get OTP at most ONCE. Never pretends SMS was sent. */
 async function fillPhoneAndContinueOnce(
@@ -568,16 +733,13 @@ async function fillPhoneAndContinueOnce(
     if (!/^[6-9]\d{9}$/.test(national)) {
         console.warn(`[pharmacy-login] phone not a valid IN mobile 10: ${national.slice(0, 4)}…`);
     }
-    await phoneInput.click({ timeout: 5000 }).catch(() => undefined);
-    await phoneInput.fill("");
-    await phoneInput.fill(national);
-    // React controlled inputs sometimes ignore fill() for enabling Continue
-    const current = await phoneInput.inputValue().catch(() => "");
-    if (current.replace(/\D/g, "").slice(-10) !== national) {
-        await phoneInput.fill("");
-        await phoneInput.pressSequentially(national, { delay: 35 }).catch(async () => {
-            await phoneInput.fill(national);
-        });
+    const fieldDigits = await fillNationalPhoneOnly(phoneInput, national);
+    if (fieldDigits !== national) {
+        console.warn(
+            `[pharmacy-login] phone field still not national-10 after fill (len=${fieldDigits.length} last4=${fieldDigits.slice(-4)})`,
+        );
+    } else {
+        console.info(`[pharmacy-login] phone field national-10 ok …${national.slice(-4)}`);
     }
     await tickLoginConsentCheckboxes(page);
     const enabled = await waitContinueEnabled(page, 7000);
@@ -591,37 +753,56 @@ async function fillPhoneAndContinueOnce(
         return { clicked: false, apiConfirmed: false };
     }
 
-    // Watch partner OTP APIs so we only tell WA "requested" after a real send
     let apiConfirmed = false;
-    const onResponse = async (resp: import("playwright").Response) => {
+    let rateLimited = false;
+    let phoneMismatch = false;
+
+    const onRequest = (req: import("playwright").Request) => {
         try {
-            const u = resp.url();
-            // Match real send endpoints only (not auth-service/accessToken etc.)
-            if (
-                !/generateOtp|sendOtp|send_otp|requestOtp|otp\/send|auth-service\/generateOtp/i.test(
-                    u,
-                )
-            ) {
-                return;
-            }
-            if (resp.status() < 200 || resp.status() >= 300) return;
-            const body = await resp.text().catch(() => "");
-            // Reject soft-fail bodies even on HTTP 200
-            if (/success["']?\s*:\s*false|"success"\s*:\s*false|otp\s*not\s*sent|failed to send/i.test(body)) {
-                return;
-            }
-            // Require explicit success evidence — never bare 200 / empty body
-            if (
-                /otp\s*sent|sent to the mobile|success["']?\s*:\s*true|"sucess"\s*:\s*true|successfully/i.test(
-                    body,
-                )
-            ) {
-                apiConfirmed = true;
+            const u = req.url();
+            if (!OTP_SEND_URL_RE.test(u)) return;
+            const post = req.postData() || "";
+            const snippet = sanitizeOtpLogSnippet(post);
+            const postNat = nationalFromMaybePhone(post);
+            const hasNat = post.includes(national) || post.includes(`+91${national}`) || postNat === national;
+            console.info(
+                `[pharmacy-login] OTP request ${u.slice(0, 120)} national_ok=${hasNat} body=${snippet}`,
+            );
+            if (post && !hasNat && /\d{10}/.test(post)) {
+                phoneMismatch = true;
             }
         } catch {
             /* ignore */
         }
     };
+
+    const onResponse = async (resp: import("playwright").Response) => {
+        try {
+            const u = resp.url();
+            if (!OTP_SEND_URL_RE.test(u)) return;
+            if (resp.status() < 200 || resp.status() >= 300) {
+                const body = await resp.text().catch(() => "");
+                const snippet = sanitizeOtpLogSnippet(body);
+                console.warn(
+                    `[pharmacy-login] OTP response HTTP ${resp.status()} ${u.slice(0, 100)} body=${snippet}`,
+                );
+                if (OTP_RATE_LIMIT_RE.test(body)) rateLimited = true;
+                return;
+            }
+            const body = await resp.text().catch(() => "");
+            const ev = evaluateGenerateOtpBody(body, national);
+            console.info(
+                `[pharmacy-login] OTP response HTTP ${resp.status()} confirmed=${ev.confirmed} ` +
+                    `rateLimited=${ev.rateLimited} phoneMismatch=${ev.phoneMismatch} body=${ev.snippet}`,
+            );
+            if (ev.rateLimited) rateLimited = true;
+            if (ev.phoneMismatch) phoneMismatch = true;
+            if (ev.confirmed) apiConfirmed = true;
+        } catch {
+            /* ignore */
+        }
+    };
+    page.on("request", onRequest);
     page.on("response", onResponse);
 
     const continued = await clickByName(page, CONTINUE_TEXTS);
@@ -633,21 +814,36 @@ async function fillPhoneAndContinueOnce(
     }
     // Brief wait for OTP UI / generateOtp XHR
     const waitUntil = Date.now() + 5000;
-    while (Date.now() < waitUntil && !apiConfirmed) {
+    while (Date.now() < waitUntil && !apiConfirmed && !rateLimited) {
         if (await otpFieldVisible(page)) break;
+        if (await pageLooksOtpRateLimited(page)) {
+            rateLimited = true;
+            break;
+        }
         await page.waitForTimeout(300);
     }
+    page.off("request", onRequest);
     page.off("response", onResponse);
 
     if (!clicked) {
         return { clicked: false, apiConfirmed: false };
     }
-    // ONLY now tell the user we requested a code (after Continue)
+
+    if (!rateLimited && (await pageLooksOtpRateLimited(page))) {
+        rateLimited = true;
+    }
+    // Rate-limit / mismatch beats a soft success claim
+    if (rateLimited || phoneMismatch) {
+        apiConfirmed = false;
+    }
+
     await notify(
         "phone_entered",
-        apiConfirmed
-            ? `requested *${label}* login code for ${maskPhone(loginPhone)}…`
-            : `tapped Continue on *${label}* for ${maskPhone(loginPhone)} — waiting for the code screen…`,
+        rateLimited
+            ? `*${label}* asked to wait / try again later after Continue for ${maskPhone(loginPhone)}…`
+            : apiConfirmed
+              ? `requested *${label}* login code for ${maskPhone(loginPhone)}…`
+              : `tapped Continue on *${label}* for ${maskPhone(loginPhone)} — waiting for the code screen…`,
     );
-    return { clicked: true, apiConfirmed };
+    return { clicked: true, apiConfirmed, rateLimited, phoneMismatch };
 }
