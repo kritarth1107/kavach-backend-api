@@ -340,25 +340,59 @@ export async function handlePharmacyWhatsAppTurn(input: {
         draft.phase = "awaiting_otp";
         await saveDraft(input.phone, null);
 
-        // Do not block WhatsApp on Chromium — kick off browser async; OTP paste resumes.
-        void runBrowserTask({
-            familyId: input.familyId,
-            userId: input.actorUserId,
-            goal,
-            partner,
-            deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
-        }).catch((err) => {
-            console.warn(
-                "pharmacy confirm browser background failed:",
-                err instanceof Error ? err.message : err,
+        // Do not block WhatsApp on Chromium — kick off browser async; always push a
+        // follow-up (OTP tip / confirm / block / soft failure) so WA never goes silent.
+        const deadlineMs = Number(process.env.BROWSER_TASK_DEADLINE_MS) || 45_000;
+        void (async () => {
+            const { notifyPharmacyBrowserBackgroundResult } = await import(
+                "./commerceAutomation/browserProgressNotify.service"
             );
-        });
+            try {
+                const result = await runBrowserTask({
+                    familyId: input.familyId,
+                    userId: input.actorUserId,
+                    goal,
+                    partner,
+                    deadlineMs,
+                });
+                await notifyPharmacyBrowserBackgroundResult({
+                    phone: input.phone,
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    goal,
+                    partner,
+                    otpChallengeId: challenge,
+                    result,
+                });
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.warn("pharmacy confirm browser background failed:", msg);
+                await notifyPharmacyBrowserBackgroundResult({
+                    phone: input.phone,
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    goal,
+                    partner,
+                    otpChallengeId: challenge,
+                    result: {
+                        status: "error",
+                        mode: "playwright",
+                        partner,
+                        steps: 0,
+                        message: `Browser failed: ${msg.slice(0, 160)}`,
+                    },
+                }).catch(() => undefined);
+            }
+        })();
 
         return {
             text:
                 `Opening *${partnerLabel(partner)}* for: ${summary}\n\n` +
                 `${partnerLabel(partner)} may text a login code — *paste the SMS OTP here*.\n` +
                 `(I never read your device SMS — only what you send me on WhatsApp.)\n\n` +
+                `I'll update you within about a minute if login needs a code, hits a block, or fails.\n` +
                 `No silent pay — I'll ask you to confirm item+total+address before checkout.\n` +
                 `Reply *cancel* to stop.`,
             draft,

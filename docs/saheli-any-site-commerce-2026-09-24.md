@@ -64,3 +64,10 @@ BROWSER_WORKER_MODE=dry_run npx tsx scripts/smoke-private-browser.ts
 Expect: `order oats from bigbasket` and `buy this from amazon` → browser confirm flow (not “unsupported”); confirm card includes soft *Saheli tip* when stubbed/care context present.
 
 Mock WA `917694829888`: same phrases on live backend after deploy.
+
+## Hang fix (pharmacy confirm follow-up)
+
+After *confirm* on Apollo/PharmEasy/1mg, WhatsApp always gets a second message within ~1 min
+(progress / OTP tip / CAPTCHA / soft failure). See `saheli-private-browser-2026-09-24.md`
+§ “Pharmacy confirm → no forever silence”. Reply *retry* to re-kick the browser, *cancel* to stop.
+

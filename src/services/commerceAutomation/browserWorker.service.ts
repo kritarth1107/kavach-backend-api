@@ -220,20 +220,34 @@ function extractItemGuess(goal: string): string[] {
 
 
 
-/** Detect Uber/Ola CAPTCHA, bot walls, or geo/service unavailable copy on the page. */
-async function detectRideSiteBlock(
+function isPharmacyPartnerKey(partner: string): boolean {
+    return /^(apollo|pharmeasy|tata_1mg)$/i.test(partner);
+}
+
+/** Detect CAPTCHA / bot walls / geo-unavailable on ride or pharmacy pages. */
+async function detectCommerceSiteBlock(
     page: import("playwright").Page,
+    partner: string,
+    goal: string,
 ): Promise<string | null> {
+    const ride = isRideGoal(goal, partner);
+    const pharmacy = isPharmacyPartnerKey(partner) || /\b(apollo|pharmeasy|1\s*mg)\b/i.test(goal);
+    if (!ride && !pharmacy) return null;
+    const label = partnerLabel(partner);
     try {
         const blob = await page.evaluate(() => {
             const t = (document.body?.innerText || "").slice(0, 4000).toLowerCase();
             const title = (document.title || "").toLowerCase();
             return `${title}\n${t}`;
         });
-        if (/captcha|unusual traffic|are you a robot|cf-browser-verification|access denied|bot detection/.test(blob)) {
-            return "Uber blocked the browser session (CAPTCHA / bot check). Try again later or book in the Uber app — nothing was booked.";
+        if (/captcha|unusual traffic|are you a robot|cf-browser-verification|access denied|bot detection|cloudflare/i.test(blob)) {
+            if (ride) {
+                return "Uber blocked the browser session (CAPTCHA / bot check). Try again later or book in the Uber app — nothing was booked.";
+            }
+            return `${label} blocked the browser session (CAPTCHA / bot check). Reply *retry* or *cancel* — nothing was ordered.`;
         }
         if (
+            ride &&
             /not available in (your|this) (area|region|city)|service (is )?unavailable|we don't operate|doesn't operate here|no cars? available|couldn't find a ride/.test(
                 blob,
             )
@@ -244,6 +258,13 @@ async function detectRideSiteBlock(
         /* ignore */
     }
     return null;
+}
+
+/** @deprecated use detectCommerceSiteBlock */
+async function detectRideSiteBlock(
+    page: import("playwright").Page,
+): Promise<string | null> {
+    return detectCommerceSiteBlock(page, "uber", "BOOK_RIDE provider=uber");
 }
 
 class DryRunBrowserWorker implements BrowserWorker {
@@ -420,8 +441,12 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             const page = await context.newPage();
             await page.goto(playbook.startUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
 
-            // Clear Uber block / CAPTCHA / geo-unavailable before burning Gemini steps
-            const earlyBlock = await detectRideSiteBlock(page).catch(() => null);
+            // Clear CAPTCHA / bot / geo blocks before burning Gemini steps (rides + pharmacy)
+            const earlyBlock = await detectCommerceSiteBlock(
+                page,
+                String(playbook.partner),
+                input.goal,
+            ).catch(() => null);
             if (earlyBlock) {
                 await this.persist(context, input, playbook.partner, page.url());
                 return {
@@ -470,8 +495,12 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     /* ignore */
                 }
 
-                if (isRideGoal(input.goal, String(playbook.partner))) {
-                    const midBlock = await detectRideSiteBlock(page).catch(() => null);
+                {
+                    const midBlock = await detectCommerceSiteBlock(
+                        page,
+                        String(playbook.partner),
+                        input.goal,
+                    ).catch(() => null);
                     if (midBlock) {
                         await this.persist(context, input, playbook.partner, page.url());
                         return {
@@ -747,7 +776,11 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
     const label = partnerLabel(String(playbook.partner));
     console.warn("Browser task deadline/fallback:", reason);
     const ride = isRideGoal(input.goal, String(playbook.partner));
+    const pharmacy =
+        isPharmacyPartnerKey(String(playbook.partner)) ||
+        /\b(apollo|pharmeasy|1\s*mg|medicine|vitamin)\b/i.test(input.goal);
     return {
+        // steps:0 signals follow-up formatter: OTP page likely never reached
         status: "need_otp",
         mode: "playwright",
         partner: String(playbook.partner),
@@ -762,14 +795,22 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
                   ``,
                   `Reply *cancel* to stop — nothing is booked yet.`,
               ].join("\n")
-            : [
-                  `Opening *${label}* for: ${input.goal.slice(0, 120)}`,
-                  ``,
-                  `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
-                  `(I never read your device SMS — only what you send me on WhatsApp.)`,
-                  ``,
-                  `Or reply *cancel* to stop. I can also take a medicine list / pharmacy confirm without waiting on the browser.`,
-              ].join("\n"),
+            : pharmacy
+              ? [
+                    `*${label}* didn't finish login in time (site slow, blocked, or browser busy).`,
+                    `No SMS from ${label} is expected until login actually starts.`,
+                    ``,
+                    `Reply *retry* to try again, or *cancel* to stop.`,
+                    `If a code arrives later, you can still *paste the OTP here*.`,
+                ].join("\n")
+              : [
+                    `Opening *${label}* for: ${input.goal.slice(0, 120)}`,
+                    ``,
+                    `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
+                    `(I never read your device SMS — only what you send me on WhatsApp.)`,
+                    ``,
+                    `Or reply *cancel* to stop. I can also take a medicine list / pharmacy confirm without waiting on the browser.`,
+                ].join("\n"),
     };
 }
 

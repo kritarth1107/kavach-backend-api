@@ -8,6 +8,7 @@ process.env.COMMERCE_SESSION_ENCRYPTION_KEY =
 
 import { messageLooksLikeBrowserTask } from "../src/services/commerceAutomation/browserTaskWhatsApp.service";
 import { DryRunBrowserWorker } from "../src/services/commerceAutomation/browserWorker.service";
+import { formatPharmacyBrowserFollowUp } from "../src/services/commerceAutomation/browserProgressNotify.service";
 import { resolvePlaybook, listSupportedBrowserSites } from "../src/services/commerceAutomation/playbooks";
 import { resolveSiteFromMessage } from "../src/services/commerceAutomation/siteResolve";
 import { messageLooksLikeUnsupportedCommerce } from "../src/services/saheliOrder.service";
@@ -96,6 +97,47 @@ async function main() {
     await flow("order vit c from apollo", "apollo");
     await flow("order oats from bigbasket");
     await flow("buy this from amazon");
+
+    // Pharmacy async follow-up copy must never be empty / silent
+    {
+        const otpWait = formatPharmacyBrowserFollowUp(
+            {
+                status: "need_otp",
+                mode: "playwright",
+                partner: "apollo",
+                steps: 2,
+                message: "Paste the SMS OTP here",
+            },
+            { partner: "apollo", goal: "Order from Apollo: vitamin c capsules×1" },
+        );
+        assert(/OTP|paste/i.test(otpWait.text), "follow-up need_otp mentions paste");
+        assert(otpWait.phase === "awaiting_otp", "follow-up need_otp phase");
+
+        const timedOut = formatPharmacyBrowserFollowUp(
+            {
+                status: "need_otp",
+                mode: "playwright",
+                partner: "apollo",
+                steps: 0,
+                message: "deadline",
+            },
+            { partner: "apollo" },
+        );
+        assert(/didn't reach|login-code|retry/i.test(timedOut.text), "follow-up timeout is actionable");
+        assert(/retry/i.test(timedOut.text), "follow-up timeout offers retry");
+
+        const blocked = formatPharmacyBrowserFollowUp(
+            {
+                status: "error",
+                mode: "playwright",
+                partner: "apollo",
+                steps: 0,
+                message: "Apollo blocked the browser session (CAPTCHA / bot check).",
+            },
+            { partner: "apollo" },
+        );
+        assert(/CAPTCHA|blocked|retry/i.test(blocked.text), "follow-up CAPTCHA is clear");
+    }
 
     // Stub health builder path (no Mongo — may return [])
     const tips = await buildCommerceHealthSuggestions({

@@ -147,6 +147,58 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         return { text: "Okay — cancelled the browsing task." };
     }
 
+    // Re-kick browser after pharmacy/commerce soft failure (CAPTCHA / timeout / no OTP page)
+    if (draft && (draft.phase === "awaiting_otp" || draft.phase === "awaiting_confirm") && /^(retry|try\s*again|again)$/i.test(text)) {
+        const { notifyPharmacyBrowserBackgroundResult } = await import("./browserProgressNotify.service");
+        const retryGoal = draft.goal;
+        const retryPartner = draft.partner;
+        const retryStartUrl = draft.startUrl;
+        const retryChallenge = draft.otpChallengeId;
+        const notifyPartner: import("./types").CommercePartnerKey | "generic" =
+            retryPartner && retryPartner !== "generic"
+                ? (retryPartner as import("./types").CommercePartnerKey)
+                : "apollo";
+        draft.phase = "running";
+        draft.lastMessage = `Retrying *${partnerLabel(String(retryPartner || "the site"))}*…`;
+        await saveDraft(input.phone, draft);
+
+        void (async () => {
+            try {
+                const result = await runBrowserTask({
+                    familyId: input.familyId,
+                    userId: input.actorUserId,
+                    goal: retryGoal,
+                    partner: retryPartner,
+                    startUrl: retryStartUrl,
+                    deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 45_000,
+                });
+                await notifyPharmacyBrowserBackgroundResult({
+                    phone: input.phone,
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    goal: retryGoal,
+                    partner: notifyPartner,
+                    otpChallengeId: retryChallenge,
+                    result,
+                });
+            } catch (err) {
+                console.warn(
+                    "browser retry background failed:",
+                    err instanceof Error ? err.message : err,
+                );
+            }
+        })();
+
+        return {
+            text:
+                `Retrying *${partnerLabel(String(retryPartner || "the site"))}*…\n` +
+                `I'll update you within about a minute (OTP, confirm, block, or failure).\n` +
+                `Reply *cancel* to stop.`,
+            draft,
+        };
+    }
+
     if (draft && draft.phase === "awaiting_otp" && /^\d{4,8}$/.test(text)) {
         const result = await runBrowserTask({
             familyId: input.familyId,

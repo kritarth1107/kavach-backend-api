@@ -158,3 +158,21 @@ PLAYWRIGHT_BROWSERS_PATH=/ms-playwright   # set in Cloud Run image
 - `src/services/commerceAutomation/playbooks.ts`
 - `src/models/browserProfile.model.ts`
 - `src/services/health.service.ts` — `browserWorker.modeEnv` on `/api/health`
+
+## Pharmacy confirm → no forever silence (2026-09-25)
+
+Basket *confirm* replies immediately with “Opening Apollo…” then kicks Chromium **async**.
+`runBrowserTask` results are **not** discarded: `notifyPharmacyBrowserBackgroundResult` always
+pushes a WhatsApp follow-up within the browser deadline (~45s default, SLA ~30–60s):
+
+| Browser outcome | WA follow-up |
+|-----------------|--------------|
+| OTP page / need_otp (steps>0) | Still waiting — paste SMS OTP; tip + *retry*/*cancel* |
+| Deadline / steps=0 | “Didn't reach login-code step” — no SMS expected yet; *retry*/*cancel* |
+| CAPTCHA / bot wall | Clear block message; *retry*/*cancel* |
+| Already logged in → confirm | Live confirm-before-pay card |
+| Hard error | Soft failure + *retry*/*cancel*; session stays cancellable |
+
+Root cause of the Sep 24 Vit C hang: commit `57faeaf` made confirm async (good for typing SLA)
+but only `console.warn`'d failures — successful `need_otp`/`error` results were never sent to WA.
+
