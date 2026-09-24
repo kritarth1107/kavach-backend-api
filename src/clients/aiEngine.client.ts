@@ -718,6 +718,35 @@ export async function aiPostCareBrief(payload: {
     return parseAiJson<{ brief: string }>(res);
 }
 
+export async function aiPostDoctorBrief(payload: {
+    subjectName: string;
+    timeline: string;
+    staleHealth?: string;
+    memoryProfile?: string;
+}): Promise<{ brief: string; audience?: string }> {
+    const res = await aiFetch(
+        "/v1/doctor-brief/generate",
+        {
+            method: "POST",
+            body: JSON.stringify({
+                subject_name: payload.subjectName,
+                timeline: payload.timeline,
+                stale_health: payload.staleHealth ?? "",
+                memory_profile: payload.memoryProfile ?? "",
+            }),
+        },
+        config.aiEngine.writeTimeoutMs,
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Doctor Brief generation failed", res.status);
+    }
+
+    return parseAiJson<{ brief: string; audience?: string }>(res);
+}
+
+
 type AiOutreachResponse = AiChatResponse & {
     topic_bucket: string;
     topic_hint: string;
@@ -1001,6 +1030,37 @@ export async function aiGetMemoryEntity(payload: {
     if (!res.ok) {
         const body = await res.text();
         throw new AppError(body || "Failed to load memory entity", res.status);
+    }
+
+    return parseAiJson(res);
+}
+
+
+export async function aiGetMemoryEntityHistory(payload: {
+    aiFamilyId: string;
+    aiElderId: string;
+    slug: string;
+}): Promise<{
+    facts: Array<{
+        id: string;
+        content: string;
+        source_role: string | null;
+        created_at: string | null;
+        superseded_by: string | null;
+    }>;
+}> {
+    const params = new URLSearchParams({
+        family_id: payload.aiFamilyId,
+        elder_id: payload.aiElderId,
+    });
+    const res = await aiFetch(
+        `/v1/memory/entity/${encodeURIComponent(payload.slug)}/history?${params.toString()}`,
+        { method: "GET" },
+    );
+
+    if (!res.ok) {
+        const body = await res.text();
+        throw new AppError(body || "Failed to load entity history", res.status);
     }
 
     return parseAiJson(res);

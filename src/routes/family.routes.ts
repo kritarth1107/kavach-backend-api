@@ -36,6 +36,7 @@ import {
     correctFamilyMemory,
     getSaheliMemoryProfile,
     getSaheliMemoryEntity,
+    getSaheliMemoryEntityHistory,
 } from "../controllers/saheliCompanion.controller";
 import {
     getActiveOrderSessionHandler,
@@ -180,6 +181,11 @@ router.get(
     "/:familyId/recipients/:recipientUserId/saheli/memory/entity/:slug",
     protect,
     getSaheliMemoryEntity,
+);
+router.get(
+    "/:familyId/recipients/:recipientUserId/saheli/memory/entity/:slug/history",
+    protect,
+    getSaheliMemoryEntityHistory,
 );
 router.get(
     "/:familyId/recipients/:recipientUserId/saheli/insights",

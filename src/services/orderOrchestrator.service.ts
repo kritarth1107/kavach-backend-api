@@ -30,6 +30,11 @@ import {
     orderRequiresCaregiverApproval,
 } from "./commerceSettings.service";
 import {
+    buildCommerceHealthSuggestions,
+    type CommerceHealthSuggestion,
+} from "./saheliCommerceHealthHints.service";
+import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
+import {
     ensurePartnerAddressesSynced,
     listPartnerAddresses,
 } from "./partnerAddress.service";
@@ -67,6 +72,8 @@ export type OrderFlowPayload = {
     /** Order status after submit — drives truthful WA "placed" vs "awaiting approval" copy. */
     orderStatus?: string;
     message?: string;
+    /** Gentle memory-backed tips before confirm — elder decides. */
+    healthSuggestions?: CommerceHealthSuggestion[];
     /** Grocery partner closed / not delivering at selected address (even if search returned hits). */
     deliveryUnavailable?: boolean;
     disambiguation?: {
@@ -147,7 +154,12 @@ async function loadAddresses(
 function flowFromSession(
     session: IOrderSessionDocument,
     message?: string,
-    extras?: Partial<Pick<OrderFlowPayload, "deliveryUnavailable" | "connectPartner" | "connectUrl">>,
+    extras?: Partial<
+        Pick<
+            OrderFlowPayload,
+            "deliveryUnavailable" | "connectPartner" | "connectUrl" | "healthSuggestions"
+        >
+    >,
 ): OrderFlowPayload {
     return {
         sessionId: session.sessionId,
@@ -163,6 +175,7 @@ function flowFromSession(
         orderId: session.orderId,
         orderStatus: session.orderStatus,
         message,
+        healthSuggestions: extras?.healthSuggestions,
         deliveryUnavailable: extras?.deliveryUnavailable,
         connectPartner: extras?.connectPartner,
         connectUrl: extras?.connectUrl,
@@ -699,6 +712,25 @@ async function refreshSessionBillBreakdown(session: IOrderSessionDocument): Prom
     }
 }
 
+
+async function withHealthSuggestions(
+    session: IOrderSessionDocument,
+    message?: string,
+): Promise<OrderFlowPayload> {
+    let healthSuggestions: CommerceHealthSuggestion[] | undefined;
+    try {
+        healthSuggestions = await buildCommerceHealthSuggestions({
+            familyId: session.familyId,
+            recipientUserId: session.recipientUserId,
+            cartItemNames: (session.cartItems ?? []).map((i) => i.name),
+        });
+        if (!healthSuggestions.length) healthSuggestions = undefined;
+    } catch {
+        healthSuggestions = undefined;
+    }
+    return flowFromSession(session, message, { healthSuggestions });
+}
+
 export async function addOrderFlowCartItem(input: {
     sessionId: string;
     familyId: string;
@@ -761,7 +793,7 @@ export async function addOrderFlowCartItem(input: {
     await refreshSessionBillBreakdown(session);
     await session.save();
 
-    return flowFromSession(
+    return withHealthSuggestions(
         session,
         `Added ${input.item.name} ×${qty}. Review your basket or add more items.`,
     );
@@ -786,7 +818,7 @@ export async function updateOrderFlowCartItem(input: {
 
     session.phase = session.cartItems.length ? "review_cart" : "browse";
     await session.save();
-    return flowFromSession(session);
+    return withHealthSuggestions(session);
 }
 
 export async function submitOrderFlowCart(input: {
@@ -868,6 +900,33 @@ export async function submitOrderFlowCart(input: {
                       err instanceof Error ? err.message : "Checkout failed",
                       400,
                   );
+        }
+
+        // Elder direct-order path: family is notified (caregiver still approves when flag off / over threshold).
+        if (actorRole === FamilyRole.CARE_RECIPIENT) {
+            const caregivers = family.members
+                .filter(
+                    (m) =>
+                        m.status === FamilyMemberStatus.JOINED &&
+                        m.userId &&
+                        m.userId !== session.actorUserId &&
+                        m.role !== FamilyRole.CARE_RECIPIENT,
+                )
+                .map((m) => m.userId!);
+            if (caregivers.length) {
+                void createFamilyNotification(
+                    session.familyId,
+                    {
+                        kind: "order_placed",
+                        title: "Order placed by care recipient",
+                        body: `${partnerLabel(orderPartner)} · ₹${(order.totalPaise / 100).toFixed(0)} — elder ordered directly (direct orders enabled).`,
+                        actionUrl: "/dashboard/approvals",
+                        recipientUserId: session.recipientUserId,
+                        dedupeKey: `order-placed:${order.orderId}`,
+                    },
+                    caregivers,
+                );
+            }
         }
     } else {
         void createFamilyNotification(session.familyId, {

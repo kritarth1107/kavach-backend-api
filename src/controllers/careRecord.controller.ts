@@ -8,7 +8,7 @@ import {
     getCareRecordTimeline,
     getWeeklyMetrics,
 } from "../services/careRecord.service";
-import { generateCareBrief } from "../services/careBrief.service";
+import { generateCareBrief, generateDoctorBrief } from "../services/careBrief.service";
 import {
     suggestOrder,
     listPendingApprovals,
@@ -69,6 +69,12 @@ export async function getCareRecordMetricsHandler(req: Request, res: Response) {
 export async function getCareBriefHandler(req: Request, res: Response) {
     const { familyId, subjectUserId } = req.params;
     const brief = await generateCareBrief(familyId, subjectUserId, req.user!.userId);
+    res.json({ success: true, data: brief });
+}
+
+export async function getDoctorBriefHandler(req: Request, res: Response) {
+    const { familyId, subjectUserId } = req.params;
+    const brief = await generateDoctorBrief(familyId, subjectUserId, req.user!.userId);
     res.json({ success: true, data: brief });
 }
 

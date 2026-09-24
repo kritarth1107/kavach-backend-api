@@ -216,6 +216,33 @@ export async function getSaheliMemoryEntity(
     }
 }
 
+
+export async function getSaheliMemoryEntityHistory(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) {
+    try {
+        const { familyId, recipientUserId, slug } = req.params;
+        const actorUserId = req.user!.userId;
+        const membersPayload = await getFamilyMembersList(familyId, actorUserId);
+        const displayName =
+            membersPayload.members.find((m) => m.userId === recipientUserId)?.name?.trim() ||
+            "Care recipient";
+        const { ensureAiContext } = await import("../services/aiTenant.service");
+        const { aiGetMemoryEntityHistory } = await import("../clients/aiEngine.client");
+        const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
+        const result = await aiGetMemoryEntityHistory({
+            aiFamilyId: ctx.aiFamilyId,
+            aiElderId: ctx.aiElderId,
+            slug,
+        });
+        res.json({ data: { facts: result.facts ?? [] } });
+    } catch (err) {
+        next(err);
+    }
+}
+
 export async function getCompanionActivity(
     req: Request,
     res: Response,

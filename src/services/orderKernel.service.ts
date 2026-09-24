@@ -1,9 +1,10 @@
 /**
  * Unified order kernel — AI tools call these; channel UIs render OrderFlowPayload.
- * 
+ *
  * Phase 2 addition: quickOrder / confirmOrPlace for one-message ordering.
  */
 import { AppError } from "../middleware/error.middleware";
+import { buildCommerceHealthSuggestions } from "./saheliCommerceHealthHints.service";
 import type { McpCatalogHit } from "../partners/mcp/mcpClient.service";
 import { searchMcpProduct } from "../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../partners/mcp/types";
@@ -349,6 +350,25 @@ export async function getOrderCart(input: {
     actorUserId: string;
 }): Promise<Record<string, unknown>> {
     const flow = await getOrderFlowSession(input);
+    let healthSuggestions = flow.healthSuggestions;
+    if (!healthSuggestions?.length && (flow.cartItems?.length ?? 0) > 0) {
+        try {
+            const sessionMeta = await OrderSession.findOne({
+                sessionId: input.sessionId,
+                familyId: input.familyId,
+            }).lean();
+            if (sessionMeta) {
+                healthSuggestions = await buildCommerceHealthSuggestions({
+                    familyId: input.familyId,
+                    recipientUserId: sessionMeta.recipientUserId,
+                    cartItemNames: (flow.cartItems ?? []).map((i) => i.name),
+                });
+            }
+        } catch {
+            healthSuggestions = undefined;
+        }
+    }
+    const enriched = { ...flow, healthSuggestions };
     return {
         status: "cart",
         sessionId: flow.sessionId,
@@ -360,7 +380,8 @@ export async function getOrderCart(input: {
             (sum, item) => sum + item.quantity * item.pricePaise,
             0,
         ),
-        orderFlow: flow,
+        healthSuggestions: healthSuggestions ?? [],
+        orderFlow: enriched,
     };
 }
 
@@ -444,6 +465,8 @@ export type QuickOrderResult = {
     orderFlow?: OrderFlowPayload;
     connectUrl?: string | null;
     orderId?: string;
+    /** Memory-backed tips — Saheli suggests, elder decides. */
+    healthSuggestions?: OrderFlowPayload["healthSuggestions"];
 };
 
 /**
@@ -638,6 +661,10 @@ export async function quickOrder(input: {
             },
         });
 
+        const tips = addResult.healthSuggestions ?? [];
+        const tipBlock = tips.length
+            ? `\n\nSaheli tip — you decide:\n${tips.map((t) => `• ${t.text}`).join("\n")}`
+            : "";
         return {
             status: "confirm_ready",
             sessionId: flow.sessionId,
@@ -647,8 +674,9 @@ export async function quickOrder(input: {
             address: { id: searchAddressId, label: lastAddress.label ?? "Saved address", line1: lastAddress.line1 },
             items: items.map(i => ({ name: i.name, pricePaise: i.pricePaise, itemId: i.itemId, quantity: i.quantity })),
             totalPaise: items.reduce((sum, i) => sum + i.pricePaise * i.quantity, 0),
-            message: `${items[0].name} · ₹${(items[0].pricePaise / 100).toFixed(0)} from ${label}\nTo: ${lastAddress.label ?? "Saved address"}`,
+            message: `${items[0].name} · ₹${(items[0].pricePaise / 100).toFixed(0)} from ${label}\nTo: ${lastAddress.label ?? "Saved address"}${tipBlock}`,
             orderFlow: addResult,
+            healthSuggestions: tips,
         };
     } catch (err) {
         console.warn("Quick order add to cart failed:", err);

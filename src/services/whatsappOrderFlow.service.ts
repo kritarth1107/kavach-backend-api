@@ -127,6 +127,12 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
             lines.push(`• ${item.name} ×${item.quantity} — ${formatRupee(lineTotal)}`);
         });
         lines.push(...formatBillBreakdownLines(flow.billBreakdown, itemSubtotal));
+        if (flow.healthSuggestions?.length) {
+            lines.push("\n*Saheli tip — you decide:*");
+            for (const tip of flow.healthSuggestions.slice(0, 3)) {
+                lines.push(`• ${tip.text}`);
+            }
+        }
         lines.push(
             "\nReply *place*/*confirm* to order, or pick another number to add more. Say *cancel* to stop.",
         );

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { protect } from "../middleware/auth.middleware";
 import {
     getCareBriefHandler,
+    getDoctorBriefHandler,
     getCareRecordEventsHandler,
     getCareRecordMetricsHandler,
     getCareRecordTimelineHandler,
@@ -27,6 +28,7 @@ router.get("/:familyId/subjects/:subjectUserId/care-record/events", protect, get
 router.get("/:familyId/subjects/:subjectUserId/care-record/timeline", protect, getCareRecordTimelineHandler);
 router.get("/:familyId/subjects/:subjectUserId/care-record/metrics", protect, getCareRecordMetricsHandler);
 router.get("/:familyId/subjects/:subjectUserId/care-brief", protect, getCareBriefHandler);
+router.get("/:familyId/subjects/:subjectUserId/doctor-brief", protect, getDoctorBriefHandler);
 
 router.get("/:familyId/approvals/pending", protect, getPendingApprovalsHandler);
 router.post("/:familyId/subjects/:subjectUserId/orders/suggest", protect, postSuggestOrderHandler);
