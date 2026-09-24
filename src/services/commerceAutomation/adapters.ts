@@ -189,6 +189,14 @@ const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> =
     apollo: browserAdapter("apollo"),
     pharmeasy: browserAdapter("pharmeasy"),
     tata_1mg: browserAdapter("tata_1mg"),
+    bigbasket: browserAdapter("bigbasket"),
+    jiomart: browserAdapter("jiomart"),
+    dmart: browserAdapter("dmart"),
+    natures_basket: browserAdapter("natures_basket"),
+    amazon: browserAdapter("amazon"),
+    flipkart: browserAdapter("flipkart"),
+    myntra: browserAdapter("myntra"),
+    generic_grocery: browserAdapter("generic_grocery"),
 };
 
 export function getCommerceAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter {
@@ -207,4 +215,15 @@ export const GROCERY_AUTOMATION_PARTNERS: CommercePartnerKey[] = [
     "swiggy",
     "zepto",
     "blinkit",
+    "bigbasket",
+    "jiomart",
+    "dmart",
+    "natures_basket",
+    "generic_grocery",
+];
+
+export const RETAIL_BROWSER_PARTNERS: CommercePartnerKey[] = [
+    "amazon",
+    "flipkart",
+    "myntra",
 ];

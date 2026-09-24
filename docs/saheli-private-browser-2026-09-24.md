@@ -46,14 +46,17 @@ Interface: `browserWorker.service.ts` (`BrowserWorker`). Launch args always incl
 - Max steps default 20 (cap 30)
 - **Safety:** never submit payment without `need_user_confirm` resolved (`userConfirmed=true`). Pay-ish clicks are rewritten to confirm.
 
-### D. Partner playbooks
+### D. Partner / any-site playbooks
 
-| Partner | Start URL |
+See **[saheli-any-site-commerce-2026-09-24.md](./saheli-any-site-commerce-2026-09-24.md)** for the full site list (BigBasket, Amazon, Flipkart, generic HTTPS, health tips).
+
+| Partner / site | Start URL |
 |---------|-----------|
 | Apollo | https://www.apollopharmacy.in/ |
 | Instamart | https://www.swiggy.com/instamart |
-| PharmEasy / 1mg / Blinkit / Zepto | partner sites |
-| Generic browse | Google — “open X / find Y” |
+| PharmEasy / 1mg / Blinkit / Zepto / BigBasket / JioMart / DMart / Nature's Basket | partner sites |
+| Amazon.in / Flipkart / Myntra | retail sites |
+| Generic browse / any HTTPS shop | product URL or Google site search |
 
 ### E. WhatsApp UX
 

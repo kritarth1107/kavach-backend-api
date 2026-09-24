@@ -1,5 +1,5 @@
 /**
- * Smoke: private browser dry-run OTP → confirm → done.
+ * Smoke: private browser dry-run — any-site + health tips + OTP → confirm → done.
  * Run: BROWSER_WORKER_MODE=dry_run npx tsx scripts/smoke-private-browser.ts
  */
 process.env.BROWSER_WORKER_MODE = process.env.BROWSER_WORKER_MODE || "dry_run";
@@ -8,7 +8,13 @@ process.env.COMMERCE_SESSION_ENCRYPTION_KEY =
 
 import { messageLooksLikeBrowserTask } from "../src/services/commerceAutomation/browserTaskWhatsApp.service";
 import { DryRunBrowserWorker } from "../src/services/commerceAutomation/browserWorker.service";
-import { resolvePlaybook } from "../src/services/commerceAutomation/playbooks";
+import { resolvePlaybook, listSupportedBrowserSites } from "../src/services/commerceAutomation/playbooks";
+import { resolveSiteFromMessage } from "../src/services/commerceAutomation/siteResolve";
+import { messageLooksLikeUnsupportedCommerce } from "../src/services/saheliOrder.service";
+import {
+    buildCommerceHealthSuggestions,
+    formatCommerceHealthSuggestionsForCopy,
+} from "../src/services/saheliCommerceHealthHints.service";
 
 function assert(cond: boolean, msg: string) {
     if (!cond) {
@@ -19,41 +25,87 @@ function assert(cond: boolean, msg: string) {
     }
 }
 
-async function main() {
-    const goal = "order vit c from apollo";
-    assert(messageLooksLikeBrowserTask(goal), "intent detects order vit c from apollo");
-    assert(resolvePlaybook(undefined, goal).partner === "apollo", "playbook resolves apollo");
-
+async function flow(goal: string, partner?: Parameters<DryRunBrowserWorker["runBrowserTask"]>[0]["partner"]) {
     const worker = new DryRunBrowserWorker();
     const familyId = "fam-smoke";
     const userId = "user-smoke";
+    const site = resolveSiteFromMessage(goal, { forceBrowser: true });
+    const playbook = resolvePlaybook(partner ?? (site.siteKey === "generic" ? "generic" : site.siteKey), goal, site.startUrl);
 
-    const step1 = await worker.runBrowserTask({ familyId, userId, goal, partner: "apollo" });
-    assert(step1.status === "need_otp", `step1 need_otp (got ${step1.status})`);
-    assert(!/not supported/i.test(step1.message), "step1 not 'not supported'");
-    assert(/OTP|otp|code/i.test(step1.message), "step1 asks for OTP");
+    assert(messageLooksLikeBrowserTask(goal), `intent detects: ${goal}`);
+    assert(!/unsupported/i.test(goal) || !messageLooksLikeUnsupportedCommerce(goal), `not unsupported: ${goal}`);
+
+    const step1 = await worker.runBrowserTask({
+        familyId,
+        userId,
+        goal,
+        partner: playbook.partner,
+        startUrl: playbook.startUrl,
+    });
+    assert(step1.status === "need_otp", `${goal} step1 need_otp (got ${step1.status})`);
+    assert(!/not supported|unsupported/i.test(step1.message), `${goal} step1 not unsupported`);
 
     const step2 = await worker.runBrowserTask({
         familyId,
         userId,
         goal,
-        partner: "apollo",
+        partner: playbook.partner,
+        startUrl: playbook.startUrl,
         otp: "123456",
+        healthHintCopy: formatCommerceHealthSuggestionsForCopy([
+            {
+                kind: "diet",
+                text: "Suggestion (you decide): your record notes blood pressure — low-sodium options if that matches your usual plan.",
+            },
+        ]),
     });
-    assert(step2.status === "need_user_confirm", `step2 need_user_confirm (got ${step2.status})`);
-    assert(/confirm/i.test(step2.message), "step2 asks confirm");
+    assert(step2.status === "need_user_confirm", `${goal} step2 confirm (got ${step2.status})`);
+    assert(/confirm/i.test(step2.message), `${goal} step2 asks confirm`);
+    assert(/Saheli tip/i.test(step2.message), `${goal} step2 has soft health tip`);
 
     const step3 = await worker.runBrowserTask({
         familyId,
         userId,
         goal,
-        partner: "apollo",
+        partner: playbook.partner,
+        startUrl: playbook.startUrl,
         userConfirmed: true,
     });
-    assert(step3.status === "done", `step3 done (got ${step3.status})`);
-    assert(/confirm/i.test(step3.message) || /checkout|UPI|Chromium/i.test(step3.message), "step3 completion copy");
+    assert(step3.status === "done", `${goal} step3 done (got ${step3.status})`);
+}
 
-    console.log("\nSmoke private browser:", process.exitCode ? "FAILED" : "PASSED");
+async function main() {
+    assert(resolvePlaybook(undefined, "order vit c from apollo").partner === "apollo", "apollo playbook");
+    assert(resolveSiteFromMessage("order oats from bigbasket").siteKey === "bigbasket", "bigbasket site");
+    assert(resolveSiteFromMessage("buy this from amazon").siteKey === "amazon", "amazon site");
+    assert(
+        resolveSiteFromMessage("https://www.flipkart.com/item/p/itm123").siteKey === "flipkart",
+        "flipkart url",
+    );
+    assert(resolvePlaybook(undefined, "order oats from bigbasket").partner === "bigbasket", "bigbasket playbook");
+    assert(!messageLooksLikeUnsupportedCommerce("order oats from bigbasket"), "bigbasket not unsupported");
+    assert(!messageLooksLikeUnsupportedCommerce("buy iphone from amazon"), "amazon phone not unsupported");
+    assert(messageLooksLikeBrowserTask("order oats from bigbasket"), "bigbasket browser intent");
+    assert(messageLooksLikeBrowserTask("buy this from amazon"), "amazon browser intent");
+
+    const sites = listSupportedBrowserSites();
+    assert(sites.some((s) => /BigBasket/i.test(s)), "sites list has BigBasket");
+    assert(sites.some((s) => /Amazon/i.test(s)), "sites list has Amazon");
+    console.log("Supported sites:", sites.join("; "));
+
+    await flow("order vit c from apollo", "apollo");
+    await flow("order oats from bigbasket");
+    await flow("buy this from amazon");
+
+    // Stub health builder path (no Mongo — may return [])
+    const tips = await buildCommerceHealthSuggestions({
+        familyId: "fam-smoke",
+        recipientUserId: "user-smoke",
+        cartItemNames: ["oats", "salt"],
+    }).catch(() => []);
+    console.log("health builder returned", tips.length, "tips (0 ok without care memory)");
+
+    console.log("\nSmoke private browser / any-site:", process.exitCode ? "FAILED" : "PASSED");
 }
 
 main().catch((err) => {

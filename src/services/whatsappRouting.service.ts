@@ -32,12 +32,12 @@ const GUEST_WELCOME = `👋 *Welcome to Saheli!*
 
 Hi — I'm *Saheli*, Kavach's family companion on WhatsApp. No extra setup needed; just message me from your phone.
 
-*Kavach* helps families stay connected — gentle check-ins, medicine reminders, and ordering from *Swiggy*, *Instamart*, or *Zepto*.
+*Kavach* helps families stay connected — gentle check-ins, medicine reminders, and ordering (Instamart/Swiggy/Zepto *or any site* via private browser).
 
 *What I can help with:*
 💬 Warm conversations and daily check-ins
 📋 Medicine and care reminders
-🛒 Food, grocery, and medicine orders (family gets a notify)
+🛒 Food, grocery, medicine, or any-site shop (confirm before pay; soft care tips when relevant)
 
 Our WhatsApp line: *${kavachWhatsAppLine()}*
 

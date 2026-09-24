@@ -43,12 +43,16 @@ export type RunBrowserTaskInput = {
     userId: string;
     goal: string;
     partner?: CommercePartnerKey | "generic";
+    /** Override playbook start URL (product link or resolved domain). */
+    startUrl?: string;
     /** Resume after OTP paste */
     otp?: string;
     /** Resume after WhatsApp confirm */
     userConfirmed?: boolean;
     /** Cap Gemini/playwright steps */
     maxSteps?: number;
+    /** Soft care tips for confirm card (already formatted or raw). */
+    healthHintCopy?: string;
 };
 
 export interface BrowserWorker {
@@ -98,11 +102,51 @@ async function canLaunchChromium(): Promise<boolean> {
 const TINY_PNG_B64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+async function attachHealthHints(
+    input: RunBrowserTaskInput,
+    message: string,
+    itemNames: string[],
+): Promise<string> {
+    if (input.healthHintCopy) {
+        return message.includes("Saheli tip") ? message : `${message}${input.healthHintCopy}`;
+    }
+    try {
+        const {
+            buildCommerceHealthSuggestions,
+            formatCommerceHealthSuggestionsForCopy,
+        } = await import("../saheliCommerceHealthHints.service");
+        const tips = await buildCommerceHealthSuggestions({
+            familyId: input.familyId,
+            recipientUserId: input.userId,
+            cartItemNames: itemNames.length ? itemNames : [input.goal.slice(0, 120)],
+        });
+        const copy = formatCommerceHealthSuggestionsForCopy(tips);
+        if (!copy) return message;
+        return message.includes("Saheli tip") ? message : `${message}${copy}`;
+    } catch {
+        return message;
+    }
+}
+
+function extractItemGuess(goal: string): string[] {
+    const cleaned = goal
+        .replace(/https?:\/\/\S+/gi, " ")
+        .replace(/\b(order|buy|get|purchase|from|on|via|please|for me)\b/gi, " ")
+        .replace(
+            /\b(amazon|flipkart|myntra|bigbasket|big basket|jiomart|dmart|blinkit|apollo|instamart|swiggy|zepto|pharmeasy|1mg)\b/gi,
+            " ",
+        )
+        .replace(/\s+/g, " ")
+        .trim();
+    return cleaned ? [cleaned.slice(0, 80)] : [goal.slice(0, 80)];
+}
+
+
 class DryRunBrowserWorker implements BrowserWorker {
     readonly mode = "dry_run" as const;
 
     async runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
-        const playbook = resolvePlaybook(input.partner, input.goal);
+        const playbook = resolvePlaybook(input.partner, input.goal, input.startUrl);
         try {
             await getOrCreateBrowserProfile(input.familyId, input.userId);
         } catch {
@@ -110,24 +154,27 @@ class DryRunBrowserWorker implements BrowserWorker {
         }
 
         if (input.otp && !input.userConfirmed) {
+            const items = extractItemGuess(input.goal);
+            let message = [
+                `*${partnerLabel(String(playbook.partner))} basket* — confirm before pay:`,
+                `• ${items[0] || input.goal.slice(0, 120)}`,
+                ``,
+                `Deliver to: your saved address`,
+                `Total: I'll show the live total when Chromium checkout is live`,
+                ``,
+                `Reply *confirm* to continue checkout, or *cancel*.`,
+                `_Dry-run mode: browser worker is stubbed on this host (no Chromium). OTP recorded; payment still needs your explicit confirm._`,
+            ].join("\n");
+            message = await attachHealthHints(input, message, items);
             return {
                 status: "need_user_confirm",
                 mode: "dry_run",
                 partner: String(playbook.partner),
                 steps: 1,
                 url: playbook.startUrl,
-                message: [
-                    `*${partnerLabel(String(playbook.partner))} basket* — confirm before pay:`,
-                    `• ${input.goal.slice(0, 120)}`,
-                    ``,
-                    `Deliver to: your saved address`,
-                    `Total: I'll show the live total when Chromium checkout is live`,
-                    ``,
-                    `Reply *confirm* to continue checkout, or *cancel*.`,
-                    `_Dry-run mode: browser worker is stubbed on this host (no Chromium). OTP recorded; payment still needs your explicit confirm._`,
-                ].join("\n"),
+                message,
                 confirm: {
-                    items: [input.goal.slice(0, 80)],
+                    items,
                     totalLabel: "TBD",
                     addressLabel: "saved address",
                 },
@@ -173,7 +220,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
 
     async runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
         const maxSteps = Math.min(input.maxSteps ?? 20, 30);
-        const playbook = resolvePlaybook(input.partner, input.goal);
+        const playbook = resolvePlaybook(input.partner, input.goal, input.startUrl);
         const profile = await getOrCreateBrowserProfile(input.familyId, input.userId);
 
         let pw: typeof import("playwright");
@@ -265,9 +312,17 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     });
                     if (gated.halt) {
                         await this.persist(context, input, playbook.partner, page.url());
+                        let msg = gated.message!;
+                        if (gated.status === "need_user_confirm") {
+                            msg = await attachHealthHints(
+                                input,
+                                msg,
+                                gated.confirm?.items ?? extractItemGuess(input.goal),
+                            );
+                        }
                         return {
                             status: gated.status!,
-                            message: gated.message!,
+                            message: msg,
                             steps,
                             url: page.url(),
                             modelUsed,

@@ -104,7 +104,7 @@ export function buildCasualOfferReply(displayName: string): string {
 }
 
 export function buildElderHelpReply(displayName: string): string {
-    return `I'm Saheli — here for you on WhatsApp, ${displayName}.\n\n• Today's medicines and schedule\n• Order food or groceries (Swiggy, Instamart)\n• Log how you're feeling\n\nJust tell me naturally — e.g. "what's next today?" or "order milk from instamart".`;
+    return `I'm Saheli — here for you on WhatsApp, ${displayName}.\n\n• Today's medicines and schedule\n• Order food/groceries (Instamart/Swiggy/Zepto) or any site (BigBasket, Amazon, Flipkart — paste a link)\n• Soft care tips before confirm when relevant — you decide\n• Log how you're feeling\n\nJust tell me naturally — e.g. "order oats from bigbasket" or "order milk from instamart".`;
 }
 
 export function tryHandleElderScheduleQuery(input: {

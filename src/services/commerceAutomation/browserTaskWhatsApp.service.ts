@@ -1,7 +1,9 @@
 /**
- * WhatsApp turns for Saheli private browsing / browser_task.
- * Elder + caregiver can start browse/order via browser when MCP missing or user asks.
+ * WhatsApp turns for Saheli private browsing / any-site order.
+ * Elder + caregiver can start browse/order via browser when MCP missing or user asks
+ * another site / pastes a product URL / says "any site".
  * OTP: user pastes SMS OTP in WhatsApp. Confirm before pay. No silent pay.
+ * Soft health tips on confirm when care context matches cart (never diagnose / never block).
  */
 import WhatsappSession from "../../models/whatsappSession.model";
 import { FamilyRole } from "../../types/family.types";
@@ -10,6 +12,12 @@ import { runBrowserTask, type BrowserTaskResult } from "./browserWorker.service"
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
 import { beginOtpLogin } from "./sessionStore.service";
+import {
+    extractProductUrl,
+    messageLooksLikeAnySiteBrowserOrder,
+    resolveSiteFromMessage,
+    siteKeyToPartnerKey,
+} from "./siteResolve";
 
 export type BrowserTaskPhase =
     | "idle"
@@ -22,6 +30,8 @@ export type BrowserTaskDraft = {
     phase: BrowserTaskPhase;
     goal: string;
     partner?: CommercePartnerKey | "generic";
+    siteKey?: string;
+    startUrl?: string;
     otpChallengeId?: string;
     lastMessage?: string;
     confirm?: {
@@ -35,31 +45,33 @@ export type BrowserTaskDraft = {
 const BROWSE_INTENT =
     /\b(open|browse|find|search|go\s+to|visit|look\s+up)\b/i;
 
-const ORDER_VIA_BROWSER =
-    /\b(order\s+.+\s+from\s+(apollo|pharmeasy|1\s*mg|tata|instamart|blinkit|zepto|swiggy)|order\s+vit(?:amin)?\s*c|order\s+medicines?|dawai\s+(mangao|order))\b/i;
+const ORDER_VIA_BROWSER_LEGACY =
+    /\b(order\s+.+\s+from\s+(apollo|pharmeasy|1\s*mg|tata|blinkit)|order\s+vit(?:amin)?\s*c|order\s+medicines?|dawai\s+(mangao|order))\b/i;
 
-const ApolloLike =
-    /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|instamart|blinkit)\b/i;
+const PharmacyLike =
+    /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg)\b/i;
 
-function partnerFromText(text: string): CommercePartnerKey | "generic" | undefined {
-    const t = text.toLowerCase();
-    if (/\bapollo\b/.test(t)) return "apollo";
-    if (/\bpharm\s*easy|pharmeasy\b/.test(t)) return "pharmeasy";
-    if (/\b1\s*mg|tata\b/.test(t)) return "tata_1mg";
-    if (/\binstamart\b/.test(t)) return "instamart";
-    if (/\bblinkit\b/.test(t)) return "blinkit";
-    if (/\bzepto\b/.test(t)) return "zepto";
-    if (/\bswiggy\b/.test(t)) return "swiggy";
-    return undefined;
+function partnerFromText(text: string): CommercePartnerKey | "generic" {
+    const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
+    return siteKeyToPartnerKey(resolved.siteKey);
 }
 
 export function messageLooksLikeBrowserTask(text: string): boolean {
     const t = text.trim();
-    if (ORDER_VIA_BROWSER.test(t)) return true;
+    if (!t) return false;
+    if (messageLooksLikeAnySiteBrowserOrder(t)) return true;
+    if (ORDER_VIA_BROWSER_LEGACY.test(t)) return true;
+    if (extractProductUrl(t)) return true;
     if (BROWSE_INTENT.test(t) && t.split(/\s+/).length >= 3) return true;
-    // "order vit c from apollo" without "medicines"
-    if (/\border\b/i.test(t) && ApolloLike.test(t)) return true;
-    if (/\bvit(?:amin)?\s*c\b/i.test(t) && ApolloLike.test(t)) return true;
+    if (/\border\b/i.test(t) && PharmacyLike.test(t)) return true;
+    if (/\bvit(?:amin)?\s*c\b/i.test(t) && PharmacyLike.test(t)) return true;
+    // Explicit force-browser for MCP partners
+    if (
+        /\b(via\s+browser|any\s*site|browse)\b/i.test(t) &&
+        /\b(instamart|swiggy|zepto)\b/i.test(t)
+    ) {
+        return true;
+    }
     return false;
 }
 
@@ -87,7 +99,11 @@ async function saveDraft(phone: string, draft: BrowserTaskDraft | null): Promise
             challengeId: draft.otpChallengeId,
         };
     }
-    await WhatsappSession.findOneAndUpdate({ phone }, { $set: set, $unset: draft.phase === "awaiting_otp" ? {} : { pendingCommerceOtp: 1 } }, { upsert: true });
+    await WhatsappSession.findOneAndUpdate(
+        { phone },
+        { $set: set, $unset: draft.phase === "awaiting_otp" ? {} : { pendingCommerceOtp: 1 } },
+        { upsert: true },
+    );
 }
 
 function applyResultToDraft(
@@ -97,9 +113,11 @@ function applyResultToDraft(
     draft.lastMessage = result.message;
     draft.mode = result.mode;
     if (result.confirm) draft.confirm = result.confirm;
-    if (result.partner && result.partner !== "generic") {
+    if (result.partner) {
         draft.partner = result.partner as CommercePartnerKey | "generic";
+        draft.siteKey = result.partner;
     }
+    if (result.url) draft.startUrl = result.url;
     if (result.status === "need_otp") draft.phase = "awaiting_otp";
     else if (result.status === "need_user_confirm") draft.phase = "awaiting_confirm";
     else if (result.status === "done") draft.phase = "done";
@@ -128,13 +146,13 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         return { text: "Okay — cancelled the browsing task." };
     }
 
-    // Mid-flow OTP paste
     if (draft && draft.phase === "awaiting_otp" && /^\d{4,8}$/.test(text)) {
         const result = await runBrowserTask({
             familyId: input.familyId,
             userId: input.actorUserId,
             goal: draft.goal,
             partner: draft.partner,
+            startUrl: draft.startUrl,
             otp: text,
         });
         draft = applyResultToDraft(draft, result);
@@ -147,13 +165,13 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         return { text: result.message, draft };
     }
 
-    // Mid-flow confirm
     if (draft && draft.phase === "awaiting_confirm" && /^(confirm|place|yes|haan|ok|pay)$/i.test(text)) {
         const result = await runBrowserTask({
             familyId: input.familyId,
             userId: input.actorUserId,
             goal: draft.goal,
             partner: draft.partner,
+            startUrl: draft.startUrl,
             userConfirmed: true,
         });
         draft = applyResultToDraft(draft, result);
@@ -184,20 +202,23 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         };
     }
 
-    // Start new task?
     const starting = messageLooksLikeBrowserTask(text);
     if (!starting && !(draft && draft.phase !== "idle" && draft.phase !== "done")) {
         return null;
     }
 
     if (starting) {
-        const partner = partnerFromText(text) ?? resolvePlaybook(undefined, text).partner;
+        const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
+        const partner = partnerFromText(text);
+        const playbook = resolvePlaybook(partner, text, resolved.startUrl);
         draft = {
             phase: "running",
             goal: text.slice(0, 240),
-            partner: partner === "generic" ? partner : (partner as CommercePartnerKey),
+            partner: playbook.partner,
+            siteKey: playbook.siteKey,
+            startUrl: playbook.startUrl,
         };
-        if (draft.partner && draft.partner !== "generic") {
+        if (draft.partner && draft.partner !== "generic" && draft.partner !== "generic_grocery") {
             const challenge = `browser-${draft.partner}-${Date.now()}`;
             draft.otpChallengeId = challenge;
             await beginOtpLogin({
@@ -212,6 +233,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             userId: input.actorUserId,
             goal: draft.goal,
             partner: draft.partner,
+            startUrl: draft.startUrl,
         });
         draft = applyResultToDraft(draft, result);
         await saveDraft(input.phone, draft.phase === "done" ? null : draft);
@@ -234,8 +256,6 @@ async function maybeNotifyCaregivers(
     draft: BrowserTaskDraft,
     result: BrowserTaskResult,
 ): Promise<void> {
-    // Caregiver self-orders: no elder notify required unless useful (skip).
-    // Elder places: caregivers notify-only.
     if (input.actorRole !== FamilyRole.CARE_RECIPIENT) return;
     if (result.status !== "done" && draft.phase !== "done") return;
     const label = partnerLabel(String(draft.partner || result.partner || "web"));

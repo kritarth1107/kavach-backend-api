@@ -24,3 +24,12 @@ export {
     handleBrowserTaskWhatsAppTurn,
     messageLooksLikeBrowserTask,
 } from "./browserTaskWhatsApp.service";
+
+export {
+    resolveSiteFromMessage,
+    messageLooksLikeAnySiteBrowserOrder,
+    extractProductUrl,
+    siteLabel,
+} from "./siteResolve";
+export { listSupportedBrowserSites } from "./playbooks";
+

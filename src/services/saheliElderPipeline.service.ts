@@ -195,6 +195,38 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
+    // Any-site private browser (BigBasket / Amazon / URL paste / …) before unsupported gate.
+    {
+        const {
+            messageLooksLikeBrowserTask,
+            handleBrowserTaskWhatsAppTurn,
+        } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        if (messageLooksLikeBrowserTask(input.message)) {
+            const browser = await handleBrowserTaskWhatsAppTurn({
+                phone: `elder:${input.recipientUserId}`,
+                text: input.message,
+                familyId: input.familyId,
+                actorUserId: input.recipientUserId,
+                recipientUserId: input.recipientUserId,
+                actorRole: null,
+            });
+            if (browser) {
+                return {
+                    reply: await stampCompanionVoice(browser.text, {
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                    }),
+                    replySource: "browserOrder",
+                    conversationId,
+                    order: null,
+                    orderFlow: null,
+                    orderPreview: null,
+                    skippedAi: true,
+                };
+            }
+        }
+    }
+
     if (messageLooksLikeUnsupportedCommerce(input.message)) {
         return {
             reply: await stampCompanionVoice(unsupportedCommerceReply(), {

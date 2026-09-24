@@ -181,6 +181,20 @@ export function isSoftOrderIntent(text: string): boolean {
 export function messageLooksLikeUnsupportedCommerce(text: string): boolean {
     const t = normalizeOrderText(text);
     if (!t) return false;
+    // Any-site browser covers Amazon/Flipkart/Myntra (and product URLs) — do not refuse those.
+    if (
+        /\b(amazon|flipkart|myntra|big\s*basket|bigbasket|jiomart|dmart|nature'?s\s*basket|blinkit|apollo|pharmeasy|1\s*mg)\b/i.test(
+            t,
+        ) ||
+        /https?:\/\//i.test(t)
+    ) {
+        return false;
+    }
+    // Extreme absurd qty with no site and no grocery/food — soft redirect.
+    if (/\border\s+([5-9]\d|\d{3,})\s+/i.test(t) && !GROCERY_KEYWORDS.test(t) && !FOOD_KEYWORDS.test(t)) {
+        return true;
+    }
+    // Phones/electronics without a shop named → nudge toward any-site (amazon/flipkart) or food/grocery.
     if (
         /\b(iphones?|ipads?|macbooks?|laptops?|airpods|playstations?|ps5|xbox(?:es)?|televisions?|tvs?|samsung\s*galaxy|oneplus|pixel\s*phones?)\b/i.test(
             t,
@@ -188,15 +202,11 @@ export function messageLooksLikeUnsupportedCommerce(text: string): boolean {
     ) {
         return true;
     }
-    // Extreme quantity of non-grocery "order N X"
-    if (/\border\s+([5-9]\d|\d{3,})\s+/i.test(t) && !GROCERY_KEYWORDS.test(t) && !FOOD_KEYWORDS.test(t)) {
-        return true;
-    }
     return false;
 }
 
 export function unsupportedCommerceReply(): string {
-    return "I can help with food and groceries on Instamart, Swiggy, or Zepto, and medicines on Apollo, PharmEasy, or Tata 1mg — not phones or big electronics. Want milk, veggies, a meal, or medicines instead?";
+    return "For phones or big electronics, say *order … from amazon* / *flipkart* (or paste a product link) and I'll shop via private browser — confirm before pay. Or ask for milk, veggies, a meal (Instamart/Swiggy/Zepto), or medicines (Apollo/PharmEasy/1mg).";
 }
 
 export function messageLooksLikeOrder(text: string): boolean {

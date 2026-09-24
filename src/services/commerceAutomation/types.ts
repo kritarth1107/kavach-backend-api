@@ -3,6 +3,7 @@
  * Partners may implement via official MCP, OAuth, or browser/OTP session workers.
  */
 
+/** MCP + browser site keys. Freeform shops use "generic" / "generic_grocery" playbooks. */
 export type CommercePartnerKey =
     | "swiggy"
     | "instamart"
@@ -11,7 +12,15 @@ export type CommercePartnerKey =
     | "zomato"
     | "apollo"
     | "pharmeasy"
-    | "tata_1mg";
+    | "tata_1mg"
+    | "bigbasket"
+    | "jiomart"
+    | "dmart"
+    | "natures_basket"
+    | "amazon"
+    | "flipkart"
+    | "myntra"
+    | "generic_grocery";
 
 export type AutomationSessionStatus =
     | "disconnected"

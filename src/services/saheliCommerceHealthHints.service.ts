@@ -7,15 +7,21 @@ export type CommerceHealthSuggestion = {
     text: string;
 };
 
-const SALT_RE = /\b(salt|namak|sodium|pickle|papad|chips|namkeen|soup|maggi|noodles|instant)\b/i;
+const SALT_RE = /\b(salt|namak|sodium|pickle|papad|chips|namkeen|soup|maggi|noodles|instant|ready\s*to\s*eat)\b/i;
 const JUICE_SWEET_RE =
-    /\b(juice|fruit\s*punch|soda|cola|coke|fanta|sprite|nimbu|sharbat|sweet|mithai|dessert|ice\s*cream|lassi)\b/i;
+    /\b(juice|fruit\s*punch|soda|cola|coke|fanta|sprite|nimbu|sharbat|sweet|mithai|dessert|ice\s*cream|lassi|jalebi)\b/i;
+const OTC_PAIN_RE = /\b(crocin|dolo|paracetamol|combiflam|ibrufen|ibuprofen|aspirin|disprin|saridon)\b/i;
 const BP_MEMORY_RE = /\b(blood\s*pressure|bp\b|hypertension|high\s*bp|उच्च\s*रक्तचाप|ಬಿಪಿ)\b/i;
 const METFORMIN_RE = /\b(metformin|glycomet|glucophage|diabetic|diabetes|sugar\s*medicine|मेटाफॉर्मिन)\b/i;
+const BLOOD_THINNER_RE = /\b(warfarin|ecosprin|clopidogrel|blood\s*thinner|aspirin\s*75)\b/i;
 const LOW_SODIUM_HINT =
     "Suggestion (you decide): your record notes blood pressure — low-sodium / rock salt is an option instead of regular salt.";
 const METFORMIN_JUICE_HINT =
     "Suggestion (you decide): Metformin/diabetes meds are on file — sweet drinks or juice with meals can affect sugar; stick to your usual plan if unsure.";
+const OTC_BP_HINT =
+    "Suggestion (you decide): BP is on file — some OTC pain tablets can affect BP; stick to what your doctor already okayed if unsure.";
+const OTC_THINNER_HINT =
+    "Suggestion (you decide): a blood-thinner note is on file — check with your usual care plan before extra aspirin-type OTC.";
 
 /**
  * Pulls relevant care memory and turns it into gentle commerce suggestions.
@@ -77,6 +83,14 @@ export async function buildCommerceHealthSuggestions(input: {
 
     if (hasMetformin && cartHasJuiceSweet) {
         push({ kind: "medication", text: METFORMIN_JUICE_HINT });
+    }
+
+    const cartHasOtcPain = OTC_PAIN_RE.test(cartBlob);
+    if (hasBp && cartHasOtcPain) {
+        push({ kind: "medication", text: OTC_BP_HINT });
+    }
+    if (BLOOD_THINNER_RE.test(memoryBlob) && cartHasOtcPain) {
+        push({ kind: "medication", text: OTC_THINNER_HINT });
     }
 
     // Surface a short memory-backed preference if cart-related entity hit is clear.

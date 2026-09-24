@@ -62,7 +62,9 @@ export type SaheliToolName =
     | "get_abnormal_flags"
     | "summarize_health_record"
     | "notify_caregivers"
-    | "trigger_emergency_escalation";
+    | "trigger_emergency_escalation"
+    | "browser_order"
+    | "browse_and_shop";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -752,6 +754,48 @@ case "notify_caregivers": {
                 message: String(input.args.message ?? "Emergency"),
                 channel: "whatsapp",
             });
+        }
+
+        case "browser_order":
+        case "browse_and_shop": {
+            const message = String(input.args.message ?? input.args.goal ?? "").trim();
+            if (!message) {
+                return { ok: false, error: "message required — e.g. order oats from bigbasket" };
+            }
+            const { resolveSiteFromMessage } = await import("./commerceAutomation/siteResolve");
+            const { resolvePlaybook, listSupportedBrowserSites } = await import(
+                "./commerceAutomation/playbooks"
+            );
+            const { runBrowserTask } = await import("./commerceAutomation/browserWorker.service");
+            const forceBrowser = true; // this tool is the browser path
+            const resolved = resolveSiteFromMessage(message, { forceBrowser });
+            const partner =
+                resolved.siteKey === "generic"
+                    ? ("generic" as const)
+                    : (resolved.siteKey as import("./commerceAutomation/types").CommercePartnerKey);
+            const playbook = resolvePlaybook(partner, message, resolved.startUrl);
+            const result = await runBrowserTask({
+                familyId: input.familyId,
+                userId: input.actorUserId,
+                goal: message.slice(0, 240),
+                partner: playbook.partner,
+                startUrl: playbook.startUrl,
+                otp: input.args.otp ? String(input.args.otp) : undefined,
+                userConfirmed: Boolean(input.args.userConfirmed),
+            });
+            return {
+                ok: result.status !== "error",
+                status: result.status,
+                message: result.message,
+                siteKey: playbook.siteKey,
+                partner: playbook.partner,
+                startUrl: playbook.startUrl,
+                mode: result.mode,
+                confirm: result.confirm,
+                healthAware: /Saheli tip/i.test(result.message),
+                supportedSites: listSupportedBrowserSites(),
+                note: "Prefer MCP quick_order for Instamart/Swiggy/Zepto when connected; use browser_order for any other site or product URL. Confirm before pay — never silent pay.",
+            };
         }
         default:
             return { error: `Unknown tool: ${input.tool}` };
