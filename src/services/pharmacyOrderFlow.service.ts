@@ -241,10 +241,30 @@ function confirmCopy(draft: PharmacyDraft): string {
         ``,
         `Deliver to: ${addr}`,
         `Item total: ${total}`,
+        `Payment: prefer *COD* (I'll still ask confirm-before-pay — no silent pay).`,
         ``,
         `Reply *confirm* to continue, *cancel* to stop, or send another name / *prescription photo* for Rx.`,
         `_I only help order what you ask — I don't diagnose or suggest treatments._`,
     ].join("\n");
+}
+
+
+/** Attach smoke/default delivery address when elder has none on the draft. */
+async function ensurePharmacyDeliveryAddress(
+    draft: PharmacyDraft,
+    ctx: { familyId?: string; userId?: string },
+): Promise<PharmacyDraft> {
+    if (draft.addressLabel && draft.addressLabel.trim().length >= 8) return draft;
+    const { resolveDeliveryAddressLabel } = await import(
+        "./commerceAutomation/smokeDeliveryAddress"
+    );
+    const resolved = await resolveDeliveryAddressLabel({
+        familyId: ctx.familyId,
+        userId: ctx.userId,
+        partner: draft.partner,
+    });
+    draft.addressLabel = resolved.label;
+    return draft;
 }
 
 /** Guest-search catalog and attach exact SKU + price onto draft (no login). */
@@ -252,7 +272,9 @@ async function attachGuestCatalog(
     draft: PharmacyDraft,
     ctx: { familyId?: string; userId?: string },
 ): Promise<PharmacyDraft> {
-    if (!draft.partner || !draft.items.length) return draft;
+    if (!draft.partner || !draft.items.length) {
+        return ensurePharmacyDeliveryAddress(draft, ctx);
+    }
     const query = (draft.searchQuery || draft.items.map((i) => i.name).join(" ")).trim();
     draft.searchQuery = query;
     const { searchGuestCatalog } = await import("./commerceAutomation/guestCatalogSearch.service");
@@ -266,7 +288,7 @@ async function attachGuestCatalog(
         draft.catalogOptions = undefined;
         draft.notes = result.unavailableReason || draft.notes;
         // Keep soft query name — confirmCopy will say guest price unavailable honestly.
-        return draft;
+        return ensurePharmacyDeliveryAddress(draft, ctx);
     }
     const options: PharmacyCatalogOption[] = result.hits.slice(0, 3).map((h) => ({
         id: h.id,
@@ -294,7 +316,7 @@ async function attachGuestCatalog(
         draft.estimatedTotalPaise = top.pricePaise * qty;
     }
     draft.notes = undefined;
-    return draft;
+    return ensurePharmacyDeliveryAddress(draft, ctx);
 }
 
 function applyCatalogPick(draft: PharmacyDraft, index: number): boolean {
@@ -643,6 +665,23 @@ export async function handlePharmacyWhatsAppTurn(input: {
             otpChallengeId: challenge,
         }).catch(() => undefined);
 
+        const { appendDeliveryAddressToGoal, resolveDeliveryAddressLabel } = await import(
+            "./commerceAutomation/smokeDeliveryAddress"
+        );
+        if (!draft.addressLabel || draft.addressLabel.trim().length < 8) {
+            draft.addressLabel = (
+                await resolveDeliveryAddressLabel({
+                    familyId: input.familyId,
+                    userId: input.actorUserId,
+                    partner,
+                })
+            ).label;
+        }
+        const goal = appendDeliveryAddressToGoal(
+            `Order from ${partnerLabel(partner)}: ${summary}`,
+            draft.addressLabel,
+        );
+
         // phase "running" until bootstrap actually requests SMS + OTP UI.
         // Premature awaiting_otp lets digit-ish noise / stale pending queue fire false "Got the code".
         await WhatsappSession.findOneAndUpdate(
@@ -651,10 +690,13 @@ export async function handlePharmacyWhatsAppTurn(input: {
                 $set: {
                     browserTaskDraft: {
                         phase: "running",
-                        goal: `Order from ${partnerLabel(partner)}: ${summary}`,
+                        goal,
                         partner,
                         otpChallengeId: challenge,
                         lastMessage: `Opening ${partnerLabel(partner)}…`,
+                        confirm: {
+                            addressLabel: draft.addressLabel,
+                        },
                     },
                     pharmacyDraft: null,
                     updatedAt: new Date(),
@@ -664,7 +706,6 @@ export async function handlePharmacyWhatsAppTurn(input: {
             { upsert: true },
         );
 
-        const goal = `Order from ${partnerLabel(partner)}: ${summary}`;
         await saveDraft(input.phone, null);
 
         // Do not block WhatsApp on Chromium — kick off browser async; always push a
@@ -761,6 +802,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
                 `Watch for updates (still opening… / on login page… / requested code…).\n` +
                 `*Paste the SMS OTP only after I ask* — I never read your device SMS.\n\n` +
                 `No silent pay — I'll ask you to confirm item+total+address before checkout.\n` +
+                `Prefer *COD* when the site offers it.\n` +
                 `Reply *cancel* to stop.`,
             draft,
         };

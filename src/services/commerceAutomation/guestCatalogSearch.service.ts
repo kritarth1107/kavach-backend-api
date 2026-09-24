@@ -6,6 +6,7 @@
  * - Apollo: public accessToken + search-service/v5/fullSearch
  * - PharmEasy: public /api/search/search
  * - Instamart / Swiggy / Zepto: MCP search when already connected (no new SMS)
+ * - Blinkit / Zomato / Tata 1mg: no stable guest price API — honest empty (never invent prices)
  * - Others: honest empty result (never invent prices)
  */
 import { randomUUID } from "crypto";
@@ -383,19 +384,38 @@ export async function searchGuestCatalog(input: {
             if (hits.length) {
                 return { hits: rankGuestHits(query, hits), searched: true, partner, query };
             }
+            const label =
+                partner === "instamart" ? "Instamart" : partner === "swiggy" ? "Swiggy" : "Zepto";
             return {
                 hits: [],
                 searched: true,
-                unavailableReason: `${partner} live prices need a connected account (or address). Reply *confirm* to open ${partner} in the private browser (OTP may be asked), or connect ${partner} in Integrations for guest-free search.`,
+                unavailableReason:
+                    `${label} live prices need a connected account (or address). ` +
+                    `Reply *confirm* to open ${label} in the private browser (OTP may be asked) — I won't invent a price. ` +
+                    `Or connect ${label} in Integrations for guest-free search.`,
                 partner,
                 query,
             };
         }
-        // Blinkit / Zomato / BigBasket / etc. — no guest catalog wired yet.
+        if (partner === "blinkit" || partner === "zomato") {
+            const label = partner === "blinkit" ? "Blinkit" : "Zomato";
+            return {
+                hits: [],
+                searched: true,
+                unavailableReason:
+                    `${label} does not expose guest prices without login (public catalog blocked). ` +
+                    `Reply *confirm* to open ${label} in the private browser and find the exact item (OTP may be asked) — I won't invent a price.`,
+                partner,
+                query,
+            };
+        }
+        // BigBasket / Amazon / etc. — no guest catalog wired yet.
         return {
             hits: [],
             searched: true,
-            unavailableReason: `Live guest prices for ${partner} aren't wired yet. Reply *confirm* to open the site and find the exact item (login/OTP may be asked) — I won't invent a price.`,
+            unavailableReason:
+                `Live guest prices for ${partner} aren't wired yet. ` +
+                `Reply *confirm* to open the site and find the exact item (login/OTP may be asked) — I won't invent a price.`,
             partner,
             query,
         };
@@ -430,6 +450,7 @@ export function formatGuestCatalogConfirmCopy(input: {
         lines.push("");
         if (input.addressLabel) lines.push(`Deliver to: ${input.addressLabel}`);
         lines.push(`Reply *confirm* to order this (login/OTP next), or send another name.`);
+        lines.push(`Prefer *COD* at checkout — I'll still ask confirm-before-pay.`);
     } else {
         lines.push(`Found on *${input.partnerLabel}* for "${input.query}":`);
         top.forEach((h, i) => {
@@ -439,6 +460,7 @@ export function formatGuestCatalogConfirmCopy(input: {
         lines.push(
             `Reply *1* / *2* / *3*, or *confirm* for #1. Login/OTP only after you pick. Or send another name.`,
         );
+        lines.push(`Prefer *COD* at checkout — I'll still ask confirm-before-pay.`);
     }
     lines.push(`_I only help order what you ask — I don't diagnose or suggest treatments._`);
     return lines.join("\n");

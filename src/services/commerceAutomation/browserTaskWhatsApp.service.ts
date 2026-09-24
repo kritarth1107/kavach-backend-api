@@ -52,6 +52,8 @@ export type BrowserTaskDraft = {
     startUrl?: string;
     otpChallengeId?: string;
     lastMessage?: string;
+    /** Delivery address shown at confirm / passed into browser goal. */
+    addressLabel?: string;
     /** Guest-search SKU options shown before login. */
     catalogOptions?: Array<{
         id: string;
@@ -88,6 +90,25 @@ function partnerFromText(text: string): CommercePartnerKey | "generic" {
     return siteKeyToPartnerKey(resolved.siteKey);
 }
 
+
+function toLoginPhoneE164(phone: string): string {
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length === 10) return `+91${digits}`;
+    if (digits.length >= 11) return `+${digits}`;
+    return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+const ELECTRONICS_REFUSE =
+    /\b(iphones?|ipads?|macbooks?|laptops?|airpods|playstations?|ps5|xbox(?:es)?|televisions?|tvs?|samsung\s*galaxy|oneplus|pixel\s*phones?)\b/i;
+
+function refuseElectronicsBrowser(): string {
+    return (
+        "For phones or big electronics, say *order … from amazon* / *flipkart* (or paste a product link) — " +
+        "Instamart/Swiggy/Zepto/Blinkit/Zomato are for groceries & food. " +
+        "Or ask for milk, veggies, a meal, or medicines (Apollo/PharmEasy/1mg)."
+    );
+}
+
 function formatInr(paise?: number): string {
     if (typeof paise !== "number" || !Number.isFinite(paise)) return "";
     const rupees = paise / 100;
@@ -116,6 +137,9 @@ function extractOrderQuery(text: string, partner: string): string {
 function skuConfirmCopy(draft: BrowserTaskDraft): string {
     const label = partnerLabel(String(draft.partner || "the site"));
     const opts = draft.catalogOptions ?? [];
+    const addr = draft.addressLabel
+        ? `Deliver to: ${draft.addressLabel}`
+        : "";
     if (opts.length > 1) {
         const lines = opts.slice(0, 3).map((o, i) => {
             const price = formatInr(o.pricePaise);
@@ -125,9 +149,13 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
             `Found on *${label}*:`,
             ...lines,
             ``,
+            addr,
             `Reply *1* / *2* / *3*, or *confirm* for #1 — login/OTP only after you pick.`,
+            `Prefer *COD* at checkout — I'll still ask confirm-before-pay.`,
             `Or send another name. Reply *cancel* to stop.`,
-        ].join("\n");
+        ]
+            .filter(Boolean)
+            .join("\n");
     }
     const sku = draft.selectedSku || opts[0];
     if (sku) {
@@ -136,12 +164,16 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
             `Found on *${label}*:`,
             `• ${sku.name}${price ? ` — ${price}` : ""}`,
             ``,
+            addr,
             `Reply *confirm* to order this (login/OTP next), or send another name / *cancel*.`,
-        ].join("\n");
+            `Prefer *COD* at checkout — I'll still ask confirm-before-pay.`,
+        ]
+            .filter(Boolean)
+            .join("\n");
     }
     return (
         draft.lastMessage ||
-        `I couldn't get a live guest price for *${label}* yet. Reply *confirm* to open the site (login/OTP may be asked), or *cancel*.`
+        `I couldn't get a live guest price for *${label}* yet. Reply *confirm* to open the site (login/OTP may be asked), or *cancel*. Prefer *COD* — confirm-before-pay either way.`
     );
 }
 
@@ -503,46 +535,140 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 draft.selectedSku = draft.catalogOptions[0];
                 draft.catalogOptions = undefined;
             }
-            // Fall through to browser launch below by rewriting as starting with exact goal
             const skuName = draft.selectedSku?.name;
             const price = formatInr(draft.selectedSku?.pricePaise);
             const partner = draft.partner;
             const playbook = resolvePlaybook(partner, draft.goal, draft.startUrl);
-            const exactGoal = skuName
-                ? `Order exact SKU from ${partnerLabel(String(partner || ""))}: ${skuName}${price ? ` @ ${price}` : ""}`
-                : draft.goal;
-            draft = {
-                phase: "running",
-                goal: exactGoal.slice(0, 240),
-                partner: playbook.partner,
-                siteKey: playbook.siteKey,
-                startUrl: draft.selectedSku?.productUrl || playbook.startUrl,
-                selectedSku: draft.selectedSku,
-                otpChallengeId: undefined,
-            };
-            if (draft.partner && draft.partner !== "generic" && draft.partner !== "generic_grocery") {
-                const challenge = `browser-${draft.partner}-${Date.now()}`;
-                draft.otpChallengeId = challenge;
+            const {
+                appendDeliveryAddressToGoal,
+                resolveDeliveryAddressLabel,
+            } = await import("./smokeDeliveryAddress");
+            if (!draft.addressLabel || draft.addressLabel.trim().length < 8) {
+                draft.addressLabel = (
+                    await resolveDeliveryAddressLabel({
+                        familyId: input.familyId,
+                        userId: input.actorUserId,
+                        partner: String(partner || ""),
+                    })
+                ).label;
+            }
+            const exactGoal = appendDeliveryAddressToGoal(
+                skuName
+                    ? `Order exact SKU from ${partnerLabel(String(partner || ""))}: ${skuName}${price ? ` @ ${price}` : ""}`
+                    : draft.goal,
+                draft.addressLabel,
+            );
+            const challenge =
+                draft.partner && draft.partner !== "generic" && draft.partner !== "generic_grocery"
+                    ? `browser-${draft.partner}-${Date.now()}`
+                    : undefined;
+            if (challenge && draft.partner && draft.partner !== "generic") {
                 await beginOtpLogin({
                     userId: input.actorUserId,
                     partner: draft.partner as CommercePartnerKey,
                     otpChallengeId: challenge,
                 }).catch(() => undefined);
             }
+            draft = {
+                phase: "running",
+                goal: exactGoal.slice(0, 320),
+                partner: playbook.partner,
+                siteKey: playbook.siteKey,
+                startUrl: draft.selectedSku?.productUrl || playbook.startUrl,
+                selectedSku: draft.selectedSku,
+                addressLabel: draft.addressLabel,
+                otpChallengeId: challenge,
+                lastMessage: `Opening ${partnerLabel(String(playbook.partner))}…`,
+                confirm: { addressLabel: draft.addressLabel },
+            };
             await saveDraft(input.phone, draft);
-            const result = await runBrowserTask({
-                familyId: input.familyId,
-                userId: input.actorUserId,
-                goal: draft.goal,
-                partner: draft.partner,
-                startUrl: draft.startUrl,
-            });
-            draft = applyResultToDraft(draft, result);
-            await saveDraft(input.phone, draft.phase === "done" ? null : draft);
-            if (result.status === "done") {
-                await maybeNotifyCaregivers(input, draft, result);
-            }
-            return { text: result.message, draft };
+
+            const loginPhone = toLoginPhoneE164(input.phone);
+            const goalWithPhone = /login_phone=/i.test(draft.goal)
+                ? draft.goal
+                : `${draft.goal} | login_phone=${loginPhone}`;
+            const browserGeneration = beginBrowserGeneration(input.familyId, input.actorUserId);
+            const notifyPartner: CommercePartnerKey | "generic" =
+                draft.partner && draft.partner !== "generic"
+                    ? (draft.partner as CommercePartnerKey)
+                    : "generic";
+            const deadlineEnv = Number(process.env.BROWSER_TASK_DEADLINE_MS);
+            const deadlineMs = Math.min(
+                Math.max(Number.isFinite(deadlineEnv) && deadlineEnv > 0 ? deadlineEnv : 75_000, 60_000),
+                90_000,
+            );
+            void (async () => {
+                const { notifyPharmacyBrowserBackgroundResult, pushWhatsAppBrowserFollowUp } =
+                    await import("./browserProgressNotify.service");
+                try {
+                    const result = await runBrowserTask({
+                        familyId: input.familyId,
+                        userId: input.actorUserId,
+                        goal: goalWithPhone,
+                        partner: draft!.partner,
+                        startUrl: draft!.startUrl,
+                        deadlineMs,
+                        loginPhone,
+                        browserGeneration,
+                        onProgress: async (_stage, detail) => {
+                            if (!detail?.trim()) return;
+                            if (
+                                !isBrowserGenerationCurrent(
+                                    input.familyId,
+                                    input.actorUserId,
+                                    browserGeneration,
+                                )
+                            ) {
+                                return;
+                            }
+                            if (
+                                shouldSuppressDuplicateOtpAsk(
+                                    input.familyId,
+                                    input.actorUserId,
+                                    detail,
+                                )
+                            ) {
+                                return;
+                            }
+                            await pushWhatsAppBrowserFollowUp({
+                                phone: input.phone,
+                                familyId: input.familyId,
+                                recipientUserId: input.recipientUserId,
+                                text: detail.trim(),
+                            }).catch(() => undefined);
+                        },
+                    });
+                    await notifyPharmacyBrowserBackgroundResult({
+                        phone: input.phone,
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                        actorUserId: input.actorUserId,
+                        goal: draft!.goal,
+                        partner: notifyPartner,
+                        otpChallengeId: challenge,
+                        result,
+                        browserGeneration,
+                    });
+                } catch (err) {
+                    console.warn(
+                        "browser sku-confirm launch failed:",
+                        err instanceof Error ? err.message : err,
+                    );
+                }
+            })();
+
+            const priceBit = price ? ` (${price})` : "";
+            return {
+                text:
+                    `Opening *${partnerLabel(String(playbook.partner))}* for: ${skuName || draft.goal.slice(0, 80)}` +
+                    `${priceBit}\n\n` +
+                    `Deliver to: ${draft.addressLabel}\n` +
+                    `I'll sign in with your WhatsApp number when asked.\n` +
+                    `*Paste the SMS OTP only after I ask* — I never read your device SMS.\n\n` +
+                    `No silent pay — confirm item+total+address before checkout. Prefer *COD*.\n` +
+                    `Reply *cancel* to stop.`,
+                draft,
+            };
         }
         // Re-search on new product text
         if (text.length >= 3 && !/^\d{4,8}$/.test(text)) {
@@ -588,6 +714,9 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     }
 
     if (starting) {
+        if (ELECTRONICS_REFUSE.test(text) && !/\b(amazon|flipkart)\b/i.test(text)) {
+            return { text: refuseElectronicsBrowser(), draft: draft ?? { phase: "idle", goal: "" } };
+        }
         const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
         const partner = partnerFromText(text);
         const playbook = resolvePlaybook(partner, text, resolved.startUrl);
@@ -601,6 +730,12 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             familyId: input.familyId,
             userId: input.actorUserId,
         });
+        const { resolveDeliveryAddressLabel } = await import("./smokeDeliveryAddress");
+        const addr = await resolveDeliveryAddressLabel({
+            familyId: input.familyId,
+            userId: input.actorUserId,
+            partner: String(playbook.partner),
+        });
 
         draft = {
             phase: "awaiting_sku_confirm",
@@ -608,6 +743,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             partner: playbook.partner,
             siteKey: playbook.siteKey,
             startUrl: playbook.startUrl,
+            addressLabel: addr.label,
         };
 
         if (catalog.hits.length) {

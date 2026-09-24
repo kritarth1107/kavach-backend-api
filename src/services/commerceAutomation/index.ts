@@ -53,3 +53,9 @@ export {
     type GuestCatalogHit,
     type GuestCatalogSearchResult,
 } from "./guestCatalogSearch.service";
+
+export {
+    SMOKE_DEFAULT_DELIVERY_ADDRESS,
+    resolveDeliveryAddressLabel,
+    appendDeliveryAddressToGoal,
+} from "./smokeDeliveryAddress";

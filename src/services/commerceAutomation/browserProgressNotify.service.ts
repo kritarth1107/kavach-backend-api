@@ -164,7 +164,7 @@ export function formatPharmacyBrowserFollowUp(
                   ].join("\n"),
             ``,
             `No code yet? Check the SMS thread from ${label}, then reply *retry* or *cancel*.`,
-            `No silent pay — I'll ask you to confirm item+total+address before checkout.`,
+            `No silent pay — I'll ask you to confirm item+total+address before checkout. Prefer *COD*.`,
         ].join("\n"),
         clearSession: false,
         phase: "awaiting_otp",

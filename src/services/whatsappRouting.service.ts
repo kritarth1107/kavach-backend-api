@@ -395,19 +395,32 @@ export async function handleWhatsAppInbound(body: {
         });
     }
 
-    // Pharmacy mid-flow short controls BEFORE dashboard parity — else bare "status"
-    // steals and claims *Latest Instamart order* while an Apollo SKU list is open.
+    // Pharmacy / browser-commerce mid-flow short controls BEFORE dashboard parity —
+    // else bare "status" steals and claims *Latest Instamart order* while an Apollo
+    // SKU list or grocery awaiting_sku_confirm / browser order is open.
     {
         const waPharmEarly = await WhatsappSession.findOne({ phone }).lean();
         const pd = (waPharmEarly as { pharmacyDraft?: { phase?: string } } | null)?.pharmacyDraft;
+        const bd = (
+            waPharmEarly as {
+                browserTaskDraft?: { phase?: string; lastMessage?: string; partner?: string };
+            } | null
+        )?.browserTaskDraft;
         const pharmActive =
             Boolean(pd?.phase) && pd!.phase !== "idle" && pd!.phase !== "done";
-        if (
-            pharmActive &&
+        const browserActive =
+            Boolean(bd?.phase) &&
+            bd!.phase !== "idle" &&
+            bd!.phase !== "done" &&
+            (bd!.phase === "awaiting_sku_confirm" ||
+                bd!.phase === "running" ||
+                bd!.phase === "awaiting_otp" ||
+                bd!.phase === "awaiting_confirm");
+        const shortCtrl =
             /^(status|order\s*status|ok|okay|okk|k|confirm|place|yes|haan|[123]|cancel|stop)$/i.test(
                 text.trim(),
-            )
-        ) {
+            );
+        if (pharmActive && shortCtrl) {
             const { handlePharmacyWhatsAppTurn } = await import("./pharmacyOrderFlow.service");
             const pharmacyReply = await handlePharmacyWhatsAppTurn({
                 phone,
@@ -421,6 +434,29 @@ export async function handleWhatsAppInbound(body: {
             });
             if (pharmacyReply) {
                 return outbound(phone, pharmacyReply.text);
+            }
+        }
+        if (browserActive && shortCtrl) {
+            const { handleBrowserTaskWhatsAppTurn } = await import(
+                "./commerceAutomation/browserTaskWhatsApp.service"
+            );
+            const browserReply = await handleBrowserTaskWhatsAppTurn({
+                phone,
+                text,
+                familyId: identity.familyId,
+                actorUserId: identity.userId,
+                recipientUserId: subjectUserId,
+                actorRole: identity.role,
+            });
+            if (browserReply) {
+                return outbound(phone, browserReply.text);
+            }
+            // Bare "status" with no handler reply — restating last browser message beats Instamart steal
+            if (/^(status|order\s*status)$/i.test(text.trim()) && bd?.lastMessage) {
+                return outbound(
+                    phone,
+                    `Still working on your *${bd.partner || "order"}*…\n\n${bd.lastMessage}`,
+                );
             }
         }
     }

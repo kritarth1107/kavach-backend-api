@@ -107,6 +107,8 @@ export type RunBrowserTaskInput = {
     onProgress?: (stage: BrowserProgressStage, detail: string) => void | Promise<void>;
     /** Per-user generation — stale tasks no-op after cancel. */
     browserGeneration?: number;
+    /** Mutable — last WA progress stage (avoids stale "didn't reach login" after sign-in). */
+    lastProgressStage?: BrowserProgressStage;
 };
 
 export interface BrowserWorker {
@@ -164,6 +166,7 @@ async function notifyProgress(
     ) {
         return;
     }
+    input.lastProgressStage = stage;
     try {
         await input.onProgress?.(stage, detail);
     } catch (err) {
@@ -349,7 +352,7 @@ function dryRunRideFaresMessage(goal: string, partnerLabelStr: string): {
 function extractItemGuess(goal: string): string[] {
     const cleaned = goal
         .replace(/\|\s*login_phone=\S*/gi, " ")
-        .replace(/\blogin_phone=\S*/gi, " ")
+        .replace(/\blogin_phone=\S*/gi, " ").replace(/\|\s*login_phone=(?=\s|$)/gi, " ")
         .replace(/https?:\/\/\S+/gi, " ")
         .replace(/\b(order|buy|get|purchase|from|on|via|please|for me|exact sku)\b/gi, " ")
         .replace(
@@ -1146,9 +1149,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                       ...items.map((i) => `• ${i}`),
                       ``,
                       `Total: ${action.confirm?.totalLabel || "see site"}`,
-                      `Deliver to: ${action.confirm?.addressLabel || "your saved address"}`,
+                      `Deliver to: ${
+                          action.confirm?.addressLabel ||
+                          (ctx.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim() ||
+                              "your saved address")
+                      }`,
+                      `Payment: prefer *COD* (no silent pay / UPI until you confirm).`,
                       ``,
-                      `Reply *confirm* to continue, or *cancel*.`,
+                      `Reply *confirm* to place with COD if offered, or *cancel*.`,
                       action.message ? `\n${action.message}` : "",
                   ];
             return {
@@ -1290,6 +1298,28 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
         : busy
           ? "busy"
           : "timeout";
+    const stage = input.lastProgressStage || "";
+    const postLogin =
+        Boolean(input.otp) ||
+        stage === "searching" ||
+        stage === "otp_ready";
+    // Never claim "didn't reach login" after successful sign-in / OTP paste.
+    if (postLogin && !ride) {
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: String(playbook.partner),
+            steps: 1,
+            url: playbook.startUrl,
+            failureReason: crash ? "chromium_crash" : busy ? "busy" : "site_slow",
+            message: [
+                `*${label}* signed in but timed out before confirm-before-pay (search/cart slow).`,
+                `Nothing was ordered or paid.`,
+                ``,
+                `Reply *retry* to continue, or *cancel* to stop.`,
+            ].join("\n"),
+        };
+    }
     return {
         // steps:0 signals follow-up formatter: OTP page likely never reached
         status: "need_otp",
@@ -1320,12 +1350,12 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
                     `If a code arrives later, you can still *paste the OTP here*.`,
                 ].join("\n")
               : [
-                    `Opening *${label}* for: ${input.goal.slice(0, 120)}`,
+                    `Opening *${label}* for: ${input.goal.replace(/\|\s*login_phone=\S*/gi, "").replace(/\|\s*delivery_address=[^|]*/gi, "").slice(0, 120)}`,
                     ``,
                     `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
                     `(I never read your device SMS — only what you send me on WhatsApp.)`,
                     ``,
-                    `Or reply *cancel* to stop. I can also take a medicine list / pharmacy confirm without waiting on the browser.`,
+                    `Or reply *cancel* to stop.`,
                 ].join("\n"),
     };
 }

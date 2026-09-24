@@ -21,7 +21,8 @@ Previously `Order vitamin c from apollo` built a soft basket (`vitamin c capsule
 | PharmEasy | Public `/api/search/search` |
 | Tata 1mg | No stable guest price API — honest copy; confirm opens browser |
 | Instamart / Swiggy / Zepto | MCP search when connected (no new SMS); else honest + confirm opens browser |
-| Blinkit / Zomato / others | Not wired for guest yet — honest + confirm opens browser |
+| Blinkit / Zomato | No stable guest price API (public catalog blocked) — honest + confirm opens browser |
+| Others (BigBasket / Amazon / …) | Not wired for guest yet — honest + confirm opens browser |
 
 Code: `src/services/commerceAutomation/guestCatalogSearch.service.ts`  
 Pharmacy WA: `pharmacyOrderFlow.service.ts` (`attachGuestCatalog` before `confirm_basket`)  

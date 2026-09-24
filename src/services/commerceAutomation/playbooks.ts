@@ -17,7 +17,7 @@ export type BrowserPlaybook = {
 };
 
 const CONFIRM =
-    "Before any pay/UPI, stop and ask WhatsApp confirm of item + total + address. Never silent pay.";
+    "Before any pay/UPI, stop and ask WhatsApp confirm of item + total + address. Prefer Cash on Delivery (COD) when available; never silent pay. Never invent prices.";
 const OTP =
     "If OTP field is visible, emit need_otp and wait for WhatsApp paste. NEVER click Send OTP / Resend / Continue on pharmacy login (bootstrap already requested once). Never read device SMS.";
 const CONFIRM_RIDE =
@@ -58,7 +58,7 @@ function pharmacyPlaybook(partner: CommercePartnerKey, startUrl: string): Browse
         siteKey: partner,
         startUrl,
         searchHint:
-            "LIVE pharmacy web. OTP SMS is sent by deterministic bootstrap ONCE — NEVER click Continue/Get OTP/Send OTP/Resend on the login modal (causes SMS spam). If OTP field is visible, emit need_otp and wait. After OTP: search the medicine/OTC in the goal; add to cart. Never diagnose. At checkout emit need_user_confirm with real item+total+address; never pay/UPI until userConfirmed=true. CAPTCHA/bot wall → clear WhatsApp error.",
+            "LIVE pharmacy web. OTP SMS is sent by deterministic bootstrap ONCE — NEVER click Continue/Get OTP/Send OTP/Resend on the login modal (causes SMS spam). If OTP field is visible, emit need_otp and wait. After OTP: search the medicine/OTC in the goal; add to cart. Never diagnose. At checkout prefer COD when available; emit need_user_confirm with real item+total+address; never pay/UPI until userConfirmed=true. Use delivery_address= from goal when elder has no saved address. CAPTCHA/bot wall → clear WhatsApp error.",
         otpHint: OTP,
         confirmHint: CONFIRM,
         category: "pharmacy",
