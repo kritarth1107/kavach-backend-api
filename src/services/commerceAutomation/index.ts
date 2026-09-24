@@ -46,3 +46,10 @@ export {
     shouldPreferMcpForPartner,
     DEFAULT_BROWSER_FIRST_PARTNERS,
 } from "./commerceBrowserFirst";
+
+export {
+    searchGuestCatalog,
+    formatGuestCatalogConfirmCopy,
+    type GuestCatalogHit,
+    type GuestCatalogSearchResult,
+} from "./guestCatalogSearch.service";

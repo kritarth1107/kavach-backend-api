@@ -118,26 +118,31 @@ function browserAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter 
             return { status: "connected" };
         },
         async search(input) {
-            const result = await runBrowserTask({
+            // Guest/MCP catalog first — never invent prices; do not open login for search.
+            const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+            const catalog = await searchGuestCatalog({
+                partner,
+                query: input.query,
                 familyId: input.familyId,
                 userId: input.userId,
-                goal: `Search and add to cart: ${input.query}`,
-                partner,
-                maxSteps: 8,
             });
-            const hits: SearchHit[] = [
-                {
-                    id: `${partner}-browser-1`,
-                    name: input.query.slice(0, 80) || "Item",
-                    pricePaise: undefined,
-                    requiresRx: /rx|prescription|antibiotic|schedule\s*h/i.test(input.query),
-                },
-            ];
+            if (catalog.hits.length) {
+                const hits: SearchHit[] = catalog.hits.map((h) => ({
+                    id: h.id,
+                    name: h.name,
+                    pricePaise: h.pricePaise,
+                    requiresRx: h.requiresRx,
+                }));
+                return {
+                    hits,
+                    message: `Found ${hits.length} live guest match(es) for "${input.query}". Confirm SKU before login.`,
+                };
+            }
             return {
-                hits,
+                hits: [],
                 message:
-                    result.message ||
-                    `${partner} browser search — confirm item, address, and total before pay.`,
+                    catalog.unavailableReason ||
+                    `${partner} guest search returned no priced match for "${input.query}".`,
             };
         },
         async setAddress() {

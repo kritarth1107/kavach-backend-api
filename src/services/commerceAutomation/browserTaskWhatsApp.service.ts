@@ -38,6 +38,7 @@ import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 
 export type BrowserTaskPhase =
     | "idle"
+    | "awaiting_sku_confirm"
     | "running"
     | "awaiting_otp"
     | "awaiting_confirm"
@@ -51,6 +52,19 @@ export type BrowserTaskDraft = {
     startUrl?: string;
     otpChallengeId?: string;
     lastMessage?: string;
+    /** Guest-search SKU options shown before login. */
+    catalogOptions?: Array<{
+        id: string;
+        name: string;
+        pricePaise?: number;
+        productUrl?: string;
+    }>;
+    selectedSku?: {
+        id: string;
+        name: string;
+        pricePaise?: number;
+        productUrl?: string;
+    };
     confirm?: {
         items?: string[];
         totalLabel?: string;
@@ -73,6 +87,64 @@ function partnerFromText(text: string): CommercePartnerKey | "generic" {
     const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
     return siteKeyToPartnerKey(resolved.siteKey);
 }
+
+function formatInr(paise?: number): string {
+    if (typeof paise !== "number" || !Number.isFinite(paise)) return "";
+    const rupees = paise / 100;
+    return Number.isInteger(rupees) ? `₹${rupees}` : `₹${rupees.toFixed(2)}`;
+}
+
+/** Extract item query from "order X from Y" style goals. */
+function extractOrderQuery(text: string, partner: string): string {
+    let q = text
+        .replace(
+            new RegExp(
+                `\\b(?:from|on|via|at|using|with)\\s+${partner.replace(/_/g, "\\s*")}\b`,
+                "ig",
+            ),
+            " ",
+        )
+        .replace(
+            /\b(order|buy|get|purchase|shop|browse|find|search|open|please|for|me|the|a|an)\b/gi,
+            " ",
+        )
+        .replace(/\s+/g, " ")
+        .trim();
+    return q.slice(0, 80) || text.slice(0, 80);
+}
+
+function skuConfirmCopy(draft: BrowserTaskDraft): string {
+    const label = partnerLabel(String(draft.partner || "the site"));
+    const opts = draft.catalogOptions ?? [];
+    if (opts.length > 1) {
+        const lines = opts.slice(0, 3).map((o, i) => {
+            const price = formatInr(o.pricePaise);
+            return `${i + 1}. ${o.name}${price ? ` — ${price}` : ""}`;
+        });
+        return [
+            `Found on *${label}*:`,
+            ...lines,
+            ``,
+            `Reply *1* / *2* / *3*, or *confirm* for #1 — login/OTP only after you pick.`,
+            `Or send another name. Reply *cancel* to stop.`,
+        ].join("\n");
+    }
+    const sku = draft.selectedSku || opts[0];
+    if (sku) {
+        const price = formatInr(sku.pricePaise);
+        return [
+            `Found on *${label}*:`,
+            `• ${sku.name}${price ? ` — ${price}` : ""}`,
+            ``,
+            `Reply *confirm* to order this (login/OTP next), or send another name / *cancel*.`,
+        ].join("\n");
+    }
+    return (
+        draft.lastMessage ||
+        `I couldn't get a live guest price for *${label}* yet. Reply *confirm* to open the site (login/OTP may be asked), or *cancel*.`
+    );
+}
+
 
 export function messageLooksLikeBrowserTask(text: string): boolean {
     const t = text.trim();
@@ -414,40 +486,153 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         return null;
     }
 
+    // Confirm SKU (guest search) before opening login for browser-first partners
+    if (draft && draft.phase === "awaiting_sku_confirm") {
+        if (draft.catalogOptions && draft.catalogOptions.length > 1 && /^[123]$/.test(text)) {
+            const pick = draft.catalogOptions[Number(text) - 1];
+            if (pick) {
+                draft.selectedSku = pick;
+                draft.catalogOptions = undefined;
+                draft.goal = `Order ${pick.name} from ${partnerLabel(String(draft.partner || ""))}`;
+                await saveDraft(input.phone, draft);
+                return { text: skuConfirmCopy(draft), draft };
+            }
+        }
+        if (/^(confirm|place|yes|haan|ok)$/i.test(text)) {
+            if (draft.catalogOptions && draft.catalogOptions.length > 1 && !draft.selectedSku) {
+                draft.selectedSku = draft.catalogOptions[0];
+                draft.catalogOptions = undefined;
+            }
+            // Fall through to browser launch below by rewriting as starting with exact goal
+            const skuName = draft.selectedSku?.name;
+            const price = formatInr(draft.selectedSku?.pricePaise);
+            const partner = draft.partner;
+            const playbook = resolvePlaybook(partner, draft.goal, draft.startUrl);
+            const exactGoal = skuName
+                ? `Order exact SKU from ${partnerLabel(String(partner || ""))}: ${skuName}${price ? ` @ ${price}` : ""}`
+                : draft.goal;
+            draft = {
+                phase: "running",
+                goal: exactGoal.slice(0, 240),
+                partner: playbook.partner,
+                siteKey: playbook.siteKey,
+                startUrl: draft.selectedSku?.productUrl || playbook.startUrl,
+                selectedSku: draft.selectedSku,
+                otpChallengeId: undefined,
+            };
+            if (draft.partner && draft.partner !== "generic" && draft.partner !== "generic_grocery") {
+                const challenge = `browser-${draft.partner}-${Date.now()}`;
+                draft.otpChallengeId = challenge;
+                await beginOtpLogin({
+                    userId: input.actorUserId,
+                    partner: draft.partner as CommercePartnerKey,
+                    otpChallengeId: challenge,
+                }).catch(() => undefined);
+            }
+            await saveDraft(input.phone, draft);
+            const result = await runBrowserTask({
+                familyId: input.familyId,
+                userId: input.actorUserId,
+                goal: draft.goal,
+                partner: draft.partner,
+                startUrl: draft.startUrl,
+            });
+            draft = applyResultToDraft(draft, result);
+            await saveDraft(input.phone, draft.phase === "done" ? null : draft);
+            if (result.status === "done") {
+                await maybeNotifyCaregivers(input, draft, result);
+            }
+            return { text: result.message, draft };
+        }
+        // Re-search on new product text
+        if (text.length >= 3 && !/^\d{4,8}$/.test(text)) {
+            const partner = draft.partner || partnerFromText(text);
+            const query = extractOrderQuery(text, String(partner));
+            const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+            const result = await searchGuestCatalog({
+                partner: String(partner),
+                query,
+                familyId: input.familyId,
+                userId: input.actorUserId,
+            });
+            draft.goal = text.slice(0, 240);
+            draft.partner = partner;
+            if (result.hits.length) {
+                draft.catalogOptions = result.hits.slice(0, 3).map((h) => ({
+                    id: h.id,
+                    name: h.name,
+                    pricePaise: h.pricePaise,
+                    productUrl: h.productUrl,
+                }));
+                draft.selectedSku =
+                    result.hits.length === 1
+                        ? {
+                              id: result.hits[0].id,
+                              name: result.hits[0].name,
+                              pricePaise: result.hits[0].pricePaise,
+                              productUrl: result.hits[0].productUrl,
+                          }
+                        : undefined;
+                draft.lastMessage = undefined;
+            } else {
+                draft.catalogOptions = undefined;
+                draft.selectedSku = undefined;
+                draft.lastMessage =
+                    result.unavailableReason ||
+                    `No live guest match for "${query}". Reply *confirm* to open the site, or try another name.`;
+            }
+            await saveDraft(input.phone, draft);
+            return { text: skuConfirmCopy(draft), draft };
+        }
+        return { text: skuConfirmCopy(draft), draft };
+    }
+
     if (starting) {
         const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
         const partner = partnerFromText(text);
         const playbook = resolvePlaybook(partner, text, resolved.startUrl);
+        const query = extractOrderQuery(text, String(playbook.partner));
+
+        // SEARCH FIRST — guest/MCP catalog. Do not open login until SKU confirm.
+        const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+        const catalog = await searchGuestCatalog({
+            partner: String(playbook.partner),
+            query,
+            familyId: input.familyId,
+            userId: input.actorUserId,
+        });
+
         draft = {
-            phase: "running",
+            phase: "awaiting_sku_confirm",
             goal: text.slice(0, 240),
             partner: playbook.partner,
             siteKey: playbook.siteKey,
             startUrl: playbook.startUrl,
         };
-        if (draft.partner && draft.partner !== "generic" && draft.partner !== "generic_grocery") {
-            const challenge = `browser-${draft.partner}-${Date.now()}`;
-            draft.otpChallengeId = challenge;
-            await beginOtpLogin({
-                userId: input.actorUserId,
-                partner: draft.partner as CommercePartnerKey,
-                otpChallengeId: challenge,
-            }).catch(() => undefined);
+
+        if (catalog.hits.length) {
+            draft.catalogOptions = catalog.hits.slice(0, 3).map((h) => ({
+                id: h.id,
+                name: h.name,
+                pricePaise: h.pricePaise,
+                productUrl: h.productUrl,
+            }));
+            if (catalog.hits.length === 1) {
+                draft.selectedSku = {
+                    id: catalog.hits[0].id,
+                    name: catalog.hits[0].name,
+                    pricePaise: catalog.hits[0].pricePaise,
+                    productUrl: catalog.hits[0].productUrl,
+                };
+            }
+        } else {
+            draft.lastMessage =
+                catalog.unavailableReason ||
+                `No live guest price for *${partnerLabel(String(playbook.partner))}* yet. Reply *confirm* to open the site (login/OTP may be asked), or send another name / *cancel*.`;
         }
 
-        const result = await runBrowserTask({
-            familyId: input.familyId,
-            userId: input.actorUserId,
-            goal: draft.goal,
-            partner: draft.partner,
-            startUrl: draft.startUrl,
-        });
-        draft = applyResultToDraft(draft, result);
-        await saveDraft(input.phone, draft.phase === "done" ? null : draft);
-        if (result.status === "done") {
-            await maybeNotifyCaregivers(input, draft, result);
-        }
-        return { text: result.message, draft };
+        await saveDraft(input.phone, draft);
+        return { text: skuConfirmCopy(draft), draft };
     }
 
     return null;

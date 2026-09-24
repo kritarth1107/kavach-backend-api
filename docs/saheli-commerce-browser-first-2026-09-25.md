@@ -41,3 +41,7 @@ Manual WA: `order milk from instamart` / `zepto` / `blinkit` or `order pizza fro
 - Bot walls / CAPTCHA on partner sites → clear WA error, retry later  
 - OTP paste timing (parked page) — same patterns as pharmacy  
 - Live Chromium required on Cloud Run (`BROWSER_WORKER_MODE=auto`)
+
+## Search-before-login (2026-09-25)
+
+Browser-first still places via Playwright, but WA now **guest/MCP-searches first** and asks confirm of exact SKU+₹ before opening login/OTP. See `saheli-commerce-search-before-login-2026-09-25.md`.

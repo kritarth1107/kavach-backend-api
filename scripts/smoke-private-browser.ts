@@ -240,6 +240,34 @@ async function main() {
         console.log("OK: otp one-shot + got-code ACK dedupe + cancel + still-working suppress");
     }
 
+
+    // Guest catalog search (Apollo/PharmEasy) — no login
+    {
+        const { searchGuestCatalog } = await import(
+            "../src/services/commerceAutomation/guestCatalogSearch.service"
+        );
+        const apollo = await searchGuestCatalog({ partner: "apollo", query: "vitamin c" });
+        assert(apollo.searched === true, "apollo guest searched");
+        if (apollo.hits.length) {
+            assert(!!apollo.hits[0].name && !!apollo.hits[0].pricePaise, "apollo hit has name+price");
+            console.log(
+                "OK: apollo guest",
+                apollo.hits[0].name.slice(0, 60),
+                "₹" + ((apollo.hits[0].pricePaise || 0) / 100),
+            );
+        } else {
+            console.warn("WARN: apollo guest returned 0 hits (network/rate-limit) —", apollo.unavailableReason);
+        }
+        const pe = await searchGuestCatalog({ partner: "pharmeasy", query: "limcee" });
+        assert(pe.searched === true, "pharmeasy guest searched");
+        if (pe.hits.length) {
+            assert(!!pe.hits[0].pricePaise, "pharmeasy hit priced");
+            console.log("OK: pharmeasy guest", pe.hits[0].name.slice(0, 60));
+        } else {
+            console.warn("WARN: pharmeasy guest 0 hits —", pe.unavailableReason);
+        }
+    }
+
     console.log("\nSmoke private browser / any-site:", process.exitCode ? "FAILED" : "PASSED");
 }
 

@@ -498,6 +498,7 @@ export async function handleWhatsAppInbound(body: {
             browserDraft &&
             (browserDraft.phase === "awaiting_otp" ||
                 browserDraft.phase === "awaiting_confirm" ||
+                browserDraft.phase === "awaiting_sku_confirm" ||
                 browserDraft.phase === "running")
         ) {
             const browserReply = await handleBrowserTaskWhatsAppTurn({
