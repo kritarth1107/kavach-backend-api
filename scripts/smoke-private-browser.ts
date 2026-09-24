@@ -181,6 +181,41 @@ async function main() {
     }).catch(() => []);
     console.log("health builder returned", tips.length, "tips (0 ok without care memory)");
 
+    
+    // OTP one-shot + cancel + still-working suppress (unit, no Chromium)
+    {
+        const {
+            beginBrowserGeneration,
+            claimPharmacyOtpSend,
+            hasPharmacyOtpSendBeenClaimed,
+            abortBrowserSessionForUser,
+            shouldSuppressStillWorkingFallback,
+            wasBrowserCancelledRecently,
+        } = await import("../src/services/commerceAutomation/parkedOtpSession.service");
+        const fam = "fam-otp-smoke";
+        const user = "user-otp-smoke";
+        const gen = beginBrowserGeneration(fam, user);
+        assert(claimPharmacyOtpSend(fam, user, gen) === true, "first OTP send claim wins");
+        assert(claimPharmacyOtpSend(fam, user, gen) === false, "second OTP send claim blocked");
+        assert(hasPharmacyOtpSendBeenClaimed(fam, user, gen) === true, "otp send marked claimed");
+        await abortBrowserSessionForUser(fam, user, { phone: "+919999000111" });
+        assert(wasBrowserCancelledRecently(fam, user) === true, "cancel sticks recently");
+        assert(
+            shouldSuppressStillWorkingFallback({
+                phone: "+919999000111",
+                browserTaskPhase: "awaiting_otp",
+            }) === true,
+            "still-working suppressed while awaiting_otp",
+        );
+        assert(
+            shouldSuppressStillWorkingFallback({
+                phone: "+919999000111",
+            }) === true,
+            "still-working suppressed after cancel-by-phone",
+        );
+        console.log("OK: otp one-shot + cancel + still-working suppress");
+    }
+
     console.log("\nSmoke private browser / any-site:", process.exitCode ? "FAILED" : "PASSED");
 }
 

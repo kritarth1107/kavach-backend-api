@@ -26,6 +26,10 @@ import {
     isBrowserGenerationCurrent,
     parkBrowserForOtp,
     takeParkedBrowserOtpSession,
+    claimPharmacyOtpSend,
+    hasPharmacyOtpSendBeenClaimed,
+    clearActiveBrowserTask,
+    currentBrowserGeneration,
 } from "./parkedOtpSession.service";
 
 export type BrowserTaskStatus =
@@ -625,6 +629,13 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     partner: String(playbook.partner),
                     loginPhone: input.loginPhone,
                     isCancelled: () => isTaskCancelled(input),
+                    claimOtpSend: () =>
+                        claimPharmacyOtpSend(
+                            input.familyId,
+                            input.userId,
+                            input.browserGeneration ??
+                                currentBrowserGeneration(input.familyId, input.userId),
+                        ),
                     onProgress: async (stage: PharmacyLoginStage, detail: string) => {
                         const mapped =
                             stage === "login_page"
@@ -796,6 +807,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     const gated = await this.applyAction(page, action, {
                         userConfirmed,
                         goal: input.goal,
+                        blockPharmacyOtpSend:
+                            Boolean(pharmacyPartner) ||
+                            hasPharmacyOtpSendBeenClaimed(
+                                input.familyId,
+                                input.userId,
+                                input.browserGeneration ??
+                                    currentBrowserGeneration(input.familyId, input.userId),
+                            ),
                     });
                     if (gated.halt) {
                         await this.persist(context, input, playbook.partner, page.url());
@@ -906,7 +925,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
     private async applyAction(
         page: import("playwright").Page,
         action: BrowserAction,
-        ctx: { userConfirmed: boolean; goal: string },
+        ctx: { userConfirmed: boolean; goal: string; blockPharmacyOtpSend?: boolean },
     ): Promise<{
         halt: boolean;
         status?: BrowserTaskStatus;
@@ -969,6 +988,28 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 status: "done",
                 message: action.message || "Done.",
             };
+        }
+
+        // Pharmacy: never let Gemini re-click Continue / Send OTP / Resend (SMS spam)
+        if (
+            ctx.blockPharmacyOtpSend &&
+            (action.type === "click" || action.type === "press")
+        ) {
+            const t = `${action.text || ""} ${action.selector || ""} ${action.message || ""}`.toLowerCase();
+            if (
+                /\b(send\s*otp|get\s*otp|request\s*otp|resend|re-?send|continue|get\s*(a\s*)?new\s*(otp|code))\b/.test(
+                    t,
+                )
+            ) {
+                console.warn("blocked Gemini pharmacy OTP-send click:", t.slice(0, 80));
+                return {
+                    halt: true,
+                    status: "need_otp",
+                    message:
+                        action.message ||
+                        "Paste the SMS OTP here (I don't read your phone SMS).",
+                };
+            }
         }
 
         // Safety: never click pay / request-ride without confirm

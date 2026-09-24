@@ -15,6 +15,9 @@ import {
 } from "./browserWorker.service";
 import {
     abortBrowserSessionForUser,
+    beginBrowserGeneration,
+    isBrowserGenerationCurrent,
+    shouldSuppressDuplicateOtpAsk,
     clearOtpAskDedupe,
     hasParkedBrowserOtpSession,
     queuePendingBrowserOtp,
@@ -96,7 +99,7 @@ async function saveDraft(phone: string, draft: BrowserTaskDraft | null): Promise
     if (!draft) {
         await WhatsappSession.findOneAndUpdate(
             { phone },
-            { $unset: { browserTaskDraft: 1, pendingCommerceOtp: 1 }, $set: { updatedAt: new Date() } },
+            { $unset: { browserTaskDraft: 1, pendingCommerceOtp: 1, pharmacyDraft: 1 }, $set: { updatedAt: new Date() } },
         );
         return;
     }
@@ -152,8 +155,8 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     const text = input.text.trim();
     let draft = await loadDraft(input.phone);
 
-    if (/^(cancel|stop|never ?mind)$/i.test(text) && draft) {
-        await abortBrowserSessionForUser(input.familyId, input.actorUserId);
+    if (/^(cancel|stop|never ?mind|cancel all(?: browsing)?)$/i.test(text) && (draft || /cancel\s+all/i.test(text))) {
+        await abortBrowserSessionForUser(input.familyId, input.actorUserId, { phone: input.phone });
         clearOtpAskDedupe(input.familyId, input.actorUserId);
         await WhatsappSession.findOneAndUpdate(
             { phone: input.phone },
@@ -195,6 +198,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             90_000,
         );
 
+        const browserGeneration = beginBrowserGeneration(input.familyId, input.actorUserId);
         void (async () => {
             const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
             try {
@@ -208,8 +212,15 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                     startUrl: retryStartUrl,
                     deadlineMs: retryDeadline,
                     loginPhone: retryLoginPhone,
+                    browserGeneration,
                     onProgress: async (_stage, detail) => {
                         if (!detail?.trim()) return;
+                        if (!isBrowserGenerationCurrent(input.familyId, input.actorUserId, browserGeneration)) {
+                            return;
+                        }
+                        if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, detail)) {
+                            return;
+                        }
                         await pushWhatsAppBrowserFollowUp({
                             phone: input.phone,
                             familyId: input.familyId,
@@ -227,6 +238,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                     partner: notifyPartner,
                     otpChallengeId: retryChallenge,
                     result,
+                    browserGeneration,
                 });
             } catch (err) {
                 console.warn(

@@ -176,3 +176,19 @@ pushes a WhatsApp follow-up within the browser deadline (~45s default, SLA ~30�
 Root cause of the Sep 24 Vit C hang: commit `57faeaf` made confirm async (good for typing SLA)
 but only `console.warn`'d failures — successful `need_otp`/`error` results were never sent to WA.
 
+## Pharmacy OTP — one-shot + cancel (2026-09-25)
+
+**SMS OTP spam fix (re-enabled carefully):**
+
+| Rule | Behavior |
+|------|----------|
+| Code default | `BROWSER_PHARMACY_LOGIN=off` (no Continue/Send OTP unless env on) |
+| Prod Cloud Run | Workflow sets `BROWSER_PHARMACY_LOGIN=on` after one-shot + cancel guards landed |
+| One-shot send | `claimPharmacyOtpSend(generation)` — Continue/Send OTP at most once per `browserGeneration` |
+| Gemini | Must **not** click Continue / Send OTP / Resend on pharmacy login; emit `need_otp` if OTP field visible |
+| OTP paste | Digits while `awaiting_otp` → `submitParkedBrowserOtp` into parked page → ACK “signing in…” once (no relaunch) |
+| Cancel | `cancel` / `cancel all browsing` → `abortBrowserSessionForUser` + bump generation + clear parked OTP + clear `pharmacyDraft` / `browserTaskDraft` — suppresses late stage/OTP asks |
+| Still-working | SLA fallback **suppressed** while OTP pending, pharmacy draft active, or recently cancelled |
+
+**Retest:** Order Vit C Apollo → Confirm → **one SMS max** → paste OTP → “signing in” (not still-working loop). Or cancel once → silence.
+

@@ -178,8 +178,14 @@ export async function bootstrapPharmacyLogin(input: {
     loginPhone: string;
     onProgress?: PharmacyProgressFn;
     settleMs?: number;
-    /** Abort check — return disabled/cancelled if false */
+    /** Abort check — return cancelled if true */
     isCancelled?: () => boolean;
+    /**
+     * One-shot gate for Continue/Send OTP. Return false to skip clicking
+     * (already claimed this browserGeneration). Omit to always allow one click
+     * inside this call (legacy). Prefer wiring claimPharmacyOtpSend.
+     */
+    claimOtpSend?: () => boolean;
 }): Promise<PharmacyLoginBootstrapResult> {
     const { page, partner, loginPhone } = input;
     const label = partnerLabel(partner);
@@ -321,9 +327,9 @@ export async function bootstrapPharmacyLogin(input: {
                 message: `${label} login opened but no phone field appeared. Reply *retry* or *cancel* — nothing was ordered.`,
             };
         }
-        otpRequestSent = await fillPhoneAndContinueOnce(page, retryPhone, loginPhone, label, notify);
+        otpRequestSent = await fillPhoneAndContinueOnce(page, retryPhone, loginPhone, label, notify, input.claimOtpSend);
     } else {
-        otpRequestSent = await fillPhoneAndContinueOnce(page, phoneInput, loginPhone, label, notify);
+        otpRequestSent = await fillPhoneAndContinueOnce(page, phoneInput, loginPhone, label, notify, input.claimOtpSend);
     }
 
     // Wait for OTP UI — poll ONLY; never click Continue/resend again
@@ -383,17 +389,26 @@ async function fillPhoneAndContinueOnce(
     loginPhone: string,
     label: string,
     notify: (stage: PharmacyLoginStage, detail: string) => void | Promise<void>,
+    claimOtpSend?: () => boolean,
 ): Promise<boolean> {
     const national = indiaMobile10(loginPhone) || loginPhone.replace(/\D/g, "").slice(-10);
     await phoneInput.click({ timeout: 5000 }).catch(() => undefined);
     await phoneInput.fill("");
     await phoneInput.fill(national);
+    // Generation-level one-shot — never re-click Continue/Send OTP for this attempt
+    if (claimOtpSend && !claimOtpSend()) {
+        console.warn(`[pharmacy-login] OTP send already claimed — not re-clicking Continue for ${label}`);
+        await notify("phone_entered", `*${label}* login code already requested — waiting for paste…`);
+        await page.waitForTimeout(400);
+        return false;
+    }
     await notify("phone_entered", `requested *${label}* login code for ${maskPhone(loginPhone)}…`);
     // One-shot only — never call this twice per bootstrap
     const continued = await clickByName(page, CONTINUE_TEXTS);
     if (!continued) {
+        // Enter only if we own the claim (first send). Never fall through to Resend.
         await page.keyboard.press("Enter").catch(() => undefined);
     }
     await page.waitForTimeout(1200);
-    return continued || true;
+    return true;
 }

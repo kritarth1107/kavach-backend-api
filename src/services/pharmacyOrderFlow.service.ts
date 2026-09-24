@@ -190,9 +190,26 @@ export async function handlePharmacyWhatsAppTurn(input: {
     const text = input.text.trim();
     let draft = await loadDraft(input.phone);
 
-    if (/^(cancel|stop|never ?mind)$/i.test(text) && draft) {
+    if (/^(cancel|stop|never ?mind|cancel all(?: browsing)?)$/i.test(text) && draft) {
+        const { abortBrowserSessionForUser } = await import(
+            "./commerceAutomation/parkedOtpSession.service"
+        );
+        await abortBrowserSessionForUser(input.familyId, input.actorUserId, {
+            phone: input.phone,
+        });
         await saveDraft(input.phone, null);
-        return { text: "Okay — cancelled the medicine order." };
+        // Also clear browser task draft so late OTP asks die
+        const WhatsappSession = (await import("../models/whatsappSession.model")).default;
+        await WhatsappSession.findOneAndUpdate(
+            { phone: input.phone },
+            {
+                $unset: { browserTaskDraft: 1, pendingCommerceOtp: 1, pharmacyDraft: 1 },
+                $set: { updatedAt: new Date() },
+            },
+        ).catch(() => undefined);
+        return {
+            text: "Okay — cancelled the medicine order. No more OTP asks from this attempt.",
+        };
     }
 
     // Seed from Rx photo while in pharmacy flow or explicit Rx attach

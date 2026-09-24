@@ -33,6 +33,14 @@ const parked = new Map<string, ParkedBrowserOtpSession>();
 const pendingOtps = new Map<string, PendingOtp>();
 const generationByKey = new Map<string, number>();
 const lastOtpAskByKey = new Map<string, { text: string; at: number }>();
+/** One Continue/Send-OTP click per browserGeneration — blocks Gemini + relaunch spam. */
+const otpSendClaimedByKey = new Map<string, number>();
+/** Soft cancel marker so SLA "still working" cannot fire after cancel. */
+const cancelledAtByKey = new Map<string, number>();
+const cancelledAtByPhone = new Map<string, number>();
+/** Active fire-and-forget slot: generation currently allowed to notify. */
+const activeTaskGenerationByKey = new Map<string, number>();
+const CANCEL_SUPPRESS_MS = 120_000;
 
 export function browserSessionKey(familyId: string, userId: string): string {
     return `${familyId}:${userId}`;
@@ -46,6 +54,9 @@ export function beginBrowserGeneration(familyId: string, userId: string): number
     const key = browserSessionKey(familyId, userId);
     const next = (generationByKey.get(key) ?? 0) + 1;
     generationByKey.set(key, next);
+    otpSendClaimedByKey.delete(key);
+    cancelledAtByKey.delete(key);
+    activeTaskGenerationByKey.set(key, next);
     void disposeParked(key);
     return next;
 }
@@ -144,11 +155,20 @@ export function takeParkedBrowserOtpSession(
 export async function abortBrowserSessionForUser(
     familyId: string,
     userId: string,
+    opts?: { phone?: string },
 ): Promise<void> {
     const key = browserSessionKey(familyId, userId);
     generationByKey.set(key, (generationByKey.get(key) ?? 0) + 1);
     pendingOtps.delete(key);
     lastOtpAskByKey.delete(key);
+    otpSendClaimedByKey.delete(key);
+    activeTaskGenerationByKey.delete(key);
+    const now = Date.now();
+    cancelledAtByKey.set(key, now);
+    if (opts?.phone) {
+        const phone = opts.phone.replace(/\D/g, "");
+        if (phone) cancelledAtByPhone.set(phone, now);
+    }
     const row = parked.get(key);
     if (row) {
         row.aborted = true;
@@ -244,6 +264,106 @@ export async function fillOtpOnPage(
             filled: false,
             reason: err instanceof Error ? err.message.slice(0, 120) : "fill_failed",
         };
+    }
+}
+
+
+/**
+ * Claim the single Continue/Send-OTP for this generation.
+ * Returns true only once — subsequent calls (Gemini / relaunch) get false.
+ */
+export function claimPharmacyOtpSend(
+    familyId: string,
+    userId: string,
+    generation: number,
+): boolean {
+    const key = browserSessionKey(familyId, userId);
+    if (!isBrowserGenerationCurrent(familyId, userId, generation)) return false;
+    const claimed = otpSendClaimedByKey.get(key);
+    if (claimed === generation) return false;
+    otpSendClaimedByKey.set(key, generation);
+    return true;
+}
+
+export function hasPharmacyOtpSendBeenClaimed(
+    familyId: string,
+    userId: string,
+    generation: number,
+): boolean {
+    const key = browserSessionKey(familyId, userId);
+    return otpSendClaimedByKey.get(key) === generation;
+}
+
+export function markBrowserCancelledForPhone(phone: string): void {
+    const digits = phone.replace(/\D/g, "");
+    if (digits) cancelledAtByPhone.set(digits, Date.now());
+}
+
+export function wasBrowserCancelledRecently(
+    familyId: string,
+    userId: string,
+    withinMs = CANCEL_SUPPRESS_MS,
+): boolean {
+    const at = cancelledAtByKey.get(browserSessionKey(familyId, userId));
+    return Boolean(at && Date.now() - at < withinMs);
+}
+
+export function wasBrowserCancelledRecentlyByPhone(
+    phone: string,
+    withinMs = CANCEL_SUPPRESS_MS,
+): boolean {
+    const digits = phone.replace(/\D/g, "");
+    const at = cancelledAtByPhone.get(digits);
+    return Boolean(at && Date.now() - at < withinMs);
+}
+
+/** True when a parked OTP page or draft should suppress "still working" SLA spam. */
+export function shouldSuppressStillWorkingFallback(input: {
+    phone?: string;
+    familyId?: string;
+    userId?: string;
+    browserTaskPhase?: string | null;
+    hasPendingCommerceOtp?: boolean;
+    hasPharmacyDraft?: boolean;
+}): boolean {
+    if (input.phone && wasBrowserCancelledRecentlyByPhone(input.phone)) return true;
+    if (
+        input.familyId &&
+        input.userId &&
+        wasBrowserCancelledRecently(input.familyId, input.userId)
+    ) {
+        return true;
+    }
+    if (
+        input.familyId &&
+        input.userId &&
+        hasParkedBrowserOtpSession(input.familyId, input.userId)
+    ) {
+        return true;
+    }
+    const phase = (input.browserTaskPhase || "").toLowerCase();
+    if (phase === "awaiting_otp" || phase === "running" || phase === "awaiting_confirm") {
+        return true;
+    }
+    if (input.hasPendingCommerceOtp) return true;
+    // Pharmacy draft mid-flight (confirm kicked browser) — avoid still-working loop
+    if (input.hasPharmacyDraft) return true;
+    return false;
+}
+
+export function isActiveBrowserTaskGeneration(
+    familyId: string,
+    userId: string,
+    generation: number,
+): boolean {
+    const key = browserSessionKey(familyId, userId);
+    return activeTaskGenerationByKey.get(key) === generation;
+}
+
+export function clearActiveBrowserTask(familyId: string, userId: string, generation: number): void {
+    const key = browserSessionKey(familyId, userId);
+    if (activeTaskGenerationByKey.get(key) === generation) {
+        activeTaskGenerationByKey.delete(key);
     }
 }
 

@@ -19,7 +19,7 @@ export type BrowserPlaybook = {
 const CONFIRM =
     "Before any pay/UPI, stop and ask WhatsApp confirm of item + total + address. Never silent pay.";
 const OTP =
-    "If the site SMS an OTP for login — ask the user to paste it in WhatsApp. Never read device SMS.";
+    "If OTP field is visible, emit need_otp and wait for WhatsApp paste. NEVER click Send OTP / Resend / Continue on pharmacy login (bootstrap already requested once). Never read device SMS.";
 const CONFIRM_RIDE =
     "Before booking a ride, stop and ask WhatsApp confirm of fare + ride type. Never silent book.";
 
@@ -58,7 +58,7 @@ function pharmacyPlaybook(partner: CommercePartnerKey, startUrl: string): Browse
         siteKey: partner,
         startUrl,
         searchHint:
-            "LIVE pharmacy web. Steps: (1) If not logged in, click Login/Sign in, enter login_phone from goal/context (10-digit IN mobile), submit to request SMS OTP — when OTP field appears emit need_otp (do not invent OTPs). (2) After OTP, use site search for the medicine/OTC in the goal; add to cart. Never diagnose. (3) At checkout emit need_user_confirm with real item+total+address; never pay/UPI until userConfirmed=true. Errors: CAPTCHA/bot wall → clear WhatsApp error. Prefer Login early — do not wander the catalog first.",
+            "LIVE pharmacy web. OTP SMS is sent by deterministic bootstrap ONCE — NEVER click Continue/Get OTP/Send OTP/Resend on the login modal (causes SMS spam). If OTP field is visible, emit need_otp and wait. After OTP: search the medicine/OTC in the goal; add to cart. Never diagnose. At checkout emit need_user_confirm with real item+total+address; never pay/UPI until userConfirmed=true. CAPTCHA/bot wall → clear WhatsApp error.",
         otpHint: OTP,
         confirmHint: CONFIRM,
         category: "pharmacy",
