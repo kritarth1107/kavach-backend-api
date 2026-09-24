@@ -317,6 +317,27 @@ function isDecline(text: string): boolean {
 const CANCEL_WORD =
     String.raw`cancel|cencel|cancle|canel|cnacel|stop|exit|exitt|quit|leave|abort|nevermind|never\s*mind`;
 
+
+function shouldReleaseOrderSessionForCareTurn(text: string): boolean {
+    const t = text.trim();
+    if (!t) return false;
+    if (/^\d{1,2}$/.test(t)) return false;
+    if (
+        /\b(pick|address|home|office|confirm|add|cart|browse|cancel|swiggy|instamart|zepto|order)\b/i.test(
+            t,
+        )
+    ) {
+        return false;
+    }
+    return (
+        /\b(remind|yaad|pain|dard|hurt|peeth|family|weather|mars|bill|doctor|paani|who is|tell\s+\w+|hurting|fever|bukhar)\b/i.test(
+            t,
+        ) ||
+        /\bhow\s+much\b/i.test(t) ||
+        /\biphone|laptop|electronics\b/i.test(t)
+    );
+}
+
 function isExplicitOrderCancel(text: string): boolean {
     const t = text.trim().toLowerCase();
     if (t === "cancel_order") return true;
@@ -788,6 +809,10 @@ export async function tryHandleWhatsAppOrderTurn(input: {
 
     const orderSessionId = waSession?.orderSessionId;
     if (orderSessionId) {
+        if (shouldReleaseOrderSessionForCareTurn(text)) {
+            await clearWhatsAppOrderSession(input.phone);
+            return null;
+        }
         const { isActiveOrderSession } = await import("./orderSessionRecovery.service");
         if (!(await isActiveOrderSession(orderSessionId, input.familyId))) {
             await clearWhatsAppOrderSession(input.phone);
@@ -834,7 +859,15 @@ export async function tryHandleWhatsAppOrderTurn(input: {
         }
     }
 
-    const { isHighConfidenceOrderIntent, isSoftOrderIntent } = await import("./saheliOrder.service");
+    const {
+        isHighConfidenceOrderIntent,
+        isSoftOrderIntent,
+        messageLooksLikeUnsupportedCommerce,
+        unsupportedCommerceReply,
+    } = await import("./saheliOrder.service");
+    if (messageLooksLikeUnsupportedCommerce(text)) {
+        return orderTurn(unsupportedCommerceReply());
+    }
     let allowQuick = isHighConfidenceOrderIntent(text);
     if (!allowQuick && isSoftOrderIntent(text)) {
         // Soft ask — still enter quickOrder when a last-used partner address exists.

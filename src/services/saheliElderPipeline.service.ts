@@ -1,6 +1,6 @@
 import type { OrderFlowPayload } from "./orderOrchestrator.service";
 import type { OrderChatResult } from "./saheliOrder.service";
-import { messageLooksLikeOrder } from "./saheliOrder.service";
+import { messageLooksLikeOrder, messageLooksLikeUnsupportedCommerce, unsupportedCommerceReply } from "./saheliOrder.service";
 import type { SaheliContextBundle } from "./saheliContext.service";
 import type { ChannelType } from "../types/careRecord.types";
 import type { SaheliReplySource } from "./whatsappWebhookLog.service";
@@ -127,6 +127,22 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
+    if (/^(\.{2,}|…+|\?+)$/u.test(input.message.trim())) {
+        return {
+            reply: await stampCompanionVoice("I'm here — tell me more whenever you're ready.", {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+            guardAction: "ellipsis_ping",
+        };
+    }
+
     if (!wantsMemoryAi && messageIsAcknowledgment(input.message)) {
         return {
             reply: await stampCompanionVoice("Anytime! I'm here whenever you need me.", {
@@ -176,6 +192,22 @@ export async function resolveElderWhatsappReply(input: {
             orderFlow: null,
             orderPreview: null,
             skippedAi: true,
+        };
+    }
+
+    if (messageLooksLikeUnsupportedCommerce(input.message)) {
+        return {
+            reply: await stampCompanionVoice(unsupportedCommerceReply(), {
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+            }),
+            replySource: "scheduleFacts",
+            conversationId,
+            order: null,
+            orderFlow: null,
+            orderPreview: null,
+            skippedAi: true,
+            guardAction: "unsupported_commerce",
         };
     }
 

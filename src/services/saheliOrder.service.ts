@@ -177,6 +177,28 @@ export function isSoftOrderIntent(text: string): boolean {
 
 
 /** Looser check — used only after AI could not handle the turn. */
+/** Phones / electronics / absurd qty — redirect to food/grocery, never start checkout. */
+export function messageLooksLikeUnsupportedCommerce(text: string): boolean {
+    const t = normalizeOrderText(text);
+    if (!t) return false;
+    if (
+        /\b(iphone|ipad|macbook|laptop|airpods|playstation|ps5|xbox|television|\btv\b|samsung\s*galaxy|oneplus|pixel\s*phone)\b/i.test(
+            t,
+        )
+    ) {
+        return true;
+    }
+    // Extreme quantity of non-grocery "order N X"
+    if (/\border\s+([5-9]\d|\d{3,})\s+/i.test(t) && !GROCERY_KEYWORDS.test(t) && !FOOD_KEYWORDS.test(t)) {
+        return true;
+    }
+    return false;
+}
+
+export function unsupportedCommerceReply(): string {
+    return "I can help with food and groceries on Instamart, Swiggy, or Zepto — not phones or big electronics. Want milk, veggies, or a meal instead?";
+}
+
 export function messageLooksLikeOrder(text: string): boolean {
     const t = normalizeOrderText(text);
     if (t.length < 4 || isCasualNonOrderMessage(t)) return false;

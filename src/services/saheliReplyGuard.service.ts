@@ -88,6 +88,19 @@ export async function guardElderReply(
 
     const hadOrderTools = hasOrderToolTrace(input.toolTrace);
     const orderLike = messageLooksLikeOrder(input.message);
+    const asksExactBill =
+        /\b(last\s+bill|bill\s+exact|exact(ly)?|how\s+much)\b/i.test(input.message) &&
+        /\b(bill|order|paid|cost|price|total)\b/i.test(input.message);
+
+    if (asksExactBill && replyInventsPrice(reply, hadOrderTools) && !orderFlow) {
+        return {
+            reply:
+                "I don't invent bill amounts. Check the dashboard or ask your caregiver for the exact saved total.",
+            replySource: "scheduleFacts",
+            orderFlow: null,
+            guardAction: "invented_bill_blocked",
+        };
+    }
 
     if (
         orderLike &&

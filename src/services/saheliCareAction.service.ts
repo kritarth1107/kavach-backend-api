@@ -329,7 +329,7 @@ export async function logCheckIn(input: {
             symptom: input.pain.trim(),
             note: input.note,
             channel: input.channel,
-            notify: true,
+            notify: false,
         });
     }
 
@@ -448,11 +448,82 @@ export async function tryApplyElderCareActionFromMessage(input: {
     }
 
 
-    // Symptom / pain — Care Record SYMPTOM + notify caregivers (never diagnose).
-    // Broaden heuristics so Phase 3 notify still fires before AI (back pain / dard / peeth / hurting).
+    // Explicit "tell <name> I'm fine / ..." — notify caregivers with consent already given.
+    const tellMatch = q.match(
+        /\b(?:tell|inform|bata(?:o|do)?|message)\s+([A-Za-z][A-Za-z\s]{1,40}?)\s+(?:that\s+)?(?:i'?m|i am|main)\s+(.+)$/i,
+    );
+    if (tellMatch) {
+        const who = tellMatch[1].trim();
+        const what = tellMatch[2].trim().slice(0, 200);
+        const { notifyCaregivers } = await import("./saheliCaregiverAlert.service");
+        await notifyCaregivers({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            message: `${input.displayName} asked Saheli to tell ${who}: "${what}"`,
+            urgency: "low",
+            kind: "elder_share",
+        });
+        return `Okay — I've let your family know you told ${who}: "${what}".`;
+    }
+
+    // Pending notify consent after a recent symptom note.
+    const consentYes =
+        /^(yes|yeah|yep|haan|han|ji|sure|please|ok|okay|bata do|batao|tell them|inform them|notify them)[!.?\s]*$/i.test(
+            q,
+        ) || /\b(yes[, ]+)?(tell|inform|notify)\s+(them|my\s+family|son|beta|kritarth)\b/i.test(qLower);
+    const consentNo =
+        /^(no|nahi|nope|mat bata|don'?t tell|do not tell|no need)[!.?\s]*$/i.test(q) ||
+        /\b(don'?t|do not|mat)\s+(tell|inform|notify|bata)\b/i.test(qLower);
+
+    if ((consentYes || consentNo) && q.length < 120) {
+        const { default: CareRecordEvent } = await import("../models/careRecordEvent.model");
+        const { CareRecordEventType } = await import("../types/careRecord.types");
+        const recent = await CareRecordEvent.findOne({
+            familyId: input.familyId,
+            subjectUserId: input.recipientUserId,
+            type: CareRecordEventType.SYMPTOM,
+            createdAt: { $gte: new Date(Date.now() - 45 * 60 * 1000) },
+            "payload.awaitingNotifyConsent": true,
+        })
+            .sort({ createdAt: -1 })
+            .lean();
+        if (recent) {
+            await CareRecordEvent.updateOne(
+                { _id: recent._id },
+                { $set: { "payload.awaitingNotifyConsent": false, "payload.notifyConsent": consentYes ? "yes" : "no" } },
+            );
+            if (consentYes) {
+                const { notifyCaregivers } = await import("./saheliCaregiverAlert.service");
+                await notifyCaregivers({
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    message: `Care note (not a diagnosis): ${String(recent.detail ?? "").slice(0, 220)}`,
+                    urgency: /severe|worst|unbearable|bahut|bohot/i.test(String(recent.detail ?? ""))
+                        ? "high"
+                        : "medium",
+                    kind: "symptom",
+                });
+                return "Okay — I've gently let your family know. I'm still here with you.";
+            }
+            return "Understood — I won't tell them. I'm here if you change your mind or need anything else.";
+        }
+    }
+
+    // "My son doesn't know yet" after a symptom — offer consent, do not auto-notify.
+    if (
+        /\b(doesn'?t|does not|dont|don'?t)\s+know(\s+yet)?\b/i.test(qLower) ||
+        /\b(son|beta|family|kritarth).{0,40}\b(doesn'?t|does not|dont)\s+know\b/i.test(qLower)
+    ) {
+        return "Would you like me to let them know gently? Just say yes and I'll tell your family — or say no and I'll keep it between us.";
+    }
+
+    // Symptom / pain — log Care Record SYMPTOM, ASK before notify (never diagnose).
+    // Emergencies (chest pain / can't breathe) are handled upstream.
     const symptomMatch =
         /\b(chest pain|severe pain|unbearable|can'?t breathe|cannot breathe)\b/i.test(qLower)
-            ? null // emergencies handled upstream
+            ? null
             : q.match(
                   /\b((?:head|back|stomach|pet|peeth|joint|knee|leg|arm|tooth|throat|ear)?\s*(?:pain|ache|dard|hurting|hurt)|(?:my\s+)?(?:back|peeth|head|stomach|pet)\s+(?:is\s+)?(?:hurting|hurt|aching|painful)|headache|migraine|fever|bukhar|nausea|dizzy|dizziness|cough|khansi|vomiting|thakaan|weakness|swelling|body\s+pain|dard\s+ho\s+raha)\b(.{0,80})/i,
               );
@@ -465,11 +536,33 @@ export async function tryApplyElderCareActionFromMessage(input: {
             symptom: snippet || q,
             note: q,
             channel: input.channel,
+            notify: false,
         });
-        return "Sorry you're feeling that — I've noted it for your family. I'm not a doctor and can't diagnose; rest and tell me if it gets worse.";
+        // Mark latest symptom as awaiting consent.
+        try {
+            const { default: CareRecordEvent } = await import("../models/careRecordEvent.model");
+            const { CareRecordEventType } = await import("../types/careRecord.types");
+            await CareRecordEvent.findOneAndUpdate(
+                {
+                    familyId: input.familyId,
+                    subjectUserId: input.recipientUserId,
+                    type: CareRecordEventType.SYMPTOM,
+                },
+                { $set: { "payload.awaitingNotifyConsent": true } },
+                { sort: { createdAt: -1 } },
+            );
+        } catch {
+            /* best-effort */
+        }
+        return "Sorry you're feeling that — I've noted it. I'm not a doctor and can't diagnose. Would you like me to tell your family?";
     }
 
-    if (/\b(fine|good|okay|ok|theek|thik|better|doing well|i'm ok|im ok)\b/i.test(qLower) && q.length < 80) {
+    if (
+        /\b(fine|good|okay|ok|theek|thik|better|doing well|i'm ok|im ok)\b/i.test(qLower) &&
+        q.length < 80 &&
+        !/\btell\b/i.test(qLower) &&
+        !/\bknow(\s+yet)?\b/i.test(qLower)
+    ) {
         await logCheckIn({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,

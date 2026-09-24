@@ -13,7 +13,12 @@ export type CompanionVoiceOpts = {
 };
 
 function looksAlreadyWarm(reply: string): boolean {
-    return /\b(beta|mummy|papa|amma|how are you|kaise ho|yaad|miss you|💕|😊)\b/i.test(reply.slice(0, 120));
+    const head = reply.slice(0, 160);
+    if (/\b(beta|mummy|papa|amma|how are you|kaise ho|yaad|miss you|💕|😊)\b/i.test(head)) return true;
+    // Care/reminder short-circuits already carry tone — do not prepend a greet-y opener.
+    return /^(sorry|got it|reminder set|i.?ll remind|noted|done —|glad to hear|would you like|i can help with food)/i.test(
+        reply.trim(),
+    );
 }
 
 function pickOpener(childName: string, relationshipLabel: string, hindi: boolean, memoryHook?: string | null): string {
@@ -26,7 +31,7 @@ function pickOpener(childName: string, relationshipLabel: string, hindi: boolean
     }
     return hindi
         ? `${name} bol rahi hoon…`
-        : `Hi, it's ${name}…`;
+        : `${name} here…`;
 }
 
 /**

@@ -11,7 +11,7 @@ import { notifyCaregivers } from "./saheliCaregiverAlert.service";
 const EMERGENCY_DEDUPE_MS = 15 * 60 * 1000;
 
 const EMERGENCY_PATTERNS =
-    /\b(chest pain|can't breathe|cannot breathe|heart attack|fell down|fallen|help me|emergency|ambulance|112|108|severe pain|unconscious|stroke|seizure|bleeding heavily|suffocating|dard|saans|gir gay|gir gaya|madad|emergency)\b/i;
+    /\b(chest pain|can't breathe|cannot breathe|heart attack|fell down|fallen|help me|emergency|ambulance|112|108|severe pain|unbearable pain|unconscious|stroke|seizure|bleeding heavily|suffocating|saans\s+nahi|gir gay(?:a|i)?|gir\s+gay(?:a|i)?|bahut\s+dard|bohot\s+dard|madad\s+karo|call\s+ambulance)\b/i;
 
 export function messageLooksLikeEmergency(text: string): boolean {
     return EMERGENCY_PATTERNS.test(text.trim());

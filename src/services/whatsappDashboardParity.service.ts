@@ -844,7 +844,9 @@ export async function tryHandleSetReminder(input: {
     const looksLike =
         /\b(?:set|add|create)\s+(?:a\s+)?reminder\b/i.test(text) ||
         /\bremind\s+me\b/i.test(text) ||
-        /\bevery\s+hour\b/i.test(text);
+        /\bevery\s+hour\b/i.test(text) ||
+        /\b(yaad\s+dilao|yaad\s+dilana|yaad\s+rakhna|yaad\s+dila\s+dena)\b/i.test(text) ||
+        /\b(mujhe|mere\s+ko).{0,60}\byaad\b/i.test(text);
     if (!looksLike) return { handled: false };
 
     const {
@@ -899,6 +901,119 @@ export async function tryHandleSetReminder(input: {
 }
 
 
+
+/**
+ * Wave 3: "Who is in my family?" — list joined members from family record (no inventing).
+ */
+export async function tryHandleFamilyWhoQuery(input: {
+    familyId: string;
+    actorUserId: string;
+    text: string;
+}): Promise<DashboardParityResult> {
+    const text = input.text.trim();
+    if (
+        !/\bwho\s+is\s+in\s+my\s+family\b/i.test(text) &&
+        !/\b(mere|meri)\s+family\s+(mein|me)\s+kaun\b/i.test(text) &&
+        !/\bfamily\s+members?\b/i.test(text)
+    ) {
+        return { handled: false };
+    }
+    try {
+        const { getFamilyMembersList } = await import("./familyMember.service");
+        const { FamilyRole, FamilyMemberStatus } = await import("../types/family.types");
+        const payload = await getFamilyMembersList(input.familyId, input.actorUserId);
+        const lines = payload.members
+            .filter((m) => m.status === FamilyMemberStatus.JOINED)
+            .map((m) => {
+                const role =
+                    m.role === FamilyRole.CARE_RECIPIENT
+                        ? "care recipient"
+                        : m.role === FamilyRole.PRIMARY_CAREGIVER
+                          ? "primary caregiver"
+                          : m.role === FamilyRole.CO_CAREGIVER
+                            ? "caregiver"
+                            : String(m.role || "member");
+                return `• ${m.name || "Member"} (${role})`;
+            });
+        if (!lines.length) {
+            return { handled: true, reply: "I don't see family members listed yet in your care record." };
+        }
+        return {
+            handled: true,
+            reply: `Here's who I see in your family record:\n${lines.join("\n")}`,
+        };
+    } catch (err) {
+        console.warn("Family who query failed:", err);
+        return {
+            handled: true,
+            reply: "I couldn't load your family list just now — try again in a moment.",
+        };
+    }
+}
+
+/**
+ * Wave 3: out-of-domain / bill exactness without inventing care facts.
+ */
+export async function tryHandleCompanionGuardrails(input: {
+    familyId: string;
+    recipientUserId: string;
+    text: string;
+}): Promise<DashboardParityResult> {
+    const text = input.text.trim();
+    const lower = text.toLowerCase();
+
+    if (/\bweather\b/i.test(lower) && /\b(mars|jupiter|moon|venus|saturn)\b/i.test(lower)) {
+        return {
+            handled: true,
+            reply:
+                "I'm your care companion — I don't have weather on Mars. I'm right here for how you're feeling, reminders, or family updates.",
+        };
+    }
+
+    if (
+        (/\b(last\s+bill|bill\s+exact|exact(ly)?\s+(is|was)|how\s+much\s+(is|was)\s+my)\b/i.test(lower) &&
+            /\b(bill|order|paid|cost|price|total)\b/i.test(lower)) ||
+        /\bhow\s+much\s+is\s+my\s+last\s+bill\b/i.test(lower)
+    ) {
+        try {
+            const OrderModel = (await import("../models/order.model")).default;
+            const latest = await OrderModel.findOne({
+                familyId: input.familyId,
+                status: { $nin: [OrderStatus.CANCELLED] },
+            })
+                .sort({ createdAt: -1 })
+                .lean();
+            if (!latest) {
+                return {
+                    handled: true,
+                    reply:
+                        "I don't invent bill amounts. I don't see a recent saved order in your care record — check the dashboard or ask your caregiver.",
+                };
+            }
+            const partnerName =
+                latest.partner === OrderPartner.SWIGGY
+                    ? "Swiggy"
+                    : latest.partner === OrderPartner.INSTAMART
+                      ? "Instamart"
+                      : "Zepto";
+            const total = `₹${(latest.totalPaise / 100).toFixed(0)}`;
+            return {
+                handled: true,
+                reply: `From your last saved ${partnerName} order in the care record: *${total}* (status: ${String(latest.status).replace(/_/g, " ")}). I won't invent amounts beyond what's saved.`,
+            };
+        } catch (err) {
+            console.warn("Bill exact query failed:", err);
+            return {
+                handled: true,
+                reply:
+                    "I don't invent bill amounts. Please check the dashboard or ask your caregiver for the exact figure.",
+            };
+        }
+    }
+
+    return { handled: false };
+}
+
 export async function tryHandleWhatsAppDashboardAction(input: {
     familyId: string;
     recipientUserId: string;
@@ -908,6 +1023,20 @@ export async function tryHandleWhatsAppDashboardAction(input: {
     role: "caregiver" | "elder";
     recipientName?: string;
 }): Promise<DashboardParityResult> {
+    const familyWho = await tryHandleFamilyWhoQuery({
+        familyId: input.familyId,
+        actorUserId: input.actorUserId,
+        text: input.text,
+    });
+    if (familyWho.handled) return familyWho;
+
+    const guardrails = await tryHandleCompanionGuardrails({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        text: input.text,
+    });
+    if (guardrails.handled) return guardrails;
+
     const orderStatus = await tryHandleOrderStatusQuery({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
