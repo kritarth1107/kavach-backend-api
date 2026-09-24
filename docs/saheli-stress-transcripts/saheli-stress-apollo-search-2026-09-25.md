@@ -345,3 +345,77 @@ Small/obvious patches in `src/services/pharmacyOrderFlow.service.ts` (same PR/co
 ## END cancel
 - **Sent:** cancel
 - **Reply:** `Order cancelled. Tell me anytime if you'd like to order again.` / pharmacy cancel acks as above.
+
+---
+
+## Re-run after deploy — 2026-09-25 ~02:40–02:56 IST
+
+- **Deployed SHAs (Cloud Run, asia-south1, success):**
+  - `451692f` Apollo search-before-login guards (cancelled mid-deploy by concurrency)
+  - `570cc10` docs + includes `451692f` — **deployed** (run 36059100214)
+  - `0b2a7ed` pharmacy mid-flow `status` before dashboard Instamart steal; unicorn honest empty; PE Limcee merge — **deployed** (run 36060076908)
+  - `337c860` Apollo Vit C merges Limcee + drop Evion — **deployed** (run 36060793139)
+- **Live HEAD at end of re-run:** `337c860`
+- **OTP / SMS this re-run:** 1 controlled Opening Apollo for live COD (Limcee ₹24.50). No fake OTP pasted. No resend spam after OTP ask.
+
+### Re-run scoreboard (previously failing + key regressions)
+
+| CASE-ID | Result | Notes |
+|---|---|---|
+| A2 limcee apollo | **PASS** | Guest Limcee list + ₹ (no Rx-gate) |
+| A4 Hinglish vit c | **PASS** | Limcee #1 + Celin (fillers stripped) |
+| A4b pe limcee chahiye | **PASS** | Guest Limcee list |
+| A5 shelcal | **PASS** | Guest Shelcal list + ₹ |
+| A6 unicorn dust | **PASS** | Honest `No Apollo matches for "unicorn dust"` |
+| A14 antibiotic | **PASS*** | Guest search (Rx-marked SKUs) — search-before-Rx |
+| A14b insulin | **PASS*** | Guest search (devices/syringes) — search-before-Rx |
+| A15 iphone | **PASS** | Electronics refuse copy |
+| A17 status @ multi-list | **PASS** | "You're still choosing a *Apollo* item (not Instamart)." |
+| A18 bare ok @ multi-list | **PASS** | Refuses login; asks 1/2/3 |
+| A19 confirm idle | **SOFT** | Warm ping / try again — not residual browser |
+| A20 PE vitamin c | **FAIL** | Still Iron/Amla multi-vit ranked; Limcee merge works for *Order limcee from pharmeasy* but not always for bare vit c query on Cloud Run |
+| A1 vitamin c apollo | **FLAKY→mitigated** | Brief Evion-only regression on CR; `337c860` merges Limcee + drops Evion (verify post-deploy with limcee path for COD) |
+
+**Approx previously-failing set:** ~10/12 green (A20 still weak; A1 flaky mitigated). Suite directionally **~20+/23** if counting prior PASSes held.
+
+### Live COD order attempt (real)
+
+- **from:** `917694829888`
+- **Product:** Limcee 500 mg Chewable Orange Tablet 15's — ₹24.50 (pick `3` after guest list)
+- **Address intended:** C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH, 492001
+- **Payment:** COD only
+- **Outcome:** **NEED_OTP_FROM_USER** — blocked after Opening Apollo / login SMS to ••••9888. No OTP invented; stopped (no retry spam).
+
+#### Exact mock transcript (live path)
+
+```
+Sent: cancel
+→ Order cancelled / medicine-order cancel ack
+
+Sent: Order limcee from apollo
+→ Found on *Apollo*:
+1. Limcee Active … — ₹116
+2. Limcee … Gummies … — ₹231
+3. Limcee 500 mg Chewable Orange Tablet 15's — ₹24.50
+Reply *1* / *2* / *3*, or *confirm* for #1 …
+
+Sent: 3
+→ Found on *Apollo* — reply *confirm* …
+• Limcee 500 mg Chewable Orange Tablet 15's — ₹24.50 ×1 _(OTC)_
+Deliver to: your saved delivery address
+Item total: ₹24.50
+
+Sent: confirm
+→ Opening *Apollo* for: Limcee 500 mg Chewable Orange Tablet 15's … ×1 (₹24.50)
+I'll sign in with your WhatsApp number when *Apollo* asks.
+… *Paste the SMS OTP only after I ask* …
+No silent pay — I'll ask you to confirm item+total+address before checkout.
+
+(async)
+→ *Apollo* is waiting for your login code — *paste the SMS OTP here*.
+(Sent to ••••9888 — I never read your device SMS, only what you paste here.)
+No code yet? Check the SMS thread from Apollo, then reply *retry* or *cancel*.
+```
+
+**Coordinator handoff:** User must paste the Apollo SMS OTP from phone `7694829888` into WhatsApp/mock as the next message. After OTP: send full address string if asked, confirm **COD only**, capture order id.
+
