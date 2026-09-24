@@ -195,6 +195,37 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
+    // Pharmacy OTC / medicine path before Playwright browser (WhatsApp SLA).
+    {
+        const { messageLooksLikePharmacyOrder, handlePharmacyWhatsAppTurn } = await import(
+            "./pharmacyOrderFlow.service"
+        );
+        if (messageLooksLikePharmacyOrder(input.message)) {
+            const pharmacy = await handlePharmacyWhatsAppTurn({
+                phone: `elder:${input.recipientUserId}`,
+                text: input.message,
+                familyId: input.familyId,
+                actorUserId: input.recipientUserId,
+                recipientUserId: input.recipientUserId,
+                actorRole: null,
+            });
+            if (pharmacy) {
+                return {
+                    reply: await stampCompanionVoice(pharmacy.text, {
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                    }),
+                    replySource: "pharmacyOrder",
+                    conversationId,
+                    order: null,
+                    orderFlow: null,
+                    orderPreview: null,
+                    skippedAi: true,
+                };
+            }
+        }
+    }
+
     // Any-site private browser (BigBasket / Amazon / URL paste / …) before unsupported gate.
     {
         const {
@@ -243,35 +274,7 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
-    {
-        const { messageLooksLikePharmacyOrder, handlePharmacyWhatsAppTurn } = await import(
-            "./pharmacyOrderFlow.service"
-        );
-        if (messageLooksLikePharmacyOrder(input.message)) {
-            const pharmacy = await handlePharmacyWhatsAppTurn({
-                phone: `elder:${input.recipientUserId}`,
-                text: input.message,
-                familyId: input.familyId,
-                actorUserId: input.recipientUserId,
-                recipientUserId: input.recipientUserId,
-                actorRole: null,
-            });
-            if (pharmacy) {
-                return {
-                    reply: await stampCompanionVoice(pharmacy.text, {
-                        familyId: input.familyId,
-                        recipientUserId: input.recipientUserId,
-                    }),
-                    replySource: "pharmacyOrder",
-                    conversationId,
-                    order: null,
-                    orderFlow: null,
-                    orderPreview: null,
-                    skippedAi: true,
-                };
-            }
-        }
-    }
+
 
     if (messageLooksLikeOrder(input.message)) {
         const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");

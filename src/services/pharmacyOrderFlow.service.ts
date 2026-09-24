@@ -26,14 +26,18 @@ export type PharmacyDraft = {
     notes?: string;
 };
 
+/** Typo-tolerant Vit C / medicine order intents (vitamic, vitaminc, vit c, …). */
+const VITAMIN_C =
+    /\b(?:order\s+)?vita\w*\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?\b|\bvit\s*c\b/i;
+
 const PHARMACY_INTENT =
-    /\b(order\s+medicines?|order\s+medicine|medicines?\s+for\s+me|pharmacy|apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|dawai\s+(mangao|order|bhej)|order\s+dawai|order\s+vit(?:amin)?\s*c|vit(?:amin)?\s*c\s+from\s+apollo)\b/i;
+    /\b(order\s+medicines?|order\s+medicine|medicines?\s+for\s+me|pharmacy|apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|dawai\s+(mangao|order|bhej)|order\s+dawai|order\s+vita\w*\s*c|vita\w*\s*c\s+from\s+apollo)\b/i;
 
 const PARTNER_PICK =
     /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|tata)\b/i;
 
 const OTC_HINT =
-    /\b(vit(?:amin)?\s*c|vitamin\s*d|paracetamol|crocin|dolo|ors|electral|band[\s-]?aid|antiseptic|cough\s*syrup\s*otc)\b/i;
+    /\b(vita\w*\s*c|vit\s*c|vitamin\s*d|paracetamol|crocin|dolo|ors|electral|band[\s-]?aid|antiseptic|cough\s*syrup\s*otc)\b/i;
 
 function partnerFromText(text: string): CommercePartnerKey | undefined {
     const t = text.toLowerCase();
@@ -44,20 +48,40 @@ function partnerFromText(text: string): CommercePartnerKey | undefined {
 }
 
 function parseMedicineList(text: string): Array<{ name: string; quantity: number; requiresRx?: boolean }> {
-    // "Apollo and I need vit c tablets no prescription needed"
+    // "Apollo and I need vit c tablets no prescription needed" / "order vitamic c capsules"
     let cleaned = text
         .replace(PHARMACY_INTENT, " ")
         .replace(PARTNER_PICK, " ")
         .replace(/\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc)\b/gi, " ")
+        .replace(/\bvita\w*\s*c\b/gi, "vitamin c")
+        .replace(/\bvit\s*c\b/gi, "vitamin c")
         .replace(/\s+/g, " ")
         .trim();
+    // If intent consumed the vitamin token, still seed OTC Vit C from original text
+    if (!cleaned && VITAMIN_C.test(text)) {
+        cleaned = "vitamin c capsules";
+    }
     if (!cleaned) return [];
     const parts = cleaned.split(/,| and | \+ |\/|;/i).map((p) => p.trim()).filter(Boolean);
-    return parts.slice(0, 8).map((name) => ({
+    let items = parts.slice(0, 8).map((name) => ({
         name: name.slice(0, 80),
         quantity: 1,
         requiresRx: !OTC_HINT.test(name) && !/\bno\s+prescription\b/i.test(text),
     }));
+    // Prefer a clear OTC Vit C line when the user meant vitamin C (incl. typos like vitamic).
+    if (VITAMIN_C.test(text)) {
+        const hasVitC = items.some((i) => /vitamin\s*c|vita\w*\s*c|vit\s*c/i.test(i.name));
+        if (!hasVitC) {
+            items = [{ name: "vitamin c capsules", quantity: 1, requiresRx: false }, ...items].slice(0, 8);
+        } else {
+            items = items.map((i) =>
+                /vitamin\s*c|vita\w*\s*c|vit\s*c|capsules?/i.test(i.name)
+                    ? { ...i, name: /vitamin\s*c/i.test(i.name) ? i.name : "vitamin c capsules", requiresRx: false }
+                    : i,
+            );
+        }
+    }
+    return items;
 }
 
 function partnerLabel(p: CommercePartnerKey): string {
@@ -68,7 +92,12 @@ function partnerLabel(p: CommercePartnerKey): string {
 }
 
 export function messageLooksLikePharmacyOrder(text: string): boolean {
-    return PHARMACY_INTENT.test(text) || (PARTNER_PICK.test(text) && /\b(vit|tablet|medicine|dawai|strip)\b/i.test(text));
+    const t = text.trim();
+    if (!t) return false;
+    if (VITAMIN_C.test(t)) return true;
+    if (PHARMACY_INTENT.test(t)) return true;
+    if (PARTNER_PICK.test(t) && /\b(vit|tablet|medicine|dawai|strip|capsule)\b/i.test(t)) return true;
+    return false;
 }
 
 async function loadDraft(phone: string): Promise<PharmacyDraft | null> {
@@ -275,14 +304,16 @@ export async function handlePharmacyWhatsAppTurn(input: {
             { upsert: true },
         );
 
+        const goal = `Order from ${partnerLabel(partner)}: ${summary}`;
+        // Hard-deadline browser step — WhatsApp must reply within SLA even if Chromium hangs.
         const result = await runBrowserTask({
             familyId: input.familyId,
             userId: input.actorUserId,
-            goal: `Order from ${partnerLabel(partner)}: ${summary}`,
+            goal,
             partner,
+            deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
         });
 
-        // Elder notify-only after eventual done is handled by browserTaskWhatsApp.
         draft.phase = "awaiting_otp";
         await saveDraft(input.phone, null);
 

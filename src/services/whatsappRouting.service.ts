@@ -498,25 +498,7 @@ export async function handleWhatsAppInbound(body: {
             }
         }
 
-        // New browser / browse-help intents (elder + caregiver personal assistant).
-        if (
-            messageLooksLikeBrowserTask(text) ||
-            (waForCommerce as { browserTaskDraft?: unknown } | null)?.browserTaskDraft
-        ) {
-            const browserReply = await handleBrowserTaskWhatsAppTurn({
-                phone,
-                text,
-                familyId: identity.familyId,
-                actorUserId: identity.userId,
-                recipientUserId: subjectUserId,
-                actorRole: identity.role,
-            });
-            if (browserReply) {
-                return outbound(phone, browserReply.text);
-            }
-        }
-
-        // Pharmacy conversational path (elder + caregiver).
+        // Pharmacy conversational path FIRST (Vit C / medicines) — never block WA on Playwright.
         if (
             messageLooksLikePharmacyOrder(text) ||
             (waForCommerce as { pharmacyDraft?: unknown } | null)?.pharmacyDraft
@@ -533,6 +515,24 @@ export async function handleWhatsAppInbound(body: {
             });
             if (pharmacyReply) {
                 return outbound(phone, pharmacyReply.text);
+            }
+        }
+
+        // New browser / browse-help intents (elder + caregiver personal assistant).
+        if (
+            messageLooksLikeBrowserTask(text) ||
+            (waForCommerce as { browserTaskDraft?: unknown } | null)?.browserTaskDraft
+        ) {
+            const browserReply = await handleBrowserTaskWhatsAppTurn({
+                phone,
+                text,
+                familyId: identity.familyId,
+                actorUserId: identity.userId,
+                recipientUserId: subjectUserId,
+                actorRole: identity.role,
+            });
+            if (browserReply) {
+                return outbound(phone, browserReply.text);
             }
         }
     }

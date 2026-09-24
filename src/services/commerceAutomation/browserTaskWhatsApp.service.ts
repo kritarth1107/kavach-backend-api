@@ -45,8 +45,9 @@ export type BrowserTaskDraft = {
 const BROWSE_INTENT =
     /\b(open|browse|find|search|go\s+to|visit|look\s+up)\b/i;
 
+/** Site-explicit browser orders only — Vit C / medicines go to pharmacy conversational path. */
 const ORDER_VIA_BROWSER_LEGACY =
-    /\b(order\s+.+\s+from\s+(apollo|pharmeasy|1\s*mg|tata|blinkit)|order\s+vit(?:amin)?\s*c|order\s+medicines?|dawai\s+(mangao|order))\b/i;
+    /\b(order\s+.+\s+from\s+(apollo|pharmeasy|1\s*mg|tata|blinkit|amazon|flipkart|bigbasket|big\s*basket))\b/i;
 
 const PharmacyLike =
     /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg)\b/i;
@@ -63,8 +64,8 @@ export function messageLooksLikeBrowserTask(text: string): boolean {
     if (ORDER_VIA_BROWSER_LEGACY.test(t)) return true;
     if (extractProductUrl(t)) return true;
     if (BROWSE_INTENT.test(t) && t.split(/\s+/).length >= 3) return true;
-    if (/\border\b/i.test(t) && PharmacyLike.test(t)) return true;
-    if (/\bvit(?:amin)?\s*c\b/i.test(t) && PharmacyLike.test(t)) return true;
+    // Medicine / Vit C without an explicit "from <site>" URL → pharmacy path, not Playwright.
+    if (/\border\b/i.test(t) && PharmacyLike.test(t) && /\bfrom\b/i.test(t)) return true;
     // Explicit force-browser for MCP partners
     if (
         /\b(via\s+browser|any\s*site|browse)\b/i.test(t) &&

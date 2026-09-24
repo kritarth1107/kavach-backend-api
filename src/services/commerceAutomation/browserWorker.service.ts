@@ -53,6 +53,8 @@ export type RunBrowserTaskInput = {
     maxSteps?: number;
     /** Soft care tips for confirm card (already formatted or raw). */
     healthHintCopy?: string;
+    /** Hard wall-clock deadline for this task (WhatsApp SLA). Default ~28s. */
+    deadlineMs?: number;
 };
 
 export interface BrowserWorker {
@@ -68,6 +70,38 @@ function configuredMode(): "playwright" | "dry_run" | "auto" {
 
 let playwrightAvailable: boolean | null = null;
 
+/** Race a promise against a hard deadline; clears timer either way. */
+export async function raceWithDeadline<T>(
+    promise: Promise<T>,
+    ms: number,
+    label: string,
+): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                timer = setTimeout(
+                    () => reject(new Error(`${label} timed out after ${ms}ms`)),
+                    ms,
+                );
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+function browserTaskDeadlineMs(input?: { deadlineMs?: number }): number {
+    const raw =
+        input?.deadlineMs ??
+        Number(process.env.BROWSER_TASK_DEADLINE_MS) ??
+        28_000;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return 28_000;
+    return Math.min(Math.max(n, 5_000), 90_000);
+}
+
 async function canLaunchChromium(): Promise<boolean> {
     if (playwrightAvailable != null) return playwrightAvailable;
     if (configuredMode() === "dry_run") {
@@ -81,10 +115,18 @@ async function canLaunchChromium(): Promise<boolean> {
     try {
         // Dynamic import so Cloud Run alpine builds don't hard-fail without playwright
         const pw = await import("playwright");
-        const browser = await pw.chromium.launch({
-            headless: true,
-            args: ["--no-sandbox", "--disable-dev-shm-usage"],
-        });
+        const launchProbeMs = Math.min(
+            Number(process.env.BROWSER_LAUNCH_PROBE_MS) || 8_000,
+            20_000,
+        );
+        const browser = await raceWithDeadline(
+            pw.chromium.launch({
+                headless: true,
+                args: ["--no-sandbox", "--disable-dev-shm-usage"],
+            }),
+            launchProbeMs,
+            "Playwright Chromium launch probe",
+        );
         await browser.close();
         playwrightAvailable = true;
         return true;
@@ -231,10 +273,15 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             return new DryRunBrowserWorker().runBrowserTask(input);
         }
 
-        const browser = await pw.chromium.launch({
-            headless: true,
-            args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        });
+        const launchMs = Math.min(Number(process.env.BROWSER_LAUNCH_MS) || 15_000, 45_000);
+        const browser = await raceWithDeadline(
+            pw.chromium.launch({
+                headless: true,
+                args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            }),
+            launchMs,
+            "Playwright chromium.launch",
+        );
 
         let context: import("playwright").BrowserContext | null = null;
         let modelUsed: string | undefined;
@@ -516,10 +563,55 @@ export async function getBrowserWorker(): Promise<BrowserWorker> {
     return cachedWorker;
 }
 
-/** Public API — per-user profile + run */
+function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): BrowserTaskResult {
+    const playbook = resolvePlaybook(input.partner, input.goal, input.startUrl);
+    const label = partnerLabel(String(playbook.partner));
+    console.warn("Browser task deadline/fallback:", reason);
+    return {
+        status: "need_otp",
+        mode: "playwright",
+        partner: String(playbook.partner),
+        steps: 0,
+        url: playbook.startUrl,
+        message: [
+            `Opening *${label}* for: ${input.goal.slice(0, 120)}`,
+            ``,
+            `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
+            `(I never read your device SMS — only what you send me on WhatsApp.)`,
+            ``,
+            `Or reply *cancel* to stop. I can also take a medicine list / pharmacy confirm without waiting on the browser.`,
+        ].join("\n"),
+    };
+}
+
+/** Public API — per-user profile + run. Always respects a hard WhatsApp-facing deadline. */
 export async function runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
-    const worker = await getBrowserWorker();
-    return worker.runBrowserTask(input);
+    const deadlineMs = browserTaskDeadlineMs(input);
+    try {
+        const worker = await raceWithDeadline(
+            getBrowserWorker(),
+            Math.min(10_000, deadlineMs),
+            "getBrowserWorker",
+        );
+        return await raceWithDeadline(
+            worker.runBrowserTask(input),
+            deadlineMs,
+            "runBrowserTask",
+        );
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/timed out/i.test(msg)) {
+            return progressNeedOtpResult(input, msg);
+        }
+        console.warn("runBrowserTask failed:", msg);
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: String(input.partner || "generic"),
+            steps: 0,
+            message: `Browser task failed: ${msg.slice(0, 180)}. You can retry, paste an OTP if you have one, or *cancel*.`,
+        };
+    }
 }
 
 export { DryRunBrowserWorker, PlaywrightBrowserWorker, TINY_PNG_B64 };

@@ -782,6 +782,7 @@ case "notify_caregivers": {
                 startUrl: playbook.startUrl,
                 otp: input.args.otp ? String(input.args.otp) : undefined,
                 userConfirmed: Boolean(input.args.userConfirmed),
+                deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
             });
             return {
                 ok: result.status !== "error",
