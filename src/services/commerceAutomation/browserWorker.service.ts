@@ -880,11 +880,12 @@ class PlaywrightBrowserWorker implements BrowserWorker {
     }
 
     private async persist(
-        context: import("playwright").BrowserContext,
+        context: import("playwright").BrowserContext | null,
         input: RunBrowserTaskInput,
         partner: string,
         url: string,
     ): Promise<void> {
+        if (!context) return;
         try {
             const state = await context.storageState();
             await saveBrowserProfileState({
