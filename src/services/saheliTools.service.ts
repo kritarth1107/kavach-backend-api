@@ -251,38 +251,69 @@ export async function executeSaheliTool(input: {
             );
             const site = resolveSiteFromMessage(qoMessage);
             if (shouldPreferBrowserForPartner(site.siteKey)) {
-                // Fall through to browser_order path with same message (MCP place unreliable).
-                const { resolvePlaybook, listSupportedBrowserSites } = await import(
+                // Browser-first place path — but SEARCH guest/MCP catalog before login.
+                const { resolvePlaybook, listSupportedBrowserSites, partnerLabel } = await import(
                     "./commerceAutomation/playbooks"
                 );
-                const { runBrowserTask } = await import("./commerceAutomation/browserWorker.service");
+                const { searchGuestCatalog, formatGuestCatalogConfirmCopy } = await import(
+                    "./commerceAutomation/guestCatalogSearch.service"
+                );
                 const partner =
                     site.siteKey === "generic"
                         ? ("generic" as const)
                         : (site.siteKey as import("./commerceAutomation/types").CommercePartnerKey);
                 const playbook = resolvePlaybook(partner, qoMessage, site.startUrl);
-                const result = await runBrowserTask({
+                const query = qoMessage
+                    .replace(
+                        /\b(order|buy|get|purchase|shop|from|on|via|at|please|for|me)\b/gi,
+                        " ",
+                    )
+                    .replace(new RegExp(String(playbook.partner).replace(/_/g, "\\s*"), "ig"), " ")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .slice(0, 80) || qoMessage.slice(0, 80);
+                const catalog = await searchGuestCatalog({
+                    partner: String(playbook.partner),
+                    query,
                     familyId: input.familyId,
                     userId: input.actorUserId,
-                    goal: qoMessage.slice(0, 240),
-                    partner: playbook.partner,
-                    startUrl: playbook.startUrl,
-                    deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
                 });
+                if (catalog.hits.length) {
+                    return {
+                        ok: true,
+                        status: "need_sku_confirm",
+                        path: "browser_guest_catalog",
+                        message: formatGuestCatalogConfirmCopy({
+                            partnerLabel: partnerLabel(String(playbook.partner)),
+                            query,
+                            hits: catalog.hits,
+                        }),
+                        siteKey: playbook.siteKey,
+                        partner: playbook.partner,
+                        startUrl: playbook.startUrl,
+                        candidates: catalog.hits.slice(0, 3).map((h) => ({
+                            id: h.id,
+                            name: h.name,
+                            pricePaise: h.pricePaise,
+                            productUrl: h.productUrl,
+                        })),
+                        supportedSites: listSupportedBrowserSites(),
+                        note: "Search-before-login. After elder confirms SKU, call browser_order with userConfirmed and exact product name.",
+                    };
+                }
                 return {
-                    ok: result.status !== "error",
-                    status: result.status === "need_user_confirm" ? "confirm_ready" : result.status,
-                    path: "browser",
-                    message: result.message,
+                    ok: true,
+                    status: "need_sku_confirm",
+                    path: "browser_guest_catalog_unavailable",
+                    message:
+                        catalog.unavailableReason ||
+                        `No live guest price yet for ${partnerLabel(String(playbook.partner))}. Ask confirm to open the site — never invent ₹.`,
                     siteKey: playbook.siteKey,
                     partner: playbook.partner,
                     startUrl: playbook.startUrl,
-                    mode: result.mode,
-                    confirm: result.confirm,
-                    note:
-                        "COMMERCE_BROWSER_FIRST: routed to private browser (MCP still available when flag off). " +
-                        "Ask elder to confirm item+total+address in WhatsApp; paste OTP when asked. Never silent pay.",
+                    candidates: [],
                     supportedSites: listSupportedBrowserSites(),
+                    note: "No guest catalog — do not open login until explicit confirm.",
                 };
             }
             const { quickOrder } = await import("./orderKernel.service");
@@ -888,7 +919,7 @@ case "notify_caregivers": {
                 return { ok: false, error: "message required — e.g. order oats from bigbasket" };
             }
             const { resolveSiteFromMessage } = await import("./commerceAutomation/siteResolve");
-            const { resolvePlaybook, listSupportedBrowserSites } = await import(
+            const { resolvePlaybook, listSupportedBrowserSites, partnerLabel } = await import(
                 "./commerceAutomation/playbooks"
             );
             const { runBrowserTask } = await import("./commerceAutomation/browserWorker.service");
@@ -899,14 +930,78 @@ case "notify_caregivers": {
                     ? ("generic" as const)
                     : (resolved.siteKey as import("./commerceAutomation/types").CommercePartnerKey);
             const playbook = resolvePlaybook(partner, message, resolved.startUrl);
+            const userConfirmed = Boolean(input.args.userConfirmed);
+            const otp = input.args.otp ? String(input.args.otp) : undefined;
+
+            // Search-before-login: guest/MCP catalog first unless already confirming or pasting OTP.
+            if (!userConfirmed && !otp) {
+                const { searchGuestCatalog, formatGuestCatalogConfirmCopy } = await import(
+                    "./commerceAutomation/guestCatalogSearch.service"
+                );
+                const query = message
+                    .replace(
+                        /\b(order|buy|get|purchase|shop|from|on|via|at|please|for|me)\b/gi,
+                        " ",
+                    )
+                    .replace(new RegExp(String(playbook.partner).replace(/_/g, "\\s*"), "ig"), " ")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                    .slice(0, 80) || message.slice(0, 80);
+                const catalog = await searchGuestCatalog({
+                    partner: String(playbook.partner),
+                    query,
+                    familyId: input.familyId,
+                    userId: input.actorUserId,
+                });
+                if (catalog.hits.length) {
+                    const copy = formatGuestCatalogConfirmCopy({
+                        partnerLabel: partnerLabel(String(playbook.partner)),
+                        query,
+                        hits: catalog.hits,
+                    });
+                    return {
+                        ok: true,
+                        status: "need_sku_confirm",
+                        path: "guest_catalog",
+                        message: copy,
+                        siteKey: playbook.siteKey,
+                        partner: playbook.partner,
+                        startUrl: playbook.startUrl,
+                        candidates: catalog.hits.slice(0, 3).map((h) => ({
+                            id: h.id,
+                            name: h.name,
+                            pricePaise: h.pricePaise,
+                            productUrl: h.productUrl,
+                        })),
+                        supportedSites: listSupportedBrowserSites(),
+                        note: "Search-before-login: show exact SKU+₹, wait for confirm, then call browser_order with userConfirmed=true (and exact product name in message).",
+                    };
+                }
+                // Honest: no guest price — still do not open login until explicit confirm.
+                return {
+                    ok: true,
+                    status: "need_sku_confirm",
+                    path: "guest_catalog_unavailable",
+                    message:
+                        catalog.unavailableReason ||
+                        `No live guest price for ${partnerLabel(String(playbook.partner))} yet. Ask the elder to reply confirm to open the site (OTP may follow), or try another name — never invent ₹.`,
+                    siteKey: playbook.siteKey,
+                    partner: playbook.partner,
+                    startUrl: playbook.startUrl,
+                    candidates: [],
+                    supportedSites: listSupportedBrowserSites(),
+                    note: "No guest catalog hit — do not invent prices; only open browser after explicit confirm.",
+                };
+            }
+
             const result = await runBrowserTask({
                 familyId: input.familyId,
                 userId: input.actorUserId,
                 goal: message.slice(0, 240),
                 partner: playbook.partner,
                 startUrl: playbook.startUrl,
-                otp: input.args.otp ? String(input.args.otp) : undefined,
-                userConfirmed: Boolean(input.args.userConfirmed),
+                otp,
+                userConfirmed,
                 deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
             });
             return {
@@ -920,7 +1015,7 @@ case "notify_caregivers": {
                 confirm: result.confirm,
                 healthAware: /Saheli tip/i.test(result.message),
                 supportedSites: listSupportedBrowserSites(),
-                note: "Primary path for Instamart/Swiggy/Zepto/Blinkit/Zomato is private browser (COMMERCE_BROWSER_FIRST). MCP quick_order remains as fallback when flag off. Confirm before pay — never silent pay.",
+                note: "Primary path for Instamart/Swiggy/Zepto/Blinkit/Zomato is private browser (COMMERCE_BROWSER_FIRST). Search-before-login for SKU+₹; confirm-before-pay at checkout. MCP quick_order remains as fallback when flag off.",
             };
         }
         default:
