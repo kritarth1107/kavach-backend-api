@@ -182,7 +182,7 @@ export function messageLooksLikeUnsupportedCommerce(text: string): boolean {
     const t = normalizeOrderText(text);
     if (!t) return false;
     if (
-        /\b(iphone|ipad|macbook|laptop|airpods|playstation|ps5|xbox|television|\btv\b|samsung\s*galaxy|oneplus|pixel\s*phone)\b/i.test(
+        /\b(iphones?|ipads?|macbooks?|laptops?|airpods|playstations?|ps5|xbox(?:es)?|televisions?|tvs?|samsung\s*galaxy|oneplus|pixel\s*phones?)\b/i.test(
             t,
         )
     ) {

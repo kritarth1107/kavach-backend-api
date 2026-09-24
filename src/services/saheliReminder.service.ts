@@ -76,6 +76,31 @@ export function extractTimesFromText(text: string): string[] {
         const hhmm = parseClockToHHMM(m[1]);
         if (hhmm && !found.includes(hhmm)) found.push(hhmm);
     }
+    // Hindi: "raat 8 baje", "subah 9 baje", "sham 6 baje", or bare "8 baje"
+    const bajeRe =
+        /\b(subah|savar|savere|dupahar|dopahar|sham|shaam|raat|night|evening|morning)?\s*(\d{1,2})\s*baje\b/gi;
+    let bm: RegExpExecArray | null;
+    while ((bm = bajeRe.exec(text)) !== null) {
+        let h = parseInt(bm[2], 10);
+        if (Number.isNaN(h) || h < 0 || h > 23) continue;
+        const period = (bm[1] || "").toLowerCase();
+        if (period && h <= 12) {
+            if (/raat|night/.test(period) && h < 12) {
+                // 8 raat → 20:00; 12 raat stays awkward — treat 1-11 as PM
+                if (h < 12) h = h === 12 ? 0 : h + 12;
+            } else if (/sham|shaam|evening/.test(period) && h < 12) {
+                h = h + 12;
+            } else if (/subah|savar|savere|morning/.test(period) && h === 12) {
+                h = 0;
+            }
+            // dupahar 1-4 → +12 if <=4? keep simple: 1-4 dopahar => 13-16
+            else if (/dupahar|dopahar/.test(period) && h < 12) {
+                h = h + 12;
+            }
+        }
+        const hhmm = `${String(h).padStart(2, "0")}:00`;
+        if (!found.includes(hhmm)) found.push(hhmm);
+    }
     return found;
 }
 

@@ -329,12 +329,12 @@ function shouldReleaseOrderSessionForCareTurn(text: string): boolean {
     ) {
         return false;
     }
+    if (/^(\.{2,}|…+)$/u.test(t)) return true;
     return (
-        /\b(remind|yaad|pain|dard|hurt|peeth|family|weather|mars|bill|doctor|paani|who is|tell\s+\w+|hurting|fever|bukhar)\b/i.test(
+        /\b(remind|yaad|pain|dard|hurt|peeth|family|weather|mars|bill|doctor|paani|who is|tell\s+\w+|hurting|fever|bukhar|iphones?|laptops?|electronics)\b/i.test(
             t,
         ) ||
-        /\bhow\s+much\b/i.test(t) ||
-        /\biphone|laptop|electronics\b/i.test(t)
+        /\bhow\s+much\b/i.test(t)
     );
 }
 
