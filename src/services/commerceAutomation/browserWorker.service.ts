@@ -18,6 +18,15 @@ import {
     bootstrapPharmacyLogin,
     type PharmacyLoginStage,
 } from "./pharmacyLogin.bootstrap";
+import {
+    beginBrowserGeneration,
+    closeTakenPark,
+    fillOtpOnPage,
+    hasParkedBrowserOtpSession,
+    isBrowserGenerationCurrent,
+    parkBrowserForOtp,
+    takeParkedBrowserOtpSession,
+} from "./parkedOtpSession.service";
 
 export type BrowserTaskStatus =
     | "running"
@@ -34,6 +43,7 @@ export type BrowserFailureReason =
     | "chromium_crash"
     | "site_slow"
     | "busy"
+    | "disabled"
     | "unknown";
 
 export type BrowserTaskResult = {
@@ -90,6 +100,8 @@ export type RunBrowserTaskInput = {
     loginPhone?: string;
     /** Live WA stage updates while Chromium works (non-blocking). */
     onProgress?: (stage: BrowserProgressStage, detail: string) => void | Promise<void>;
+    /** Per-user generation — stale tasks no-op after cancel. */
+    browserGeneration?: number;
 };
 
 export interface BrowserWorker {
@@ -141,6 +153,12 @@ async function notifyProgress(
     stage: BrowserProgressStage,
     detail: string,
 ): Promise<void> {
+    if (
+        input.browserGeneration != null &&
+        !isBrowserGenerationCurrent(input.familyId, input.userId, input.browserGeneration)
+    ) {
+        return;
+    }
     try {
         await input.onProgress?.(stage, detail);
     } catch (err) {
@@ -149,6 +167,13 @@ async function notifyProgress(
             err instanceof Error ? err.message : err,
         );
     }
+}
+
+function isTaskCancelled(input: RunBrowserTaskInput): boolean {
+    return (
+        input.browserGeneration != null &&
+        !isBrowserGenerationCurrent(input.familyId, input.userId, input.browserGeneration)
+    );
 }
 
 async function saveFailureScreenshot(
@@ -529,8 +554,19 @@ class PlaywrightBrowserWorker implements BrowserWorker {
         let context: import("playwright").BrowserContext | null = null;
         let modelUsed: string | undefined;
         let steps = 0;
+        let retainBrowser = false;
 
         try {
+            if (isTaskCancelled(input)) {
+                await browser.close().catch(() => undefined);
+                return {
+                    status: "cancelled",
+                    message: "Cancelled.",
+                    steps: 0,
+                    mode: "playwright",
+                    partner: String(playbook.partner),
+                };
+            }
             const storageState = profile.storageStateJson
                 ? (JSON.parse(profile.storageStateJson) as object)
                 : undefined;
@@ -588,6 +624,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     page,
                     partner: String(playbook.partner),
                     loginPhone: input.loginPhone,
+                    isCancelled: () => isTaskCancelled(input),
                     onProgress: async (stage: PharmacyLoginStage, detail: string) => {
                         const mapped =
                             stage === "login_page"
@@ -604,20 +641,64 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 });
                 if (boot.ok && boot.status === "need_otp") {
                     await this.persist(context, input, playbook.partner, page.url());
-                    return {
-                        status: "need_otp",
-                        message: boot.message,
-                        steps: 1,
-                        url: page.url(),
-                        mode: "playwright",
-                        partner: String(playbook.partner),
-                    };
+                    if (context && !isTaskCancelled(input)) {
+                        const gen =
+                            input.browserGeneration ??
+                            beginBrowserGeneration(input.familyId, input.userId);
+                        const early = parkBrowserForOtp({
+                            familyId: input.familyId,
+                            userId: input.userId,
+                            partner: String(playbook.partner),
+                            goal: input.goal,
+                            generation: gen,
+                            browser,
+                            context,
+                            page,
+                            taskInput: input,
+                        });
+                        retainBrowser = true;
+                        context = null;
+                        if (early.earlyOtp) {
+                            const filled = await fillOtpOnPage(page, early.earlyOtp);
+                            if (filled.filled) {
+                                (input as { otp?: string }).otp = early.earlyOtp;
+                                retainBrowser = false;
+                                const taken = takeParkedBrowserOtpSession(
+                                    input.familyId,
+                                    input.userId,
+                                );
+                                if (taken) context = taken.context;
+                            }
+                        }
+                        if (retainBrowser) {
+                            return {
+                                status: "need_otp",
+                                message: boot.message,
+                                steps: 1,
+                                url: page.url(),
+                                mode: "playwright",
+                                partner: String(playbook.partner),
+                            };
+                        }
+                    } else {
+                        return {
+                            status: "need_otp",
+                            message: boot.message,
+                            steps: 1,
+                            url: page.url(),
+                            mode: "playwright",
+                            partner: String(playbook.partner),
+                        };
+                    }
                 }
                 if (!boot.ok) {
-                    const shot = await saveFailureScreenshot(
-                        page,
-                        `login-${playbook.partner}-${boot.failureReason}`,
-                    );
+                    const shot =
+                        boot.failureReason === "disabled"
+                            ? undefined
+                            : await saveFailureScreenshot(
+                                  page,
+                                  `login-${playbook.partner}-${boot.failureReason}`,
+                              );
                     await this.persist(context, input, playbook.partner, page.url());
                     return {
                         status: "error",
@@ -626,7 +707,10 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                         url: page.url(),
                         mode: "playwright",
                         partner: String(playbook.partner),
-                        failureReason: boot.failureReason,
+                        failureReason:
+                            boot.failureReason === "disabled"
+                                ? "disabled"
+                                : boot.failureReason,
                         screenshotPath: shot,
                     };
                 }
@@ -645,14 +729,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             // If OTP provided, try typing into focused/OTP field first
             if (input.otp) {
                 try {
-                    const otpSel =
-                        'input[autocomplete="one-time-code"], input[name*="otp" i], input[placeholder*="OTP" i], input[type="tel"]';
-                    const el = page.locator(otpSel).first();
-                    if (await el.count()) {
-                        await el.fill(input.otp);
-                        await page.keyboard.press("Enter").catch(() => undefined);
-                        await page.waitForTimeout(1200);
-                    }
+                    await fillOtpOnPage(page, input.otp);
                 } catch {
                     /* continue to AI loop */
                 }
@@ -730,6 +807,28 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                                 gated.confirm?.items ?? extractItemGuess(input.goal),
                             );
                         }
+                        if (
+                            gated.status === "need_otp" &&
+                            context &&
+                            !isTaskCancelled(input)
+                        ) {
+                            const gen =
+                                input.browserGeneration ??
+                                beginBrowserGeneration(input.familyId, input.userId);
+                            parkBrowserForOtp({
+                                familyId: input.familyId,
+                                userId: input.userId,
+                                partner: String(playbook.partner),
+                                goal: input.goal,
+                                generation: gen,
+                                browser,
+                                context,
+                                page,
+                                taskInput: input,
+                            });
+                            retainBrowser = true;
+                            context = null;
+                        }
                         return {
                             status: gated.status!,
                             message: msg,
@@ -769,12 +868,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 partner: String(playbook.partner),
             };
         } finally {
-            try {
-                await context?.close();
-            } catch {
-                /* ignore */
+            if (!retainBrowser) {
+                try {
+                    await context?.close();
+                } catch {
+                    /* ignore */
+                }
+                await browser.close().catch(() => undefined);
             }
-            await browser.close().catch(() => undefined);
         }
     }
 
@@ -1052,6 +1153,98 @@ export async function runBrowserTask(input: RunBrowserTaskInput): Promise<Browse
             failureReason: crash ? "chromium_crash" : "unknown",
             message: `Browser task failed: ${msg.slice(0, 180)}. You can retry, paste an OTP if you have one, or *cancel*.`,
         };
+    }
+}
+
+
+
+/** Inject WA-pasted OTP into a parked live Playwright page. Null if no park. */
+export async function submitParkedBrowserOtp(input: {
+    familyId: string;
+    userId: string;
+    otp: string;
+}): Promise<BrowserTaskResult | null> {
+    const parked = takeParkedBrowserOtpSession(input.familyId, input.userId);
+    if (!parked || parked.aborted) {
+        if (parked) await closeTakenPark(parked);
+        return null;
+    }
+    if (
+        parked.generation != null &&
+        !isBrowserGenerationCurrent(input.familyId, input.userId, parked.generation)
+    ) {
+        await closeTakenPark(parked);
+        return null;
+    }
+    try {
+        const filled = await fillOtpOnPage(parked.page, input.otp.trim());
+        if (!filled.filled) {
+            parkBrowserForOtp({
+                familyId: parked.familyId,
+                userId: parked.userId,
+                partner: parked.partner,
+                goal: parked.goal,
+                generation: parked.generation,
+                browser: parked.browser,
+                context: parked.context,
+                page: parked.page,
+                taskInput: parked.input,
+            });
+            return {
+                status: "need_otp",
+                mode: "playwright",
+                partner: parked.partner,
+                steps: 1,
+                message:
+                    `Couldn't find the OTP box on the open *${partnerLabel(parked.partner)}* page. ` +
+                    `Paste the code again, or reply *retry* / *cancel*.`,
+            };
+        }
+        try {
+            const state = await parked.context.storageState();
+            await saveBrowserProfileState({
+                familyId: input.familyId,
+                userId: input.userId,
+                storageStateJson: JSON.stringify(state),
+                lastPartner: parked.partner,
+                lastUrl: parked.page.url(),
+            });
+        } catch {
+            /* ignore */
+        }
+        const items = extractItemGuess(parked.goal);
+        return {
+            status: "need_user_confirm",
+            mode: "playwright",
+            partner: parked.partner,
+            steps: 1,
+            url: parked.page.url(),
+            message: [
+                `Got the code — signed in to *${partnerLabel(parked.partner)}*.`,
+                `Next I'll find: ${items[0] || parked.goal.slice(0, 80)}`,
+                ``,
+                `Reply *confirm* when I show item+total+address (no silent pay), or *cancel*.`,
+            ].join("\n"),
+            confirm: {
+                items,
+                totalLabel: "TBD",
+                addressLabel: "saved address",
+            },
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: parked.partner,
+            steps: 0,
+            failureReason: /closed|Target/i.test(msg) ? "chromium_crash" : "unknown",
+            message: `OTP submit failed: ${msg.slice(0, 160)}. Reply *retry* or *cancel*.`,
+        };
+    } finally {
+        if (!hasParkedBrowserOtpSession(input.familyId, input.userId)) {
+            await closeTakenPark(parked);
+        }
     }
 }
 

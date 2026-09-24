@@ -85,8 +85,8 @@ export function formatPharmacyBrowserFollowUp(
                 `Nothing was ordered or paid.`,
                 `Reply *retry* to try again, or *cancel* to stop.`,
             ].join("\n"),
-            clearSession: false,
-            phase: "awaiting_otp",
+            clearSession: reason === "disabled",
+            phase: reason === "disabled" ? "idle" : "awaiting_otp",
         };
     }
 
