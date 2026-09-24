@@ -2,6 +2,9 @@
  * Deterministic Apollo / PharmEasy / 1mg login bootstrap (Playwright).
  * Prefer this over burning Gemini steps just to click Login + enter phone.
  * Returns need_otp once the OTP field is visible; otherwise a typed failure.
+ *
+ * EMERGENCY: live Continue/Send-OTP is OFF unless BROWSER_PHARMACY_LOGIN=on|1|true.
+ * One OTP request per login attempt max — never re-click Continue/resend while waiting.
  */
 import type { Page } from "playwright";
 import { partnerLabel } from "./playbooks";
@@ -15,7 +18,8 @@ export type PharmacyLoginStage =
     | "already_logged_in"
     | "no_login_button"
     | "captcha"
-    | "failed";
+    | "failed"
+    | "disabled";
 
 export type PharmacyLoginBootstrapResult =
     | { ok: true; status: "need_otp" | "already_logged_in"; stage: PharmacyLoginStage; message: string }
@@ -23,14 +27,22 @@ export type PharmacyLoginBootstrapResult =
           ok: false;
           status: "error";
           stage: PharmacyLoginStage;
-          failureReason: "captcha" | "no_login_button" | "site_slow" | "chromium_crash" | "timeout";
+          failureReason: "captcha" | "no_login_button" | "site_slow" | "chromium_crash" | "timeout" | "disabled";
           message: string;
       };
 
 export type PharmacyProgressFn = (stage: PharmacyLoginStage, detail: string) => void | Promise<void>;
 
 const LOGIN_CLICK_TEXTS = /^(login|log in|sign in|signin|sign up|signup|login\/sign up|hello,\s*log in|account)$/i;
-const CONTINUE_TEXTS = /^(continue|get otp|send otp|request otp|submit|proceed|next|verify)$/i;
+const CONTINUE_TEXTS = /^(continue|get otp|send otp|request otp|submit|proceed|next)$/i;
+/** Never click these while waiting for user paste — causes SMS spam. */
+const RESEND_TEXTS = /^(resend|re-send|send again|get (a )?new (otp|code)|request (a )?new)/i;
+
+/** Live Continue/Send OTP — DEFAULT OFF (emergency SMS-spam kill). Set on|1|true to enable. */
+export function isPharmacyLoginOtpSendEnabled(): boolean {
+    const raw = (process.env.BROWSER_PHARMACY_LOGIN || "off").trim().toLowerCase();
+    return raw === "on" || raw === "1" || raw === "true" || raw === "yes";
+}
 
 function indiaMobile10(phone: string): string {
     const d = phone.replace(/\D/g, "");
@@ -64,7 +76,6 @@ async function looksCaptcha(page: Page): Promise<boolean> {
 
 async function looksLoggedIn(page: Page): Promise<boolean> {
     const blob = await pageBlob(page);
-    // PharmEasy marketing CTA is literally "Hello, Log in" — that is NOT logged in.
     if (/hello,\s*log\s*in|sign\s*in\s*\/?\s*sign\s*up|login\s*\/?\s*sign\s*up/i.test(blob)) {
         return false;
     }
@@ -86,7 +97,6 @@ async function looksLoggedIn(page: Page): Promise<boolean> {
     } catch {
         /* ignore */
     }
-    // Greeting with a real name (not "Log in")
     if (/hello,\s*[a-z][a-z]+/i.test(blob) && !/hello,\s*log/i.test(blob)) return true;
     return false;
 }
@@ -100,7 +110,6 @@ async function otpFieldVisible(page: Page): Promise<boolean> {
     } catch {
         /* ignore */
     }
-    // 4–6 discrete digit boxes
     try {
         const boxes = page.locator('input[maxlength="1"]');
         const n = await boxes.count();
@@ -160,7 +169,7 @@ async function findPhoneInput(page: Page) {
 }
 
 /**
- * Click Login → fill elder WhatsApp phone → request OTP.
+ * Click Login → fill elder WhatsApp phone → request OTP (at most once).
  * Soft-fails with typed reason so WA can explain CAPTCHA vs no-login vs timeout.
  */
 export async function bootstrapPharmacyLogin(input: {
@@ -169,6 +178,8 @@ export async function bootstrapPharmacyLogin(input: {
     loginPhone: string;
     onProgress?: PharmacyProgressFn;
     settleMs?: number;
+    /** Abort check — return disabled/cancelled if false */
+    isCancelled?: () => boolean;
 }): Promise<PharmacyLoginBootstrapResult> {
     const { page, partner, loginPhone } = input;
     const label = partnerLabel(partner);
@@ -179,6 +190,32 @@ export async function bootstrapPharmacyLogin(input: {
             /* never block login on WA progress */
         }
     };
+
+    // EMERGENCY KILL: do not send SMS OTP unless explicitly enabled
+    if (!isPharmacyLoginOtpSendEnabled()) {
+        console.warn(
+            `[pharmacy-login] BROWSER_PHARMACY_LOGIN off — skipping Continue/Send OTP for ${label}`,
+        );
+        return {
+            ok: false,
+            status: "error",
+            stage: "disabled",
+            failureReason: "disabled",
+            message:
+                `${label} login is temporarily paused (SMS OTP send disabled while we fix the browser). ` +
+                `Nothing was ordered. Reply *cancel* — no more codes should arrive from this attempt.`,
+        };
+    }
+
+    if (input.isCancelled?.()) {
+        return {
+            ok: false,
+            status: "error",
+            stage: "failed",
+            failureReason: "timeout",
+            message: `${label} login cancelled.`,
+        };
+    }
 
     await notify("homepage", `on *${label}* homepage…`);
     await page.waitForTimeout(input.settleMs ?? 1200);
@@ -194,6 +231,7 @@ export async function bootstrapPharmacyLogin(input: {
     }
 
     if (await otpFieldVisible(page)) {
+        // Already on OTP screen — NEVER click Continue/resend
         await notify("otp_ready", `*${label}* login code screen is open — *paste the SMS OTP here*.`);
         return {
             ok: true,
@@ -213,7 +251,6 @@ export async function bootstrapPharmacyLogin(input: {
         };
     }
 
-    // Open login UI
     const clickedLogin =
         (await clickByName(page, LOGIN_CLICK_TEXTS)) ||
         (await clickByName(page, /hello,\s*log\s*in/i)) ||
@@ -221,6 +258,16 @@ export async function bootstrapPharmacyLogin(input: {
     if (clickedLogin) {
         await notify("login_page", `on *${label}* login page…`);
         await page.waitForTimeout(1000);
+    }
+
+    if (input.isCancelled?.()) {
+        return {
+            ok: false,
+            status: "error",
+            stage: "failed",
+            failureReason: "timeout",
+            message: `${label} login cancelled.`,
+        };
     }
 
     if (await looksCaptcha(page)) {
@@ -243,9 +290,9 @@ export async function bootstrapPharmacyLogin(input: {
         };
     }
 
+    let otpRequestSent = false;
     const phoneInput = await findPhoneInput(page);
     if (!phoneInput) {
-        // Maybe login click opened a different surface — one more Login attempt then fail typed
         if (!clickedLogin) {
             return {
                 ok: false,
@@ -274,14 +321,23 @@ export async function bootstrapPharmacyLogin(input: {
                 message: `${label} login opened but no phone field appeared. Reply *retry* or *cancel* — nothing was ordered.`,
             };
         }
-        await fillPhoneAndContinue(page, retryPhone, loginPhone, label, notify);
+        otpRequestSent = await fillPhoneAndContinueOnce(page, retryPhone, loginPhone, label, notify);
     } else {
-        await fillPhoneAndContinue(page, phoneInput, loginPhone, label, notify);
+        otpRequestSent = await fillPhoneAndContinueOnce(page, phoneInput, loginPhone, label, notify);
     }
 
-    // Wait for OTP UI (site SMS send)
+    // Wait for OTP UI — poll ONLY; never click Continue/resend again
     const deadline = Date.now() + 18_000;
     while (Date.now() < deadline) {
+        if (input.isCancelled?.()) {
+            return {
+                ok: false,
+                status: "error",
+                stage: "failed",
+                failureReason: "timeout",
+                message: `${label} login cancelled.`,
+            };
+        }
         if (await looksCaptcha(page)) {
             return {
                 ok: false,
@@ -300,9 +356,14 @@ export async function bootstrapPharmacyLogin(input: {
                 message: [
                     `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
                     `(Sent to ${maskPhone(loginPhone)} — I never read your device SMS, only what you paste here.)`,
-                ].join("\n"),
+                    otpRequestSent ? `` : ``,
+                ]
+                    .filter((l) => l !== undefined)
+                    .join("\n"),
             };
         }
+        // Explicitly do NOT click RESEND_TEXTS / CONTINUE_TEXTS here
+        void RESEND_TEXTS;
         await page.waitForTimeout(800);
     }
 
@@ -315,22 +376,24 @@ export async function bootstrapPharmacyLogin(input: {
     };
 }
 
-async function fillPhoneAndContinue(
+/** Fill phone + click Continue/Get OTP at most ONCE. Returns true if Continue was clicked. */
+async function fillPhoneAndContinueOnce(
     page: Page,
     phoneInput: import("playwright").Locator,
     loginPhone: string,
     label: string,
     notify: (stage: PharmacyLoginStage, detail: string) => void | Promise<void>,
-): Promise<void> {
+): Promise<boolean> {
     const national = indiaMobile10(loginPhone) || loginPhone.replace(/\D/g, "").slice(-10);
     await phoneInput.click({ timeout: 5000 }).catch(() => undefined);
     await phoneInput.fill("");
-    // IN pharmacy modals almost always want the 10-digit national mobile
     await phoneInput.fill(national);
     await notify("phone_entered", `requested *${label}* login code for ${maskPhone(loginPhone)}…`);
+    // One-shot only — never call this twice per bootstrap
     const continued = await clickByName(page, CONTINUE_TEXTS);
     if (!continued) {
         await page.keyboard.press("Enter").catch(() => undefined);
     }
     await page.waitForTimeout(1200);
+    return continued || true;
 }

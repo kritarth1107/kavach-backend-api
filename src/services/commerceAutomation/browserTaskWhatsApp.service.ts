@@ -8,7 +8,15 @@
 import WhatsappSession from "../../models/whatsappSession.model";
 import { FamilyRole } from "../../types/family.types";
 import { notifyCaregivers } from "../saheliCaregiverAlert.service";
-import { runBrowserTask, type BrowserTaskResult } from "./browserWorker.service";
+import {
+    abortBrowserSessionForUser,
+    beginBrowserGeneration,
+    hasParkedBrowserOtpSession,
+    runBrowserTask,
+    submitParkedBrowserOtp,
+    type BrowserTaskResult,
+} from "./browserWorker.service";
+import { queuePendingBrowserOtp, clearOtpAskDedupe } from "./parkedOtpSession.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
 import { beginOtpLogin } from "./sessionStore.service";
@@ -143,8 +151,16 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     let draft = await loadDraft(input.phone);
 
     if (/^(cancel|stop|never ?mind)$/i.test(text) && draft) {
-        await saveDraft(input.phone, null);
-        return { text: "Okay — cancelled the browsing task." };
+        await abortBrowserSessionForUser(input.familyId, input.actorUserId);
+        clearOtpAskDedupe(input.familyId, input.actorUserId);
+        await WhatsappSession.findOneAndUpdate(
+            { phone: input.phone },
+            {
+                $unset: { browserTaskDraft: 1, pendingCommerceOtp: 1, pharmacyDraft: 1 },
+                $set: { updatedAt: new Date() },
+            },
+        );
+        return { text: "Okay — cancelled. Nothing was ordered or paid — no more OTP asks from this attempt." };
     }
 
     // Re-kick browser after pharmacy/commerce soft failure (CAPTCHA / timeout / no OTP page)
@@ -228,36 +244,70 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     }
 
     if (draft && draft.phase === "awaiting_otp" && /^\d{4,8}$/.test(text)) {
-        const otpPhoneDigits = input.phone.replace(/\D/g, "");
-        const otpLoginPhone =
-            otpPhoneDigits.length === 10
-                ? `+91${otpPhoneDigits}`
-                : otpPhoneDigits.length >= 11
-                  ? `+${otpPhoneDigits}`
-                  : input.phone.startsWith("+")
-                    ? input.phone
-                    : `+${input.phone}`;
-        const result = await runBrowserTask({
-            familyId: input.familyId,
-            userId: input.actorUserId,
-            goal: draft.goal,
-            partner: draft.partner,
-            startUrl: draft.startUrl,
-            otp: text,
-            loginPhone: otpLoginPhone,
-            deadlineMs: Math.min(
-                Math.max(Number(process.env.BROWSER_TASK_DEADLINE_MS) || 75_000, 45_000),
-                90_000,
-            ),
-        });
-        draft = applyResultToDraft(draft, result);
-        if (draft.phase === "done") {
-            await saveDraft(input.phone, null);
-            await maybeNotifyCaregivers(input, draft, result);
-            return { text: result.message, draft };
+        // Fast path: inject into parked live page (never relaunch → never re-Send OTP)
+        if (hasParkedBrowserOtpSession(input.familyId, input.actorUserId)) {
+            draft.lastMessage = "Got the code — signing in…";
+            draft.phase = "running";
+            await saveDraft(input.phone, draft);
+            void (async () => {
+                const {
+                    notifyPharmacyBrowserBackgroundResult,
+                } = await import("./browserProgressNotify.service");
+                try {
+                    const result = await submitParkedBrowserOtp({
+                        familyId: input.familyId,
+                        userId: input.actorUserId,
+                        otp: text,
+                    });
+                    if (!result) {
+                        await notifyPharmacyBrowserBackgroundResult({
+                            phone: input.phone,
+                            familyId: input.familyId,
+                            recipientUserId: input.recipientUserId,
+                            actorUserId: input.actorUserId,
+                            goal: draft!.goal,
+                            partner: (draft!.partner as import("./types").CommercePartnerKey) || "apollo",
+                            otpChallengeId: draft!.otpChallengeId,
+                            result: {
+                                status: "error",
+                                mode: "playwright",
+                                partner: String(draft!.partner || "apollo"),
+                                steps: 0,
+                                failureReason: "chromium_crash",
+                                message:
+                                    "The login page closed before I could enter your code. Reply *retry* to open again — don't paste until I ask.",
+                            },
+                        });
+                        return;
+                    }
+                    await notifyPharmacyBrowserBackgroundResult({
+                        phone: input.phone,
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                        actorUserId: input.actorUserId,
+                        goal: draft!.goal,
+                        partner: (draft!.partner as import("./types").CommercePartnerKey) || "apollo",
+                        otpChallengeId: draft!.otpChallengeId,
+                        result,
+                    });
+                } catch (err) {
+                    console.warn(
+                        "parked OTP submit failed:",
+                        err instanceof Error ? err.message : err,
+                    );
+                }
+            })();
+            return { text: "Got the code — signing in…", draft };
         }
+
+        // Browser not ready yet — queue digits for when OTP page parks
+        queuePendingBrowserOtp(input.familyId, input.actorUserId, text);
+        draft.lastMessage = "Got the code — signing in as soon as the login screen is ready…";
         await saveDraft(input.phone, draft);
-        return { text: result.message, draft };
+        return {
+            text: "Got the code — signing in as soon as the login screen is ready…",
+            draft,
+        };
     }
 
     if (draft && draft.phase === "awaiting_confirm" && /^(confirm|place|yes|haan|ok|pay)$/i.test(text)) {

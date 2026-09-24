@@ -372,12 +372,26 @@ export async function handlePharmacyWhatsAppTurn(input: {
         // follow-up (OTP tip / confirm / block / soft failure) so WA never goes silent.
         const deadlineMs = pharmacyBrowserDeadlineMs();
         const loginPhone = toLoginPhoneE164(input.phone);
+        const { beginBrowserGeneration } = await import(
+            "./commerceAutomation/parkedOtpSession.service"
+        );
+        const {
+            isBrowserGenerationCurrent,
+            shouldSuppressDuplicateOtpAsk,
+        } = await import("./commerceAutomation/parkedOtpSession.service");
+        const browserGeneration = beginBrowserGeneration(input.familyId, input.actorUserId);
         void (async () => {
             const {
                 notifyPharmacyBrowserBackgroundResult,
                 pushWhatsAppBrowserFollowUp,
             } = await import("./commerceAutomation/browserProgressNotify.service");
             const progressPush = async (detail: string) => {
+                if (!isBrowserGenerationCurrent(input.familyId, input.actorUserId, browserGeneration)) {
+                    return;
+                }
+                if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, detail)) {
+                    return;
+                }
                 await pushWhatsAppBrowserFollowUp({
                     phone: input.phone,
                     familyId: input.familyId,
@@ -393,6 +407,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
                     partner,
                     deadlineMs,
                     loginPhone,
+                    browserGeneration,
                     onProgress: async (_stage, detail) => {
                         if (detail && detail.trim()) await progressPush(detail.trim());
                     },
@@ -406,6 +421,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
                     partner,
                     otpChallengeId: challenge,
                     result,
+                    browserGeneration,
                 });
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
@@ -418,6 +434,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
                     goal,
                     partner,
                     otpChallengeId: challenge,
+                    browserGeneration,
                     result: {
                         status: "error",
                         mode: "playwright",

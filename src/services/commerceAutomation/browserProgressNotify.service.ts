@@ -10,6 +10,10 @@ import { deliverOutboundMessage } from "../channelOutbound.service";
 import type { BrowserTaskResult } from "./browserWorker.service";
 import { partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
+import {
+    isBrowserGenerationCurrent,
+    shouldSuppressDuplicateOtpAsk,
+} from "./parkedOtpSession.service";
 
 export type BrowserTaskDraftPatch = {
     phase: "idle" | "running" | "awaiting_otp" | "awaiting_confirm" | "done";
@@ -62,15 +66,17 @@ export function formatPharmacyBrowserFollowUp(
         const tip =
             reason === "captcha" || blocked
                 ? `${label} looks blocked (CAPTCHA / bot wall).`
-                : reason === "no_login_button"
-                  ? `${label} loaded but Login / phone field wasn't found.`
-                  : reason === "chromium_crash"
-                    ? `${label} browser crashed (Chromium).`
-                    : reason === "busy"
-                      ? `${label} timed out while the browser was busy.`
-                      : reason === "site_slow"
-                        ? `${label} was too slow to show the login-code screen.`
-                        : `${label} didn't finish opening the order.`;
+                : reason === "disabled"
+                  ? `${label} login is temporarily paused (OTP send disabled).`
+                  : reason === "no_login_button"
+                    ? `${label} loaded but Login / phone field wasn't found.`
+                    : reason === "chromium_crash"
+                      ? `${label} browser crashed (Chromium).`
+                      : reason === "busy"
+                        ? `${label} timed out while the browser was busy.`
+                        : reason === "site_slow"
+                          ? `${label} was too slow to show the login-code screen.`
+                          : `${label} didn't finish opening the order.`;
         return {
             text: [
                 tip,
@@ -194,6 +200,7 @@ export async function notifyPharmacyBrowserBackgroundResult(input: {
     partner: CommercePartnerKey | "generic";
     otpChallengeId?: string;
     result: BrowserTaskResult;
+    browserGeneration?: number;
 }): Promise<void> {
     const follow = formatPharmacyBrowserFollowUp(input.result, {
         partner: input.partner,
@@ -239,6 +246,28 @@ export async function notifyPharmacyBrowserBackgroundResult(input: {
         ).catch(() => undefined);
     }
 
+    // Suppress late OTP asks after cancel / duplicate floods
+    if (
+        input.browserGeneration != null &&
+        !isBrowserGenerationCurrent(input.familyId, input.actorUserId, input.browserGeneration)
+    ) {
+        console.warn("suppress browser follow-up — generation stale (cancelled)");
+        return;
+    }
+    if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, follow.text)) {
+        console.warn("suppress duplicate OTP ask follow-up");
+        return;
+    }
+    // Disabled login: clear drafts so cancel/OTP loop cannot continue
+    if (input.result.failureReason === "disabled") {
+        await WhatsappSession.findOneAndUpdate(
+            { phone: input.phone },
+            {
+                $unset: { browserTaskDraft: 1, pendingCommerceOtp: 1, pharmacyDraft: 1 },
+                $set: { updatedAt: new Date() },
+            },
+        ).catch(() => undefined);
+    }
     await pushWhatsAppBrowserFollowUp({
         phone: input.phone,
         familyId: input.familyId,
