@@ -1154,12 +1154,17 @@ export type PartnerBillBreakdown = {
     itemSubtotalPaise?: number;
     deliveryFeePaise?: number;
     platformFeePaise?: number;
+    /** Small-cart / minimum-order fee (Instamart often surfaces as smallOrderFee). */
+    smallOrderFeePaise?: number;
     packingFeePaise?: number;
     taxPaise?: number;
     discountPaise?: number;
     tipPaise?: number;
     otherFeesPaise?: number;
     grandTotalPaise?: number;
+    /** Partner ETA minutes when returned after place/track. */
+    etaMinutes?: number;
+    trackingUrl?: string;
 };
 
 /**
@@ -1250,7 +1255,14 @@ export function parsePartnerBillBreakdown(payload: unknown): PartnerBillBreakdow
             "platform_fee",
             "convenienceFee",
             "convenience_fee",
+        ),
+        smallOrderFeePaise: pick(
             "smallOrderFee",
+            "small_order_fee",
+            "smallCartFee",
+            "small_cart_fee",
+            "minOrderFee",
+            "minimumOrderFee",
         ),
         packingFeePaise: pick(
             "packingFee",

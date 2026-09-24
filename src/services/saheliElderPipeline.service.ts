@@ -211,6 +211,36 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
+    {
+        const { messageLooksLikePharmacyOrder, handlePharmacyWhatsAppTurn } = await import(
+            "./pharmacyOrderFlow.service"
+        );
+        if (messageLooksLikePharmacyOrder(input.message)) {
+            const pharmacy = await handlePharmacyWhatsAppTurn({
+                phone: `elder:${input.recipientUserId}`,
+                text: input.message,
+                familyId: input.familyId,
+                actorUserId: input.recipientUserId,
+                recipientUserId: input.recipientUserId,
+                actorRole: null,
+            });
+            if (pharmacy) {
+                return {
+                    reply: await stampCompanionVoice(pharmacy.text, {
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                    }),
+                    replySource: "pharmacyOrder",
+                    conversationId,
+                    order: null,
+                    orderFlow: null,
+                    orderPreview: null,
+                    skippedAi: true,
+                };
+            }
+        }
+    }
+
     if (messageLooksLikeOrder(input.message)) {
         const { buildOrderCommunicationReply } = await import("./orderPartnerAvailability.service");
         const orderComms = await buildOrderCommunicationReply({

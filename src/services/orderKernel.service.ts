@@ -91,6 +91,28 @@ async function persistSearch(sessionId: string, familyId: string, query: string,
     );
 }
 
+
+/** Instinct-style substitution hints when catalog miss (e.g. Diet Coke → Coke Zero). */
+export function suggestGrocerySubstitutions(query: string): string[] {
+    const q = query.toLowerCase();
+    const tips: string[] = [];
+    const pairs: Array<[RegExp, string]> = [
+        [/diet\s*coke|diet\s*cola|coke\s*zero/i, "Coke Zero / Diet Coke / Pepsi Black"],
+        [/\bcoke\b|\bcola\b/i, "Coca-Cola / Thums Up / Pepsi"],
+        [/full\s*cream\s*milk|toned\s*milk/i, "toned milk / double toned / cow milk"],
+        [/brown\s*bread|whole\s*wheat\s*bread/i, "whole wheat bread / multigrain bread"],
+        [/olive\s*oil/i, "extra virgin olive oil / light olive oil"],
+        [/vitamin\s*c|vit\s*c/i, "Vitamin C tablets (OTC) — try Apollo / PharmEasy / 1mg"],
+    ];
+    for (const [re, alt] of pairs) {
+        if (re.test(q)) tips.push(alt);
+    }
+    if (!tips.length && q.trim()) {
+        tips.push(`a close match for "${query.trim().slice(0, 40)}"`);
+    }
+    return tips.slice(0, 3);
+}
+
 export async function ensureOrderSession(input: {
     familyId: string;
     recipientUserId: string;
@@ -518,7 +540,9 @@ export async function quickOrder(input: {
             partner: mcpPartner,
             partnerLabel: label,
             query,
-            message: `Connect ${label} first to place this order.${connectUrl ? " Tap below to connect." : " Ask your caregiver to connect it in Integrations."}`,
+            message: connectUrl
+                ? `To order from ${label} on *your* number, tap *Connect ${label}* below, sign in with OTP, then say your order again.`
+                : `Connect ${label} for this WhatsApp number first (Integrations → ${label}), then tell me what to order.`,
             connectUrl,
         };
     }
@@ -574,7 +598,7 @@ export async function quickOrder(input: {
                 partner: mcpPartner,
                 partnerLabel: label,
                 query,
-                message: "Couldn't start your order. Try being more specific about what you want.",
+                message: (() => { const _alts = suggestGrocerySubstitutions(query); const _base = "Couldn't start your order. Try being more specific about what you want."; return _alts.length ? `${_base} Try: ${_alts.join("; ")}?` : _base; })(),
             };
         }
 
@@ -607,7 +631,7 @@ export async function quickOrder(input: {
             partnerLabel: label,
             query,
             address: { id: searchAddressId, label: lastAddress.label ?? "Saved address", line1: lastAddress.line1 },
-            message: `I couldn't find "${query}" on ${label}. Try a different search or browse the catalog.`,
+            message: (() => { const _alts = suggestGrocerySubstitutions(query); const _base = `I couldn't find "${query}" on ${label}. Try a different search or browse the catalog.`; return _alts.length ? `${_base} Try: ${_alts.join("; ")}?` : _base; })(),
             orderFlow: flow ?? undefined,
         };
     }

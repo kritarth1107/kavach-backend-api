@@ -31,6 +31,7 @@ function formatBillBreakdownLines(
     const feeLines: Array<[string, number | undefined]> = [
         ["Delivery fee", bill?.deliveryFeePaise],
         ["Platform fee", bill?.platformFeePaise],
+        ["Small cart fee", bill?.smallOrderFeePaise],
         ["Packing fee", bill?.packingFeePaise],
         ["Tax", bill?.taxPaise],
         ["Discount", bill?.discountPaise],
@@ -44,12 +45,21 @@ function formatBillBreakdownLines(
             lines.push(`${label}: ${sign}${formatRupee(abs)}`);
         }
     }
+    if (typeof bill?.smallOrderFeePaise === "number" && bill.smallOrderFeePaise > 0) {
+        lines.push("_Tip: add a bit more to the basket to avoid the small-cart fee._");
+    }
 
     const total =
         typeof bill?.grandTotalPaise === "number" && bill.grandTotalPaise > 0
             ? bill.grandTotalPaise
             : sub;
     lines.push(`\n*Total:* ${formatRupee(total)}`);
+    if (typeof bill?.etaMinutes === "number" && bill.etaMinutes > 0) {
+        lines.push(`ETA: ~${bill.etaMinutes} min`);
+    }
+    if (bill?.trackingUrl) {
+        lines.push(`Track: ${bill.trackingUrl}`);
+    }
     return lines;
 }
 
@@ -919,7 +929,17 @@ export async function tryHandleWhatsAppOrderTurn(input: {
     }
 
     if (quick.status === "partner_not_connected") {
-        return orderTurn(quick.message, quick.orderFlow);
+        const connectFlow = {
+            sessionId: "",
+            phase: "browse" as const,
+            partner: quick.partner,
+            partnerLabel: quick.partnerLabel,
+            query: quick.query,
+            connectPartner: quick.partner,
+            connectUrl: quick.connectUrl ?? null,
+            message: quick.message,
+        };
+        return orderTurn(quick.message, connectFlow);
     }
 
     if (quick.status === "partner_error") {

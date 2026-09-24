@@ -21,6 +21,10 @@ export interface IWhatsappSession {
     pendingOrderId?: string;
     /** Mid-order ask waiting for cancel-and-switch confirm */
     pendingOrderSwitchText?: string;
+    /** Pharmacy WA draft (Apollo / PharmEasy / 1mg) */
+    pharmacyDraft?: Record<string, unknown>;
+    /** Partner OTP relay while connecting elder-owned commerce session */
+    pendingCommerceOtp?: { partner: string; challengeId?: string };
     expiresAt: Date;
 }
 
@@ -45,6 +49,8 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         orderPhase: { type: String },
         pendingOrderId: { type: String },
         pendingOrderSwitchText: { type: String },
+        pharmacyDraft: { type: Schema.Types.Mixed },
+        pendingCommerceOtp: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

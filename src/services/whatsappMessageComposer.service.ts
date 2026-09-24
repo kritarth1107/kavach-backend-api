@@ -341,6 +341,7 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
         const feePairs: Array<[string, number | undefined]> = [
             ["Delivery fee", bill?.deliveryFeePaise],
             ["Platform fee", bill?.platformFeePaise],
+            ["Small cart fee", bill?.smallOrderFeePaise],
             ["Packing fee", bill?.packingFeePaise],
             ["Tax", bill?.taxPaise],
             ["Discount", bill?.discountPaise],

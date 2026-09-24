@@ -11,7 +11,8 @@ export type SaheliReplySource =
     | "kernelFallback"
     | "scheduleFacts"
     | "quickOrder"
-    | "dashboardParity";
+    | "dashboardParity"
+    | "pharmacyOrder";
 
 export type WhatsAppAiDebug = {
     at: string;

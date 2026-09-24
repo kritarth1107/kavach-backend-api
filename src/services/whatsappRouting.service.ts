@@ -37,7 +37,7 @@ Hi — I'm *Saheli*, Kavach's family companion on WhatsApp. No extra setup neede
 *What I can help with:*
 💬 Warm conversations and daily check-ins
 📋 Medicine and care reminders
-🛒 Food and grocery orders (with family approval when needed)
+🛒 Food, grocery, and medicine orders (family gets a notify)
 
 Our WhatsApp line: *${kavachWhatsAppLine()}*
 
@@ -434,6 +434,59 @@ export async function handleWhatsAppInbound(body: {
         }
         
         return outbound(phone, stampedParityReply);
+    }
+
+    // Pharmacy (Apollo / PharmEasy / Tata 1mg) — elder places, caregivers notify-only.
+    {
+        const { handlePharmacyWhatsAppTurn, messageLooksLikePharmacyOrder } = await import(
+            "./pharmacyOrderFlow.service"
+        );
+        const { getCommerceAdapter } = await import("./commerceAutomation");
+        const waForPharmacy = await WhatsappSession.findOne({ phone }).lean();
+        const pendingOtp = (waForPharmacy as { pendingCommerceOtp?: { partner: string; challengeId?: string } } | null)
+            ?.pendingCommerceOtp;
+        if (pendingOtp && /^\d{4,8}$/.test(text.trim())) {
+            try {
+                const adapter = getCommerceAdapter(pendingOtp.partner as import("./commerceAutomation").CommercePartnerKey);
+                const result = await adapter.submitOtp({
+                    userId: identity.userId,
+                    familyId: identity.familyId,
+                    otp: text.trim(),
+                    otpChallengeId: pendingOtp.challengeId,
+                });
+                await WhatsappSession.findOneAndUpdate(
+                    { phone },
+                    { $unset: { pendingCommerceOtp: 1 } },
+                );
+                if (result.status === "connected") {
+                    return outbound(
+                        phone,
+                        `Connected ${pendingOtp.partner.replace("_", " ")} on your number. Tell me what to order.`,
+                    );
+                }
+            } catch (err) {
+                console.warn("Commerce OTP submit failed:", err);
+            }
+        }
+        if (
+            identity.role === FamilyRole.CARE_RECIPIENT &&
+            (messageLooksLikePharmacyOrder(text) ||
+                (waForPharmacy as { pharmacyDraft?: unknown } | null)?.pharmacyDraft)
+        ) {
+            const pharmacyReply = await handlePharmacyWhatsAppTurn({
+                phone,
+                text,
+                familyId: identity.familyId,
+                actorUserId: identity.userId,
+                recipientUserId: subjectUserId,
+                actorRole: identity.role,
+                mediaUrl: body.mediaUrl,
+                isRxPhoto: body.mediaType === "image" || body.mediaType === "document",
+            });
+            if (pharmacyReply) {
+                return outbound(phone, pharmacyReply.text);
+            }
+        }
     }
 
     const orderFlowReply = await tryHandleWhatsAppOrderTurn({

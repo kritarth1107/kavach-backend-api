@@ -196,7 +196,7 @@ export function messageLooksLikeUnsupportedCommerce(text: string): boolean {
 }
 
 export function unsupportedCommerceReply(): string {
-    return "I can help with food and groceries on Instamart, Swiggy, or Zepto — not phones or big electronics. Want milk, veggies, or a meal instead?";
+    return "I can help with food and groceries on Instamart, Swiggy, or Zepto, and medicines on Apollo, PharmEasy, or Tata 1mg — not phones or big electronics. Want milk, veggies, a meal, or medicines instead?";
 }
 
 export function messageLooksLikeOrder(text: string): boolean {

@@ -44,9 +44,16 @@ Pharmacy orders follow the same product rules: elder places, caregivers **notify
 
 ---
 
+## Phase A / B / C (this wave)
+
+- **Phase A (partial):** small-cart fee narration, substitution tips on catalog miss, clearer Connect CTA + elder OTP copy, ETA/track lines when bill has them.
+- **Phase B (partial):** WA OTP relay + OAuth URL connect attributed to elder user id via `commerceAutomation` session store; full Swiggy OAuth submit still partner-dependent.
+- **Phase C (foundation):** `commerceAutomation/` adapters + encrypted session store + `resolveElderCommercePath` (MCP → automation session → start login). Playwright Instamart login+search **not** live yet.
+- **Pharmacy:** WA conversational path for Apollo / PharmEasy / Tata 1mg (list or Rx photo, confirm total+address, notify-only). **Place is scaffold** — no live pharmacy API.
+
 ## Remaining gaps
 
-- **Phase A**: stronger fee narration, substitution prompts, Instamart connect deep link, ETA after place.
+- **Phase A remaining:** stronger fee narration, substitution prompts, Instamart connect deep link, ETA after place.
 - **Phase B**: conversational partner OTP/OAuth attributed to elder user id.
 - **Phase C**: `commerceAutomation/` session store + OTP state machine; Playwright Instamart login+search when automatable; pharmacy adapters beyond scaffold.
 - Full pharmacy place/pay is **not** live until partner automation or official APIs land.
