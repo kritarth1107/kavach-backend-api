@@ -78,7 +78,7 @@ function rankGuestHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[
             if (/\b(15|10|20)\b/.test(n) && /tablet|strip|chewable/i.test(n) && !/bottle|60|effervescent/i.test(n)) {
                 s += 4;
             }
-            if (/vitamin\s*e\b|\bevion\b/i.test(n) && !/vitamin\s*c/i.test(n)) s -= 12;
+            if (/vitamin\s*e\b|\bevion\b/i.test(n) && !/vitamin\s*c/i.test(n)) s -= 999;
         }
         if (typeof hits.find((h) => h.name === name)?.pricePaise === "number") s += 1;
         return s;
@@ -314,7 +314,24 @@ export async function searchGuestCatalog(input: {
 
     try {
         if (partner === "apollo") {
-            const hits = filterWeakHits(query, rankGuestHits(query, await searchApolloPublic(query)));
+            let raw = await searchApolloPublic(query);
+            if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+                const brandHits = await searchApolloPublic("limcee");
+                raw = dedupeHits([...raw, ...brandHits]);
+            }
+            const hits = filterWeakHits(
+                query,
+                rankGuestHits(query, raw).filter((h) => {
+                    // Never offer Vitamin E / Evion for a Vit C ask
+                    if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+                        const n = h.name.toLowerCase();
+                        if (/\bevion\b|vitamin\s*e\b/.test(n) && !/vitamin\s*c|ascorbic|limcee|celin/.test(n)) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }),
+            );
             return {
                 hits,
                 searched: true,
