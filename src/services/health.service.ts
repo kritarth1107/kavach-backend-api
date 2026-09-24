@@ -220,6 +220,7 @@ export async function buildHealthReport() {
         build: getBuildMetadata(),
         browserWorker: {
             modeEnv: (process.env.BROWSER_WORKER_MODE || "auto").trim().toLowerCase() || "auto",
+            commerceBrowserFirst: !["0","false","off","no","mcp"].includes((process.env.COMMERCE_BROWSER_FIRST ?? "1").trim().toLowerCase()),
         },
         runtime: {
             nodeVersion: process.version,

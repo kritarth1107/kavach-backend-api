@@ -242,12 +242,55 @@ export async function executeSaheliTool(input: {
             };
         }
         case "quick_order": {
+            // When COMMERCE_BROWSER_FIRST (default ON), steer Instamart/Swiggy/Zepto to browser_order.
+            // MCP quick_order remains available when flag is off.
+            const qoMessage = String(input.args.message ?? "");
+            const { resolveSiteFromMessage } = await import("./commerceAutomation/siteResolve");
+            const { shouldPreferBrowserForPartner } = await import(
+                "./commerceAutomation/commerceBrowserFirst"
+            );
+            const site = resolveSiteFromMessage(qoMessage);
+            if (shouldPreferBrowserForPartner(site.siteKey)) {
+                // Fall through to browser_order path with same message (MCP place unreliable).
+                const { resolvePlaybook, listSupportedBrowserSites } = await import(
+                    "./commerceAutomation/playbooks"
+                );
+                const { runBrowserTask } = await import("./commerceAutomation/browserWorker.service");
+                const partner =
+                    site.siteKey === "generic"
+                        ? ("generic" as const)
+                        : (site.siteKey as import("./commerceAutomation/types").CommercePartnerKey);
+                const playbook = resolvePlaybook(partner, qoMessage, site.startUrl);
+                const result = await runBrowserTask({
+                    familyId: input.familyId,
+                    userId: input.actorUserId,
+                    goal: qoMessage.slice(0, 240),
+                    partner: playbook.partner,
+                    startUrl: playbook.startUrl,
+                    deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
+                });
+                return {
+                    ok: result.status !== "error",
+                    status: result.status === "need_user_confirm" ? "confirm_ready" : result.status,
+                    path: "browser",
+                    message: result.message,
+                    siteKey: playbook.siteKey,
+                    partner: playbook.partner,
+                    startUrl: playbook.startUrl,
+                    mode: result.mode,
+                    confirm: result.confirm,
+                    note:
+                        "COMMERCE_BROWSER_FIRST: routed to private browser (MCP still available when flag off). " +
+                        "Ask elder to confirm item+total+address in WhatsApp; paste OTP when asked. Never silent pay.",
+                    supportedSites: listSupportedBrowserSites(),
+                };
+            }
             const { quickOrder } = await import("./orderKernel.service");
             return quickOrder({
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
-                message: String(input.args.message ?? ""),
+                message: qoMessage,
                 saheliSessionId: input.args.saheliSessionId
                     ? String(input.args.saheliSessionId)
                     : undefined,
@@ -877,7 +920,7 @@ case "notify_caregivers": {
                 confirm: result.confirm,
                 healthAware: /Saheli tip/i.test(result.message),
                 supportedSites: listSupportedBrowserSites(),
-                note: "Prefer MCP quick_order for Instamart/Swiggy/Zepto when connected; use browser_order for any other site or product URL. Confirm before pay — never silent pay.",
+                note: "Primary path for Instamart/Swiggy/Zepto/Blinkit/Zomato is private browser (COMMERCE_BROWSER_FIRST). MCP quick_order remains as fallback when flag off. Confirm before pay — never silent pay.",
             };
         }
         default:

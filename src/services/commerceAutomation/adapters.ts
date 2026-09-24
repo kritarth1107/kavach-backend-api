@@ -3,6 +3,7 @@ import { beginOtpLogin, getAutomationSession, markSessionConnected } from "./ses
 import { startMcpConnect, searchMcpProduct } from "../../partners/mcp/mcpClient.service";
 import type { McpPartnerKey } from "../../partners/mcp/types";
 import { runBrowserTask } from "./browserWorker.service";
+import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 
 const MCP_PARTNERS = new Set<CommercePartnerKey>(["swiggy", "instamart", "zepto"]);
 
@@ -180,10 +181,18 @@ function browserAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter 
     };
 }
 
-const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> = {
+/** MCP adapters kept registered — used when COMMERCE_BROWSER_FIRST=0. */
+const mcpRegistry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> = {
     swiggy: mcpAdapter("swiggy"),
     instamart: mcpAdapter("instamart"),
     zepto: mcpAdapter("zepto"),
+};
+
+const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> = {
+    // Default primary path is browser when COMMERCE_BROWSER_FIRST (see getCommerceAdapter).
+    swiggy: browserAdapter("swiggy"),
+    instamart: browserAdapter("instamart"),
+    zepto: browserAdapter("zepto"),
     blinkit: browserAdapter("blinkit"),
     zomato: browserAdapter("zomato"),
     apollo: browserAdapter("apollo"),
@@ -203,9 +212,19 @@ const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> =
 };
 
 export function getCommerceAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter {
+    // When browser-first is off, restore MCP adapters for Swiggy/Instamart/Zepto.
+    if (MCP_PARTNERS.has(partner) && !shouldPreferBrowserForPartner(partner)) {
+        const mcp = mcpRegistry[partner];
+        if (mcp) return mcp;
+    }
     const adapter = registry[partner];
     if (!adapter) throw new Error(`No commerce adapter for ${partner}`);
     return adapter;
+}
+
+/** Always returns the MCP-backed adapter when one exists (for explicit MCP fallback). */
+export function getMcpCommerceAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter | null {
+    return mcpRegistry[partner] ?? null;
 }
 
 export function isMcpCommercePartner(partner: CommercePartnerKey): boolean {

@@ -39,3 +39,10 @@ export {
     pushWhatsAppBrowserFollowUp,
 } from "./browserProgressNotify.service";
 
+
+export {
+    isCommerceBrowserFirstEnabled,
+    shouldPreferBrowserForPartner,
+    shouldPreferMcpForPartner,
+    DEFAULT_BROWSER_FIRST_PARTNERS,
+} from "./commerceBrowserFirst";

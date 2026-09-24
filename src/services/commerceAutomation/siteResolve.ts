@@ -1,9 +1,10 @@
 /**
  * Resolve commerce siteKey / domain / startUrl from freeform WA text or a product URL.
- * MCP partners (instamart/swiggy/zepto) stay on MCP when connected — browser when named
- * non-MCP site, URL paste, "any site", or explicit browse.
+ * When COMMERCE_BROWSER_FIRST is on (default), Swiggy/Zomato/Blinkit/Zepto/Instamart
+ * prefer private browser. MCP adapters remain available when the flag is off.
  */
 import type { CommercePartnerKey } from "./types";
+import { shouldPreferMcpForPartner, shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 
 export type CommerceSiteKey = CommercePartnerKey | "generic";
 
@@ -11,12 +12,10 @@ export type ResolvedSite = {
     siteKey: CommerceSiteKey;
     startUrl: string;
     domain?: string;
-    /** Prefer MCP path when this is an MCP grocery/food partner (unless forceBrowser). */
+    /** Prefer MCP path when flag allows (COMMERCE_BROWSER_FIRST off) and partner is MCP-capable. */
     preferMcp: boolean;
     label: string;
 };
-
-const MCP_KEYS = new Set<string>(["swiggy", "instamart", "zepto"]);
 
 const SITE_TABLE: Array<{
     key: CommerceSiteKey;
@@ -24,7 +23,6 @@ const SITE_TABLE: Array<{
     startUrl: string;
     domains: RegExp;
     names: RegExp;
-    preferMcp?: boolean;
 }> = [
     {
         key: "amazon",
@@ -109,7 +107,6 @@ const SITE_TABLE: Array<{
         startUrl: "https://www.swiggy.com/instamart",
         domains: /swiggy\.com\/instamart|instamart/i,
         names: /\binstamart\b/i,
-        preferMcp: true,
     },
     {
         key: "swiggy",
@@ -117,7 +114,6 @@ const SITE_TABLE: Array<{
         startUrl: "https://www.swiggy.com/",
         domains: /swiggy\.com/i,
         names: /\bswiggy\b/i,
-        preferMcp: true,
     },
     {
         key: "zepto",
@@ -125,7 +121,6 @@ const SITE_TABLE: Array<{
         startUrl: "https://www.zeptonow.com/",
         domains: /zeptonow\.com|zepto\.co/i,
         names: /\bzepto\b/i,
-        preferMcp: true,
     },
     {
         key: "uber",
@@ -188,6 +183,11 @@ export function siteLabel(siteKey: string): string {
 /**
  * Map freeform text / URL → site. Unknown HTTPS shop → generic with that startUrl.
  */
+function computePreferMcp(siteKey: string, forceBrowser?: boolean): boolean {
+    if (forceBrowser) return false;
+    return shouldPreferMcpForPartner(siteKey);
+}
+
 export function resolveSiteFromMessage(
     text: string,
     opts?: { forceBrowser?: boolean },
@@ -202,7 +202,7 @@ export function resolveSiteFromMessage(
                         siteKey: row.key,
                         startUrl: url,
                         domain: host,
-                        preferMcp: Boolean(row.preferMcp) && !opts?.forceBrowser,
+                        preferMcp: computePreferMcp(row.key, opts?.forceBrowser),
                         label: row.label,
                     };
                 }
@@ -224,7 +224,7 @@ export function resolveSiteFromMessage(
             return {
                 siteKey: row.key,
                 startUrl: row.startUrl,
-                preferMcp: Boolean(row.preferMcp) && !opts?.forceBrowser,
+                preferMcp: computePreferMcp(row.key, opts?.forceBrowser),
                 label: row.label,
             };
         }
@@ -276,6 +276,15 @@ export function messageLooksLikeAnySiteBrowserOrder(text: string): boolean {
         return true;
     }
     const resolved = resolveSiteFromMessage(t);
+    // Browser-first partners (Instamart/Swiggy/Zepto/Blinkit/Zomato) when flag on
+    if (
+        shouldPreferBrowserForPartner(resolved.siteKey) &&
+        (/\b(order|buy|get|purchase|shop|add\s+to\s+cart)\b/i.test(t) ||
+            /\b(open|browse|find|search|go\s+to|visit|look\s+up)\b/i.test(t) ||
+            extractProductUrl(t))
+    ) {
+        return true;
+    }
     if (resolved.siteKey !== "generic" && resolved.siteKey !== "generic_grocery" && !resolved.preferMcp) {
         if (/\b(order|buy|get|purchase|shop|add\s+to\s+cart)\b/i.test(t) || extractProductUrl(t)) {
             return true;
@@ -285,23 +294,25 @@ export function messageLooksLikeAnySiteBrowserOrder(text: string): boolean {
     if (
         resolved.siteKey === "generic_grocery" &&
         /\b(order|buy|get)\b/i.test(t) &&
-        !/\b(instamart|swiggy|zepto)\b/i.test(t)
+        !/\b(instamart|swiggy|zepto|blinkit|zomato)\b/i.test(t)
     ) {
         return true;
     }
     if (
         /\b(order|buy|get|purchase)\b/i.test(t) &&
-        /\b(amazon|flipkart|myntra|big\s*basket|bigbasket|jiomart|jio\s*mart|dmart|nature'?s\s*basket|blinkit|apollo|pharmeasy|1\s*mg)\b/i.test(
+        /\b(amazon|flipkart|myntra|big\s*basket|bigbasket|jiomart|jio\s*mart|dmart|nature'?s\s*basket|blinkit|apollo|pharmeasy|1\s*mg|instamart|swiggy|zepto|zomato)\b/i.test(
             t,
         )
     ) {
+        // Named MCP partners only when browser-first (else leave to MCP order flow)
+        if (resolved.preferMcp) return false;
         return true;
     }
     return false;
 }
 
 export function isMcpPreferSite(siteKey: string): boolean {
-    return MCP_KEYS.has(siteKey);
+    return shouldPreferMcpForPartner(siteKey);
 }
 
 export function siteKeyToPartnerKey(
