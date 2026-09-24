@@ -86,6 +86,34 @@ function rankGuestHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[
     return [...hits].sort((a, b) => score(b.name) - score(a.name) || a.name.length - b.name.length);
 }
 
+/** Drop fuzzy catalog noise (e.g. "unicorn dust" → Unicorn syrup) — require token coverage. */
+function filterWeakHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[] {
+    const tokens = query
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((t) => t.length >= 3 && !["the", "and", "for", "with"].includes(t));
+    if (tokens.length < 2 || !hits.length) return hits;
+    const strong = hits.filter((h) => {
+        const n = h.name.toLowerCase();
+        const matched = tokens.filter((t) => n.includes(t)).length;
+        return matched >= 2 || tokens.every((t) => n.includes(t));
+    });
+    return strong;
+}
+
+function dedupeHits(hits: GuestCatalogHit[]): GuestCatalogHit[] {
+    const seen = new Set<string>();
+    const out: GuestCatalogHit[] = [];
+    for (const h of hits) {
+        const key = `${(h.id || "").toLowerCase()}|${h.name.toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(h);
+    }
+    return out;
+}
+
 async function fetchJson(
     url: string,
     init: RequestInit & { timeoutMs?: number } = {},
@@ -286,7 +314,7 @@ export async function searchGuestCatalog(input: {
 
     try {
         if (partner === "apollo") {
-            const hits = rankGuestHits(query, await searchApolloPublic(query));
+            const hits = filterWeakHits(query, rankGuestHits(query, await searchApolloPublic(query)));
             return {
                 hits,
                 searched: true,
@@ -299,7 +327,13 @@ export async function searchGuestCatalog(input: {
             };
         }
         if (partner === "pharmeasy") {
-            const hits = rankGuestHits(query, await searchPharmeasyPublic(query));
+            let raw = await searchPharmeasyPublic(query);
+            // Vit C often returns Iron/Amla multi-vits on PE — also pull Limcee/Celin brand hits.
+            if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+                const brandHits = await searchPharmeasyPublic("limcee");
+                raw = dedupeHits([...raw, ...brandHits]);
+            }
+            const hits = filterWeakHits(query, rankGuestHits(query, raw));
             return {
                 hits,
                 searched: true,

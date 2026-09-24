@@ -395,6 +395,36 @@ export async function handleWhatsAppInbound(body: {
         });
     }
 
+    // Pharmacy mid-flow short controls BEFORE dashboard parity — else bare "status"
+    // steals and claims *Latest Instamart order* while an Apollo SKU list is open.
+    {
+        const waPharmEarly = await WhatsappSession.findOne({ phone }).lean();
+        const pd = (waPharmEarly as { pharmacyDraft?: { phase?: string } } | null)?.pharmacyDraft;
+        const pharmActive =
+            Boolean(pd?.phase) && pd!.phase !== "idle" && pd!.phase !== "done";
+        if (
+            pharmActive &&
+            /^(status|order\s*status|ok|okay|okk|k|confirm|place|yes|haan|[123]|cancel|stop)$/i.test(
+                text.trim(),
+            )
+        ) {
+            const { handlePharmacyWhatsAppTurn } = await import("./pharmacyOrderFlow.service");
+            const pharmacyReply = await handlePharmacyWhatsAppTurn({
+                phone,
+                text,
+                familyId: identity.familyId,
+                actorUserId: identity.userId,
+                recipientUserId: subjectUserId,
+                actorRole: identity.role,
+                mediaUrl: body.mediaUrl,
+                isRxPhoto: body.mediaType === "image" || body.mediaType === "document",
+            });
+            if (pharmacyReply) {
+                return outbound(phone, pharmacyReply.text);
+            }
+        }
+    }
+
     const dashboardAction = await tryHandleWhatsAppDashboardAction({
         familyId: identity.familyId,
         recipientUserId: subjectUserId,
