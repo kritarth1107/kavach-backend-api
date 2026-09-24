@@ -219,6 +219,33 @@ function extractItemGuess(goal: string): string[] {
 }
 
 
+
+/** Detect Uber/Ola CAPTCHA, bot walls, or geo/service unavailable copy on the page. */
+async function detectRideSiteBlock(
+    page: import("playwright").Page,
+): Promise<string | null> {
+    try {
+        const blob = await page.evaluate(() => {
+            const t = (document.body?.innerText || "").slice(0, 4000).toLowerCase();
+            const title = (document.title || "").toLowerCase();
+            return `${title}\n${t}`;
+        });
+        if (/captcha|unusual traffic|are you a robot|cf-browser-verification|access denied|bot detection/.test(blob)) {
+            return "Uber blocked the browser session (CAPTCHA / bot check). Try again later or book in the Uber app — nothing was booked.";
+        }
+        if (
+            /not available in (your|this) (area|region|city)|service (is )?unavailable|we don't operate|doesn't operate here|no cars? available|couldn't find a ride/.test(
+                blob,
+            )
+        ) {
+            return "Uber isn't available for that area right now (geo / no cars). Nothing was booked — try a different pickup or the Uber app.";
+        }
+    } catch {
+        /* ignore */
+    }
+    return null;
+}
+
 class DryRunBrowserWorker implements BrowserWorker {
     readonly mode = "dry_run" as const;
 
@@ -376,14 +403,36 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 ? (JSON.parse(profile.storageStateJson) as object)
                 : undefined;
 
+            const ride = isRideGoal(input.goal, String(playbook.partner));
+            const mobileUa =
+                "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
+            const desktopUa =
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
             context = await browser.newContext({
                 storageState: storageState as import("playwright").BrowserContextOptions["storageState"],
-                viewport: { width: 1280, height: 720 },
-                userAgent:
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport: ride
+                    ? { width: 390, height: 844 }
+                    : { width: 1280, height: 720 },
+                userAgent: ride ? mobileUa : desktopUa,
+                isMobile: ride,
+                hasTouch: ride,
             });
             const page = await context.newPage();
             await page.goto(playbook.startUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+
+            // Clear Uber block / CAPTCHA / geo-unavailable before burning Gemini steps
+            const earlyBlock = await detectRideSiteBlock(page).catch(() => null);
+            if (earlyBlock) {
+                await this.persist(context, input, playbook.partner, page.url());
+                return {
+                    status: "error",
+                    message: earlyBlock,
+                    steps: 0,
+                    url: page.url(),
+                    mode: "playwright",
+                    partner: String(playbook.partner),
+                };
+            }
 
             // If OTP provided, try typing into focused/OTP field first
             if (input.otp) {
@@ -419,6 +468,22 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     });
                 } catch {
                     /* ignore */
+                }
+
+                if (isRideGoal(input.goal, String(playbook.partner))) {
+                    const midBlock = await detectRideSiteBlock(page).catch(() => null);
+                    if (midBlock) {
+                        await this.persist(context, input, playbook.partner, page.url());
+                        return {
+                            status: "error",
+                            message: midBlock,
+                            steps,
+                            url: page.url(),
+                            modelUsed,
+                            mode: "playwright",
+                            partner: String(playbook.partner),
+                        };
+                    }
                 }
 
                 const planned = await planBrowserActions({
@@ -548,16 +613,33 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             const items = action.confirm?.items?.length
                 ? action.confirm.items
                 : [ctx.goal.slice(0, 80)];
-            const lines = [
-                `*Confirm before pay:*`,
-                ...items.map((i) => `• ${i}`),
-                ``,
-                `Total: ${action.confirm?.totalLabel || "see site"}`,
-                `Deliver to: ${action.confirm?.addressLabel || "your saved address"}`,
-                ``,
-                `Reply *confirm* to continue, or *cancel*.`,
-                action.message ? `\n${action.message}` : "",
-            ];
+            const ride = isRideGoal(ctx.goal);
+            const lines = ride
+                ? [
+                      `*Confirm before book:*`,
+                      ...items.map((i) => `• ${i}`),
+                      ``,
+                      action.confirm?.addressLabel
+                          ? `Route: ${action.confirm.addressLabel}`
+                          : "",
+                      action.confirm?.totalLabel
+                          ? `Selected: ${action.confirm.totalLabel}`
+                          : "",
+                      ``,
+                      `Reply *book* / *confirm* to request the ride, or *cancel*.`,
+                      `_No silent book — nothing is booked until you confirm._`,
+                      action.message ? `\n${action.message}` : "",
+                  ]
+                : [
+                      `*Confirm before pay:*`,
+                      ...items.map((i) => `• ${i}`),
+                      ``,
+                      `Total: ${action.confirm?.totalLabel || "see site"}`,
+                      `Deliver to: ${action.confirm?.addressLabel || "your saved address"}`,
+                      ``,
+                      `Reply *confirm* to continue, or *cancel*.`,
+                      action.message ? `\n${action.message}` : "",
+                  ];
             return {
                 halt: true,
                 status: "need_user_confirm",
@@ -573,7 +655,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             };
         }
 
-        // Safety: never click pay without confirm
+        // Safety: never click pay / request-ride without confirm
         if (!ctx.userConfirmed && (action.type === "click" || action.type === "press")) {
             const t = `${action.text || ""} ${action.selector || ""} ${action.message || ""}`.toLowerCase();
             if (/\b(pay now|place order|confirm.*pay|upi)\b/.test(t)) {
@@ -582,6 +664,19 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     status: "need_user_confirm",
                     message:
                         "Ready to pay — reply *confirm* with item/total/address check, or *cancel*.",
+                };
+            }
+            if (
+                isRideGoal(ctx.goal) &&
+                /\b(request\s*(uber|ride)?|confirm\s*(ride|booking|trip)|book\s*(now|ride|uber)|schedule\s*ride)\b/.test(
+                    t,
+                )
+            ) {
+                return {
+                    halt: true,
+                    status: "need_user_confirm",
+                    message:
+                        "Ready to book — reply *book* / *confirm* with fare + ride type check, or *cancel*.",
                 };
             }
         }
@@ -651,20 +746,30 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
     const playbook = resolvePlaybook(input.partner, input.goal, input.startUrl);
     const label = partnerLabel(String(playbook.partner));
     console.warn("Browser task deadline/fallback:", reason);
+    const ride = isRideGoal(input.goal, String(playbook.partner));
     return {
         status: "need_otp",
         mode: "playwright",
         partner: String(playbook.partner),
         steps: 0,
         url: playbook.startUrl,
-        message: [
-            `Opening *${label}* for: ${input.goal.slice(0, 120)}`,
-            ``,
-            `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
-            `(I never read your device SMS — only what you send me on WhatsApp.)`,
-            ``,
-            `Or reply *cancel* to stop. I can also take a medicine list / pharmacy confirm without waiting on the browser.`,
-        ].join("\n"),
+        message: ride
+            ? [
+                  `Opening *${label}* for your ride…`,
+                  ``,
+                  `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
+                  `(I never read your device SMS — only what you send me on WhatsApp.)`,
+                  ``,
+                  `Reply *cancel* to stop — nothing is booked yet.`,
+              ].join("\n")
+            : [
+                  `Opening *${label}* for: ${input.goal.slice(0, 120)}`,
+                  ``,
+                  `This is taking a moment — if you get an SMS OTP, *paste it here*.`,
+                  `(I never read your device SMS — only what you send me on WhatsApp.)`,
+                  ``,
+                  `Or reply *cancel* to stop. I can also take a medicine list / pharmacy confirm without waiting on the browser.`,
+              ].join("\n"),
     };
 }
 

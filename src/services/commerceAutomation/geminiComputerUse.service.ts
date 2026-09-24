@@ -119,9 +119,10 @@ You control a browser via structured actions. Chat brain is separate — you onl
 
 HARD SAFETY RULES:
 1. NEVER submit payment, tap Pay, confirm UPI, or complete checkout without first emitting need_user_confirm and waiting for userConfirmed=true.
-2. If an OTP / SMS login code is required, emit need_otp with a short WhatsApp message. Do not invent OTPs.
-3. Prefer OTC medicine/grocery goals. Never diagnose. Only fulfill what the user asked.
-4. Max steps are limited — be efficient.
+2. RIDES (BOOK_RIDE / Uber / Ola / Rapido): NEVER tap Request / Confirm ride / Book / Schedule without first emitting need_user_confirm with fare options (confirm.items) and waiting for userConfirmed=true. Scrape real fares from the page — never invent stub prices. On done after book, include driver name, car, and plate in message when visible. If CAPTCHA, blocked, or service unavailable in the user's area, emit done with a clear error message (no fake driver).
+3. If an OTP / SMS login code is required, emit need_otp with a short WhatsApp message. Do not invent OTPs.
+4. Prefer OTC medicine/grocery goals. Never diagnose. Only fulfill what the user asked.
+5. Max steps are limited — be efficient.
 
 Respond with a single JSON object (no markdown):
 {
@@ -298,8 +299,9 @@ export async function planBrowserActions(
         };
     }
 
-    // Safety: strip payment-ish clicks unless user already confirmed
+    // Safety: strip payment / silent-book clicks unless user already confirmed
     if (!obs.userConfirmed) {
+        const isRide = /\bBOOK_RIDE\b/i.test(obs.goal) || /\b(uber|ola|rapido)\b/i.test(obs.goal + " " + (obs.playbookHint || ""));
         for (const a of actions) {
             if (a.type === "click" || a.type === "press") {
                 const t = `${a.text || ""} ${a.selector || ""} ${a.message || ""}`.toLowerCase();
@@ -312,6 +314,26 @@ export async function planBrowserActions(
                                 type: "need_user_confirm",
                                 message:
                                     "Ready to pay — please confirm item, total, and address before I continue.",
+                                confirm: a.confirm,
+                            },
+                        ],
+                    };
+                }
+                if (
+                    isRide &&
+                    /\b(request\s*(uber|ride)?|confirm\s*(ride|booking|trip)|book\s*(now|ride|uber)|schedule\s*ride|reserve)\b/.test(
+                        t,
+                    )
+                ) {
+                    return {
+                        modelUsed: model,
+                        thought: "blocked_silent_book",
+                        actions: [
+                            {
+                                type: "need_user_confirm",
+                                message:
+                                    a.message ||
+                                    "Ready to book — reply *book* / *confirm* with fare + ride type check, or *cancel*.",
                                 confirm: a.confirm,
                             },
                         ],

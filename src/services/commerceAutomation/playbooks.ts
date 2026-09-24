@@ -134,7 +134,7 @@ const PLAYBOOKS: Record<string, BrowserPlaybook> = {
         siteKey: "uber",
         startUrl: "https://m.uber.com/",
         searchHint:
-            "Uber web ride: set pickup and drop from the goal (pickup=/drop=/lat/lng). Scrape fare + ride types. On confirm, request the ride and scrape driver/car/plate. Never silent book.",
+            "LIVE Uber web (m.uber.com) ride booking. Steps: (1) If login/phone screen, enter phone from chat context if present else wait — when OTP field appears emit need_otp. (2) After OTP, set pickup then drop from goal fields pickup=/drop=/pickup_lat/pickup_lng/drop_lat/drop_lng (type into Where to / Pickup fields; accept suggestions). (3) When fare/ride-type list is visible, emit need_user_confirm with confirm.items like ['UberX ≈ ₹180 · 8 min', ...] and addressLabel 'pickup → drop'; never tap Request/Confirm/Book yet. (4) Only when userConfirmed=true, tap Request/Confirm for the chosen ride_type and scrape driver name, car, plate, ETA into done.message. Errors: if CAPTCHA/bot check, geo/service unavailable, or blocked login — emit done or need_user_confirm with a clear WhatsApp error (do not invent fares/driver). Never silent book.",
         otpHint: OTP,
         confirmHint: CONFIRM_RIDE,
         category: "ride",

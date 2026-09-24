@@ -105,6 +105,9 @@ export async function confirmRideBook(input: {
     userId: string;
     draft: RideDraft;
 }): Promise<BrowserTaskResult> {
+    const base = Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000;
+    // Live book needs a bit longer to request + scrape driver; still hard-capped by worker.
+    const deadlineMs = Math.min(Math.max(base, 40_000), 60_000);
     return runBrowserTask({
         familyId: input.familyId,
         userId: input.userId,
@@ -112,7 +115,8 @@ export async function confirmRideBook(input: {
         partner: input.draft.provider === "uber" ? "uber" : "generic",
         startUrl: rideStartUrl(input.draft.provider),
         userConfirmed: true,
-        deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
+        deadlineMs,
+        maxSteps: 24,
     });
 }
 
@@ -125,6 +129,6 @@ export function dryRunDriverMessage(draft: RideDraft): string {
         `• Plate: *KA-01-AB-4231*`,
         `• ETA: ~${fare?.etaMinutes ?? 8} min`,
         ``,
-        `_Dry-run: no real Uber trip was created. Live Chromium books when BROWSER_WORKER_MODE=playwright._`,
+        `_Dry-run: no real Uber trip was created. Production uses live Chromium when BROWSER_WORKER_MODE=auto|playwright._`,
     ].join("\n");
 }

@@ -34,6 +34,27 @@ import { RIDE_CONFIRM_RE, type RideDraft, type RidePlace } from "./types";
 export { messageLooksLikeRideIntent, isRideCancel } from "./slotParse";
 export type { RideDraft } from "./types";
 
+
+function parseDriverFromMessage(message: string): RideDraft["driver"] | undefined {
+    const name =
+        message.match(/Driver:\s*\*?([^*\n]+)\*?/i)?.[1]?.trim() ||
+        message.match(/driver\s+([A-Z][a-zA-Z.\s]{1,40})/i)?.[1]?.trim();
+    const vehicle =
+        message.match(/Car:\s*\*?([^*\n]+)\*?/i)?.[1]?.trim() ||
+        message.match(/vehicle:\s*([^\n]+)/i)?.[1]?.trim();
+    const plate =
+        message.match(/Plate:\s*\*?([^*\n]+)\*?/i)?.[1]?.trim() ||
+        message.match(/\b([A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{1,2}[-\s]?\d{1,4})\b/)?.[1];
+    const etaRaw = message.match(/ETA:\s*~?(\d+)/i)?.[1];
+    if (!name && !vehicle && !plate) return undefined;
+    return {
+        name,
+        vehicle,
+        plate,
+        etaMinutes: etaRaw ? Number(etaRaw) : undefined,
+    };
+}
+
 async function loadDraft(phone: string): Promise<RideDraft | null> {
     const row = await WhatsappSession.findOne({ phone }).lean();
     const raw = (row as { rideDraft?: RideDraft } | null)?.rideDraft;
@@ -210,18 +231,59 @@ export async function handleRideWhatsAppTurn(input: {
                 return {
                     text:
                         `Couldn't continue on ${providerLabel(draft.provider)} right now. ` +
-                        `${result.message.slice(0, 120)}\n` +
-                        `Local taxi options (GoaMiles / TaxiBazaar) are coming in a later phase — try again shortly or book in the Uber app.`,
+                        `${result.message.slice(0, 180)}\n` +
+                        `Nothing was booked. Local taxi options (GoaMiles / TaxiBazaar) are coming later — try again shortly or book in the Uber app.`,
                     draft,
                 };
             }
 
-            const fares = parseFaresFromBrowserResult(result) || dryRunFares(draft.pickup, draft.drop);
+            // Live Chromium still waiting on OTP / login — stay in awaiting_otp
+            if (result.status === "need_otp" && result.mode === "playwright") {
+                const msg =
+                    result.message ||
+                    `${providerLabel(draft.provider)} still needs the login code — *paste the OTP here*, or *cancel*.`;
+                draft.lastMessage = msg;
+                await saveDraft(input.phone, draft);
+                return { text: msg, draft };
+            }
+
+            const scraped = parseFaresFromBrowserResult(result);
+            const liveOk =
+                result.mode === "playwright" &&
+                (result.status === "need_user_confirm" || Boolean(scraped?.length));
+
+            // Live mode: never invent stub fares if scrape failed
+            if (result.mode === "playwright" && !scraped?.length && result.status !== "need_user_confirm") {
+                draft.phase = "unavailable";
+                draft.unavailableReason = result.message;
+                await saveDraft(input.phone, null);
+                return {
+                    text:
+                        `Couldn't read live fares from ${providerLabel(draft.provider)} yet. ` +
+                        `${(result.message || "").slice(0, 160)}\n` +
+                        `Nothing was booked — try again or use the Uber app.`,
+                    draft,
+                };
+            }
+
+            const fares =
+                scraped ||
+                (result.mode === "dry_run"
+                    ? dryRunFares(draft.pickup, draft.drop)
+                    : undefined);
+            if (!fares?.length) {
+                draft.phase = "unavailable";
+                await saveDraft(input.phone, null);
+                return {
+                    text: `No fare options came back from ${providerLabel(draft.provider)}. Nothing was booked — try again shortly.`,
+                    draft,
+                };
+            }
             draft.fares = fares;
             draft.selectedFareId = fares[0]?.id;
             draft.phase = "awaiting_book_confirm";
             const card =
-                result.status === "need_user_confirm" && result.message.includes("₹")
+                liveOk && /₹|fare|UberX|confirm|book/i.test(result.message)
                     ? result.message
                     : formatFareCard(fares, draft.provider);
             draft.lastMessage = card;
@@ -254,30 +316,51 @@ export async function handleRideWhatsAppTurn(input: {
             });
             draft.mode = result.mode;
 
-            if (result.status === "done" || result.mode === "dry_run") {
+            if (result.status === "done" || (result.mode === "dry_run" && result.status !== "error")) {
                 draft.phase = "done";
-                draft.driver = {
-                    name: "Ravi K.",
-                    vehicle: "White Swift Dzire",
-                    plate: "KA-01-AB-4231",
-                    etaMinutes: draft.fares?.[0]?.etaMinutes ?? 8,
-                };
+                if (result.mode === "dry_run") {
+                    draft.driver = {
+                        name: "Ravi K.",
+                        vehicle: "White Swift Dzire",
+                        plate: "KA-01-AB-4231",
+                        etaMinutes: draft.fares?.[0]?.etaMinutes ?? 8,
+                    };
+                    const msg = dryRunDriverMessage(draft);
+                    draft.lastMessage = msg;
+                    await saveDraft(input.phone, null);
+                    await maybeNotifyCaregivers({ ...input, draft });
+                    return { text: msg, draft };
+                }
+                // Live: trust browser message; parse driver fields best-effort
                 const msg =
-                    result.mode === "dry_run" || !/driver|plate|KA-/i.test(result.message)
-                        ? dryRunDriverMessage(draft)
-                        : result.message;
+                    result.message?.trim() ||
+                    `Ride requested on ${providerLabel(draft.provider)}. Watch the Uber app for driver details.`;
+                draft.driver = parseDriverFromMessage(msg) || {
+                    name: undefined,
+                    vehicle: undefined,
+                    plate: undefined,
+                    etaMinutes: draft.fares?.[0]?.etaMinutes,
+                };
                 draft.lastMessage = msg;
                 await saveDraft(input.phone, null);
                 await maybeNotifyCaregivers({ ...input, draft });
                 return { text: msg, draft };
             }
 
+            // Still asking confirm mid-book (shouldn't silent-book)
+            if (result.status === "need_user_confirm") {
+                draft.phase = "awaiting_book_confirm";
+                draft.lastMessage = result.message;
+                await saveDraft(input.phone, draft);
+                return { text: result.message, draft };
+            }
+
             draft.phase = "unavailable";
             await saveDraft(input.phone, null);
             return {
                 text:
-                    `Booking didn't complete: ${result.message.slice(0, 160)}. ` +
-                    `Nothing was paid. You can try again or use the Uber app.`,
+                    `Booking didn't complete: ${result.message.slice(0, 180)}. ` +
+                    `Nothing was booked or paid. You can try again or use the Uber app.`,
                 draft,
             };
         }
