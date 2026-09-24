@@ -141,9 +141,11 @@ export function formatOrderFlowForWhatsApp(flow: OrderFlowPayload): string {
     if (flow.phase === "submitted") {
         const status = String(flow.orderStatus ?? "").toLowerCase();
         const placed = status === "paid" || status === "delivered";
-        const awaiting = status === "awaiting_approval" || (!status && !placed);
+        // Only treat explicit awaiting_approval as approval-gated (elders place + notify).
+        const awaiting = status === "awaiting_approval";
         if (placed) {
             lines.push(`\n✅ *Order placed on ${flow.partnerLabel}*`);
+            lines.push("Your family has been notified.");
         } else if (awaiting) {
             lines.push(
                 `\n🛒 *Basket submitted on ${flow.partnerLabel}* — waiting for family approval`,

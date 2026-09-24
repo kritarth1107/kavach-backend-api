@@ -902,8 +902,17 @@ export async function submitOrderFlowCart(input: {
                   );
         }
 
-        // Elder direct-order path: family is notified (caregiver still approves when flag off / over threshold).
+        // Elder Instinct path: caregivers get notify-only (WhatsApp + in-app) — never an approve gate.
         if (actorRole === FamilyRole.CARE_RECIPIENT) {
+            const itemSummary = order.items
+                .slice(0, 4)
+                .map((i) => `${i.name}×${i.quantity}`)
+                .join(", ");
+            const amount = `₹${(order.totalPaise / 100).toFixed(0)}`;
+            const notifyBody =
+                `Amma placed an order on ${partnerLabel(orderPartner)} — ${amount}` +
+                (itemSummary ? ` (${itemSummary})` : "") +
+                `. Notify only — no approval needed.`;
             const caregivers = family.members
                 .filter(
                     (m) =>
@@ -918,8 +927,8 @@ export async function submitOrderFlowCart(input: {
                     session.familyId,
                     {
                         kind: "order_placed",
-                        title: "Order placed by care recipient",
-                        body: `${partnerLabel(orderPartner)} · ₹${(order.totalPaise / 100).toFixed(0)} — elder ordered directly (direct orders enabled).`,
+                        title: "Amma placed an order",
+                        body: notifyBody.slice(0, 280),
                         actionUrl: "/dashboard/approvals",
                         recipientUserId: session.recipientUserId,
                         dedupeKey: `order-placed:${order.orderId}`,
@@ -927,6 +936,20 @@ export async function submitOrderFlowCart(input: {
                     caregivers,
                 );
             }
+            void import("./saheliCaregiverAlert.service")
+                .then(({ notifyCaregivers }) =>
+                    notifyCaregivers({
+                        familyId: session.familyId,
+                        recipientUserId: session.recipientUserId,
+                        actorUserId: session.actorUserId,
+                        message: notifyBody,
+                        urgency: "low",
+                        kind: "order_placed",
+                    }),
+                )
+                .catch((err) =>
+                    console.warn("Elder order caregiver WhatsApp notify failed:", err),
+                );
         }
     } else {
         void createFamilyNotification(session.familyId, {

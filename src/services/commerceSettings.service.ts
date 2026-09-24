@@ -48,6 +48,12 @@ export function orderRequiresCaregiverApproval(input: {
     totalPaise: number;
     settings: PartnerOrderSettings;
 }): boolean {
+    // Instinct parity: CARE_RECIPIENT orders from their own WhatsApp/number — never gate on
+    // caregiver approval. Caregivers receive notify-only (see orderOrchestrator submit path).
+    if (input.actorRole === FamilyRole.CARE_RECIPIENT) {
+        return false;
+    }
+
     if (input.actorRole && roleHasPermission(input.actorRole, "approve_order")) {
         return false;
     }

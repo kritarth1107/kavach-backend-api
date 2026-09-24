@@ -1,9 +1,13 @@
 import type { McpPartnerKey } from "../partners/mcp/types";
 
 export type PartnerOrderSettings = {
-    /** When false (default), all care-recipient orders need caregiver approval. */
+    /**
+     * Instinct parity (default true): care recipients order from their own WhatsApp.
+     * Caregivers are notified only — never parked in awaiting_approval for normal groceries.
+     * Toggle kept for family preference / legacy dashboard messaging.
+     */
     allowRecipientDirectOrders: boolean;
-    /** Orders above this amount (in paise) need approval even when direct ordering is on. Null = no limit. */
+    /** Soft hint for large baskets (paise). Null = no limit. Elders still place; caregivers notified. */
     approvalThresholdPaise: number | null;
 };
 
@@ -15,7 +19,7 @@ export type FamilyCommerceSettings = {
 };
 
 export const DEFAULT_PARTNER_ORDER_SETTINGS: PartnerOrderSettings = {
-    allowRecipientDirectOrders: false,
+    allowRecipientDirectOrders: true,
     approvalThresholdPaise: null,
 };
 

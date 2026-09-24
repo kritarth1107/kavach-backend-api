@@ -30,11 +30,19 @@ export async function notifyCaregivers(input: {
     const channels: string[] = [];
 
     for (const caregiverId of caregiverIds) {
+        const isOrderPlaced = input.kind === "order_placed";
         void createFamilyNotification(input.familyId, {
-            kind: input.kind === "emergency" ? "emergency" : "care_alert",
-            title: input.urgency === "high" ? "Urgent care alert" : "Care update",
+            kind: input.kind === "emergency" ? "emergency" : isOrderPlaced ? "order_placed" : "care_alert",
+            title:
+                input.kind === "emergency"
+                    ? "Urgent care alert"
+                    : isOrderPlaced
+                      ? "Amma placed an order"
+                      : input.urgency === "high"
+                        ? "Urgent care alert"
+                        : "Care update",
             body: input.message.slice(0, 280),
-            actionUrl: "/dashboard",
+            actionUrl: isOrderPlaced ? "/dashboard/approvals" : "/dashboard",
             recipientUserId: input.recipientUserId,
             dedupeKey: `alert:${input.recipientUserId}:${input.message.slice(0, 40)}:${Date.now()}`,
         }).catch(() => {});
@@ -45,8 +53,12 @@ export async function notifyCaregivers(input: {
                 ? `${user.phone.countryCode}${user.phone.number}`
                 : undefined;
         if (phone) {
+            // Never attach "approve" interactive chrome for elder-placed notify-only alerts.
             const payloads = composeWhatsAppReply(input.message, {
-                kind: input.kind === "emergency" ? "plain" : "order_pending_approval",
+                kind:
+                    input.kind === "emergency" || isOrderPlaced || input.kind === "missed_tasks"
+                        ? "plain"
+                        : "order_pending_approval",
             });
             const delivery = await deliverOutboundMessage({
                 familyId: input.familyId,

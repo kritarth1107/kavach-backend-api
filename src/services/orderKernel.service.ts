@@ -731,14 +731,16 @@ export async function confirmAndPlaceOrder(input: {
         const isPending = status === "awaiting_approval";
         const isPlaced = status === "paid" || status === "delivered";
 
+        // Elder direct path returns paid; never imply caregiver approval for normal groceries.
+        const statusOut = isPlaced ? "placed" : isPending ? "awaiting_approval" : "placed";
         return {
-            status: isPending ? "awaiting_approval" : isPlaced ? "placed" : "awaiting_approval",
+            status: statusOut,
             orderId,
-            message: isPending
-                ? "Basket submitted — waiting for your family to approve before checkout."
-                : isPlaced
-                  ? `Order placed! ₹${((order.totalPaise as number) / 100).toFixed(0)} from ${flow.partnerLabel}. I'll update you when it's on the way.`
-                  : `Basket approved — placing with ${flow.partnerLabel}…`,
+            message: isPlaced
+                ? `Order placed! ₹${((order.totalPaise as number) / 100).toFixed(0)} from ${flow.partnerLabel}. I'll update you when it's on the way. Your family has been notified.`
+                : isPending
+                  ? "Basket submitted — waiting for your family to approve before checkout."
+                  : `Order submitted with ${flow.partnerLabel}. Your family has been notified.`,
             orderFlow: flow,
         };
     } catch (err) {

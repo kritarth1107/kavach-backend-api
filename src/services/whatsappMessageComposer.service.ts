@@ -412,7 +412,7 @@ export function buildOrderFlowMessages(flow: OrderFlowPayload): MetaWhatsAppPayl
             }) ?? [];
         const status = String(flow.orderStatus ?? "").toLowerCase();
         const placed = status === "paid" || status === "delivered";
-        const awaiting = status === "awaiting_approval" || (!status && !placed);
+        const awaiting = status === "awaiting_approval";
         const headline = placed
             ? `✅ Order placed on ${flow.partnerLabel}`
             : awaiting

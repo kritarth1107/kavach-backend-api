@@ -7,13 +7,16 @@ import {
     ChannelType,
     OrderPartner,
     OrderStatus,
+    roleHasPermission,
 } from "../types/careRecord.types";
 import {
     getFamilyForActor,
+    getMemberRole,
     requireCareRecipient,
     requirePermission,
 } from "./careRecordAuth.service";
 import { createCommerceOrder, payCommerceOrder } from "../partners/commerce.adapter";
+import { FamilyRole } from "../types/family.types";
 
 function orderPartnerTitle(partner: OrderPartner, totalPaise: number): string {
     const amount = `₹${(totalPaise / 100).toFixed(0)}`;
@@ -21,6 +24,26 @@ function orderPartnerTitle(partner: OrderPartner, totalPaise: number): string {
     if (partner === OrderPartner.INSTAMART) return `Instamart basket suggested — ${amount}`;
     return `Zepto basket suggested — ${amount}`;
 }
+
+/** Elder Instinct path: CARE_RECIPIENT may approve+pay their own basket without approve_order. */
+function actorMaySelfCheckout(
+    family: Awaited<ReturnType<typeof getFamilyForActor>>,
+    actorUserId: string,
+    order: { suggestedBy?: string; subjectUserId: string },
+): boolean {
+    const role = getMemberRole(family, actorUserId);
+    if (role && roleHasPermission(role, "approve_order")) return true;
+    if (
+        role === FamilyRole.CARE_RECIPIENT &&
+        order.subjectUserId === actorUserId &&
+        (order.suggestedBy === actorUserId || !order.suggestedBy)
+    ) {
+        return true;
+    }
+    return false;
+}
+
+
 
 export async function suggestOrder(input: {
     familyId: string;
@@ -102,10 +125,12 @@ export async function listPendingApprovals(familyId: string, actorUserId: string
 
 export async function approveOrder(familyId: string, orderId: string, actorUserId: string) {
     const family = await getFamilyForActor(familyId, actorUserId);
-    requirePermission(family, actorUserId, "approve_order");
 
     const order = await Order.findOne({ orderId, familyId });
     if (!order) throw new AppError("Order not found", 404);
+    if (!actorMaySelfCheckout(family, actorUserId, order)) {
+        requirePermission(family, actorUserId, "approve_order");
+    }
     if (order.status !== OrderStatus.AWAITING_APPROVAL) {
         throw new AppError("Order is not awaiting approval", 400);
     }
@@ -137,10 +162,12 @@ export async function payOrder(
     opts?: { partnerAddressId?: string; deliveryAddress?: string },
 ) {
     const family = await getFamilyForActor(familyId, actorUserId);
-    requirePermission(family, actorUserId, "approve_order");
 
     const order = await Order.findOne({ orderId, familyId });
     if (!order) throw new AppError("Order not found", 404);
+    if (!actorMaySelfCheckout(family, actorUserId, order)) {
+        requirePermission(family, actorUserId, "approve_order");
+    }
     if (order.status !== OrderStatus.APPROVED) {
         throw new AppError("Order must be approved before payment", 400);
     }

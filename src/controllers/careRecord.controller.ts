@@ -147,6 +147,8 @@ export async function getOrderHistoryHandler(req: Request, res: Response) {
                 total_paise: o.totalPaise,
                 items: o.items,
                 deep_link: o.deepLink,
+                subject_user_id: o.subjectUserId,
+                suggested_by: o.suggestedBy ?? null,
                 created_at: o.createdAt?.toISOString() ?? null,
             })),
         },
