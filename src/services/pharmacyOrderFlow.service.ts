@@ -189,6 +189,17 @@ export async function handlePharmacyWhatsAppTurn(input: {
         await saveDraft(input.phone, draft);
 
         if (!draft.partner) {
+            if (draft.items.length) {
+                const lines = draft.items
+                    .map((i) => `• ${i.name} ×${i.quantity}${i.requiresRx ? " _(Rx)_" : " _(OTC)_"}`)
+                    .join("\n");
+                return {
+                    text:
+                        `Got it:\n${lines}\n\n` +
+                        "Which pharmacy — *Apollo*, *PharmEasy*, or *Tata 1mg*?",
+                    draft,
+                };
+            }
             return {
                 text:
                     "Sure — I can order medicines for you.\n\n" +
