@@ -337,23 +337,30 @@ export async function handlePharmacyWhatsAppTurn(input: {
         );
 
         const goal = `Order from ${partnerLabel(partner)}: ${summary}`;
-        // Hard-deadline browser step — WhatsApp must reply within SLA even if Chromium hangs.
-        const result = await runBrowserTask({
+        draft.phase = "awaiting_otp";
+        await saveDraft(input.phone, null);
+
+        // Do not block WhatsApp on Chromium — kick off browser async; OTP paste resumes.
+        void runBrowserTask({
             familyId: input.familyId,
             userId: input.actorUserId,
             goal,
             partner,
             deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
+        }).catch((err) => {
+            console.warn(
+                "pharmacy confirm browser background failed:",
+                err instanceof Error ? err.message : err,
+            );
         });
-
-        draft.phase = "awaiting_otp";
-        await saveDraft(input.phone, null);
 
         return {
             text:
-                result.message ||
-                `${partnerLabel(partner)} may text a login code — paste the SMS OTP here.\n` +
-                    `(Basket: ${summary}. No silent pay — I'll ask you to confirm item+total+address before checkout.)`,
+                `Opening *${partnerLabel(partner)}* for: ${summary}\n\n` +
+                `${partnerLabel(partner)} may text a login code — *paste the SMS OTP here*.\n` +
+                `(I never read your device SMS — only what you send me on WhatsApp.)\n\n` +
+                `No silent pay — I'll ask you to confirm item+total+address before checkout.\n` +
+                `Reply *cancel* to stop.`,
             draft,
         };
     }
