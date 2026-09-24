@@ -25,6 +25,8 @@ export type SaheliContextBundle = {
     connectedPartners: { swiggy: boolean; instamart: boolean; zepto: boolean };
     defaultAddressCount: number;
     channel?: SaheliContextChannel;
+    /** Compact caregiver roster for elder WA system prompt. */
+    familyRosterText?: string;
 };
 
 function formatScheduleItem(item: ScheduleDayItem): string {
@@ -57,7 +59,7 @@ export function formatSaheliContextForAi(bundle: SaheliContextBundle): string {
         );
     }
 
-    const careLimit = compact ? 600 : bundle.careRecordContext.length;
+    const careLimit = compact ? 2000 : bundle.careRecordContext.length;
     const careSnippet = bundle.careRecordContext.slice(0, careLimit);
     parts.push(`[Care record]\n${careSnippet}`);
 
@@ -78,6 +80,10 @@ export function formatSaheliContextForAi(bundle: SaheliContextBundle): string {
     } else {
         const lang = bundle.companionProfile.preferred_language ?? bundle.companionProfile.preferredLanguage;
         if (lang) parts.push(`[Language preference] ${lang}`);
+    }
+
+    if (bundle.familyRosterText?.trim()) {
+        parts.push(`[Family]\n${bundle.familyRosterText.trim().slice(0, 1200)}`);
     }
 
     return parts.filter(Boolean).join("\n\n");
@@ -149,6 +155,16 @@ export async function buildSaheliContextBundle(input: {
     );
     const defaultAddressCount = await countDefaultAddresses(input.familyId, input.actorUserId);
 
+    let familyRosterText = "";
+    try {
+        const { getFamilyMembersList } = await import("./familyMember.service");
+        const { formatFamilyRosterForAi } = await import("./saheliCaregiverFacts.service");
+        const list = await getFamilyMembersList(input.familyId, input.actorUserId);
+        familyRosterText = formatFamilyRosterForAi(list.members);
+    } catch {
+        familyRosterText = "";
+    }
+
     const items = dayStatus.items;
     return {
         dateKey: dayStatus.dateKey,
@@ -166,5 +182,6 @@ export async function buildSaheliContextBundle(input: {
         connectedPartners,
         defaultAddressCount,
         channel: input.channel,
+        familyRosterText,
     };
 }

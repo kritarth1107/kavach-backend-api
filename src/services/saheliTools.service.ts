@@ -54,6 +54,9 @@ export type SaheliToolName =
     | "log_dose"
     | "log_check_in"
     | "log_symptom"
+    | "create_reminder"
+    | "list_reminders"
+    | "cancel_reminder"
     | "log_appointment_notes"
     | "get_lab_trends"
     | "get_abnormal_flags"
@@ -664,7 +667,73 @@ export async function executeSaheliTool(input: {
                 adherencePercent: day.adherencePercent,
             };
         }
-        case "notify_caregivers": {
+        
+        case "create_reminder": {
+            const { createSaheliReminder } = await import("./saheliReminder.service");
+            const textArg = String(input.args.text ?? input.args.message ?? "").trim();
+            const timesRaw = input.args.times;
+            const times = Array.isArray(timesRaw)
+                ? timesRaw.map((t) => String(t))
+                : typeof timesRaw === "string"
+                  ? [timesRaw]
+                  : undefined;
+            const result = await createSaheliReminder({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                text: textArg,
+                times,
+                kind: input.args.kind === "hourly_window" ? "hourly_window" : undefined,
+                windowStartMinutes:
+                    input.args.windowStartMinutes != null
+                        ? Number(input.args.windowStartMinutes)
+                        : undefined,
+                windowEndMinutes:
+                    input.args.windowEndMinutes != null
+                        ? Number(input.args.windowEndMinutes)
+                        : input.args.windowEndMinutes === null
+                          ? null
+                          : undefined,
+                stopConditionPhrase: input.args.stopConditionPhrase
+                    ? String(input.args.stopConditionPhrase)
+                    : undefined,
+            });
+            if (!result.ok) {
+                return {
+                    error: result.error,
+                    askUser: result.askUser,
+                    status: "needs_slot",
+                };
+            }
+            return {
+                status: "created",
+                reminder: result.reminder,
+                askUser: result.askUser,
+            };
+        }
+        case "list_reminders": {
+            const { listSaheliReminders } = await import("./saheliReminder.service");
+            const reminders = await listSaheliReminders({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                status: input.args.status === "cancelled" || input.args.status === "completed"
+                    ? (input.args.status as "cancelled" | "completed")
+                    : "active",
+            });
+            return { reminders };
+        }
+        case "cancel_reminder": {
+            const { cancelSaheliReminder } = await import("./saheliReminder.service");
+            return await cancelSaheliReminder({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                reminderId: input.args.reminderId ? String(input.args.reminderId) : undefined,
+                textHint: input.args.textHint ? String(input.args.textHint) : undefined,
+            });
+        }
+case "notify_caregivers": {
             const { notifyCaregivers } = await import("./saheliCaregiverAlert.service");
             return notifyCaregivers({
                 familyId: input.familyId,

@@ -449,11 +449,12 @@ export async function tryApplyElderCareActionFromMessage(input: {
 
 
     // Symptom / pain — Care Record SYMPTOM + notify caregivers (never diagnose).
+    // Broaden heuristics so Phase 3 notify still fires before AI (back pain / dard / peeth / hurting).
     const symptomMatch =
         /\b(chest pain|severe pain|unbearable|can'?t breathe|cannot breathe)\b/i.test(qLower)
             ? null // emergencies handled upstream
             : q.match(
-                  /\b((?:head|back|stomach|pet|joint|knee|leg|arm|tooth|throat|ear)?\s*(?:pain|ache|dard)|headache|migraine|fever|bukhar|nausea|dizzy|dizziness|cough|khansi|vomiting|thakaan|weakness|swelling)\b(.{0,80})/i,
+                  /\b((?:head|back|stomach|pet|peeth|joint|knee|leg|arm|tooth|throat|ear)?\s*(?:pain|ache|dard|hurting|hurt)|(?:my\s+)?(?:back|peeth|head|stomach|pet)\s+(?:is\s+)?(?:hurting|hurt|aching|painful)|headache|migraine|fever|bukhar|nausea|dizzy|dizziness|cough|khansi|vomiting|thakaan|weakness|swelling|body\s+pain|dard\s+ho\s+raha)\b(.{0,80})/i,
               );
     if (symptomMatch && q.length < 280) {
         const snippet = (symptomMatch[0] + (symptomMatch[2] || "")).trim().slice(0, 200);

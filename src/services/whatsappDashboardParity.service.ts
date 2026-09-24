@@ -841,45 +841,59 @@ export async function tryHandleSetReminder(input: {
     text: string;
 }): Promise<DashboardParityResult> {
     const text = input.text.trim();
-    const m =
-        text.match(
-            /\b(?:set|add|create)\s+(?:a\s+)?reminder\s+(?:for\s+)?(.+?)(?:\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?$/i,
-        ) ||
-        text.match(/\bremind\s+(?:me\s+)?(?:to\s+)?(.+?)(?:\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?))?$/i);
-    if (!m) return { handled: false };
+    const looksLike =
+        /\b(?:set|add|create)\s+(?:a\s+)?reminder\b/i.test(text) ||
+        /\bremind\s+me\b/i.test(text) ||
+        /\bevery\s+hour\b/i.test(text);
+    if (!looksLike) return { handled: false };
 
-    const title = (m[1] || "").trim().replace(/[!.]+$/, "");
-    if (!title || title.length < 2) return { handled: false };
-    let time = (m[2] || "9:00").trim().toLowerCase();
-    // normalize to HH:MM 24h-ish string care schedule expects
-    const tm = time.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
-    if (tm) {
-        let h = parseInt(tm[1], 10);
-        const min = tm[2] || "00";
-        const ap = (tm[3] || "").toLowerCase();
-        if (ap === "pm" && h < 12) h += 12;
-        if (ap === "am" && h === 12) h = 0;
-        time = `${String(h).padStart(2, "0")}:${min}`;
-    }
-
-    const { createCareSchedule } = await import("./careSchedule.service");
+    const {
+        createSaheliReminder,
+        extractTimesFromText,
+        parseHourlyWindow,
+    } = await import("./saheliReminder.service");
     try {
-        await createCareSchedule(input.familyId, input.recipientUserId, input.actorUserId, {
-            type: "CUSTOM",
-            title,
-            time,
-            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-            active: true,
+        const window = parseHourlyWindow(text);
+        const times = extractTimesFromText(text);
+        const result = await createSaheliReminder({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            text,
+            times: times.length ? times : undefined,
+            kind: window.start != null || /\bevery\s+hour|hourly\b/i.test(text)
+                ? "hourly_window"
+                : "multi_time",
+            windowStartMinutes: window.start,
+            windowEndMinutes: window.end,
         });
+        if (!result.ok) {
+            return {
+                handled: true,
+                reply: result.askUser || result.error || "Couldn't set that reminder.",
+            };
+        }
+        const rem = result.reminder;
+        if (rem.kind === "hourly_window") {
+            const fmt = (m: number | null) =>
+                m == null
+                    ? "?"
+                    : `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+            return {
+                handled: true,
+                reply: `I'll remind you every hour from ${fmt(rem.windowStartMinutes)} to ${fmt(rem.windowEndMinutes)}: *${rem.text}*${rem.stopConditionPhrase ? ` (until you say you ${rem.stopConditionPhrase})` : ""}.`,
+            };
+        }
+        const when = (rem.times || []).join(" and ") || "the times you said";
         return {
             handled: true,
-            reply: `Reminder set: *${title}* at ${time}. I'll nudge when it's time.`,
+            reply: `Reminder set: *${rem.text}* at ${when}. I'll nudge when it's time${rem.stopConditionPhrase ? ` — say when you've ${rem.stopConditionPhrase} and I'll stop` : ""}.`,
         };
     } catch (err) {
         console.warn("Set reminder WA failed:", err);
         return {
             handled: true,
-            reply: "Couldn't set that reminder. Try from the dashboard, or say e.g. \"remind me to take Shelcal at 9pm\".",
+            reply: 'Couldn\'t set that reminder. Try e.g. "remind me at 6pm and 9pm until I say filled".',
         };
     }
 }

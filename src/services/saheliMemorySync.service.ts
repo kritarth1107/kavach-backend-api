@@ -10,6 +10,16 @@ function mapRole(thread: SaheliThreadKind, role: string): "elder" | "saheli" | "
     return "elder";
 }
 
+/** Newest-N then chronological order for AI history sync. */
+async function loadNewestMessages(
+    query: Record<string, unknown>,
+    limit: number,
+) {
+    const rows = await SaheliMessage.find(query).sort({ createdAt: -1 }).limit(limit).lean();
+    rows.reverse();
+    return rows;
+}
+
 export async function syncSessionHistoryToAiEngine(input: {
     familyId: string;
     recipientUserId: string;
@@ -20,15 +30,15 @@ export async function syncSessionHistoryToAiEngine(input: {
     limit?: number;
 }) {
     const ctx = await ensureAiContext(input.familyId, input.recipientUserId, input.displayName);
-    const rows = await SaheliMessage.find({
-        familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
-        thread: input.thread,
-        sessionId: input.sessionId,
-    })
-        .sort({ createdAt: 1 })
-        .limit(input.limit ?? 40)
-        .lean();
+    const rows = await loadNewestMessages(
+        {
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            thread: input.thread,
+            sessionId: input.sessionId,
+        },
+        input.limit ?? 50,
+    );
 
     if (!rows.length) return ctx;
 
@@ -63,7 +73,7 @@ export async function refreshRecipientMemoryToAiEngine(input: {
             thread,
         };
         if (input.sessionId) query.sessionId = input.sessionId;
-        const rows = await SaheliMessage.find(query).sort({ createdAt: 1 }).limit(40).lean();
+        const rows = await loadNewestMessages(query, 50);
         if (!rows.length) continue;
         await aiSyncConversationHistory({
             aiFamilyId: ctx.aiFamilyId,

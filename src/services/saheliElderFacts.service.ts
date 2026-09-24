@@ -10,13 +10,39 @@ export function messageIsGreeting(text: string): boolean {
     );
 }
 
+export function respectfulElderAddress(displayName: string): string {
+    const raw = (displayName || "").trim();
+    if (!raw) return "";
+    const lower = raw.toLowerCase();
+    // Prefer existing respectful titles / family address over first-name chatbot style.
+    if (/\b(amma|maa|mummy|aji|aji ji|dadi|nani|papa|baba|uncle|aunty|ji)\b/i.test(raw)) {
+        return raw;
+    }
+    if (lower.endsWith(" ji") || /\bji$/i.test(raw)) return raw;
+    // Soften bare first names: avoid "Hi Vasundara!" — use Namaste without first-name.
+    return "";
+}
+
 export function buildGreetingReply(displayName: string, memoryHook?: string | null): string {
-    const name = displayName.split(/\s+/)[0]?.trim() || displayName;
-    const base = `Hi ${name}! Good to hear from you. How are you doing today?`;
+    const address = respectfulElderAddress(displayName);
+    const base = address
+        ? `Namaste ${address}. Good to hear from you — how are you doing today?`
+        : "Namaste. Good to hear from you — how are you doing today?";
     if (memoryHook?.trim()) {
         return `${base} ${memoryHook.trim()}`;
     }
     return base;
+}
+
+/** Warm neutral when AI fails mid-thread — never a greeting. */
+export function buildWarmNeutralReply(opts?: { careAware?: boolean; offline?: boolean }): string {
+    if (opts?.offline) {
+        return "Saheli is reconnecting — please try again in a moment.";
+    }
+    if (opts?.careAware) {
+        return "I'm here with you. I've noted what you shared — please try again in a moment if you need anything else.";
+    }
+    return "I'm here — please try again in a moment.";
 }
 
 export function messageAsksMemory(text: string): boolean {

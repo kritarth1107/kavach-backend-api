@@ -1,4 +1,5 @@
 import { runCareNudgeTick } from "../services/saheliCareNudge.service";
+import { runSaheliReminderTick } from "../services/saheliReminder.service";
 
 const TICK_MS = 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -11,6 +12,12 @@ async function runTick() {
         const result = await runCareNudgeTick();
         if (result.sent > 0 || result.scanned > 0) {
             console.log(`Care nudge tick: sent=${result.sent} scanned=${result.scanned}`);
+        }
+        const reminders = await runSaheliReminderTick();
+        if (reminders.sent > 0 || reminders.scanned > 0) {
+            console.log(
+                `Saheli reminder tick: sent=${reminders.sent} scanned=${reminders.scanned}`,
+            );
         }
     } catch (err) {
         console.warn("Care nudge tick failed:", err);
@@ -25,7 +32,7 @@ export function startCareNudgeScheduler() {
         return;
     }
     if (timer) return;
-    console.log("Care nudge scheduler started (1m tick)");
+    console.log("Care nudge scheduler started (1m tick, includes Instinct reminders)");
     void runTick();
     timer = setInterval(() => void runTick(), TICK_MS);
 }
@@ -38,5 +45,7 @@ export function stopCareNudgeScheduler() {
 }
 
 export async function runCareNudgeJob() {
-    return runCareNudgeTick();
+    const nudge = await runCareNudgeTick();
+    const reminders = await runSaheliReminderTick();
+    return { ...nudge, reminders };
 }

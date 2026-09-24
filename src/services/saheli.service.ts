@@ -34,7 +34,7 @@ import {
     resolveElderDashboardReply,
     resolveElderWhatsappReply,
 } from "./saheliElderPipeline.service";
-import { buildGreetingReply, messageIsGreeting } from "./saheliElderFacts.service";
+import { buildGreetingReply, buildWarmNeutralReply, messageIsGreeting } from "./saheliElderFacts.service";
 import { messageAsksForMemberPhone } from "./saheliCaregiverFacts.service";
 import {
     refreshRecipientMemoryToAiEngine,
@@ -191,10 +191,13 @@ async function listThread(
     const filter: Record<string, unknown> = { familyId, recipientUserId, thread };
     if (sessionId) filter.sessionId = sessionId;
 
+    // Newest-N then chronological: sort desc + limit, then reverse.
+    // (Ascending + limit wrongly returns oldest-N on long threads.)
     const rows = await SaheliMessage.find(filter)
-        .sort({ createdAt: 1 })
+        .sort({ createdAt: -1 })
         .limit(limit)
         .lean();
+    rows.reverse();
     return rows.map((m) => ({
         role: m.role,
         content: m.content,
@@ -315,9 +318,8 @@ function applyOrderChatResult(reply: string, order: OrderChatResult | null): str
     return reply.trim() ? `${reply.trim()}\n\n${basket}` : basket;
 }
 
-function buildElderSafeReply(displayName: string): string {
-    const name = displayName.split(/\s+/)[0] || displayName;
-    return `Hi ${name}! I'm Saheli. How can I help?`;
+function buildElderSafeReply(_displayName: string): string {
+    return "Namaste — I'm Saheli. How can I help?";
 }
 
 function buildElderHelpReply(_displayName: string): string {
@@ -337,8 +339,25 @@ function trimElderReplyFluff(reply: string): string {
     return out.trim();
 }
 
+function looksLikeThoughtSignatureLeak(reply: string): boolean {
+    const t = reply.trim();
+    if (!t) return false;
+    if (/thought_signature/i.test(t)) return true;
+    if (/^\[\s*\{\s*['"]?type['"]?\s*[:=]\s*['"]text['"]/i.test(t)) return true;
+    if (/^\[\{\s*['"]type['"]\s*:\s*['"]text['"]/i.test(t)) return true;
+    if (/^\[\s*\{\s*type:\s*['"]?text['"]?/i.test(t)) return true;
+    // Python-ish dumps: [{'type': 'text', 'text': '...'}]
+    if (/^\[\s*\{\s*['"]type['"]\s*:\s*['"]text['"].*['"]text['"]\s*:/i.test(t) && t.includes("}]")) {
+        return true;
+    }
+    return false;
+}
+
 function sanitizeElderReply(reply: string, displayName: string): string {
     let out = trimElderReplyFluff(reply);
+    if (looksLikeThoughtSignatureLeak(out)) {
+        return buildWarmNeutralReply();
+    }
     const first = displayName.split(/\s+/)[0]?.trim();
     const escapedFirst = first ? first.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "";
     const escapedFull = displayName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -361,6 +380,9 @@ function sanitizeElderReply(reply: string, displayName: string): string {
         out = out.replace(new RegExp(`${escapedFull}\\s+last said`, "gi"), "You last told me");
     }
 
+    if (looksLikeThoughtSignatureLeak(out)) {
+        return buildWarmNeutralReply();
+    }
     return out;
 }
 
@@ -464,7 +486,10 @@ function buildElderSmartReply(opts: {
         return "Anytime! I'm here whenever you need me.";
     }
 
-    return buildGreetingReply(opts.displayName);
+    // NEVER greet for non-greetings (symptom/chat AI failure must not become "Hi Name!").
+    const careAware =
+        /\b(pain|ache|dard|hurt|fever|bukhar|cough|dizzy|nausea|symptom|peeth|back)\b/i.test(qLower);
+    return buildWarmNeutralReply({ careAware });
 }
 
 async function elderReplyWithAi(
@@ -639,21 +664,56 @@ async function elderReplyWithAi(
                 labs: opts?.labs,
                 elderLines: opts?.elderLines,
             });
+            const reply = offlineFallback.includes("missed today")
+                ? offlineFallback
+                : messageIsGreeting(message)
+                  ? buildGreetingReply(displayName)
+                  : offlineSaheliMessage();
+            if (waChannel) {
+                recordWhatsAppAiDebug({
+                    familyId,
+                    recipientUserId,
+                    actorUserId: recipientUserId,
+                    fallbackUsed: "offlineSaheliMessage",
+                    replySource: "ai",
+                });
+            }
             return {
-                reply: offlineFallback.includes("missed today") ? offlineFallback : offlineSaheliMessage(),
+                reply,
                 conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
             };
         }
+        // Non-offline AI errors: never funnel symptom/chat into greeting catch-all.
+        const smart = buildElderSmartReply({
+            displayName,
+            question: message,
+            context: contextBundle,
+            isFirstMessage: opts?.isFirstMessage ?? false,
+            orderHint: opts?.orderContext,
+            labs: opts?.labs,
+            elderLines: opts?.elderLines,
+        });
+        const careAware =
+            /\b(pain|ache|dard|hurt|fever|bukhar|cough|dizzy|nausea|symptom|peeth|back)\b/i.test(
+                message,
+            );
+        const reply =
+            messageIsGreeting(message) && opts?.isFirstMessage
+                ? smart
+                : /missed today|Up next|Upcoming|Nothing scheduled/i.test(smart)
+                  ? smart
+                  : buildWarmNeutralReply({ careAware });
+        if (waChannel) {
+            recordWhatsAppAiDebug({
+                familyId,
+                recipientUserId,
+                actorUserId: recipientUserId,
+                fallbackUsed: careAware ? "warmNeutralCareAware" : "warmNeutral",
+                replySource: "ai",
+            });
+        }
         return {
-            reply: buildElderSmartReply({
-                displayName,
-                question: message,
-                context: contextBundle,
-                isFirstMessage: opts?.isFirstMessage ?? false,
-                orderHint: opts?.orderContext,
-                labs: opts?.labs,
-                elderLines: opts?.elderLines,
-            }),
+            reply: waChannel ? sanitizeElderReply(reply, displayName) : reply,
             conversationId: conversationIdOverride ?? `${familyId}:${recipientUserId}:elder`,
         };
     }
@@ -930,7 +990,7 @@ export async function sendSaheliMessage(
         actorUserId,
         channel: waChannel ? "whatsapp" : "dashboard",
     });
-    const historyLimit = waChannel ? 10 : 80;
+    const historyLimit = waChannel ? 50 : 80;
     const elderHistory = await listThread(familyId, recipientUserId, "elder", historyLimit, sessionId);
     const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
     const labs = await LabDocument.find({ familyId, recipientUserId })
@@ -957,15 +1017,31 @@ export async function sendSaheliMessage(
         await touchWhatsAppInbound(familyId, recipientUserId);
     }
 
+    // Instinct-style semantic stop for active free-form reminders.
+    let reminderCompleteReply: string | null = null;
+    try {
+        const { tryCompleteRemindersFromMessage } = await import("./saheliReminder.service");
+        reminderCompleteReply = await tryCompleteRemindersFromMessage({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            message: text,
+        });
+    } catch (err) {
+        console.warn("Reminder complete check failed:", err);
+    }
+
     const { tryApplyElderCareActionFromMessage } = await import("./saheliCareAction.service");
-    const careActionReply = await tryApplyElderCareActionFromMessage({
-        familyId,
-        recipientUserId,
-        actorUserId,
-        message: text,
-        displayName,
-        channel: opts?.channel,
-    });
+    const careActionReply =
+        reminderCompleteReply ??
+        (await tryApplyElderCareActionFromMessage({
+            familyId,
+            recipientUserId,
+            actorUserId,
+            message: text,
+            displayName,
+            channel: opts?.channel,
+        }));
 
     const session = await getSaheliChatSession({
         sessionId,
