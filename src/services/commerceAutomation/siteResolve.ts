@@ -128,6 +128,27 @@ const SITE_TABLE: Array<{
         preferMcp: true,
     },
     {
+        key: "uber",
+        label: "Uber",
+        startUrl: "https://m.uber.com/",
+        domains: /uber\.com|m\.uber\.com|riders\.uber\.com/i,
+        names: /\buber\b/i,
+    },
+    {
+        key: "ola",
+        label: "Ola",
+        startUrl: "https://book.olacabs.com/",
+        domains: /olacabs\.com|ola\.com/i,
+        names: /\bola\b/i,
+    },
+    {
+        key: "rapido",
+        label: "Rapido",
+        startUrl: "https://www.rapido.bike/",
+        domains: /rapido\.bike/i,
+        names: /\brapido\b/i,
+    },
+    {
         key: "zomato",
         label: "Zomato",
         startUrl: "https://www.zomato.com/",
@@ -157,6 +178,9 @@ export function siteLabel(siteKey: string): string {
     const row = SITE_TABLE.find((s) => s.key === siteKey);
     if (row) return row.label;
     if (siteKey === "generic_grocery") return "grocery site";
+    if (siteKey === "uber") return "Uber";
+    if (siteKey === "ola") return "Ola";
+    if (siteKey === "rapido") return "Rapido";
     if (siteKey === "generic") return "the web";
     return siteKey.replace(/_/g, " ");
 }

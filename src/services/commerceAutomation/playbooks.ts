@@ -13,13 +13,16 @@ export type BrowserPlaybook = {
     searchHint: string;
     otpHint: string;
     confirmHint: string;
-    category: "grocery" | "pharmacy" | "retail" | "food" | "generic";
+    category: "grocery" | "pharmacy" | "retail" | "food" | "ride" | "generic";
 };
 
 const CONFIRM =
     "Before any pay/UPI, stop and ask WhatsApp confirm of item + total + address. Never silent pay.";
 const OTP =
     "If the site SMS an OTP for login — ask the user to paste it in WhatsApp. Never read device SMS.";
+const CONFIRM_RIDE =
+    "Before booking a ride, stop and ask WhatsApp confirm of fare + ride type. Never silent book.";
+
 
 function groceryPlaybook(
     partner: CommercePartnerKey | "generic",
@@ -125,6 +128,35 @@ const PLAYBOOKS: Record<string, BrowserPlaybook> = {
         confirmHint: CONFIRM,
         category: "food",
     },
+
+    uber: {
+        partner: "uber",
+        siteKey: "uber",
+        startUrl: "https://m.uber.com/",
+        searchHint:
+            "Uber web ride: set pickup and drop from the goal (pickup=/drop=/lat/lng). Scrape fare + ride types. On confirm, request the ride and scrape driver/car/plate. Never silent book.",
+        otpHint: OTP,
+        confirmHint: CONFIRM_RIDE,
+        category: "ride",
+    },
+    ola: {
+        partner: "ola",
+        siteKey: "ola",
+        startUrl: "https://book.olacabs.com/",
+        searchHint: "Ola web if available; else report unavailable cleanly. Confirm fare before book.",
+        otpHint: OTP,
+        confirmHint: CONFIRM_RIDE,
+        category: "ride",
+    },
+    rapido: {
+        partner: "rapido",
+        siteKey: "rapido",
+        startUrl: "https://www.rapido.bike/",
+        searchHint: "Rapido web if available; else report unavailable. Confirm before book.",
+        otpHint: OTP,
+        confirmHint: CONFIRM_RIDE,
+        category: "ride",
+    },
     generic_grocery: groceryPlaybook(
         "generic_grocery",
         "https://www.google.com/search?q=grocery+delivery+india",
@@ -193,5 +225,7 @@ export function listSupportedBrowserSites(): string[] {
         "Apollo / PharmEasy / Tata 1mg",
         "Generic grocery (unknown domain)",
         "Generic any HTTPS shop (URL or Google site search)",
+        "Uber (web ride booking)",
+        "Ola / Rapido (web if available — phase 2)",
     ];
 }

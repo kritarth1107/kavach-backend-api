@@ -27,6 +27,8 @@ export interface IWhatsappSession {
     pendingCommerceOtp?: { partner: string; challengeId?: string };
     /** Private browser / Gemini computer-use task draft */
     browserTaskDraft?: Record<string, unknown>;
+    /** Ride booking draft (Uber web / OTP / confirm-before-book) */
+    rideDraft?: Record<string, unknown>;
     expiresAt: Date;
 }
 
@@ -54,6 +56,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         pharmacyDraft: { type: Schema.Types.Mixed },
         pendingCommerceOtp: { type: Schema.Types.Mixed },
         browserTaskDraft: { type: Schema.Types.Mixed },
+        rideDraft: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

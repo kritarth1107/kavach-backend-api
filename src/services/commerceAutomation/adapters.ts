@@ -196,6 +196,9 @@ const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> =
     amazon: browserAdapter("amazon"),
     flipkart: browserAdapter("flipkart"),
     myntra: browserAdapter("myntra"),
+    uber: browserAdapter("uber"),
+    ola: browserAdapter("ola"),
+    rapido: browserAdapter("rapido"),
     generic_grocery: browserAdapter("generic_grocery"),
 };
 
@@ -227,3 +230,5 @@ export const RETAIL_BROWSER_PARTNERS: CommercePartnerKey[] = [
     "flipkart",
     "myntra",
 ];
+
+export const RIDE_BROWSER_PARTNERS: CommercePartnerKey[] = ["uber", "ola", "rapido"];

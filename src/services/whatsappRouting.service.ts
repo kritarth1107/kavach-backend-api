@@ -436,6 +436,47 @@ export async function handleWhatsAppInbound(body: {
         return outbound(phone, stampedParityReply);
     }
 
+    // Ride booking (Uber web) — slot-fill, location pin, OTP, confirm-before-book.
+    {
+        const {
+            handleRideWhatsAppTurn,
+            messageLooksLikeRideIntent,
+        } = await import("./rideBooking/rideWhatsApp.service");
+        const waForRide = await WhatsappSession.findOne({ phone }).lean();
+        const rideDraft = (waForRide as { rideDraft?: { phase?: string } } | null)?.rideDraft;
+        const rideActive =
+            rideDraft &&
+            rideDraft.phase &&
+            rideDraft.phase !== "idle" &&
+            rideDraft.phase !== "done";
+        if (
+            rideActive ||
+            messageLooksLikeRideIntent(text) ||
+            /^(yeah|yes|yep|haan|ha|ok|okay|sure)$/i.test(text.trim())
+        ) {
+            // Bare yeah only starts a ride when no pharmacy/browser/order draft is mid-flight.
+            const busyElsewhere = Boolean(
+                (waForRide as { browserTaskDraft?: unknown } | null)?.browserTaskDraft ||
+                    (waForRide as { pharmacyDraft?: unknown } | null)?.pharmacyDraft ||
+                    (waForRide as { pendingCommerceOtp?: unknown } | null)?.pendingCommerceOtp ||
+                    (waForRide as { orderSessionId?: string } | null)?.orderSessionId,
+            );
+            if (rideActive || messageLooksLikeRideIntent(text) || ( !busyElsewhere && /^(yeah|yes|yep|haan|ha|ok|okay|sure)$/i.test(text.trim()))) {
+                const rideReply = await handleRideWhatsAppTurn({
+                    phone,
+                    text,
+                    familyId: identity.familyId,
+                    actorUserId: identity.userId,
+                    recipientUserId: subjectUserId,
+                    actorRole: identity.role,
+                });
+                if (rideReply) {
+                    return outbound(phone, rideReply.text);
+                }
+            }
+        }
+    }
+
     // Private browser + pharmacy (Apollo / Instamart browse) — elder & caregiver.
     {
         const {

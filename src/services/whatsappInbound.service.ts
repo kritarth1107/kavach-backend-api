@@ -19,8 +19,9 @@ function slaFallback(from: string | undefined): OutboundMessage {
         modality: "text",
         content:
             "I'm still working on that (browser can be slow). " +
-            "If you get an SMS OTP, paste it here. " +
-            "For medicines / Vit C, tell me the pharmacy (*Apollo*, *PharmEasy*, or *Tata 1mg*) or reply *cancel*.",
+            "If you get an SMS OTP (Uber / commerce), paste it here. " +
+            "For medicines / Vit C, tell me the pharmacy (*Apollo*, *PharmEasy*, or *Tata 1mg*). " +
+            "For rides, reply *cancel* to drop the booking — nothing is booked until you confirm.",
     };
 }
 

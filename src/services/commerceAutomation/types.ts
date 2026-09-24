@@ -20,6 +20,9 @@ export type CommercePartnerKey =
     | "amazon"
     | "flipkart"
     | "myntra"
+    | "uber"
+    | "ola"
+    | "rapido"
     | "generic_grocery";
 
 export type AutomationSessionStatus =

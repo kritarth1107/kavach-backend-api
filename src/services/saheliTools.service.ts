@@ -64,7 +64,10 @@ export type SaheliToolName =
     | "notify_caregivers"
     | "trigger_emergency_escalation"
     | "browser_order"
-    | "browse_and_shop";
+    | "browse_and_shop"
+    | "book_ride"
+    | "ride_status"
+    | "cancel_ride";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -754,6 +757,85 @@ case "notify_caregivers": {
                 message: String(input.args.message ?? "Emergency"),
                 channel: "whatsapp",
             });
+        }
+
+
+        case "book_ride": {
+            const { bookRideTool } = await import("./rideBooking/rideWhatsApp.service");
+            const { FamilyRole } = await import("../types/family.types");
+            const User = (await import("../models/users.model")).default;
+            const ChannelIdentity = (await import("../models/channelIdentity.model")).default;
+            const { ChannelType } = await import("../types/careRecord.types");
+            // Resolve actor WhatsApp phone for session draft
+            let phone = String(input.args.phone ?? "").trim();
+            if (!phone) {
+                const ident = await ChannelIdentity.findOne({
+                    userId: input.actorUserId,
+                    channelType: ChannelType.WHATSAPP,
+                })
+                    .lean()
+                    .catch(() => null);
+                phone = String((ident as { channelIdentifier?: string } | null)?.channelIdentifier ?? "");
+            }
+            if (!phone) {
+                const user = await User.findById(input.actorUserId).lean();
+                const cc = (user as { phone?: { countryCode?: string; number?: string } } | null)?.phone?.countryCode;
+                const num = (user as { phone?: { countryCode?: string; number?: string } } | null)?.phone?.number;
+                if (cc && num) phone = `${cc}${num}`.replace(/^\+/, "");
+            }
+            if (!phone) {
+                return { ok: false, error: "phone required to start ride WhatsApp session" };
+            }
+            const result = await bookRideTool({
+                phone,
+                familyId: input.familyId,
+                actorUserId: input.actorUserId,
+                recipientUserId: input.recipientUserId,
+                actorRole: FamilyRole.CARE_RECIPIENT,
+                message: String(input.args.message ?? input.args.goal ?? "book a cab"),
+                pickup: input.args.pickup ? String(input.args.pickup) : undefined,
+                drop: input.args.drop ? String(input.args.drop) : undefined,
+                otp: input.args.otp ? String(input.args.otp) : undefined,
+                userConfirmed: Boolean(input.args.userConfirmed),
+            });
+            return {
+                ...result,
+                note: "Confirm-before-book. Elder pastes Uber OTP in WhatsApp. Caregiver notify-only.",
+            };
+        }
+        case "ride_status": {
+            const { rideStatusTool } = await import("./rideBooking/rideWhatsApp.service");
+            const ChannelIdentity = (await import("../models/channelIdentity.model")).default;
+            const { ChannelType } = await import("../types/careRecord.types");
+            let phone = String(input.args.phone ?? "").trim();
+            if (!phone) {
+                const ident = await ChannelIdentity.findOne({
+                    userId: input.actorUserId,
+                    channelType: ChannelType.WHATSAPP,
+                })
+                    .lean()
+                    .catch(() => null);
+                phone = String((ident as { channelIdentifier?: string } | null)?.channelIdentifier ?? "");
+            }
+            if (!phone) return { ok: false, error: "phone required" };
+            return rideStatusTool(phone);
+        }
+        case "cancel_ride": {
+            const { cancelRideTool } = await import("./rideBooking/rideWhatsApp.service");
+            const ChannelIdentity = (await import("../models/channelIdentity.model")).default;
+            const { ChannelType } = await import("../types/careRecord.types");
+            let phone = String(input.args.phone ?? "").trim();
+            if (!phone) {
+                const ident = await ChannelIdentity.findOne({
+                    userId: input.actorUserId,
+                    channelType: ChannelType.WHATSAPP,
+                })
+                    .lean()
+                    .catch(() => null);
+                phone = String((ident as { channelIdentifier?: string } | null)?.channelIdentifier ?? "");
+            }
+            if (!phone) return { ok: false, error: "phone required" };
+            return cancelRideTool(phone);
         }
 
         case "browser_order":

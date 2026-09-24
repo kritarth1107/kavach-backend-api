@@ -170,6 +170,41 @@ async function attachHealthHints(
     }
 }
 
+
+function isRideGoal(goal: string, partner?: string): boolean {
+    if (partner === "uber" || partner === "ola" || partner === "rapido") return true;
+    return /\bBOOK_RIDE\b/i.test(goal) || /\b(book|need)\s+(a\s+)?(cab|ride|uber)\b/i.test(goal);
+}
+
+function dryRunRideFaresMessage(goal: string, partnerLabelStr: string): {
+    message: string;
+    confirm: BrowserTaskResult["confirm"];
+} {
+    const pickup = goal.match(/pickup=([^|]+)/i)?.[1]?.trim() || "pickup";
+    const drop = goal.match(/drop=([^|]+)/i)?.[1]?.trim() || "drop";
+    const items = [
+        "UberX ≈ ₹180–220 · 8 min",
+        "Comfort ≈ ₹240–280 · 10 min",
+        "Premier ≈ ₹320–380 · 12 min",
+    ];
+    const message = [
+        `*${partnerLabelStr} fares* — confirm before book:`,
+        `Route: ${pickup} → ${drop}`,
+        ...items.map((i) => `• ${i}`),
+        ``,
+        `Reply *book* / *confirm* for UberX, or *cancel*.`,
+        `_Dry-run mode: fares stubbed; nothing booked until you confirm._`,
+    ].join("\n");
+    return {
+        message,
+        confirm: {
+            items,
+            totalLabel: "≈ ₹180–220",
+            addressLabel: `${pickup} → ${drop}`,
+        },
+    };
+}
+
 function extractItemGuess(goal: string): string[] {
     const cleaned = goal
         .replace(/https?:\/\/\S+/gi, " ")
@@ -196,6 +231,21 @@ class DryRunBrowserWorker implements BrowserWorker {
         }
 
         if (input.otp && !input.userConfirmed) {
+            if (isRideGoal(input.goal, String(playbook.partner))) {
+                const fare = dryRunRideFaresMessage(
+                    input.goal,
+                    partnerLabel(String(playbook.partner)),
+                );
+                return {
+                    status: "need_user_confirm",
+                    mode: "dry_run",
+                    partner: String(playbook.partner),
+                    steps: 1,
+                    url: playbook.startUrl,
+                    message: fare.message,
+                    confirm: fare.confirm,
+                };
+            }
             const items = extractItemGuess(input.goal);
             let message = [
                 `*${partnerLabel(String(playbook.partner))} basket* — confirm before pay:`,
@@ -224,6 +274,23 @@ class DryRunBrowserWorker implements BrowserWorker {
         }
 
         if (input.userConfirmed) {
+            if (isRideGoal(input.goal, String(playbook.partner))) {
+                return {
+                    status: "done",
+                    mode: "dry_run",
+                    partner: String(playbook.partner),
+                    steps: 2,
+                    url: playbook.startUrl,
+                    message: [
+                        `Booked *UberX* — driver on the way.`,
+                        `• Driver: *Ravi K.*`,
+                        `• Car: White Swift Dzire`,
+                        `• Plate: *KA-01-AB-4231*`,
+                        `• ETA: ~8 min`,
+                        `_Dry-run: no real trip created. No silent book — you confirmed in chat._`,
+                    ].join("\n"),
+                };
+            }
             return {
                 status: "done",
                 mode: "dry_run",
@@ -238,7 +305,24 @@ class DryRunBrowserWorker implements BrowserWorker {
             };
         }
 
-        // Fresh goal → ask for OTP (Instinct-like login) then confirm
+        // Fresh goal → ask for OTP (Instinct-like login) then confirm / fare
+        if (isRideGoal(input.goal, String(playbook.partner))) {
+            return {
+                status: "need_otp",
+                mode: "dry_run",
+                partner: String(playbook.partner),
+                steps: 0,
+                url: playbook.startUrl,
+                message: [
+                    `Opening *${partnerLabel(String(playbook.partner))}* for your ride…`,
+                    ``,
+                    `${partnerLabel(String(playbook.partner))} may text a 4-digit code — *forward or paste it here*.`,
+                    `(I never read your device SMS — only what you send me on WhatsApp.)`,
+                    ``,
+                    `Reply *cancel* to stop — nothing booked yet.`,
+                ].join("\n"),
+            };
+        }
         return {
             status: "need_otp",
             mode: "dry_run",

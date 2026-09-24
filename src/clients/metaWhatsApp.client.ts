@@ -472,7 +472,20 @@ function extractInboundText(row: Record<string, unknown>): string {
         const video = row.video as Record<string, unknown> | undefined;
         return String(video?.caption ?? "").trim() || "[video message]";
     }
-    if (type === "location") return "[location shared]";
+    if (type === "location") {
+        const loc = row.location as Record<string, unknown> | undefined;
+        const lat = loc?.latitude ?? loc?.lat;
+        const lng = loc?.longitude ?? loc?.lng ?? loc?.long;
+        const name = String(loc?.name ?? "").replace(/"/g, "").trim();
+        const address = String(loc?.address ?? "").replace(/"/g, "").trim();
+        if (lat != null && lng != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng))) {
+            const parts = [`[location lat=${Number(lat)} lng=${Number(lng)}`];
+            if (name) parts.push(`name="${name}"`);
+            if (address) parts.push(`address="${address}"`);
+            return parts.join(" ") + "]";
+        }
+        return "[location shared]";
+    }
     if (type === "contacts") return "[contact shared]";
     return "";
 }
