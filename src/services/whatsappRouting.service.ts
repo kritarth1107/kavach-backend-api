@@ -299,7 +299,7 @@ export async function handleWhatsAppInbound(body: {
         !messageLooksLikeEmergency(text)
     ) {
         const { ingestWhatsAppMediaMessage } = await import("./whatsappMediaIngest.service");
-        const mediaReply = await ingestWhatsAppMediaMessage({
+        const mediaResult = await ingestWhatsAppMediaMessage({
             familyId: identity.familyId,
             recipientUserId: identity.userId,
             actorUserId: identity.userId,
@@ -312,10 +312,13 @@ export async function handleWhatsAppInbound(body: {
         const isMediaOnly =
             !text ||
             /^\[(image|document|voice|audio|video) (message|shared)\]$/i.test(text);
-        // Voice with transcript continues to elder AI; other media-only still short-circuits.
-        if (isMediaOnly && !isVoice) {
-            return outbound(phone, mediaReply);
+        // Image/document: vision pipeline → companion prompt (no dead-end "Saved in your care record.").
+        if (!isVoice && mediaResult.companionPrompt) {
+            text = mediaResult.companionPrompt;
+        } else if (isMediaOnly && !isVoice && mediaResult.reply) {
+            return outbound(phone, mediaResult.reply);
         }
+        // Voice with transcript continues to elder AI.
         if (isMediaOnly && isVoice && !text) {
             return outbound(
                 phone,

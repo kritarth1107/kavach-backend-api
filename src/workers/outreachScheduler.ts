@@ -69,6 +69,53 @@ async function maybeSendOrderDeliveredFollowup(companion: {
     return true;
 }
 
+
+async function maybeSymptomEveningFollowup(companion: {
+    familyId: string;
+    recipientUserId: string;
+    timezone?: string;
+}): Promise<boolean> {
+    const { getISTParts, toDateKeyIST } = await import("../utils/istTime.util");
+    const parts = getISTParts();
+    // Evening window 18:00–20:30 IST
+    if (parts.hours < 18 || parts.hours > 20 || (parts.hours === 20 && parts.minutes > 30)) {
+        return false;
+    }
+    const since = new Date(Date.now() - 14 * 60 * 60 * 1000);
+    const CareRecordEvent = (await import("../models/careRecordEvent.model")).default;
+    const { CareRecordEventType } = await import("../types/careRecord.types");
+    const recent = await CareRecordEvent.findOne({
+        familyId: companion.familyId,
+        subjectUserId: companion.recipientUserId,
+        type: CareRecordEventType.SYMPTOM,
+        createdAt: { $gte: since },
+        "payload.followUpSuggested": "evening",
+    })
+        .sort({ createdAt: -1 })
+        .lean();
+    if (!recent) return false;
+
+    const dateKey = toDateKeyIST();
+    const topicHint = `symptom_followup:${String((recent as { eventId?: string }).eventId ?? dateKey)}`;
+    const already = await SaheliOutreachLog.findOne({
+        familyId: companion.familyId,
+        recipientUserId: companion.recipientUserId,
+        topicHint,
+    }).lean();
+    if (already) return false;
+
+    await deliverSaheliOutreach({
+        familyId: companion.familyId,
+        recipientUserId: companion.recipientUserId,
+        outreachKind: "care",
+        topicBucket: "symptom_followup",
+        topicHint,
+        force: true,
+        outreachSlot: "random",
+    });
+    return true;
+}
+
 export async function runOutreachTick() {
     if (running) return;
     running = true;
@@ -78,6 +125,19 @@ export async function runOutreachTick() {
         for (const companion of companions) {
             const timezone = companion.timezone || "Asia/Kolkata";
             const dateKey = localDateParts(timezone).date;
+
+            try {
+                if (!isWithinQuietHours(companion, now)) {
+                    const symptomFollowed = await maybeSymptomEveningFollowup(companion);
+                    if (symptomFollowed) continue;
+                }
+            } catch (err) {
+                console.warn(
+                    `Symptom evening follow-up failed for ${companion.familyId}/${companion.recipientUserId}:`,
+                    err,
+                );
+            }
+
                         // Soft check-in when elder has been quiet for 2+ days (respect quiet hours).
             const lonely =
                 companion.lastWhatsAppInboundAt &&

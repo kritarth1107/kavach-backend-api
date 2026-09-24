@@ -222,6 +222,67 @@ export async function logDose(input: {
     return { logged: true, medicineName: input.medicineName, schedule: marked };
 }
 
+export async function logSymptom(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    symptom: string;
+    severity?: string;
+    note?: string;
+    channel?: ChannelType;
+    notify?: boolean;
+}): Promise<Record<string, unknown>> {
+    const detail = [
+        input.symptom.trim(),
+        input.severity ? `Severity: ${input.severity}` : "",
+        input.note?.trim() || "",
+    ]
+        .filter(Boolean)
+        .join(". ")
+        .slice(0, 2000);
+
+    await appendCareRecordEvent({
+        familyId: input.familyId,
+        subjectUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        type: CareRecordEventType.SYMPTOM,
+        source: CareRecordSource.SAHELI,
+        channel: input.channel ?? ChannelType.WHATSAPP,
+        title: "Symptom",
+        detail: detail || "Symptom reported.",
+        status: "reported",
+        payload: {
+            symptom: input.symptom.trim().slice(0, 400),
+            severity: input.severity,
+            note: input.note,
+            followUpSuggested: "evening",
+            neverDiagnose: true,
+        },
+        skipSignalCheck: true,
+    });
+
+    if (input.notify !== false) {
+        try {
+            const { notifyCaregivers } = await import("./saheliCaregiverAlert.service");
+            await notifyCaregivers({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                message: `Care note (not a diagnosis): ${detail.slice(0, 220)}`,
+                urgency: /severe|worst|unbearable|bahut|bohot/i.test(detail) ? "high" : "medium",
+                kind: "symptom",
+            });
+        } catch (err) {
+            console.warn(
+                "Caregiver notify for symptom failed:",
+                err instanceof Error ? err.message : err,
+            );
+        }
+    }
+
+    return { logged: true, symptom: input.symptom, followUpSuggested: "evening" };
+}
+
 export async function logCheckIn(input: {
     familyId: string;
     recipientUserId: string;
@@ -259,6 +320,18 @@ export async function logCheckIn(input: {
         },
         skipSignalCheck: true,
     });
+
+    if (input.pain?.trim()) {
+        await logSymptom({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            symptom: input.pain.trim(),
+            note: input.note,
+            channel: input.channel,
+            notify: true,
+        });
+    }
 
     const day = await getScheduleDayStatuses(
         input.familyId,
@@ -372,6 +445,27 @@ export async function tryApplyElderCareActionFromMessage(input: {
             }
             return `Noted — ${hint}.`;
         }
+    }
+
+
+    // Symptom / pain — Care Record SYMPTOM + notify caregivers (never diagnose).
+    const symptomMatch =
+        /\b(chest pain|severe pain|unbearable|can'?t breathe|cannot breathe)\b/i.test(qLower)
+            ? null // emergencies handled upstream
+            : q.match(
+                  /\b((?:head|back|stomach|pet|joint|knee|leg|arm|tooth|throat|ear)?\s*(?:pain|ache|dard)|headache|migraine|fever|bukhar|nausea|dizzy|dizziness|cough|khansi|vomiting|thakaan|weakness|swelling)\b(.{0,80})/i,
+              );
+    if (symptomMatch && q.length < 280) {
+        const snippet = (symptomMatch[0] + (symptomMatch[2] || "")).trim().slice(0, 200);
+        await logSymptom({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            symptom: snippet || q,
+            note: q,
+            channel: input.channel,
+        });
+        return "Sorry you're feeling that — I've noted it for your family. I'm not a doctor and can't diagnose; rest and tell me if it gets worse.";
     }
 
     if (/\b(fine|good|okay|ok|theek|thik|better|doing well|i'm ok|im ok)\b/i.test(qLower) && q.length < 80) {

@@ -53,6 +53,7 @@ export type SaheliToolName =
     | "log_vitals"
     | "log_dose"
     | "log_check_in"
+    | "log_symptom"
     | "log_appointment_notes"
     | "get_lab_trends"
     | "get_abnormal_flags"
@@ -596,6 +597,17 @@ export async function executeSaheliTool(input: {
                 meals: input.args.meals ? String(input.args.meals) : undefined,
                 sleep: input.args.sleep ? String(input.args.sleep) : undefined,
                 pain: input.args.pain ? String(input.args.pain) : undefined,
+                note: input.args.note ? String(input.args.note) : undefined,
+            });
+        }
+        case "log_symptom": {
+            const { logSymptom } = await import("./saheliCareAction.service");
+            return logSymptom({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                symptom: String(input.args.symptom ?? input.args.pain ?? input.args.note ?? ""),
+                severity: input.args.severity ? String(input.args.severity) : undefined,
                 note: input.args.note ? String(input.args.note) : undefined,
             });
         }
