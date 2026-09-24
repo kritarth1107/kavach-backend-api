@@ -9,6 +9,7 @@ process.env.COMMERCE_SESSION_ENCRYPTION_KEY =
 import { messageLooksLikeBrowserTask } from "../src/services/commerceAutomation/browserTaskWhatsApp.service";
 import { DryRunBrowserWorker } from "../src/services/commerceAutomation/browserWorker.service";
 import { formatPharmacyBrowserFollowUp } from "../src/services/commerceAutomation/browserProgressNotify.service";
+import { parseMedicineList } from "../src/services/pharmacyOrderFlow.service";
 import { resolvePlaybook, listSupportedBrowserSites } from "../src/services/commerceAutomation/playbooks";
 import { resolveSiteFromMessage } from "../src/services/commerceAutomation/siteResolve";
 import { messageLooksLikeUnsupportedCommerce } from "../src/services/saheliOrder.service";
@@ -119,6 +120,7 @@ async function main() {
                 mode: "playwright",
                 partner: "apollo",
                 steps: 0,
+                failureReason: "timeout",
                 message: "deadline",
             },
             { partner: "apollo" },
@@ -132,11 +134,43 @@ async function main() {
                 mode: "playwright",
                 partner: "apollo",
                 steps: 0,
+                failureReason: "captcha",
                 message: "Apollo blocked the browser session (CAPTCHA / bot check).",
             },
             { partner: "apollo" },
         );
         assert(/CAPTCHA|blocked|retry/i.test(blocked.text), "follow-up CAPTCHA is clear");
+
+        const noLogin = formatPharmacyBrowserFollowUp(
+            {
+                status: "error",
+                mode: "playwright",
+                partner: "pharmeasy",
+                steps: 0,
+                failureReason: "no_login_button",
+                message: "PharmEasy page loaded but I couldn't find a Login / phone field.",
+            },
+            { partner: "pharmeasy" },
+        );
+        assert(/Login|phone field|retry/i.test(noLogin.text), "follow-up no_login_button is clear");
+    }
+
+    // Basket parse: partner linker words must never become SKUs
+    {
+        const items = parseMedicineList("Order vitamin c from apollo");
+        assert(
+            items.length === 1 && /vitamin\s*c/i.test(items[0].name),
+            `vit c from apollo → single SKU (got ${JSON.stringify(items)})`,
+        );
+        assert(
+            !items.some((i) => /^from$/i.test(i.name)),
+            "from must not be a basket item",
+        );
+        const pe = parseMedicineList("order vit c from pharmeasy");
+        assert(
+            pe.length === 1 && /vitamin\s*c/i.test(pe[0].name),
+            `vit c from pharmeasy → single SKU (got ${JSON.stringify(pe)})`,
+        );
     }
 
     // Stub health builder path (no Mongo — may return [])

@@ -14,6 +14,10 @@ import {
 } from "./browserProfile.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
+import {
+    bootstrapPharmacyLogin,
+    type PharmacyLoginStage,
+} from "./pharmacyLogin.bootstrap";
 
 export type BrowserTaskStatus =
     | "running"
@@ -22,6 +26,15 @@ export type BrowserTaskStatus =
     | "done"
     | "error"
     | "cancelled";
+
+export type BrowserFailureReason =
+    | "captcha"
+    | "timeout"
+    | "no_login_button"
+    | "chromium_crash"
+    | "site_slow"
+    | "busy"
+    | "unknown";
 
 export type BrowserTaskResult = {
     status: BrowserTaskStatus;
@@ -36,7 +49,22 @@ export type BrowserTaskResult = {
         addressLabel?: string;
     };
     partner?: string;
+    /** Typed soft-failure for WA copy (CAPTCHA vs timeout vs no login UI). */
+    failureReason?: BrowserFailureReason;
+    /** Optional local screenshot path when a step failed (Cloud Run /tmp). */
+    screenshotPath?: string;
 };
+
+export type BrowserProgressStage =
+    | "queued"
+    | "launching"
+    | "opening"
+    | "homepage"
+    | "login_page"
+    | "phone_entered"
+    | "otp_ready"
+    | "searching"
+    | "busy";
 
 export type RunBrowserTaskInput = {
     familyId: string;
@@ -55,6 +83,13 @@ export type RunBrowserTaskInput = {
     healthHintCopy?: string;
     /** Hard wall-clock deadline for this task (WhatsApp SLA). Default ~28s. */
     deadlineMs?: number;
+    /**
+     * Elder WhatsApp / account phone for pharmacy (and ride) OTP request.
+     * Prefer E.164; bootstrap uses last 10 digits for IN sites.
+     */
+    loginPhone?: string;
+    /** Live WA stage updates while Chromium works (non-blocking). */
+    onProgress?: (stage: BrowserProgressStage, detail: string) => void | Promise<void>;
 };
 
 export interface BrowserWorker {
@@ -69,6 +104,75 @@ function configuredMode(): "playwright" | "dry_run" | "auto" {
 }
 
 let playwrightAvailable: boolean | null = null;
+
+/** Serialize Playwright sessions in-process (Cloud Run concurrency=1 still allows overlapping fire-and-forget). */
+let browserGate: Promise<void> = Promise.resolve();
+
+async function withBrowserGate<T>(
+    fn: () => Promise<T>,
+    onQueued?: () => void | Promise<void>,
+): Promise<T> {
+    const prev = browserGate;
+    let release!: () => void;
+    browserGate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    const waited = Promise.race([
+        prev.then(() => false),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 400)),
+    ]);
+    if (await waited) {
+        try {
+            await onQueued?.();
+        } catch {
+            /* ignore */
+        }
+    }
+    await prev;
+    try {
+        return await fn();
+    } finally {
+        release();
+    }
+}
+
+async function notifyProgress(
+    input: RunBrowserTaskInput,
+    stage: BrowserProgressStage,
+    detail: string,
+): Promise<void> {
+    try {
+        await input.onProgress?.(stage, detail);
+    } catch (err) {
+        console.warn(
+            "browser onProgress failed:",
+            err instanceof Error ? err.message : err,
+        );
+    }
+}
+
+async function saveFailureScreenshot(
+    page: import("playwright").Page | null | undefined,
+    tag: string,
+): Promise<string | undefined> {
+    if (!page) return undefined;
+    try {
+        const fs = await import("fs/promises");
+        const pathMod = await import("path");
+        const dir = process.env.BROWSER_SCREENSHOT_DIR || "/tmp/saheli-browser-fail";
+        await fs.mkdir(dir, { recursive: true });
+        const file = pathMod.join(dir, `${tag}-${Date.now()}.png`);
+        await page.screenshot({ path: file, fullPage: false, type: "png" });
+        console.warn("browser failure screenshot:", file);
+        return file;
+    } catch (err) {
+        console.warn(
+            "browser failure screenshot failed:",
+            err instanceof Error ? err.message : err,
+        );
+        return undefined;
+    }
+}
 
 /** Race a promise against a hard deadline; clears timer either way. */
 export async function raceWithDeadline<T>(
@@ -92,13 +196,20 @@ export async function raceWithDeadline<T>(
     }
 }
 
-function browserTaskDeadlineMs(input?: { deadlineMs?: number }): number {
-    const raw =
-        input?.deadlineMs ??
-        Number(process.env.BROWSER_TASK_DEADLINE_MS) ??
-        28_000;
+function browserTaskDeadlineMs(input?: {
+    deadlineMs?: number;
+    partner?: string;
+    goal?: string;
+}): number {
+    const envN = Number(process.env.BROWSER_TASK_DEADLINE_MS);
+    const pharmacy =
+        isPharmacyPartnerKey(String(input?.partner || "")) ||
+        /\b(apollo|pharmeasy|1\s*mg|medicine|vitamin)\b/i.test(input?.goal || "");
+    const fallback = pharmacy ? 75_000 : 28_000;
+    const raw = input?.deadlineMs ?? (Number.isFinite(envN) ? envN : fallback);
     const n = Number(raw);
-    if (!Number.isFinite(n)) return 28_000;
+    if (!Number.isFinite(n)) return fallback;
+    // Pharmacy cold Chromium + login needs more headroom than rides' WA SLA.
     return Math.min(Math.max(n, 5_000), 90_000);
 }
 
@@ -448,6 +559,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 input.goal,
             ).catch(() => null);
             if (earlyBlock) {
+                const shot = await saveFailureScreenshot(page, `block-${playbook.partner}`);
                 await this.persist(context, input, playbook.partner, page.url());
                 return {
                     status: "error",
@@ -456,7 +568,78 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     url: page.url(),
                     mode: "playwright",
                     partner: String(playbook.partner),
+                    failureReason: "captcha",
+                    screenshotPath: shot,
                 };
+            }
+
+            const pharmacyPartner =
+                isPharmacyPartnerKey(String(playbook.partner)) ||
+                /\b(apollo|pharmeasy|1\s*mg|medicine|vitamin)\b/i.test(input.goal);
+
+            // Deterministic pharmacy Login → phone → OTP (before Gemini burns the deadline)
+            if (pharmacyPartner && !input.otp && !input.userConfirmed && input.loginPhone) {
+                await notifyProgress(
+                    input,
+                    "homepage",
+                    `still opening *${partnerLabel(String(playbook.partner))}*…`,
+                );
+                const boot = await bootstrapPharmacyLogin({
+                    page,
+                    partner: String(playbook.partner),
+                    loginPhone: input.loginPhone,
+                    onProgress: async (stage: PharmacyLoginStage, detail: string) => {
+                        const mapped =
+                            stage === "login_page"
+                                ? "login_page"
+                                : stage === "phone_entered"
+                                  ? "phone_entered"
+                                  : stage === "otp_ready"
+                                    ? "otp_ready"
+                                    : stage === "homepage"
+                                      ? "homepage"
+                                      : "opening";
+                        await notifyProgress(input, mapped as BrowserProgressStage, detail);
+                    },
+                });
+                if (boot.ok && boot.status === "need_otp") {
+                    await this.persist(context, input, playbook.partner, page.url());
+                    return {
+                        status: "need_otp",
+                        message: boot.message,
+                        steps: 1,
+                        url: page.url(),
+                        mode: "playwright",
+                        partner: String(playbook.partner),
+                    };
+                }
+                if (!boot.ok) {
+                    const shot = await saveFailureScreenshot(
+                        page,
+                        `login-${playbook.partner}-${boot.failureReason}`,
+                    );
+                    await this.persist(context, input, playbook.partner, page.url());
+                    return {
+                        status: "error",
+                        message: boot.message,
+                        steps: 0,
+                        url: page.url(),
+                        mode: "playwright",
+                        partner: String(playbook.partner),
+                        failureReason: boot.failureReason,
+                        screenshotPath: shot,
+                    };
+                }
+                // already_logged_in → fall through to Gemini search/cart loop
+                await notifyProgress(
+                    input,
+                    "searching",
+                    `*${partnerLabel(String(playbook.partner))}* signed in — finding your medicines…`,
+                );
+            } else if (pharmacyPartner && !input.otp && !input.userConfirmed && !input.loginPhone) {
+                console.warn(
+                    "pharmacy browser task missing loginPhone — Gemini must find Login unaided",
+                );
             }
 
             // If OTP provided, try typing into focused/OTP field first
@@ -522,7 +705,9 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     title,
                     accessibilityHint,
                     goal: input.goal,
-                    playbookHint: `${playbook.searchHint} ${playbook.confirmHint}`,
+                    playbookHint: `${playbook.searchHint} ${playbook.otpHint} ${playbook.confirmHint}${
+                        input.loginPhone ? ` login_phone=${input.loginPhone}` : ""
+                    }`,
                     step: steps,
                     maxSteps,
                     otpProvided: Boolean(input.otp),
@@ -779,6 +964,13 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
     const pharmacy =
         isPharmacyPartnerKey(String(playbook.partner)) ||
         /\b(apollo|pharmeasy|1\s*mg|medicine|vitamin)\b/i.test(input.goal);
+    const busy = /browser gate|queued|busy/i.test(reason);
+    const crash = /chromium|launch|Target closed|browser has been closed/i.test(reason);
+    const failureReason: BrowserFailureReason = crash
+        ? "chromium_crash"
+        : busy
+          ? "busy"
+          : "timeout";
     return {
         // steps:0 signals follow-up formatter: OTP page likely never reached
         status: "need_otp",
@@ -786,6 +978,7 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
         partner: String(playbook.partner),
         steps: 0,
         url: playbook.startUrl,
+        failureReason,
         message: ride
             ? [
                   `Opening *${label}* for your ride…`,
@@ -797,7 +990,11 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
               ].join("\n")
             : pharmacy
               ? [
-                    `*${label}* didn't finish login in time (site slow, blocked, or browser busy).`,
+                    failureReason === "chromium_crash"
+                        ? `*${label}* browser crashed before login (Chromium).`
+                        : failureReason === "busy"
+                          ? `*${label}* is waiting — browser was busy with another task and hit the time limit.`
+                          : `*${label}* didn't reach the login-code step in time (site slow or login UI not reached).`,
                     `No SMS from ${label} is expected until login actually starts.`,
                     ``,
                     `Reply *retry* to try again, or *cancel* to stop.`,
@@ -818,15 +1015,27 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
 export async function runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
     const deadlineMs = browserTaskDeadlineMs(input);
     try {
-        const worker = await raceWithDeadline(
-            getBrowserWorker(),
-            Math.min(10_000, deadlineMs),
-            "getBrowserWorker",
-        );
-        return await raceWithDeadline(
-            worker.runBrowserTask(input),
-            deadlineMs,
-            "runBrowserTask",
+        return await withBrowserGate(
+            async () => {
+                await notifyProgress(input, "launching", "still opening the browser…");
+                const worker = await raceWithDeadline(
+                    getBrowserWorker(),
+                    Math.min(10_000, deadlineMs),
+                    "getBrowserWorker",
+                );
+                return await raceWithDeadline(
+                    worker.runBrowserTask(input),
+                    deadlineMs,
+                    "runBrowserTask",
+                );
+            },
+            async () => {
+                await notifyProgress(
+                    input,
+                    "busy",
+                    "browser busy with another task — still opening…",
+                );
+            },
         );
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -834,11 +1043,13 @@ export async function runBrowserTask(input: RunBrowserTaskInput): Promise<Browse
             return progressNeedOtpResult(input, msg);
         }
         console.warn("runBrowserTask failed:", msg);
+        const crash = /chromium|launch|Target closed|browser has been closed/i.test(msg);
         return {
             status: "error",
             mode: "playwright",
             partner: String(input.partner || "generic"),
             steps: 0,
+            failureReason: crash ? "chromium_crash" : "unknown",
             message: `Browser task failed: ${msg.slice(0, 180)}. You can retry, paste an OTP if you have one, or *cancel*.`,
         };
     }

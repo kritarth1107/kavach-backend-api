@@ -57,7 +57,8 @@ function pharmacyPlaybook(partner: CommercePartnerKey, startUrl: string): Browse
         partner,
         siteKey: partner,
         startUrl,
-        searchHint: "Use site search to find the medicine/OTC item the user asked for. Never diagnose.",
+        searchHint:
+            "LIVE pharmacy web. Steps: (1) If not logged in, click Login/Sign in, enter login_phone from goal/context (10-digit IN mobile), submit to request SMS OTP — when OTP field appears emit need_otp (do not invent OTPs). (2) After OTP, use site search for the medicine/OTC in the goal; add to cart. Never diagnose. (3) At checkout emit need_user_confirm with real item+total+address; never pay/UPI until userConfirmed=true. Errors: CAPTCHA/bot wall → clear WhatsApp error. Prefer Login early — do not wander the catalog first.",
         otpHint: OTP,
         confirmHint: CONFIRM,
         category: "pharmacy",

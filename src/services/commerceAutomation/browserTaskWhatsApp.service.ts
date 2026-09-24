@@ -162,15 +162,43 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         draft.lastMessage = `Retrying *${partnerLabel(String(retryPartner || "the site"))}*…`;
         await saveDraft(input.phone, draft);
 
+        const retryPhoneDigits = input.phone.replace(/\D/g, "");
+        const retryLoginPhone =
+            retryPhoneDigits.length === 10
+                ? `+91${retryPhoneDigits}`
+                : retryPhoneDigits.length >= 11
+                  ? `+${retryPhoneDigits}`
+                  : input.phone.startsWith("+")
+                    ? input.phone
+                    : `+${input.phone}`;
+        const envN = Number(process.env.BROWSER_TASK_DEADLINE_MS);
+        const retryDeadline = Math.min(
+            Math.max(Number.isFinite(envN) && envN > 0 ? envN : 75_000, 60_000),
+            90_000,
+        );
+
         void (async () => {
+            const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
             try {
                 const result = await runBrowserTask({
                     familyId: input.familyId,
                     userId: input.actorUserId,
-                    goal: retryGoal,
+                    goal: /login_phone=/i.test(retryGoal)
+                        ? retryGoal
+                        : `${retryGoal} | login_phone=${retryLoginPhone}`,
                     partner: retryPartner,
                     startUrl: retryStartUrl,
-                    deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 45_000,
+                    deadlineMs: retryDeadline,
+                    loginPhone: retryLoginPhone,
+                    onProgress: async (_stage, detail) => {
+                        if (!detail?.trim()) return;
+                        await pushWhatsAppBrowserFollowUp({
+                            phone: input.phone,
+                            familyId: input.familyId,
+                            recipientUserId: input.recipientUserId,
+                            text: detail.trim(),
+                        }).catch(() => undefined);
+                    },
                 });
                 await notifyPharmacyBrowserBackgroundResult({
                     phone: input.phone,
@@ -193,13 +221,22 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         return {
             text:
                 `Retrying *${partnerLabel(String(retryPartner || "the site"))}*…\n` +
-                `I'll update you within about a minute (OTP, confirm, block, or failure).\n` +
+                `Watch for stage updates (still opening… / on login page…), then paste the OTP if asked.\n` +
                 `Reply *cancel* to stop.`,
             draft,
         };
     }
 
     if (draft && draft.phase === "awaiting_otp" && /^\d{4,8}$/.test(text)) {
+        const otpPhoneDigits = input.phone.replace(/\D/g, "");
+        const otpLoginPhone =
+            otpPhoneDigits.length === 10
+                ? `+91${otpPhoneDigits}`
+                : otpPhoneDigits.length >= 11
+                  ? `+${otpPhoneDigits}`
+                  : input.phone.startsWith("+")
+                    ? input.phone
+                    : `+${input.phone}`;
         const result = await runBrowserTask({
             familyId: input.familyId,
             userId: input.actorUserId,
@@ -207,6 +244,11 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             partner: draft.partner,
             startUrl: draft.startUrl,
             otp: text,
+            loginPhone: otpLoginPhone,
+            deadlineMs: Math.min(
+                Math.max(Number(process.env.BROWSER_TASK_DEADLINE_MS) || 75_000, 45_000),
+                90_000,
+            ),
         });
         draft = applyResultToDraft(draft, result);
         if (draft.phase === "done") {

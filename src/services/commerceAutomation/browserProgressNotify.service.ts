@@ -56,10 +56,21 @@ export function formatPharmacyBrowserFollowUp(
 
     if (result.status === "error") {
         const base = result.message?.trim() || `${label} browser hit a problem.`;
-        const blocked = /captcha|bot check|blocked|access denied/i.test(base);
-        const tip = blocked
-            ? `${label} looks blocked (CAPTCHA / bot wall).`
-            : `${label} didn't finish opening the order.`;
+        const reason = result.failureReason;
+        const blocked =
+            reason === "captcha" || /captcha|bot check|blocked|access denied/i.test(base);
+        const tip =
+            reason === "captcha" || blocked
+                ? `${label} looks blocked (CAPTCHA / bot wall).`
+                : reason === "no_login_button"
+                  ? `${label} loaded but Login / phone field wasn't found.`
+                  : reason === "chromium_crash"
+                    ? `${label} browser crashed (Chromium).`
+                    : reason === "busy"
+                      ? `${label} timed out while the browser was busy.`
+                      : reason === "site_slow"
+                        ? `${label} was too slow to show the login-code screen.`
+                        : `${label} didn't finish opening the order.`;
         return {
             text: [
                 tip,
@@ -91,14 +102,32 @@ export function formatPharmacyBrowserFollowUp(
 
     // Deadline / never reached OTP page (steps === 0) vs real OTP wait
     if (!result.steps || result.steps <= 0) {
+        const reason = result.failureReason;
+        const head =
+            reason === "captcha"
+                ? `*${label}* hit a CAPTCHA / bot wall before login.`
+                : reason === "no_login_button"
+                  ? `*${label}* loaded but Login / phone field wasn't found.`
+                  : reason === "chromium_crash"
+                    ? `*${label}* browser crashed before the login-code step.`
+                    : reason === "busy"
+                      ? `*${label}* timed out — browser was busy with another task.`
+                      : reason === "site_slow"
+                        ? `*${label}* was too slow to show the login-code screen.`
+                        : `*${label}* didn't reach the login-code step in time (site slow or login UI not reached).`;
         return {
             text: [
-                `*${label}* didn't reach the login-code step in time (site slow, blocked, or browser busy).`,
+                head,
                 `No SMS from ${label} is expected until login actually starts.`,
+                result.message && !/didn't (reach|finish)/i.test(result.message)
+                    ? result.message.slice(0, 180)
+                    : "",
                 ``,
                 `Reply *retry* to try again, or *cancel* to stop.`,
                 `If a code arrives later, you can still *paste the OTP here*.`,
-            ].join("\n"),
+            ]
+                .filter(Boolean)
+                .join("\n"),
             clearSession: false,
             phase: "awaiting_otp",
         };

@@ -47,14 +47,24 @@ function partnerFromText(text: string): CommercePartnerKey | undefined {
     return undefined;
 }
 
-function parseMedicineList(text: string): Array<{ name: string; quantity: number; requiresRx?: boolean }> {
+/** Exported for smoke / unit checks — partner names must never become basket SKUs. */
+export function parseMedicineList(text: string): Array<{ name: string; quantity: number; requiresRx?: boolean }> {
+    // "Order vitamin c from apollo" → vitamin c only (not "from")
     // "Apollo and I need vit c tablets no prescription needed" / "order vitamic c capsules"
     let cleaned = text
         .replace(/\bvita\w*\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c capsules ")
         .replace(/\bvit\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c capsules ")
-        .replace(PHARMACY_INTENT, " ")
+        // Strip "from/on/via/at <partner>" before bare partner wipe so "from" is not left as a token
+        .replace(
+            /\b(?:from|on|via|at|using|with)\s+(?:apollo|pharm\s*easy|pharmeasy|tata\s*1\s*mg|1\s*mg|tata)\b/gi,
+            " ",
+        )
         .replace(PARTNER_PICK, " ")
-        .replace(/\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc|capsules?|tablets?|tabs?|pills?)\b/gi, " ")
+        .replace(PHARMACY_INTENT, " ")
+        .replace(
+            /\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc|capsules?|tablets?|tabs?|pills?|from|on|via|at|using|with|the|a|an)\b/gi,
+            " ",
+        )
         .replace(/\s+/g, " ")
         .trim();
     if (!cleaned && VITAMIN_C.test(text)) {
@@ -65,11 +75,14 @@ function parseMedicineList(text: string): Array<{ name: string; quantity: number
             ? [{ name: "vitamin c capsules", quantity: 1, requiresRx: false }]
             : [];
     }
+    const junkToken =
+        /^(capsules?|tablets?|tabs?|pills?|from|on|via|at|using|with|the|a|an|apollo|pharmeasy|pharm|easy|tata|1mg|mg)$/i;
     const parts = cleaned
         .split(/,| and | \+ |\/|;/i)
         .map((p) => p.trim())
         .filter(Boolean)
-        .filter((p) => !/^(capsules?|tablets?|tabs?|pills?)$/i.test(p));
+        .filter((p) => !junkToken.test(p))
+        .filter((p) => p.length >= 2);
     let items = parts.slice(0, 8).map((name) => ({
         name: name.slice(0, 80),
         quantity: 1,
@@ -94,6 +107,21 @@ function parseMedicineList(text: string): Array<{ name: string; quantity: number
         });
     }
     return items;
+}
+
+
+function toLoginPhoneE164(phone: string): string {
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length === 10) return `+91${digits}`;
+    if (digits.length >= 11) return `+${digits}`;
+    return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+function pharmacyBrowserDeadlineMs(): number {
+    const envN = Number(process.env.BROWSER_TASK_DEADLINE_MS);
+    // Cold Chromium + Login + OTP UI: prefer ~75s (hard-capped at 90s in worker).
+    const base = Number.isFinite(envN) && envN > 0 ? envN : 75_000;
+    return Math.min(Math.max(base, 60_000), 90_000);
 }
 
 function partnerLabel(p: CommercePartnerKey): string {
@@ -342,18 +370,32 @@ export async function handlePharmacyWhatsAppTurn(input: {
 
         // Do not block WhatsApp on Chromium — kick off browser async; always push a
         // follow-up (OTP tip / confirm / block / soft failure) so WA never goes silent.
-        const deadlineMs = Number(process.env.BROWSER_TASK_DEADLINE_MS) || 45_000;
+        const deadlineMs = pharmacyBrowserDeadlineMs();
+        const loginPhone = toLoginPhoneE164(input.phone);
         void (async () => {
-            const { notifyPharmacyBrowserBackgroundResult } = await import(
-                "./commerceAutomation/browserProgressNotify.service"
-            );
+            const {
+                notifyPharmacyBrowserBackgroundResult,
+                pushWhatsAppBrowserFollowUp,
+            } = await import("./commerceAutomation/browserProgressNotify.service");
+            const progressPush = async (detail: string) => {
+                await pushWhatsAppBrowserFollowUp({
+                    phone: input.phone,
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    text: detail,
+                }).catch(() => undefined);
+            };
             try {
                 const result = await runBrowserTask({
                     familyId: input.familyId,
                     userId: input.actorUserId,
-                    goal,
+                    goal: `${goal} | login_phone=${loginPhone}`,
                     partner,
                     deadlineMs,
+                    loginPhone,
+                    onProgress: async (_stage, detail) => {
+                        if (detail && detail.trim()) await progressPush(detail.trim());
+                    },
                 });
                 await notifyPharmacyBrowserBackgroundResult({
                     phone: input.phone,
@@ -381,6 +423,9 @@ export async function handlePharmacyWhatsAppTurn(input: {
                         mode: "playwright",
                         partner,
                         steps: 0,
+                        failureReason: /chromium|launch|Target closed/i.test(msg)
+                            ? "chromium_crash"
+                            : "unknown",
                         message: `Browser failed: ${msg.slice(0, 160)}`,
                     },
                 }).catch(() => undefined);
@@ -390,9 +435,9 @@ export async function handlePharmacyWhatsAppTurn(input: {
         return {
             text:
                 `Opening *${partnerLabel(partner)}* for: ${summary}\n\n` +
-                `${partnerLabel(partner)} may text a login code — *paste the SMS OTP here*.\n` +
+                `I'll use your WhatsApp number for the *${partnerLabel(partner)}* login code.\n` +
+                `Watch for updates (still opening… / on login page…) — then *paste the SMS OTP here*.\n` +
                 `(I never read your device SMS — only what you send me on WhatsApp.)\n\n` +
-                `I'll update you within about a minute if login needs a code, hits a block, or fails.\n` +
                 `No silent pay — I'll ask you to confirm item+total+address before checkout.\n` +
                 `Reply *cancel* to stop.`,
             draft,
