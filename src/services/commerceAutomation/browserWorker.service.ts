@@ -1,9 +1,10 @@
 /**
- * Browser worker interface + Playwright (local) + DryRun (Cloud Run stub).
+ * Browser worker interface + Playwright (prod Cloud Run + local) + DryRun fallback.
  *
  * Env:
  *   BROWSER_WORKER_MODE=playwright|dry_run|auto  (default auto)
  *   auto → playwright if Chromium launchable, else dry_run
+ * Cloud Run image installs Chromium (bookworm + playwright --with-deps); prefer auto|playwright in prod.
  */
 import type { BrowserAction } from "./geminiComputerUse.service";
 import { planBrowserActions } from "./geminiComputerUse.service";

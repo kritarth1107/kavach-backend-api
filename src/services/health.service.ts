@@ -170,6 +170,8 @@ export async function buildBasicHealthReport() {
     const mongo = await getMongoHealth();
     const overallOk = mongo.status === "connected" && mongo.ping.ok;
 
+    const browserModeEnv = (process.env.BROWSER_WORKER_MODE || "auto").trim().toLowerCase() || "auto";
+
     return {
         status: overallOk ? "ok" : "degraded",
         message: overallOk
@@ -181,6 +183,10 @@ export async function buildBasicHealthReport() {
             version: getAppVersion(),
             environment: process.env.NODE_ENV ?? "development",
             uptimeSeconds: Math.round(process.uptime()),
+        },
+        browserWorker: {
+            modeEnv: browserModeEnv,
+            note: "Configured mode. Effective mode (playwright|dry_run) is chosen on first browser task when modeEnv=auto.",
         },
         dependencies: {
             mongodb: {
@@ -212,6 +218,9 @@ export async function buildHealthReport() {
             startedAt: new Date(startedAt - process.uptime() * 1000).toISOString(),
         },
         build: getBuildMetadata(),
+        browserWorker: {
+            modeEnv: (process.env.BROWSER_WORKER_MODE || "auto").trim().toLowerCase() || "auto",
+        },
         runtime: {
             nodeVersion: process.version,
             platform: process.platform,

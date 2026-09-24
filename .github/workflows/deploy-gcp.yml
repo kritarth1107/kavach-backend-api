@@ -36,22 +36,40 @@ jobs:
         run: |
           gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
           IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
-          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker build \
+            --build-arg GIT_COMMIT_SHA="${{ github.sha }}" \
+            --build-arg GIT_BRANCH="${{ github.ref_name }}" \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            --build-arg IMAGE_TAG="${{ github.sha }}" \
+            -t "$IMAGE:${{ github.sha }}" \
+            -t "$IMAGE:latest" \
+            .
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"
+          # --update-env-vars merges; does not wipe secrets (ELEVENLABS, Meta tokens, etc.).
+          # Browser automation: 4Gi / 2 CPU / concurrency=1; Chromium is in the image.
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
             --image="$IMAGE:${{ github.sha }}" \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
             --port=5000 \
-            --memory=512Mi \
+            --memory=4Gi \
+            --cpu=2 \
+            --concurrency=1 \
+            --timeout=300 \
             --min-instances=1 \
             --max-instances=3 \
-            --update-env-vars="WHATSAPP_PROVIDER=meta,KAVACH_WHATSAPP_NUMBER=+919203497046,WHATSAPP_META_PHONE_NUMBER_ID=1307628429102389,WHATSAPP_META_WABA_ID=1718021715926380,WHATSAPP_META_APP_ID=2105228567034032,WHATSAPP_META_WEBHOOK_VERIFY_TOKEN=kavach_wa_verify_k9X2mP7nQ4vL8sR3,WHATSAPP_META_GRAPH_VERSION=v22.0" \
+            --update-env-vars="WHATSAPP_PROVIDER=meta,KAVACH_WHATSAPP_NUMBER=+919203497046,WHATSAPP_META_PHONE_NUMBER_ID=1307628429102389,WHATSAPP_META_WABA_ID=1718021715926380,WHATSAPP_META_APP_ID=2105228567034032,WHATSAPP_META_WEBHOOK_VERIFY_TOKEN=kavach_wa_verify_k9X2mP7nQ4vL8sR3,WHATSAPP_META_GRAPH_VERSION=v22.0,BROWSER_WORKER_MODE=auto" \
             --quiet
 
       - name: Smoke test
         run: |
           URL="$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --format='value(status.url)')"
-          curl -fsS "$URL/api/health" | grep -q '"status":"ok"'
+          BODY="$(curl -fsS "$URL/api/health")"
+          echo "$BODY" | grep -q '"status":"ok"'
+          echo "$BODY" | grep -q '"browserWorker"'
+          echo "$BODY" | grep -Eq '"modeEnv":"(auto|playwright)"'
+          echo "Health OK; browserWorker.modeEnv is auto|playwright"
+          echo "$BODY"
