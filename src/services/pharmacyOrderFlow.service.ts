@@ -50,36 +50,48 @@ function partnerFromText(text: string): CommercePartnerKey | undefined {
 function parseMedicineList(text: string): Array<{ name: string; quantity: number; requiresRx?: boolean }> {
     // "Apollo and I need vit c tablets no prescription needed" / "order vitamic c capsules"
     let cleaned = text
+        .replace(/\bvita\w*\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c capsules ")
+        .replace(/\bvit\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c capsules ")
         .replace(PHARMACY_INTENT, " ")
         .replace(PARTNER_PICK, " ")
-        .replace(/\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc)\b/gi, " ")
-        .replace(/\bvita\w*\s*c\b/gi, "vitamin c")
-        .replace(/\bvit\s*c\b/gi, "vitamin c")
+        .replace(/\b(and|i|need|want|order|please|for|me|no|prescription|needed|required|otc|capsules?|tablets?|tabs?|pills?)\b/gi, " ")
         .replace(/\s+/g, " ")
         .trim();
-    // If intent consumed the vitamin token, still seed OTC Vit C from original text
     if (!cleaned && VITAMIN_C.test(text)) {
         cleaned = "vitamin c capsules";
     }
-    if (!cleaned) return [];
-    const parts = cleaned.split(/,| and | \+ |\/|;/i).map((p) => p.trim()).filter(Boolean);
+    if (!cleaned) {
+        return VITAMIN_C.test(text)
+            ? [{ name: "vitamin c capsules", quantity: 1, requiresRx: false }]
+            : [];
+    }
+    const parts = cleaned
+        .split(/,| and | \+ |\/|;/i)
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .filter((p) => !/^(capsules?|tablets?|tabs?|pills?)$/i.test(p));
     let items = parts.slice(0, 8).map((name) => ({
         name: name.slice(0, 80),
         quantity: 1,
         requiresRx: !OTC_HINT.test(name) && !/\bno\s+prescription\b/i.test(text),
     }));
-    // Prefer a clear OTC Vit C line when the user meant vitamin C (incl. typos like vitamic).
     if (VITAMIN_C.test(text)) {
-        const hasVitC = items.some((i) => /vitamin\s*c|vita\w*\s*c|vit\s*c/i.test(i.name));
+        const hasVitC = items.some((i) => /vitamin\s*c/i.test(i.name));
         if (!hasVitC) {
             items = [{ name: "vitamin c capsules", quantity: 1, requiresRx: false }, ...items].slice(0, 8);
         } else {
             items = items.map((i) =>
-                /vitamin\s*c|vita\w*\s*c|vit\s*c|capsules?/i.test(i.name)
-                    ? { ...i, name: /vitamin\s*c/i.test(i.name) ? i.name : "vitamin c capsules", requiresRx: false }
-                    : i,
+                /vitamin\s*c/i.test(i.name) ? { ...i, requiresRx: false } : i,
             );
         }
+        // Dedupe identical Vit C lines
+        const seen = new Set<string>();
+        items = items.filter((i) => {
+            const key = i.name.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
     }
     return items;
 }
@@ -174,7 +186,16 @@ export async function handlePharmacyWhatsAppTurn(input: {
     const starting = messageLooksLikePharmacyOrder(text) || (draft && draft.phase !== "idle");
     if (!starting) return null;
 
-    if (!draft || draft.phase === "idle" || messageLooksLikePharmacyOrder(text)) {
+    // Bare partner names ("Apollo") must not wipe an in-progress draft.
+    const barePartnerOnly =
+        PARTNER_PICK.test(text.trim()) &&
+        text.replace(PARTNER_PICK, "").replace(/\W+/g, " ").trim().length === 0;
+    const freshOrderIntent =
+        VITAMIN_C.test(text) ||
+        /\b(order\s+medicines?|order\s+medicine|medicines?\s+for\s+me|order\s+dawai|dawai\s+(mangao|order|bhej))\b/i.test(
+            text,
+        );
+    if (!draft || draft.phase === "idle" || (freshOrderIntent && !barePartnerOnly)) {
         const partner = partnerFromText(text);
         const items = parseMedicineList(text);
         draft = {
