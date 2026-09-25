@@ -4,7 +4,7 @@
  * send to them — nothing reaches a real person. Fixed phones only; no user input.
  */
 const FIXTURES = [
-    { phone: "+999100000001", name: "Smoke Elder A", family: "Smoke Test Family A", address: "Flat 12, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462013" },
+    { phone: "+999100000001", name: "Smoke Elder A", family: "Smoke Test Family A", address: "Flat 12, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462002" },
     { phone: "+999100000002", name: "Smoke Elder B", family: "Smoke Test Family B", address: "H-5, Connaught Place, New Delhi, Delhi 110001" },
     { phone: "+999100000003", name: "Smoke Elder C", family: "Smoke Test Family C", address: null },
 ];

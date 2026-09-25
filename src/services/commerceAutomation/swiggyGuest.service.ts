@@ -126,6 +126,15 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
     const pick = city
         ? page.getByText(new RegExp(`\\b${city}\\s*,`, "i")).first()
         : page.locator('[data-testid*="location" i] >> text=/,/').first();
+    // Cloud Run is slower than a laptop: give the suggestions time, re-type once if none.
+    if (!(await pick.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false))) {
+        await input.fill("");
+        await input.pressSequentially(query, { delay: 40 });
+        await pick.waitFor({ state: "visible", timeout: 10_000 }).catch(async () => {
+            const snip = ((await page.evaluate(() => document.body?.innerText || "").catch(() => "")) as string).replace(/\s+/g, " ").slice(0, 160);
+            throw new Error(`swiggy_location_no_suggestion (${snip})`);
+        });
+    }
     await pick.click({ timeout: 5000 });
     await page.waitForTimeout(2500);
     const loc = await readLocationCookie(ctx);

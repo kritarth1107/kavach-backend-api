@@ -262,7 +262,12 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
         }
         res.json({
             success: true,
-            data: { peek: await buildWhatsAppMockPeek(from, { includeScreenshot: req.body?.peek === "screenshot" }) },
+            data: {
+                peek: await buildWhatsAppMockPeek(from, { includeScreenshot: req.body?.peek === "screenshot" }),
+                guestDebug: (await import("../services/commerceAutomation/browserTaskWhatsApp.service")).lastGuestDebugFor(
+                    (await import("../services/identityResolver.service")).normalizeChannelIdentifier(ChannelType.WHATSAPP, from),
+                ),
+            },
         });
         return;
     }
@@ -283,7 +288,11 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
         typeof req.body?.from === "string" ? await buildWhatsAppMockPeek(req.body.from).catch(() => null) : null;
     const { lastRouteFor } = await import("../services/saheliRouter.service");
     const route = typeof req.body?.from === "string" ? lastRouteFor(req.body.from) : null;
-    res.json({ success: true, data: { reply, saheli, route } });
+    const { lastGuestDebugFor } = await import("../services/commerceAutomation/browserTaskWhatsApp.service");
+    const { normalizeChannelIdentifier } = await import("../services/identityResolver.service");
+    const guestDebug =
+        typeof req.body?.from === "string" ? lastGuestDebugFor(normalizeChannelIdentifier(ChannelType.WHATSAPP, req.body.from)) : null;
+    res.json({ success: true, data: { reply, saheli, route, guestDebug } });
 }
 
 export async function getWhatsAppMetaWebhook(req: Request, res: Response) {

@@ -2142,6 +2142,12 @@ async function startRoutedSearch(
     );
 }
 
+/** Secret-gated mock only: this phone's last raw guest-browse failure. */
+const guestDebug = new Map<string, { at: number; partner: string; reason: string }>();
+export function lastGuestDebugFor(phone: string) {
+    return guestDebug.get(phone) ?? null;
+}
+
 async function compareSearchCore(
     input: { phone: string; familyId: string; actorUserId: string },
     category: "grocery" | "pharmacy",
@@ -2161,7 +2167,15 @@ async function compareSearchCore(
     const per = results.map((r, i) => {
         const hits = r.hits.filter((h) => !(h as { requiresRx?: boolean }).requiresRx && (h as { inStock?: boolean }).inStock !== false);
         const rx = r.hits.length - hits.length;
-        return { partner: partners[i]!, hits: hits.slice(0, 3), rx, reason: r.unavailableReason };
+        // Raw site errors are for logs, not for the elder.
+        if (/Catalog search failed|timeout|locator\./i.test(r.unavailableReason || "")) {
+            console.warn(`[compare] ${partners[i]} failed:`, (r.unavailableReason || "").slice(0, 300));
+            guestDebug.set(input.phone, { at: Date.now(), partner: partners[i]!, reason: (r.unavailableReason || "").slice(0, 400) });
+        }
+        const reason = /Catalog search failed|timeout|locator\./i.test(r.unavailableReason || "")
+            ? `${partnerLabel(partners[i]!)} didn't load for me just now.`
+            : r.unavailableReason?.replace(/\s*Reply \*confirm\*[^.]*\.?/i, "").trim();
+        return { partner: partners[i]!, hits: hits.slice(0, 3), rx, reason };
     });
     // Interleave so each platform shows its best match first.
     const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];

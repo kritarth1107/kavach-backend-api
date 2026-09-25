@@ -28,12 +28,18 @@ async function setBlinkitLocation(ctx: BrowserContext, page: Page, address: stri
     }
     await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded", timeout: 25_000 });
     const input = page.locator('input[name="select-locality"], input[placeholder*="delivery location" i]').first();
-    await input.waitFor({ state: "visible", timeout: 12_000 });
+    if (!(await input.waitFor({ state: "visible", timeout: 20_000 }).then(() => true).catch(() => false))) {
+        const snip = ((await page.evaluate(() => `${document.title} | ${document.body?.innerText || ""}`).catch(() => "")) as string)
+            .replace(/\s+/g, " ")
+            .slice(0, 160);
+        throw new Error(`blinkit_no_location_box (${snip})`);
+    }
     await input.fill(locationQueryFor(address));
     await page.waitForTimeout(2800);
     const city = (cityOf(address) || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     // Suggestions read "<Place>" + "<area>, <City>, <State>, India" — pick one in the right city.
     const pick = city ? page.getByText(new RegExp(`\\b${city}\\b.*\\bIndia\\b|\\b${city}\\s*,`, "i")).first() : page.getByText(/, India$/).first();
+    await pick.waitFor({ state: "visible", timeout: 12_000 });
     await pick.click({ timeout: 6000 });
     await page.waitForTimeout(3000);
     const all = await ctx.cookies(BASE);
