@@ -512,11 +512,12 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             bd!.phase !== "idle" &&
             bd!.phase !== "done" &&
             (bd!.phase === "awaiting_sku_confirm" ||
+                bd!.phase === "awaiting_restaurant_pick" ||
                 bd!.phase === "running" ||
                 bd!.phase === "awaiting_otp" ||
                 bd!.phase === "awaiting_confirm");
         const shortCtrl =
-            /^(status|order\s*status|ok|okay|okk|k|confirm|place|place\s*order|yes|haan|[123]|cancel|stop|order\s*again|re-?order)$/i.test(
+            /^(status|order\s*status|ok|okay|okk|k|confirm|place|place\s*order|yes|haan|[1-9]|cancel|stop|order\s*again|re-?order)$/i.test(
                 text.trim(),
             );
         if (pharmActive && shortCtrl) {
@@ -664,6 +665,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             (browserDraft.phase === "awaiting_otp" ||
                 browserDraft.phase === "awaiting_confirm" ||
                 browserDraft.phase === "awaiting_sku_confirm" ||
+                browserDraft.phase === "awaiting_restaurant_pick" ||
                 browserDraft.phase === "running")
         ) {
             const browserReply = await handleBrowserTaskWhatsAppTurn({

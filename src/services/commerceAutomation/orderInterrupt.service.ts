@@ -32,13 +32,13 @@ const CANCEL_RE =
     /^(?:please\s+)?(cancel|stop|never ?mind|nevermind|rehne\s*do|rahne\s*do|mat\s*karo|band\s*karo|ruk\s*jao|nahi\s*chahiye|don'?t\s+order|cancel\s+(?:it|the\s+order|order|kar\s*do|karo)|stop\s+(?:it|the\s+order|ordering)|cancel\s+all(?:\s+browsing)?)[.!\s]*$/i;
 
 const FLOW_REPLY_RE =
-    /^(confirm|confirm\s*order|place|place\s*order|yes|yeah|yep|haan|han|ha|ji|ok|okay|okk|k|pay|[123]|\d{4,8}|retry|try\s*again|again|order\s*again|re-?order|start\s*again)[.!\s]*$/i;
+    /^(confirm|confirm\s*order|place|place\s*order|yes|yeah|yep|haan|han|ha|ji|ok|okay|okk|k|pay|[1-9]|\d{4,8}|retry|try\s*again|again|order\s*again|re-?order|start\s*again)[.!\s]*$/i;
 
 const STATUS_RE =
     /\b(status|order\s*status|kahan\s*(?:hai|tak)|kab\s*(?:aayega|ayega|tak)|kitna\s*time|how\s*long|where\s*is\s*(?:my|the)\s*order|what'?s\s*happening|kya\s*hua|order\s*ka\s*kya|update\s*(?:on|about)?\s*(?:my\s*)?order|is\s*it\s*(?:done|placed)|placed\s*yet|done\s*yet|progress)\b/i;
 
 const CHANGE_RE =
-    /\b(instead|change|different|another\s+(?:one|brand|item)|not\s+this|wrong\s+(?:item|one)|dusra|doosra|badal|badlo|make\s+it\s+\d+|quantity|qty|\d+\s*(?:packs?|strips?|bottles?|units?|pcs|pieces|boxes?|kg|g|ml|l)\b|change\s+(?:the\s+)?address|deliver\s+(?:it\s+)?to|different\s+address|new\s+address)\b/i;
+    /\b(instead|change|different|another\s+(?:one|brand|item)|not\s+this|wrong\s+(?:item|one)|dusra|doosra|badal|badlo|make\s+it\s+\d+|quantity|qty|\d+\s*(?:packs?|strips?|bottles?|units?|pcs|pieces|boxes?|kg|g|ml|l)\b|change\s+(?:the\s+)?address|deliver(?:ed|y)?\s+(?:it\s+)?(?:to|at|home)|different\s+address|new\s+address|home\s+address|my\s+address|ghar\s+(?:pe|par)|send\s+(?:it\s+)?to)\b/i;
 
 const QUESTIONY_RE =
     /\?|^(what|why|how|when|who|where|which|can|could|would|should|do|does|is|are|tell|kya|kaise|kyun|kab|kaun|kaunsa)\b/i;
@@ -58,7 +58,9 @@ export function classifyOrderInterruptRules(
     if (STATUS_RE.test(t)) return { intent: "status", source: "rules" };
     if (CHANGE_RE.test(t)) {
         const qty = t.match(/\b(\d{1,2})\s*(?:packs?|strips?|bottles?|units?|pcs|pieces|boxes?)?\b/i);
-        const addr = t.match(/\b(?:deliver\s+(?:it\s+)?to|address(?:\s+is)?)\s+(.{6,120})$/i)?.[1];
+        const addr =
+            t.match(/\b(?:deliver(?:ed|y)?\s+(?:it\s+)?(?:to|at)|address(?:\s+is|\s+of)?)\s+(.{4,120})$/i)?.[1] ||
+            (/\b(home\s+address|my\s+address|ghar)\b/i.test(t) ? t : undefined);
         return {
             intent: "change",
             source: "rules",

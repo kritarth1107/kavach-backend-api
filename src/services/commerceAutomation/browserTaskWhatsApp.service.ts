@@ -43,9 +43,26 @@ import {
 import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 import { classifyOrderInterrupt, type OrderInterrupt } from "./orderInterrupt.service";
 import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
+import {
+    KAVACH_DELIVERY_ADDRESS,
+    KAVACH_DELIVERY_SHORT,
+    classifyAddressMention,
+    isKavachAddress,
+    stripAddressPhrases,
+} from "./kavachAddress";
+import {
+    dishListCopy,
+    extractFoodQuery,
+    isAddressOnlyMessage,
+    noOpenRestaurantsCopy,
+    replyPickCopy,
+    restaurantListCopy,
+    wantsRestaurantList,
+} from "./foodOrderFlow";
 
 export type BrowserTaskPhase =
     | "idle"
+    | "awaiting_restaurant_pick"
     | "awaiting_sku_confirm"
     | "running"
     | "awaiting_otp"
@@ -60,8 +77,13 @@ export type BrowserTaskDraft = {
     startUrl?: string;
     otpChallengeId?: string;
     lastMessage?: string;
-    /** Delivery address shown at confirm / passed into browser goal. */
+    /** Delivery address shown at confirm / passed into browser goal (always the Kavach address). */
     addressLabel?: string;
+    /** Swiggy food flow: open restaurants shown for the elder to pick. */
+    restaurantOptions?: Array<{ name: string; cuisines?: string; rating?: string; eta?: string }>;
+    /** Swiggy food flow: picked restaurant + dish query. */
+    restaurantName?: string;
+    dishQuery?: string;
     /** Guest-search SKU options shown before login. */
     catalogOptions?: Array<{
         id: string;
@@ -147,18 +169,21 @@ function extractOrderQuery(text: string, partner: string): string {
 function skuConfirmCopy(draft: BrowserTaskDraft): string {
     const label = partnerLabel(String(draft.partner || "the site"));
     const opts = draft.catalogOptions ?? [];
-    const addr = draft.addressLabel ? `📍 ${draft.addressLabel}` : "";
+    // Only ever the Kavach address — never a store-account address.
+    const addr = `📍 ${draft.addressLabel && isKavachAddress(draft.addressLabel) ? draft.addressLabel : KAVACH_DELIVERY_ADDRESS}`;
+    const where = draft.restaurantName ? `*${draft.restaurantName}* on *${label}*` : `*${label}*`;
     if (opts.length > 1) {
-        const lines = opts.slice(0, 3).map((o, i) => {
+        const shown = opts.slice(0, 5);
+        const lines = shown.map((o, i) => {
             const price = formatInr(o.pricePaise);
             return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}`;
         });
         return [
-            `Found on *${label}* 🛒`,
+            `Found on ${where} 🛒`,
             ...lines,
             addr,
             ``,
-            `Reply *1*, *2* or *3* (or *confirm* for #1). Cash on Delivery only.`,
+            `${replyPickCopy(shown.length)} (or *confirm* for #1). Cash on Delivery only.`,
         ]
             .filter((l, i, a) => l !== "" || a[i - 1] !== "")
             .join("\n");
@@ -167,7 +192,7 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
     if (sku) {
         const price = formatInr(sku.pricePaise);
         return [
-            `Found on *${label}* 🛒`,
+            `Found on ${where} 🛒`,
             `${sku.name}${price ? ` — *${price}*` : ""}`,
             addr,
             ``,
@@ -186,6 +211,13 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
 export function messageLooksLikeBrowserTask(text: string): boolean {
     const t = text.trim();
     if (!t) return false;
+    // Restaurant intent → Swiggy food flow ("show me open restaurants", "order food from swiggy").
+    if (
+        /\b(open|nearby|near\s*me|near\s*by|good|best)\s+restaurants?\b|\brestaurants?\s+(?:near|open|nearby|around)\b|\border(?:ing)?\s+(?:some\s+)?(?:food|khana)\b|\bkhana\s+(?:mangwa|order)/i.test(t) ||
+        (/\b(swiggy|zomato)\b/i.test(t) && !/\binstamart\b/i.test(t) && (wantsRestaurantList(t) || /\border(?:ing)?\b|\bshow\b|\btry\b/i.test(t)))
+    ) {
+        return true;
+    }
     if (messageLooksLikeAnySiteBrowserOrder(t)) return true;
     if (ORDER_VIA_BROWSER_LEGACY.test(t)) return true;
     if (extractProductUrl(t)) return true;
@@ -280,8 +312,34 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
 
     // ── Interrupts while an order job is open ────────────────────────────────
     // Order-related → apply; unrelated → null so the companion answers and the job continues.
+    // Picking stage + a clear order on ANOTHER partner ("order from swiggy food …") → start that fresh.
+    if (draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick")) {
+        const mentioned = partnerFromText(text);
+        const foodAsk = wantsRestaurantList(text) && /\b(swiggy|zomato|restaurants?|food|khana)\b/i.test(text);
+        const other =
+            (mentioned !== "generic" && mentioned !== draft.partner) || (foodAsk && draft.partner !== "swiggy" && draft.partner !== "zomato");
+        if (other && !isAddressOnlyMessage(text) && messageLooksLikeBrowserTask(text)) {
+            await saveDraft(input.phone, null);
+            draft = null;
+        }
+    }
+
     if (draft && ACTIVE_ORDER_PHASES.has(draft.phase)) {
         const label = partnerLabel(String(draft.partner || "the site"));
+        // Address / delivery messages modify THIS order (never a product search or partner switch).
+        const addrMention = classifyAddressMention(text);
+        if (addrMention && isAddressOnlyMessage(text)) {
+            void logActivity({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind: "order_interrupt",
+                title: `Message during ${label} order: address`,
+                detail: text,
+                data: { phase: draft.phase, intent: "change", change: "address", match: addrMention, source: "rules" },
+            });
+            return { text: await addressReply(input, draft, addrMention), draft };
+        }
         const intr = await classifyOrderInterrupt({
             phone: input.phone,
             text,
@@ -300,7 +358,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             detail: text,
             data: { phase: draft.phase, intent: intr.intent, source: intr.source },
         });
-        if (startsOtherOrder && draft.phase !== "awaiting_sku_confirm") {
+        if (startsOtherOrder && draft.phase !== "awaiting_sku_confirm" && draft.phase !== "awaiting_restaurant_pick") {
             return {
                 text: `Your *${label}* order is still in progress 🛒 — reply *cancel* first if you'd like to start a new one.`,
                 draft,
@@ -572,14 +630,38 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         return null;
     }
 
+    // Swiggy food: elder picks a restaurant → show that restaurant's dishes.
+    if (draft && draft.phase === "awaiting_restaurant_pick") {
+        const opts = draft.restaurantOptions ?? [];
+        const n = /^\d{1,2}$/.test(text) ? Number(text) : NaN;
+        const byName = opts.find((o) => text.length >= 3 && o.name.toLowerCase().includes(text.toLowerCase()));
+        const picked = Number.isFinite(n) ? opts[n - 1] : byName;
+        if (picked) return showRestaurantMenu(input, draft, picked.name);
+        if (Number.isFinite(n)) {
+            return { text: `Please pick a number from the list (${replyPickCopy(opts.length).replace(/^Reply /, "")}), or *cancel*.`, draft };
+        }
+        if (text.length >= 3 && !/^\d{4,8}$/.test(text)) {
+            // A dish / cuisine name → restaurants for that.
+            const q = extractFoodQuery(text);
+            if (q) return startFoodFlow(input, q);
+        }
+        return { text: restaurantListCopy(opts.map((o) => ({ ...o, open: true })), draft.dishQuery), draft };
+    }
+
     // Confirm SKU (guest search) before opening login for browser-first partners
     if (draft && draft.phase === "awaiting_sku_confirm") {
-        if (draft.catalogOptions && draft.catalogOptions.length > 1 && /^[123]$/.test(text)) {
-            const pick = draft.catalogOptions[Number(text) - 1];
+        const nPick = /^\d{1,2}$/.test(text) ? Number(text) : NaN;
+        if (draft.catalogOptions && draft.catalogOptions.length > 1 && Number.isFinite(nPick) && (nPick < 1 || nPick > Math.min(5, draft.catalogOptions.length))) {
+            return { text: `Please pick ${replyPickCopy(Math.min(5, draft.catalogOptions.length)).replace(/^Reply /, "")}, or *cancel*.`, draft };
+        }
+        if (draft.catalogOptions && draft.catalogOptions.length > 1 && Number.isFinite(nPick)) {
+            const pick = draft.catalogOptions[nPick - 1];
             if (pick) {
                 draft.selectedSku = pick;
                 draft.catalogOptions = undefined;
-                draft.goal = `Order ${pick.name} from ${partnerLabel(String(draft.partner || ""))}`;
+                draft.goal = draft.restaurantName
+                    ? `Order ${pick.name} from ${draft.restaurantName} on ${partnerLabel(String(draft.partner || ""))}`
+                    : `Order ${pick.name} from ${partnerLabel(String(draft.partner || ""))}`;
                 await saveDraft(input.phone, draft);
                 return { text: skuConfirmCopy(draft), draft };
             }
@@ -608,7 +690,9 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             }
             const exactGoal = appendDeliveryAddressToGoal(
                 skuName
-                    ? `Order exact SKU from ${partnerLabel(String(partner || ""))}: ${skuName}${price ? ` @ ${price}` : ""}`
+                    ? `Order exact SKU from ${partnerLabel(String(partner || ""))}: ${skuName}${price ? ` @ ${price}` : ""}${
+                          draft.restaurantName ? ` | restaurant=${draft.restaurantName}` : ""
+                      }`
                     : draft.goal,
                 draft.addressLabel,
             );
@@ -720,7 +804,20 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             if (!isAllowedOrderSite(String(partner))) {
                 return { text: refuseSiteCopy(String(partner)), draft };
             }
-            const query = extractOrderQuery(text, String(partner));
+            if (partner === "swiggy" || partner === "zomato") {
+                const q = extractFoodQuery(text);
+                if (partner === "swiggy" && draft.restaurantName && q && mentioned === "generic") {
+                    return showRestaurantMenu(input, draft, draft.restaurantName, q);
+                }
+                if (partner === "zomato") {
+                    return {
+                        text: "I can't browse Zomato without signing in yet. I can show restaurants open near you on *Swiggy* instead — say *show open restaurants on Swiggy*.",
+                        draft,
+                    };
+                }
+                return startFoodFlow(input, q);
+            }
+            const query = extractOrderQuery(stripAddressPhrases(text) || text, String(partner));
             const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
             const { extractPincode } = await import("./apolloPostOtp");
             const result = await searchGuestCatalog({
@@ -768,11 +865,22 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         }
         const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
         const partner = partnerFromText(text);
+        // Food: Swiggy/Zomato, or restaurant intent with no grocery partner named → restaurant flow.
+        if (partner === "swiggy" || partner === "zomato" || (partner === "generic" && wantsRestaurantList(text))) {
+            if (partner === "zomato") {
+                return {
+                    text:
+                        "I can't browse Zomato without signing in yet, so I can't show its restaurants for your address. " +
+                        "I can show restaurants open near you on *Swiggy* — say *show open restaurants on Swiggy*.",
+                };
+            }
+            return startFoodFlow(input, extractFoodQuery(text));
+        }
         const playbook = resolvePlaybook(partner, text, resolved.startUrl);
         if (!isAllowedOrderSite(String(playbook.partner))) {
             return { text: refuseSiteCopy(String(playbook.partner === "generic" ? partner : playbook.partner)) };
         }
-        const query = extractOrderQuery(text, String(playbook.partner));
+        const query = extractOrderQuery(stripAddressPhrases(text) || text, String(playbook.partner));
 
         // SEARCH FIRST — guest/MCP catalog. Do not open login until SKU confirm.
         // Resolve the delivery address first so stock is checked at that pincode.
@@ -829,6 +937,118 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     return null;
 }
 
+
+/** Reply to "deliver it to my home / C504 / Raipur" during an order: always the Kavach address. */
+async function addressReply(
+    input: { phone: string },
+    draft: BrowserTaskDraft,
+    match: "same" | "other",
+): Promise<string> {
+    draft.addressLabel = KAVACH_DELIVERY_ADDRESS;
+    if (draft.confirm) draft.confirm.addressLabel = KAVACH_DELIVERY_ADDRESS;
+    await saveDraft(input.phone, draft);
+    const head =
+        match === "same"
+            ? `Yes 🙂 it will be delivered to your saved address:\n📍 ${KAVACH_DELIVERY_ADDRESS}`
+            : `For now I can only deliver to your saved Kavach address 🙏\n📍 ${KAVACH_DELIVERY_ADDRESS}\nTo use a different address, please ask your family to update it in Kavach.`;
+    const next =
+        draft.phase === "awaiting_restaurant_pick" && draft.restaurantOptions?.length
+            ? `${replyPickCopy(draft.restaurantOptions.length)} to pick a restaurant, or *cancel*.`
+            : draft.phase === "awaiting_sku_confirm"
+              ? draft.catalogOptions && draft.catalogOptions.length > 1
+                  ? `${replyPickCopy(Math.min(5, draft.catalogOptions.length))} to pick, or *cancel*.`
+                  : `Reply *confirm* to continue, or *cancel*.`
+              : draft.phase === "awaiting_confirm"
+                ? `Reply *confirm* to place it (Cash on Delivery), or *cancel*.`
+                : `Your order continues — I'll update you here.`;
+    return `${head}\n\n${next}`;
+}
+
+/** Swiggy food: list restaurants taking orders now at the Kavach address (guest browser). */
+async function startFoodFlow(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    dishQuery: string,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const { listSwiggyRestaurants } = await import("./swiggyGuest.service");
+    let res: Awaited<ReturnType<typeof listSwiggyRestaurants>>;
+    try {
+        res = await listSwiggyRestaurants({ query: dishQuery || undefined });
+    } catch (err) {
+        console.warn("[swiggy-guest] list failed:", err instanceof Error ? err.message : err);
+        return { text: "Swiggy didn't load for me just now 🙏 Please try again in a minute." };
+    }
+    if (!res.location.ok || !res.location.pincodeMatch) {
+        return {
+            text: `I couldn't set Swiggy's location to your saved address (📍 ${KAVACH_DELIVERY_SHORT}), so I won't show restaurants from another area. Please try again in a bit.`,
+        };
+    }
+    const open = res.restaurants.filter((r) => r.open === true).slice(0, 5);
+    if (!open.length) {
+        await saveDraft(input.phone, null);
+        return { text: noOpenRestaurantsCopy(res.restaurants, dishQuery || undefined) };
+    }
+    const draft: BrowserTaskDraft = {
+        phase: "awaiting_restaurant_pick",
+        goal: `Swiggy food${dishQuery ? `: ${dishQuery}` : ""}`,
+        partner: "swiggy",
+        siteKey: "swiggy",
+        addressLabel: KAVACH_DELIVERY_ADDRESS,
+        dishQuery: dishQuery || undefined,
+        restaurantOptions: open.map((r) => ({ name: r.name, cuisines: r.cuisines, rating: r.rating, eta: r.eta })),
+    };
+    await saveDraft(input.phone, draft);
+    return { text: restaurantListCopy(open, dishQuery || undefined), draft };
+}
+
+/** Swiggy food: open one restaurant's menu (guest) and list its dishes to pick. */
+async function showRestaurantMenu(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    draft: BrowserTaskDraft,
+    restaurant: string,
+    dishQueryOverride?: string,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const { swiggyRestaurantMenu } = await import("./swiggyGuest.service");
+    const dishQuery = dishQueryOverride ?? draft.dishQuery;
+    let menu: Awaited<ReturnType<typeof swiggyRestaurantMenu>>;
+    try {
+        menu = await swiggyRestaurantMenu({ restaurant, dishQuery });
+    } catch (err) {
+        console.warn("[swiggy-guest] menu failed:", err instanceof Error ? err.message : err);
+        return { text: `Swiggy didn't load *${restaurant}*'s menu just now 🙏 Pick again or try another.`, draft };
+    }
+    if (menu.open === false) {
+        return {
+            text: `*${restaurant}* is ${menu.closedNote || "not taking orders right now"} 🙏\nPick another from the list, or *cancel*.`,
+            draft,
+        };
+    }
+    let dishes = menu.dishes;
+    if (!dishes.length && dishQuery) {
+        return { text: `*${restaurant}* has nothing matching "${dishQuery}". Send another dish name, or *cancel*.`, draft };
+    }
+    dishes = dishes.slice(0, 5);
+    if (!dishes.length) {
+        return { text: `I couldn't read *${restaurant}*'s menu 🙏 Pick another restaurant, or *cancel*.`, draft };
+    }
+    const next: BrowserTaskDraft = {
+        phase: "awaiting_sku_confirm",
+        goal: `Order from ${restaurant} on Swiggy`,
+        partner: "swiggy",
+        siteKey: "swiggy",
+        startUrl: menu.url,
+        addressLabel: KAVACH_DELIVERY_ADDRESS,
+        restaurantName: restaurant,
+        dishQuery,
+        restaurantOptions: draft.restaurantOptions,
+        catalogOptions: dishes.map((d, i) => ({ id: `swiggy:${restaurant}:${i}`.slice(0, 120), name: d.name, pricePaise: d.pricePaise, productUrl: menu.url })),
+        selectedSku:
+            dishes.length === 1
+                ? { id: `swiggy:${restaurant}:0`.slice(0, 120), name: dishes[0]!.name, pricePaise: dishes[0]!.pricePaise, productUrl: menu.url }
+                : undefined,
+    };
+    await saveDraft(input.phone, next);
+    return { text: dishListCopy(restaurant, dishes, dishQuery), draft: next };
+}
 
 const SESSION_EXPIRED_COPY =
     "The Apollo login session expired, so I couldn't place the order — nothing was ordered or paid.\n" +
@@ -1257,6 +1477,7 @@ async function maybeNotifyCaregivers(
 }
 
 const ACTIVE_ORDER_PHASES = new Set<BrowserTaskPhase>([
+    "awaiting_restaurant_pick",
     "awaiting_sku_confirm",
     "running",
     "awaiting_otp",
@@ -1321,6 +1542,11 @@ async function applyOrderChange(
                 draft,
             },
         };
+    }
+    if (intr.address && !intr.item) {
+        // Orders only ever go to the saved Kavach address.
+        const match = classifyAddressMention(intr.address) === "other" ? "other" : "same";
+        return { draft, reply: { text: await addressReply(input, draft, match), draft } };
     }
     if (intr.address && !intr.item) {
         draft.addressLabel = intr.address.slice(0, 200);
