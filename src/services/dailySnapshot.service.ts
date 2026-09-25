@@ -106,12 +106,12 @@ export async function generateDailySnapshot(input: {
     return serializeSnapshot(doc);
 }
 
-export async function getDailySnapshot(recipientUserId: string, dayKey: string) {
-    return serializeSnapshot(await DailySnapshot.findOne({ recipientUserId, dayKey }).lean());
+export async function getDailySnapshot(recipientUserId: string, dayKey: string, familyId?: string) {
+    return serializeSnapshot(await DailySnapshot.findOne({ recipientUserId, dayKey, ...(familyId ? { familyId } : {}) }).lean());
 }
 
-export async function listDailySnapshots(recipientUserId: string, limit = 14) {
-    const rows = await DailySnapshot.find({ recipientUserId })
+export async function listDailySnapshots(recipientUserId: string, limit = 14, familyId?: string) {
+    const rows = await DailySnapshot.find({ recipientUserId, ...(familyId ? { familyId } : {}) })
         .sort({ dayKey: -1 })
         .limit(Math.min(Math.max(limit, 1), 60))
         .lean();

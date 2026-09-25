@@ -35,7 +35,16 @@ app.use(
   }),
 );
 app.use(cookieParser());
-app.use(express.json());
+app.use(
+    express.json({
+        // Keep the raw bytes for the Meta webhook so its X-Hub-Signature-256 can be verified.
+        verify: (req, _res, buf) => {
+            if ((req as { url?: string }).url?.startsWith("/api/webhooks/whatsapp/meta")) {
+                (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
+            }
+        },
+    }),
+);
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api/auth", authRoutes);

@@ -137,6 +137,8 @@ export async function logActivity(input: LogActivityInput): Promise<void> {
 }
 
 export async function listActivity(input: {
+    /** Always scope by family too (a user could be a recipient in more than one family). */
+    familyId?: string;
     recipientUserId: string;
     dayKey?: string;
     before?: Date;
@@ -144,6 +146,7 @@ export async function listActivity(input: {
     limit?: number;
 }) {
     const q: Record<string, unknown> = { recipientUserId: input.recipientUserId };
+    if (input.familyId) q.familyId = input.familyId;
     if (input.dayKey) q.dayKey = input.dayKey;
     if (input.before) q.createdAt = { $lt: input.before };
     if (input.kinds?.length) q.kind = { $in: input.kinds };

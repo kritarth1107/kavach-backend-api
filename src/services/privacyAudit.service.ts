@@ -38,13 +38,15 @@ export async function runAddressLeakAudit(input: { ownerPhone: string; since?: s
     const digits = input.ownerPhone.replace(/\D/g, "");
     const ids = await ChannelIdentity.find({ channelIdentifier: { $in: [digits, `+${digits}`, digits.slice(-10)] } }).lean();
     const ownerFamilies = new Set(ids.map((i) => i.familyId));
+    const ownerSession = await WhatsappSession.findOne({ phone: { $in: [`+${digits}`, digits] } }, { familyId: 1 }).lean();
+    if ((ownerSession as { familyId?: string } | null)?.familyId) ownerFamilies.add((ownerSession as { familyId: string }).familyId);
     const since = new Date(input.since || "2026-09-24T00:00:00Z");
 
     const msgs = await SaheliMessage.find({ createdAt: { $gte: since }, content: LEAK }, { familyId: 1, createdAt: 1, role: 1 }).lean();
     const outs = await OutboundMessage.find({ createdAt: { $gte: since }, content: LEAK }, { familyId: 1, createdAt: 1, channelIdentifier: 1 }).lean();
     const acts = await ActivityLog.find(
         { createdAt: { $gte: since }, $or: [{ detail: LEAK }, { title: LEAK }] },
-        { familyId: 1, createdAt: 1 },
+        { familyId: 1, createdAt: 1, kind: 1 },
     ).lean();
     const orders = await Order.find({ deliveryAddress: LEAK }, { familyId: 1, createdAt: 1 }).lean();
     const previews = await OrderPreview.find({ deliveryAddress: LEAK }, { familyId: 1, createdAt: 1 }).lean();
@@ -70,7 +72,7 @@ export async function runAddressLeakAudit(input: { ownerPhone: string; since?: s
         since: since.toISOString(),
         saheliMessages: group(msgs.map((m) => ({ familyId: m.familyId, createdAt: m.createdAt, role: m.role })), ownerFamilies),
         outboundMessages: group(outs.map((o) => ({ familyId: o.familyId, createdAt: o.createdAt, phone: o.channelIdentifier })), ownerFamilies),
-        activityLogs: group(acts.map((a) => ({ familyId: a.familyId, createdAt: a.createdAt })), ownerFamilies),
+        activityLogs: group(acts.map((a) => ({ familyId: a.familyId, createdAt: a.createdAt, role: a.kind })), ownerFamilies),
         orders: group(orders.map((o) => ({ familyId: o.familyId, createdAt: (o as { createdAt?: Date }).createdAt })), ownerFamilies),
         orderPreviews: group(previews.map((o) => ({ familyId: o.familyId, createdAt: (o as { createdAt?: Date }).createdAt })), ownerFamilies),
         openDrafts: group(leakedDrafts.map((s) => ({ familyId: s.familyId, createdAt: s.updatedAt, phone: s.phone })), ownerFamilies),

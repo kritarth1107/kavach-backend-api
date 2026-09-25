@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 import { Request, Response } from "express";
 import config from "../config/app.config";
 import { ChannelType } from "../types/careRecord.types";
@@ -378,7 +378,31 @@ export async function postWhatsAppMetaSubscribeWaba(req: Request, res: Response)
     return postWhatsAppMetaSetup(req, res);
 }
 
+/**
+ * Meta signs every webhook POST with the app secret (X-Hub-Signature-256). Without this check
+ * anyone could forge an inbound message "from" any elder's number. Mode via
+ * WHATSAPP_META_SIGNATURE=enforce|log (default log until verified against live traffic).
+ */
+function metaSignatureStatus(req: Request): "ok" | "bad" | "missing" | "no_secret" {
+    const secret = config.whatsapp.meta.appSecret;
+    if (!secret) return "no_secret";
+    const header = String(req.get("x-hub-signature-256") ?? "");
+    const raw = (req as unknown as { rawBody?: Buffer }).rawBody;
+    if (!header.startsWith("sha256=") || !raw) return "missing";
+    const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
+    if (expected.length !== header.length) return "bad";
+    return timingSafeEqual(Buffer.from(expected), Buffer.from(header)) ? "ok" : "bad";
+}
+
 export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
+    const sig = metaSignatureStatus(req);
+    if (sig !== "ok") {
+        console.warn(`Meta WhatsApp webhook: signature ${sig}`);
+        if (process.env.WHATSAPP_META_SIGNATURE === "enforce" && sig !== "no_secret") {
+            res.status(401).json({ success: false });
+            return;
+        }
+    }
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     const {
         formatMetaSendError,

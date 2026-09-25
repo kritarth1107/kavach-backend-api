@@ -23,7 +23,7 @@ async function requireCaregiverOf(req: Request) {
 }
 
 export async function getActivityHandler(req: Request, res: Response) {
-    const { subjectUserId } = await requireCaregiverOf(req);
+    const { familyId, subjectUserId } = await requireCaregiverOf(req);
     const day = typeof req.query.day === "string" ? req.query.day : undefined;
     if (day && !DAY_RE.test(day)) throw new AppError("day must be YYYY-MM-DD", 400);
     const beforeRaw = typeof req.query.before === "string" ? req.query.before : undefined;
@@ -34,7 +34,7 @@ export async function getActivityHandler(req: Request, res: Response) {
             ? (req.query.kinds.split(",").map((k) => k.trim()).filter((k) => ACTIVITY_KINDS.includes(k as ActivityKind)) as ActivityKind[])
             : undefined;
     const limit = Math.min(Math.max(Number(req.query.limit ?? 200) || 200, 1), 500);
-    const rows = await listActivity({ recipientUserId: subjectUserId, dayKey: day, before, kinds, limit: limit + 1 });
+    const rows = await listActivity({ familyId, recipientUserId: subjectUserId, dayKey: day, before, kinds, limit: limit + 1 });
     const hasMore = rows.length > limit;
     const items = rows.slice(0, limit).map((r) => ({
         id: String(r._id),
@@ -54,16 +54,16 @@ export async function getActivityHandler(req: Request, res: Response) {
 }
 
 export async function getDailySnapshotHandler(req: Request, res: Response) {
-    const { subjectUserId } = await requireCaregiverOf(req);
+    const { familyId, subjectUserId } = await requireCaregiverOf(req);
     const day = typeof req.query.day === "string" && req.query.day ? req.query.day : istDayKey();
     if (!DAY_RE.test(day)) throw new AppError("day must be YYYY-MM-DD", 400);
-    res.json({ success: true, data: { snapshot: await getDailySnapshot(subjectUserId, day) } });
+    res.json({ success: true, data: { snapshot: await getDailySnapshot(subjectUserId, day, familyId) } });
 }
 
 export async function listDailySnapshotsHandler(req: Request, res: Response) {
-    const { subjectUserId } = await requireCaregiverOf(req);
+    const { familyId, subjectUserId } = await requireCaregiverOf(req);
     const limit = Number(req.query.limit ?? 14) || 14;
-    res.json({ success: true, data: { snapshots: await listDailySnapshots(subjectUserId, limit) } });
+    res.json({ success: true, data: { snapshots: await listDailySnapshots(subjectUserId, limit, familyId) } });
 }
 
 const lastRegen = new Map<string, number>();
