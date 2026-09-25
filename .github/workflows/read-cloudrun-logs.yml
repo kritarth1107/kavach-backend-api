@@ -1,0 +1,54 @@
+name: Read Cloud Run backend logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Start timestamp (UTC, RFC3339), e.g. 2026-09-25T13:32:00Z"
+        required: true
+      end:
+        description: "End timestamp (UTC, RFC3339)"
+        required: true
+      extra_filter:
+        description: "Optional extra Logging filter clause (ANDed)"
+        required: false
+        default: ""
+      limit:
+        description: "Max entries"
+        required: false
+        default: "3000"
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  SERVICE: kavach-backend
+
+jobs:
+  logs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Read logs (oldest first)
+        env:
+          START: ${{ inputs.start }}
+          END: ${{ inputs.end }}
+          EXTRA: ${{ inputs.extra_filter }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          FILTER="resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${SERVICE}\" AND timestamp>=\"${START}\" AND timestamp<=\"${END}\""
+          if [ -n "$EXTRA" ]; then FILTER="$FILTER AND ($EXTRA)"; fi
+          gcloud logging read "$FILTER" --project="$GCP_PROJECT_ID" --limit="$LIMIT" --order=asc \
+            --format='value(timestamp,resource.labels.revision_name,severity,textPayload,jsonPayload.message,httpRequest.requestMethod,httpRequest.requestUrl,httpRequest.status,httpRequest.latency)' \
+            | sed -E 's/(token|secret|password|authorization)[=:][^ ]+/\1=[redacted]/Ig' > logs.txt
+          wc -l logs.txt
+          cat logs.txt
+      - name: Service CPU config
+        run: |
+          gcloud run services describe "$SERVICE" --project="$GCP_PROJECT_ID" --region=asia-south1 \
+            --format='value(spec.template.metadata.annotations,status.latestReadyRevisionName)' | tr ';' '\n' | grep -Ei 'cpu|scale|revision|throttl' || true
