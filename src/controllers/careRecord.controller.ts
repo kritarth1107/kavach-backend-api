@@ -222,6 +222,20 @@ function isMockAuthorized(req: Request): boolean {
     return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
 }
 
+export async function postPrivacyAudit(req: Request, res: Response) {
+    if (!isMockAuthorized(req)) {
+        res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
+    const { runAddressLeakAudit } = await import("../services/privacyAudit.service");
+    const data = await runAddressLeakAudit({
+        ownerPhone: String(req.body?.ownerPhone || ""),
+        since: typeof req.body?.since === "string" ? req.body.since : undefined,
+        cleanup: req.body?.cleanup === true,
+    });
+    res.json({ success: true, data });
+}
+
 export async function postWhatsAppMockWebhook(req: Request, res: Response) {
     if (!isMockAuthorized(req)) {
         res.status(404).json({ success: false, message: "Not found" });
