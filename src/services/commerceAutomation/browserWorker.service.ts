@@ -17,6 +17,7 @@ import {
 } from "./browserProfile.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
+import { isKavachAddress } from "./kavachAddress";
 import type { CommercePartnerKey } from "./types";
 import {
     bootstrapPharmacyLogin,
@@ -2108,6 +2109,16 @@ async function parkGenericConfirm(args: {
             message: v
                 ? `I stopped before checkout on *${label}* — the cart didn't look right (${v.detail}). Nothing was ordered or paid.`
                 : `I couldn't double-check the *${label}* cart, so I stopped here. Nothing was ordered or paid.`,
+        };
+    }
+    const shownAddr = args.result.confirm?.addressLabel;
+    if (shownAddr && !isKavachAddress(shownAddr)) {
+        return {
+            ...args.result,
+            status: "error",
+            failureReason: "cart_mismatch",
+            confirm: undefined,
+            message: `I stopped on *${label}* — it had a different delivery address selected, not your saved address (C504, Sunita Park, Raipur 492001). Nothing was ordered or paid.`,
         };
     }
     if (v.payableTotal && !args.result.confirm?.totalLabel) {

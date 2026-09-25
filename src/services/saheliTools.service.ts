@@ -173,6 +173,14 @@ export async function executeSaheliTool(input: {
             };
         }
         case "list_partner_addresses": {
+            // Only the care recipient's saved Kavach address is ever used for orders.
+            const { KAVACH_DELIVERY_ADDRESS } = await import("./commerceAutomation/kavachAddress");
+            if (process.env.MCP_COMMERCE_SEARCH_ENABLED !== "true") {
+                return {
+                    addresses: [{ id: "kavach", label: "Saved Kavach address", line1: KAVACH_DELIVERY_ADDRESS, city: "Raipur", pincode: "492001", isDefault: true }],
+                    note: "Orders always go to this saved Kavach address; store-account addresses are not used.",
+                };
+            }
             const partner = String(input.args.partner ?? "swiggy") as McpPartnerKey;
             const commerceUserId =
                 (await resolveFamilyMcpUserId(input.familyId, partner, input.actorUserId)) ??

@@ -17,6 +17,7 @@ import {
     validateCartLines,
 } from "./guardrails";
 import { siteConfig, type CheckoutStepKey } from "./siteConfigs";
+import { KAVACH_DELIVERY_PINCODE, isKavachAddress } from "../kavachAddress";
 import { stagehandExtract, stagehandLocate, stagehandStep, type AgentStepResult } from "./stagehandFallback.service";
 
 type Log = (event: string, extra?: Record<string, unknown>) => void;
@@ -64,6 +65,7 @@ const screenSchema = z.object({
     billLines: z.array(z.string()).describe("Every line of the bill summary, e.g. 'Item total ₹120', 'Delivery fee ₹25', 'Swiggy One ₹99'"),
     payableTotal: z.string().nullable().describe("Final amount to pay, exactly as shown, e.g. '₹145'"),
     selectedPaymentMethod: z.string().nullable().describe("The payment method currently selected, exactly as shown, or null"),
+    deliveryAddress: z.string().nullable().describe("The delivery address shown on this page, exactly as shown (with pincode), or null"),
     orderId: z.string().nullable().describe("Order id if an order confirmation is shown"),
     eta: z.string().nullable().describe("Delivery ETA if shown"),
 });
@@ -178,6 +180,14 @@ export async function runGenericCodCheckout(
     if (screen.cartItems?.length) {
         const cart = validateCartLines(screen.cartItems.map((c) => ({ name: c.name, qty: c.quantity })), opts.skuName);
         if (!cart.ok) return { status: "cart_mismatch", url: safeUrl(page), detail: cart.detail };
+    }
+    // Delivery must be the care recipient's saved Kavach address (never a store-account default).
+    if (!isKavachAddress(screen.deliveryAddress)) {
+        return {
+            status: "address_unverified",
+            url: safeUrl(page),
+            detail: `checkout address isn't the saved Kavach address (${KAVACH_DELIVERY_PINCODE}); shows: ${(screen.deliveryAddress || "none").slice(0, 80)}`,
+        };
     }
     const payable = parseRupees(screen.payableTotal);
     if (!totalWithinConfirmed(payable, opts.confirmedTotalRupees)) {

@@ -149,6 +149,7 @@ async function main() {
         billLines: ["Item total ₹30", "Delivery ₹20"],
         payableTotal: "₹50",
         selectedPaymentMethod: "Cash on Delivery",
+        deliveryAddress: "C504, Sunita Park, Labhandih, Raipur 492001",
         orderId: null,
         eta: null,
         ...o,
@@ -190,6 +191,15 @@ async function main() {
         assert.equal(out.status, "placed");
         assert.equal(placed, 1);
         assert.deepEqual(clicked, ["place"]);
+    });
+
+    await t("generic checkout: store-account address (Gurugram) → address_unverified, no Place", async () => {
+        clicked.length = 0;
+        extractQueue = [screen({}), screen({ deliveryAddress: "1704, Tower 5, M3M Heights, Gurugram 122102" })];
+        observeQueue = [];
+        const out = await runGenericCodCheckout(page, { ...baseOpts });
+        assert.equal(out.status, "address_unverified");
+        assert.ok(!clicked.includes("place"));
     });
 
     await t("generic checkout: extract unavailable → fail closed (stuck), nothing clicked", async () => {
