@@ -612,7 +612,7 @@ export async function searchGuestCatalog(input: {
                     `I can't browse ${label} without signing in yet, so I can't show live items or prices for your address. ` +
                     (partner === "zomato"
                         ? `I can show open restaurants near you on *Swiggy* instead.`
-                        : `I can search *Instamart* for your address (Raipur 492001) instead.`),
+                        : `Reply *confirm* to sign in to ${label} in my browser (an OTP SMS will come) and I'll search there for Raipur 492001 — or say *order ${query} from Instamart*.`),
                 partner,
                 query,
             };

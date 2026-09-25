@@ -381,6 +381,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         }
     }
 
+    if (/^(cancel|stop|never ?mind|cancel all(?: browsing)?)$/i.test(text)) bumpGuestWork(input.phone);
     if (/^(cancel|stop|never ?mind|cancel all(?: browsing)?)$/i.test(text) && (draft || /cancel\s+all/i.test(text))) {
         void logActivity({
             familyId: input.familyId,
@@ -818,6 +819,15 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 return startFoodFlow(input, q);
             }
             const query = extractOrderQuery(stripAddressPhrases(text) || text, String(partner));
+            if (String(partner) === "instamart") {
+                const goalText = text;
+                return deferGuestWork(
+                    input,
+                    `Searching *Instamart* for "${query}" near 📍 ${KAVACH_DELIVERY_SHORT} 🔎 — one moment.`,
+                    (token) => grocerySearchCore(input, goalText, query, { partner: "instamart", siteKey: "instamart" }, token),
+                    draft,
+                );
+            }
             const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
             const { extractPincode } = await import("./apolloPostOtp");
             const result = await searchGuestCatalog({
@@ -881,8 +891,16 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             return { text: refuseSiteCopy(String(playbook.partner === "generic" ? partner : playbook.partner)) };
         }
         const query = extractOrderQuery(stripAddressPhrases(text) || text, String(playbook.partner));
+        if (String(playbook.partner) === "instamart") {
+            const goalText = text;
+            return deferGuestWork(
+                input,
+                `Searching *Instamart* for "${query}" near 📍 ${KAVACH_DELIVERY_SHORT} 🔎 — I'll send the options in a moment.`,
+                (token) => grocerySearchCore(input, goalText, query, playbook, token),
+            );
+        }
 
-        // SEARCH FIRST — guest/MCP catalog. Do not open login until SKU confirm.
+        // SEARCH FIRST — guest catalog (never MCP). Do not open login until SKU confirm.
         // Resolve the delivery address first so stock is checked at that pincode.
         const { resolveDeliveryAddressLabel } = await import("./smokeDeliveryAddress");
         const addr = await resolveDeliveryAddressLabel({
@@ -910,7 +928,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         };
 
         if (catalog.hits.length) {
-            draft.catalogOptions = catalog.hits.slice(0, 3).map((h) => ({
+            draft.catalogOptions = catalog.hits.slice(0, 5).map((h) => ({
                 id: h.id,
                 name: h.name,
                 pricePaise: h.pricePaise,
@@ -937,6 +955,77 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     return null;
 }
 
+
+/** Instamart guest search (browser) → awaiting_sku_confirm draft + options copy. */
+async function grocerySearchCore(
+    input: { phone: string; familyId: string; actorUserId: string },
+    goalText: string,
+    query: string,
+    playbook: { partner: CommercePartnerKey | "generic" | string; siteKey?: string; startUrl?: string },
+    token?: number,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+    const catalog = await searchGuestCatalog({ partner: String(playbook.partner), query, familyId: input.familyId, userId: input.actorUserId });
+    const draft: BrowserTaskDraft = {
+        phase: "awaiting_sku_confirm",
+        goal: goalText.slice(0, 240),
+        partner: playbook.partner as CommercePartnerKey,
+        siteKey: playbook.siteKey,
+        startUrl: playbook.startUrl,
+        addressLabel: KAVACH_DELIVERY_ADDRESS,
+    };
+    if (catalog.hits.length) {
+        draft.catalogOptions = catalog.hits.slice(0, 5).map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
+        if (catalog.hits.length === 1) draft.selectedSku = draft.catalogOptions[0];
+    } else {
+        draft.lastMessage = catalog.unavailableReason || `Instamart shows nothing for "${query}" near you. Try another name, or *cancel*.`;
+    }
+    await saveIfCurrent(input.phone, draft, token);
+    return { text: skuConfirmCopy(draft), draft };
+}
+
+/** Guest browsing (15–30s) runs in the background; the result is pushed to WhatsApp. */
+const guestWorkToken = new Map<string, number>();
+function bumpGuestWork(phone: string): number {
+    const n = (guestWorkToken.get(phone) ?? 0) + 1;
+    guestWorkToken.set(phone, n);
+    return n;
+}
+function guestWorkCurrent(phone: string, token: number | undefined): boolean {
+    return token == null || guestWorkToken.get(phone) === token;
+}
+async function saveIfCurrent(phone: string, draft: BrowserTaskDraft | null, token?: number): Promise<boolean> {
+    if (!guestWorkCurrent(phone, token)) return false;
+    await saveDraft(phone, draft);
+    return true;
+}
+
+function deferGuestWork(
+    input: { phone: string; familyId: string; recipientUserId: string },
+    ack: string,
+    work: (token: number) => Promise<{ text: string }>,
+    currentDraft?: BrowserTaskDraft | null,
+): { text: string; draft?: BrowserTaskDraft } {
+    const token = bumpGuestWork(input.phone);
+    void (async () => {
+        let text: string;
+        try {
+            text = (await work(token)).text;
+        } catch (err) {
+            console.warn("[guest-browse] failed:", err instanceof Error ? err.message : err);
+            text = "The site didn't load for me just now 🙏 Please try again in a minute.";
+        }
+        if (!guestWorkCurrent(input.phone, token)) return; // cancelled / superseded
+        const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
+        await pushWhatsAppBrowserFollowUp({
+            phone: input.phone,
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            text,
+        }).catch(() => false);
+    })();
+    return { text: ack, draft: currentDraft ?? undefined };
+}
 
 /** Reply to "deliver it to my home / C504 / Raipur" during an order: always the Kavach address. */
 async function addressReply(
@@ -969,6 +1058,18 @@ async function startFoodFlow(
     input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
     dishQuery: string,
 ): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    return deferGuestWork(
+        input,
+        `Checking which restaurants are open on *Swiggy* near 📍 ${KAVACH_DELIVERY_SHORT}${dishQuery ? ` for "${dishQuery}"` : ""} 🔎 — I'll send the list in a moment.`,
+        (token) => startFoodFlowCore(input, dishQuery, token),
+    );
+}
+
+async function startFoodFlowCore(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    dishQuery: string,
+    token?: number,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
     const { listSwiggyRestaurants } = await import("./swiggyGuest.service");
     let res: Awaited<ReturnType<typeof listSwiggyRestaurants>>;
     try {
@@ -984,7 +1085,7 @@ async function startFoodFlow(
     }
     const open = res.restaurants.filter((r) => r.open === true).slice(0, 5);
     if (!open.length) {
-        await saveDraft(input.phone, null);
+        await saveIfCurrent(input.phone, null, token);
         return { text: noOpenRestaurantsCopy(res.restaurants, dishQuery || undefined) };
     }
     const draft: BrowserTaskDraft = {
@@ -996,7 +1097,7 @@ async function startFoodFlow(
         dishQuery: dishQuery || undefined,
         restaurantOptions: open.map((r) => ({ name: r.name, cuisines: r.cuisines, rating: r.rating, eta: r.eta })),
     };
-    await saveDraft(input.phone, draft);
+    await saveIfCurrent(input.phone, draft, token);
     return { text: restaurantListCopy(open, dishQuery || undefined), draft };
 }
 
@@ -1006,6 +1107,21 @@ async function showRestaurantMenu(
     draft: BrowserTaskDraft,
     restaurant: string,
     dishQueryOverride?: string,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    return deferGuestWork(
+        input,
+        `Opening *${restaurant}*'s menu on Swiggy 🍽️ — one moment.`,
+        (token) => showRestaurantMenuCore(input, draft, restaurant, dishQueryOverride, token),
+        draft,
+    );
+}
+
+async function showRestaurantMenuCore(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    draft: BrowserTaskDraft,
+    restaurant: string,
+    dishQueryOverride?: string,
+    token?: number,
 ): Promise<{ text: string; draft?: BrowserTaskDraft }> {
     const { swiggyRestaurantMenu } = await import("./swiggyGuest.service");
     const dishQuery = dishQueryOverride ?? draft.dishQuery;
@@ -1046,7 +1162,7 @@ async function showRestaurantMenu(
                 ? { id: `swiggy:${restaurant}:0`.slice(0, 120), name: dishes[0]!.name, pricePaise: dishes[0]!.pricePaise, productUrl: menu.url }
                 : undefined,
     };
-    await saveDraft(input.phone, next);
+    await saveIfCurrent(input.phone, next, token);
     return { text: dishListCopy(restaurant, dishes, dishQuery), draft: next };
 }
 
