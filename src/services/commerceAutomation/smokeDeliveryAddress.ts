@@ -1,25 +1,18 @@
 /**
- * Default delivery address for Saheli commerce smoke / when elder has none saved.
- * Still confirm-before-pay — never silent place.
+ * Delivery address for Saheli commerce = the current care recipient's OWN saved address
+ * (recipient_delivery_addresses, scoped by familyId + recipientUserId). No global / smoke /
+ * store-account fallback: null means "ask the elder for their address".
  */
-import { KAVACH_DELIVERY_ADDRESS } from "./kavachAddress";
+import { getRecipientDeliveryAddress } from "./recipientAddress.service";
 
-/** Raipur smoke address (user-provided for 2026-09-25+ live smoke). */
-export const SMOKE_DEFAULT_DELIVERY_ADDRESS = KAVACH_DELIVERY_ADDRESS;
-
-export const SMOKE_DEFAULT_DELIVERY_SHORT = "C504 Sunita Park, Labhandih, Raipur 492001";
-
-/**
- * Delivery address for every partner = the care recipient's saved Kavach address.
- * Store-account / MCP saved addresses are never used or displayed (they can point at a
- * different city — e.g. a Gurugram Swiggy default).
- */
-export async function resolveDeliveryAddressLabel(_input: {
+export async function resolveDeliveryAddressLabel(input: {
     familyId?: string;
-    userId?: string;
+    /** Care recipient (NOT the acting caregiver). */
+    recipientUserId?: string;
     partner?: string;
-}): Promise<{ label: string; source: "kavach" }> {
-    return { label: KAVACH_DELIVERY_ADDRESS, source: "kavach" };
+}): Promise<{ label: string; source: "recipient" } | null> {
+    const a = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
+    return a ? { label: a.full, source: "recipient" } : null;
 }
 
 /** Embed into browser goal so Gemini/playbook can fill address fields. */

@@ -60,4 +60,4 @@ Pharmacy orders follow the same product rules: elder places, caregivers **notify
 
 ## Smoke expectation
 
-Mock webhook as `917694829888`: “Order diet coke from instamart” → must **not** say needs caregiver approval; proceed to connect/OTP/search/cart.
+Mock webhook as `<test-elder-number>`: “Order diet coke from instamart” → must **not** say needs caregiver approval; proceed to connect/OTP/search/cart.

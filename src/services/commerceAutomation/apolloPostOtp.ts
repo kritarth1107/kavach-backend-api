@@ -358,7 +358,7 @@ export type CartSummary = {
 
 export function parseCartText(raw: string, sku: ExactSku, pincode?: string): CartSummary & { qty?: number } {
     let text = raw.replace(/\u00a0/g, " ");
-    // Ignore the site header ("Delivery Address / Raipur 492001" is just the browse location)
+    // Ignore the site header ("Delivery Address / <City> <pincode>" is just the browse location)
     const cartStart = text.search(/your\s*cart|items?\s*in\s*your\s*cart|cart\s*breakdown|order\s*summary/i);
     const header = cartStart > 0 ? text.slice(0, cartStart) : "";
     if (cartStart > 0) text = text.slice(cartStart);

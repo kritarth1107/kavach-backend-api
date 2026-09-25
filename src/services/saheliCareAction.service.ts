@@ -471,7 +471,7 @@ export async function tryApplyElderCareActionFromMessage(input: {
     const consentYes =
         /^(yes|yeah|yep|haan|han|ji|sure|please|bata do|batao|tell them|inform them|notify them)[!.?\s]*$/i.test(
             q,
-        ) || /\b(yes[, ]+)?(tell|inform|notify)\s+(them|my\s+family|son|beta|kritarth)\b/i.test(qLower);
+        ) || /\b(yes[, ]+)?(tell|inform|notify)\s+(them|my\s+family|son|daughter|beta|beti)\b/i.test(qLower);
     const consentNo =
         /^(no|nahi|nope|mat bata|don'?t tell|do not tell|no need)[!.?\s]*$/i.test(q) ||
         /\b(don'?t|do not|mat)\s+(tell|inform|notify|bata)\b/i.test(qLower);
@@ -514,7 +514,7 @@ export async function tryApplyElderCareActionFromMessage(input: {
     // "My son doesn't know yet" after a symptom — offer consent, do not auto-notify.
     if (
         /\b(doesn'?t|does not|dont|don'?t)\s+know(\s+yet)?\b/i.test(qLower) ||
-        /\b(son|beta|family|kritarth).{0,40}\b(doesn'?t|does not|dont)\s+know\b/i.test(qLower)
+        /\b(son|daughter|beta|beti|family).{0,40}\b(doesn'?t|does not|dont)\s+know\b/i.test(qLower)
     ) {
         return "Would you like me to let them know gently? Just say yes and I'll tell your family — or say no and I'll keep it between us.";
     }

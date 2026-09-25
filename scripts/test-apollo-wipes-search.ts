@@ -1,6 +1,6 @@
 /**
  * Live guest catalog check (no login, no OTP): "order wet wipes from apollo" / "wet wipes"
- * must return everyday OTC wet wipes, in stock at 492001, no makeup/eyelid/surface junk.
+ * must return everyday OTC wet wipes, in stock at 462001, no makeup/eyelid/surface junk.
  *   npx tsx scripts/test-apollo-wipes-search.ts
  */
 import assert from "node:assert/strict";
@@ -24,15 +24,15 @@ import { parseMedicineList, messageLooksLikePharmacyOrder } from "../src/service
     ]) assert.equal(isEverydayWetWipes(junk), false, junk);
 
     for (const q of ["order wet wipes from apollo", "wet wipes", "baby wipes"]) {
-        const r = await searchGuestCatalog({ partner: "apollo", query: q, pincode: "492001" });
+        const r = await searchGuestCatalog({ partner: "apollo", query: q, pincode: "462001" });
         console.log(`\n== "${q}" → query "${r.query}" (${r.hits.length} hits)`);
         r.hits.slice(0, 6).forEach((h, i) =>
-            console.log(`${i + 1}. ${h.name} — ₹${(h.pricePaise ?? 0) / 100} | rx=${h.requiresRx} | inStock@492001=${h.inStock} | ${h.productUrl}`),
+            console.log(`${i + 1}. ${h.name} — ₹${(h.pricePaise ?? 0) / 100} | rx=${h.requiresRx} | inStock@462001=${h.inStock} | ${h.productUrl}`),
         );
         assert.ok(r.hits.length >= 3, "at least 3 wipes");
         for (const h of r.hits) {
             assert.equal(h.requiresRx, false, h.name);
-            assert.equal(h.inStock, true, `${h.name} in stock at 492001`);
+            assert.equal(h.inStock, true, `${h.name} in stock at 462001`);
             assert.ok(isEverydayWetWipes(h.name), `junk: ${h.name}`);
             assert.ok(h.productUrl?.startsWith("https://www.apollopharmacy.in/otc/"), h.name);
         }

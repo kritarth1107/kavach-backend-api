@@ -1,14 +1,14 @@
 /**
  * Swiggy (food) + Instamart guest browsing in our own headless Chromium — no login, no MCP.
- * The site location is set to the care recipient's Kavach address BEFORE anything is read,
- * so restaurants / items / open status reflect Raipur 492001, never a store-account address.
+ * The site location is set to THIS care recipient's saved address (passed in by the caller —
+ * there is no default) BEFORE anything is read, never a store-account address.
  *
  * Verified as guest (2026-09-26): location search, restaurant list (name/rating/ETA/cuisines),
  * restaurant menu (open/closed + "opens at"), dish search, Instamart item search.
  * Needs login: adding to cart + checkout (handled by the browser order flow after confirm).
  */
 import type { Browser, BrowserContext, Page } from "playwright";
-import { KAVACH_DELIVERY_ADDRESS, locationQueryFor, pincodeOf } from "./kavachAddress";
+import { cityOf, locationQueryFor, pincodeOf } from "./kavachAddress";
 
 const UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -103,7 +103,7 @@ async function applyCachedLocation(ctx: BrowserContext, loc: Loc): Promise<void>
  * Set Swiggy's delivery location to the Kavach address (area search → pick the suggestion
  * in the right city). Cached per address for 12h (lat/lng cookie).
  */
-export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address = KAVACH_DELIVERY_ADDRESS): Promise<GuestLocation> {
+export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address: string): Promise<GuestLocation> {
     const pin = pincodeOf(address);
     const cached = locCache.get(address);
     if (cached && Date.now() - cached.at < LOC_TTL_MS) {
@@ -120,10 +120,12 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
     const query = locationQueryFor(address);
     await input.fill(query);
     await page.waitForTimeout(2200);
-    const city = (address.match(/\b(raipur|bilaspur|durg|bhilai|[a-z]+)\s*,\s*(?:chhattisgarh|[a-z ]+)\s*,?\s*\d{6}/i)?.[1] || "Raipur").trim();
+    const city = (cityOf(address) || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&").trim();
     // Suggestions read "<Place>" + "<street>, <Area>, <City>, <State>, India"; the page heading
-    // "…delivery in Raipur" has no comma after the city, so it never matches.
-    const pick = page.getByText(new RegExp(`\\b${city}\\s*,`, "i")).first();
+    // "…delivery in <City>" has no comma after the city, so it never matches.
+    const pick = city
+        ? page.getByText(new RegExp(`\\b${city}\\s*,`, "i")).first()
+        : page.locator('[data-testid*="location" i] >> text=/,/').first();
     await pick.click({ timeout: 5000 });
     await page.waitForTimeout(2500);
     const loc = await readLocationCookie(ctx);
@@ -207,11 +209,11 @@ export function rankDishes(dishes: GuestDish[], query: string): GuestDish[] {
  * the top candidates are opened to verify they're actually taking orders now.
  */
 export async function listSwiggyRestaurants(input: {
-    address?: string;
+    address: string;
     query?: string;
     limit?: number;
 }): Promise<{ location: GuestLocation; restaurants: GuestRestaurant[] }> {
-    const address = input.address || KAVACH_DELIVERY_ADDRESS;
+    const address = input.address;
     const limit = input.limit ?? 5;
     return withGuest(async (ctx, page) => {
         const location = await setSwiggyLocation(ctx, page, address);
@@ -293,11 +295,11 @@ export async function listSwiggyRestaurants(input: {
 
 /** One restaurant's menu (open status + dishes), optionally filtered by a dish query. */
 export async function swiggyRestaurantMenu(input: {
-    address?: string;
+    address: string;
     restaurant: string;
     dishQuery?: string;
 }): Promise<{ location: GuestLocation; open: boolean | null; closedNote?: string; dishes: GuestDish[]; url?: string }> {
-    const address = input.address || KAVACH_DELIVERY_ADDRESS;
+    const address = input.address;
     return withGuest(async (ctx, page) => {
         const location = await setSwiggyLocation(ctx, page, address);
         if (!location.ok) return { location, open: null, dishes: [] };
@@ -325,10 +327,10 @@ export async function swiggyRestaurantMenu(input: {
 
 /** Instamart item search at the Kavach address (guest). */
 export async function instamartSearch(input: {
-    address?: string;
+    address: string;
     query: string;
 }): Promise<{ location: GuestLocation; items: Array<{ name: string; pack?: string; pricePaise?: number; sponsored?: boolean }> }> {
-    const address = input.address || KAVACH_DELIVERY_ADDRESS;
+    const address = input.address;
     return withGuest(async (ctx, page) => {
         const location = await setSwiggyLocation(ctx, page, address);
         if (!location.ok) return { location, items: [] };
@@ -368,5 +370,5 @@ export async function instamartSearch(input: {
             })
             .filter((x): x is { name: string; pack: string | undefined; pricePaise: number | undefined; sponsored: boolean } => Boolean(x));
         return { location, items };
-    }, 40_000);
+    }, 60_000);
 }

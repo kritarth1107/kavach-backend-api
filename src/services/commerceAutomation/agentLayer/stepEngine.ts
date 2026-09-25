@@ -17,7 +17,7 @@ import {
     validateCartLines,
 } from "./guardrails";
 import { siteConfig, type CheckoutStepKey } from "./siteConfigs";
-import { KAVACH_DELIVERY_PINCODE, isKavachAddress } from "../kavachAddress";
+import { pincodeOf } from "../kavachAddress";
 import { stagehandExtract, stagehandLocate, stagehandStep, type AgentStepResult } from "./stagehandFallback.service";
 
 type Log = (event: string, extra?: Record<string, unknown>) => void;
@@ -31,6 +31,8 @@ export async function runStep(
         goal?: string;
         deterministic?: () => Promise<boolean>;
         log?: Log;
+        /** The care recipient's delivery pincode (fills {PINCODE} in the site goal). */
+        pincode?: string;
     },
 ): Promise<{ by: "code" | "agent" | "none"; agent?: AgentStepResult }> {
     const log = args.log ?? (() => undefined);
@@ -39,7 +41,10 @@ export async function runStep(
         if (ok) return { by: "code" };
     }
     const cfg = siteConfig(args.partner);
-    const goal = args.goal || (args.step && cfg ? cfg.goals[args.step] : "");
+    const goal = (args.goal || (args.step && cfg ? cfg.goals[args.step] : "")).replace(
+        /\{PINCODE\}/g,
+        args.pincode || "the recipient's pincode",
+    );
     if (!goal) return { by: "none" };
     const agent = await stagehandStep(page, { goal, log });
     return { by: agent.status === "acted" ? "agent" : "none", agent };
@@ -142,7 +147,7 @@ export async function runGenericCodCheckout(
                   : screen.screen === "address"
                     ? "select_address"
                     : "reach_payment";
-        const r = await runStep(page, { partner: opts.partner, step, log });
+        const r = await runStep(page, { partner: opts.partner, step, log, pincode: opts.pincode });
         log("generic_step", { step, by: r.by, agent: r.agent?.status });
         await nap(page, 1800);
         screen = await readScreen(page, log);
@@ -181,12 +186,14 @@ export async function runGenericCodCheckout(
         const cart = validateCartLines(screen.cartItems.map((c) => ({ name: c.name, qty: c.quantity })), opts.skuName);
         if (!cart.ok) return { status: "cart_mismatch", url: safeUrl(page), detail: cart.detail };
     }
-    // Delivery must be the care recipient's saved Kavach address (never a store-account default).
-    if (!isKavachAddress(screen.deliveryAddress)) {
+    // Delivery must be THIS care recipient's saved address (never a store-account default).
+    if (!opts.pincode || pincodeOf(screen.deliveryAddress) !== opts.pincode) {
         return {
             status: "address_unverified",
             url: safeUrl(page),
-            detail: `checkout address isn't the saved Kavach address (${KAVACH_DELIVERY_PINCODE}); shows: ${(screen.deliveryAddress || "none").slice(0, 80)}`,
+            detail: opts.pincode
+                ? `checkout address pincode isn't the recipient's saved pincode; shows: ${pincodeOf(screen.deliveryAddress) || "none"}`
+                : "no saved delivery address for this recipient",
         };
     }
     const payable = parseRupees(screen.payableTotal);

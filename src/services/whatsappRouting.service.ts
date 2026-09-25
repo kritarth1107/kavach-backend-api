@@ -663,6 +663,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         if (
             browserDraft &&
             (browserDraft.phase === "awaiting_otp" ||
+                browserDraft.phase === "awaiting_address" ||
                 browserDraft.phase === "awaiting_confirm" ||
                 browserDraft.phase === "awaiting_sku_confirm" ||
                 browserDraft.phase === "awaiting_restaurant_pick" ||

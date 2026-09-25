@@ -243,10 +243,10 @@ function confirmCopy(draft: PharmacyDraft): string {
 }
 
 
-/** Attach smoke/default delivery address when elder has none on the draft. */
+/** Attach THIS recipient's own saved delivery address (none → asked at confirm). */
 async function ensurePharmacyDeliveryAddress(
     draft: PharmacyDraft,
-    ctx: { familyId?: string; userId?: string },
+    ctx: { familyId?: string; userId?: string; recipientUserId?: string },
 ): Promise<PharmacyDraft> {
     if (draft.addressLabel && draft.addressLabel.trim().length >= 8) return draft;
     const { resolveDeliveryAddressLabel } = await import(
@@ -254,17 +254,18 @@ async function ensurePharmacyDeliveryAddress(
     );
     const resolved = await resolveDeliveryAddressLabel({
         familyId: ctx.familyId,
-        userId: ctx.userId,
+        recipientUserId: ctx.recipientUserId,
         partner: draft.partner,
     });
-    draft.addressLabel = resolved.label;
+    // No saved address for THIS recipient → leave empty; confirm asks them (never a default).
+    if (resolved) draft.addressLabel = resolved.label;
     return draft;
 }
 
 /** Guest-search catalog and attach exact SKU + price onto draft (no login). */
 async function attachGuestCatalog(
     draft: PharmacyDraft,
-    ctx: { familyId?: string; userId?: string },
+    ctx: { familyId?: string; userId?: string; recipientUserId?: string },
 ): Promise<PharmacyDraft> {
     if (!draft.partner || !draft.items.length) {
         return ensurePharmacyDeliveryAddress(draft, ctx);
@@ -422,6 +423,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
             draft = await attachGuestCatalog(draft, {
                 familyId: input.familyId,
                 userId: input.actorUserId,
+                recipientUserId: input.recipientUserId,
             });
             draft.phase = "confirm_basket";
         }
@@ -494,6 +496,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
         draft = await attachGuestCatalog(draft, {
             familyId: input.familyId,
             userId: input.actorUserId,
+            recipientUserId: input.recipientUserId,
         });
         const hasLiveFresh = draft.items.some((i) => typeof i.pricePaise === "number");
         const noMatchFresh =
@@ -546,6 +549,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
         draft = await attachGuestCatalog(draft, {
             familyId: input.familyId,
             userId: input.actorUserId,
+            recipientUserId: input.recipientUserId,
         });
         const hasLiveMid = draft.items.some((i) => typeof i.pricePaise === "number");
         const noMatchMid =
@@ -574,6 +578,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
             draft = await attachGuestCatalog(draft, {
                 familyId: input.familyId,
                 userId: input.actorUserId,
+                recipientUserId: input.recipientUserId,
             });
             draft.phase = "confirm_basket";
             await saveDraft(input.phone, draft);
@@ -659,6 +664,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
             draft = await attachGuestCatalog(draft, {
                 familyId: input.familyId,
                 userId: input.actorUserId,
+                recipientUserId: input.recipientUserId,
             });
             draft.phase = "confirm_basket";
             await saveDraft(input.phone, draft);
@@ -696,13 +702,18 @@ export async function handlePharmacyWhatsAppTurn(input: {
             "./commerceAutomation/smokeDeliveryAddress"
         );
         if (!draft.addressLabel || draft.addressLabel.trim().length < 8) {
-            draft.addressLabel = (
-                await resolveDeliveryAddressLabel({
-                    familyId: input.familyId,
-                    userId: input.actorUserId,
-                    partner,
-                })
-            ).label;
+            const resolved = await resolveDeliveryAddressLabel({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                partner,
+            });
+            if (!resolved) {
+                await saveDraft(input.phone, draft);
+                const { askForAddress } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+                const asked = await askForAddress({ phone: input.phone }, "confirm", undefined, "Reply *confirm* to continue your order.");
+                return { text: asked.text, draft };
+            }
+            draft.addressLabel = resolved.label;
         }
         // Single guest-searched SKU → "exact SKU" goal so the post-login step adds THAT product
         // (product page → Add → cart) instead of a free-form Gemini search.

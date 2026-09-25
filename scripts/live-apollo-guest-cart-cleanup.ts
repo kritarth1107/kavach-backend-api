@@ -59,7 +59,7 @@ const TARGET = {
     const log = (e: string, x?: Record<string, unknown>) => console.log(`  [${e}]`, x ? JSON.stringify(x) : "");
     try {
         for (const item of RANDOM) {
-            const r = await addExactSkuToApolloCart(page, item, { deadlineAt: Date.now() + 70_000, pincode: "492001" });
+            const r = await addExactSkuToApolloCart(page, item, { deadlineAt: Date.now() + 70_000, pincode: "462001" });
             console.log(`seed add "${item.name}" →`, r.status, r.detail);
         }
         await page.goto(APOLLO_CART_URL, { waitUntil: "domcontentloaded" });
@@ -80,10 +80,10 @@ const TARGET = {
         assert.equal(after.state, "empty");
 
         const t1 = Date.now();
-        const add = await addExactSkuToApolloCart(page, TARGET, { deadlineAt: Date.now() + 70_000, pincode: "492001" });
+        const add = await addExactSkuToApolloCart(page, TARGET, { deadlineAt: Date.now() + 70_000, pincode: "462001" });
         console.log("target add:", add.status, add.detail, `(${Date.now() - t1} ms)`);
         assert.equal(add.status, "added");
-        const cart = await readApolloCart(page, TARGET, { deadlineAt: Date.now() + 40_000, pincode: "492001" });
+        const cart = await readApolloCart(page, TARGET, { deadlineAt: Date.now() + 40_000, pincode: "462001" });
         const lines = cart?.cartLines ?? (await readCartLines(page));
         const guard = checkCartExactlySku(lines, TARGET.name);
         console.log("cart after add:", JSON.stringify(lines), "total:", cart?.totalLabel, "guard:", JSON.stringify(guard));

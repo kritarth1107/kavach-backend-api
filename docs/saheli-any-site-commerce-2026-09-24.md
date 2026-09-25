@@ -63,7 +63,7 @@ BROWSER_WORKER_MODE=dry_run npx tsx scripts/smoke-private-browser.ts
 
 Expect: `order oats from bigbasket` and `buy this from amazon` → browser confirm flow (not “unsupported”); confirm card includes soft *Saheli tip* when stubbed/care context present.
 
-Mock WA `917694829888`: same phrases on live backend after deploy.
+Mock WA `<test-elder-number>`: same phrases on live backend after deploy.
 
 ## Hang fix (pharmacy confirm follow-up)
 

@@ -31,8 +31,8 @@ const TARGET = {
 };
 const GOAL =
     `Order exact SKU from Apollo: ${TARGET.name} (2x30 Wipes · Pack) @ ₹99.20` +
-    ` | delivery_address=C504, Sunita Park, Raipur, Chhattisgarh 492001`;
-const ADDRESS = "C504, Sunita Park, Raipur, Chhattisgarh 492001";
+    ` | delivery_address=B12, Green Park, Bhopal, Madhya Pradesh 462001`;
+const ADDRESS = "B12, Green Park, Bhopal, Madhya Pradesh 462001";
 
 type Line = { sku: string; name: string; qty: number; price: number };
 type MockState = {
@@ -58,7 +58,7 @@ const total = (st: MockState) => st.cart.reduce((a, l) => a + l.qty * l.price, 0
 
 function page(title: string, body: string, script = ""): string {
     return `<!doctype html><html><head><title>${title}</title></head><body>
-<header><a href="/medicines-cart" class="cartIcon">Cart</a><span>Delivery Address Raipur 492001</span></header>
+<header><a href="/medicines-cart" class="cartIcon">Cart</a><span>Delivery Address Bhopal 462001</span></header>
 <main id="app">${body}</main><script>${script}</script></body></html>`;
 }
 
@@ -77,7 +77,7 @@ async function load(){
   el.innerHTML = '<h1>YOUR CART</h1><p>' + s.cart.length + ' ITEM' + (s.cart.length>1?'S':'') + ' IN YOUR CART</p>' +
     '<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q"><div class="CartAddress_addressDetail__k1chb">' +
     '<p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>Test User</p>' +
-    '<p class="CartAddress_address__Nt8hI">C504, Sunita Park, Labhandih, Raipur, Chhattisgarh - 492001</p></div>' +
+    '<p class="CartAddress_address__Nt8hI">B12, Green Park, Arera, Bhopal, Madhya Pradesh - 462001</p></div>' +
     '<div class="CartAddress_addActions__HESr9"><span class="CartAddress_actionBtn__HJq2T">Change</span></div></div></div>' +
     s.cart.map(l => '<div class="MedicineProductCard_root__udJYP"><div class="MedicineProductCard_titleBx__V"><h2 class="MedicineProductCard_title__MJ4MD">' + l.name +
       '</h2><div style="display:inline-block;width:20px;height:20px;background:#c00" class="dustbicIcon__ZxLJZ MedicineProductCard_deleteIcon__LWTJ9" data-sku="' + l.sku + '"><span></span></div></div>' +
@@ -98,7 +98,7 @@ function pdpPage(line: Line): string {
     return page(
         line.name,
         `<h1>${esc(line.name)}</h1>
-<div class="buyBox"><p>₹${line.price}</p><p>(Inclusive of all Taxes)</p><p>Delivering to 492001 Change — Delivery by tomorrow</p>
+<div class="buyBox"><p>₹${line.price}</p><p>(Inclusive of all Taxes)</p><p>Delivering to 462001 Change — Delivery by tomorrow</p>
 <div id="cta"><button id="add">Add to Cart</button></div></div>`,
         `
 document.getElementById('add').addEventListener('click', async () => {
@@ -111,7 +111,7 @@ document.getElementById('add').addEventListener('click', async () => {
 function deliveryPage(): string {
     return page(
         "Delivery options",
-        `<h2>Choose delivery type</h2><p>Delivering to C504, Sunita Park, Raipur, Chhattisgarh 492001</p><button id="go">PROCEED</button>`,
+        `<h2>Choose delivery type</h2><p>Delivering to B12, Green Park, Bhopal, Madhya Pradesh 462001</p><button id="go">PROCEED</button>`,
         `document.getElementById('go').addEventListener('click', () => { location.href = '/pay/9001'; });`,
     );
 }
@@ -120,7 +120,7 @@ function payPage(st: MockState): string {
     const t = total(st).toFixed(2);
     return page(
         "Payment",
-        `<h2>Payment options</h2><p>Amount to pay ₹${t}</p><p>Delivering to 492001</p>
+        `<h2>Payment options</h2><p>Amount to pay ₹${t}</p><p>Delivering to 462001</p>
 <div class="codContainer__a"><div class="codCard__b"><div role="button" id="codHead">Pay on Delivery</div><input type="radio" id="checkbox-cod"></div>
 <button id="place" aria-label="Pay rupees ${t}">Place order for ₹${t}</button></div>`,
         `
@@ -278,8 +278,8 @@ async function main() {
             await p.goto(`${BASE}/medicines-cart`);
             return runApolloCodCheckout(p, {
                 deadlineAt: Date.now() + 60_000,
-                pincode: "492001",
-                addressHints: ["C504", "Sunita Park"],
+                pincode: "462001",
+                addressHints: ["B12", "Green Park"],
                 confirmedTotalRupees: 99.2,
                 skuName: `${TARGET.name} (2x30 Wipes · Pack)`,
                 geminiMaxSteps: 0,
@@ -300,8 +300,8 @@ async function main() {
             await p.goto(`${BASE}/medicines-cart`);
             return runApolloCodCheckout(p, {
                 deadlineAt: Date.now() + 70_000,
-                pincode: "492001",
-                addressHints: ["C504", "Sunita Park"],
+                pincode: "462001",
+                addressHints: ["B12", "Green Park"],
                 confirmedTotalRupees: 500, // amount check alone would NOT stop it
                 skuName: `${TARGET.name} (2x30 Wipes · Pack)`,
                 geminiMaxSteps: 0,
@@ -322,8 +322,8 @@ async function main() {
             await p.goto(`${BASE}/medicines-cart`);
             return runApolloCodCheckout(p, {
                 deadlineAt: Date.now() + 70_000,
-                pincode: "492001",
-                addressHints: ["C504", "Sunita Park"],
+                pincode: "462001",
+                addressHints: ["B12", "Green Park"],
                 confirmedTotalRupees: 99.2,
                 skuName: `${TARGET.name} (2x30 Wipes · Pack)`,
                 geminiMaxSteps: 0,

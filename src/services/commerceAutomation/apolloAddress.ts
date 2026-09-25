@@ -8,7 +8,7 @@
  *                          "<line1>, <line2>, <city>, <state> - <pin>" + action span "Change"
  *                          (or "Add Address" when the account has no saved list).
  *    - nothing selected:   [CartAddress_addressBlock CartAddress_addAdressBlock] "Bill to <name>"
- *                          + "<browse city> <browse pin>" (e.g. "Raipur 492001" — the header
+ *                          + "<browse city> <browse pin>" (e.g. "Bhopal 462001" — the header
  *                          browse location, NOT a delivery address) + action span
  *                          "SELECT ADDRESS" (has saved addresses) / "ADD ADDRESS" / "ADD DETAILS" / "+ ADD".
  *  Action → "Deliver to" right drawer (main app, "AddNewAddressRevamped_*"):
@@ -62,12 +62,12 @@ function titleCase(s?: string): string | undefined {
         .replace(/\b[a-z]/g, (c) => c.toUpperCase())
         .replace(/\b([a-z]?-?\d+[a-z]?)\b/gi, (m) => m.toUpperCase());
 }
-/** Lowercase alphanumerics only ("C-504, Sunita  Park" → "c504sunitapark"). */
+/** Lowercase alphanumerics only ("B-12, Green  Park" → "b12greenpark"). */
 export function normAddr(s: string): string {
     return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/** Parse "C504, Sunita Park, Labhandih, Near Tulip Area Hotel, Raipur, Chhattisgarh 492001". */
+/** Parse "B12, Green Park, Arera, Near Lotus Hotel, Bhopal, Madhya Pradesh 462001". */
 export function addressTargetFrom(label?: string): AddressTarget | null {
     if (!label) return null;
     const pincode = label.match(/\b(\d{6})\b/)?.[1];
@@ -409,7 +409,7 @@ export const phone10 = (p?: string) => {
 };
 
 /**
- * Make sure the cart's delivery address is the target (pincode + C504 / Sunita Park):
+ * Make sure the cart's delivery address is the target (pincode + flat / society):
  * already selected → done; a matching saved address → select it; else add a new one
  * through Apollo's own Add New Address flow and select it. Never saves an address whose
  * pincode (from Apollo's map) differs from the target.
@@ -501,14 +501,8 @@ export async function ensureApolloDeliveryAddress(
         } else {
             // 3) Add New Address → location search
             await say(`your Apollo account has no saved address for ${target.line1} — adding it (${target.pincode})…`);
-            // /address-details also asks for the browser's location; headless has none and Apollo
-            // would show a "please enable location" nudge. Grant a Raipur-area fix so it stays
-            // quiet — the saved pin still comes from the searched place, not from this.
-            await page
-                .context()
-                .grantPermissions(["geolocation"], { origin: "https://www.apollopharmacy.in" })
-                .catch(() => undefined);
-            await page.context().setGeolocation({ latitude: 21.2514, longitude: 81.6296 }).catch(() => undefined);
+            // No browser geolocation is granted (never a hard-coded location): the saved pin comes
+            // only from the searched place for THIS recipient's address.
             if (!(await clickButtonByText(page, /^\s*add new address\s*$/i))) {
                 return fail("add_new", "Apollo's address picker had no Add New Address button");
             }

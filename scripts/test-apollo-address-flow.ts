@@ -24,10 +24,10 @@ import { addressEvidenceFromText, MEMBERSHIP_PRICED_RE, runApolloCodCheckout, UP
 import { captureCheckoutDiagnostic, getLastCheckoutDiagnostic, redactDiagText } from "../src/services/commerceAutomation/checkoutDiagnostics.service";
 
 const BASE = "https://www.apollopharmacy.in";
-const LABEL = "C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH, 492001";
+const LABEL = "B12, GREEN PARK, ARERA, NEAR LOTUS AREA HOTEL, BHOPAL, MADHYA PRADESH, 462001";
 const SKU = "Apollo Life Premium Citrus Refreshing Wet Wipes, Pack of 2 (2x30)";
-const PROFILE = { name: "Kritarth Singhal", phone: "9876543210" };
-const KAVACH_RECIPIENT = "Sunita Devi";
+const PROFILE = { name: "Ramesh Singhal", phone: "9876543210" };
+const KAVACH_RECIPIENT = "Kamla Devi";
 
 type Addr = {
     id: string;
@@ -57,7 +57,7 @@ type St = {
     requests: string[];
     forbidden: string[];
     /** "block" = cart with the CartAddress block; "live" = the real signed-in desktop cart seen
-     *  on 25 Sep: NO block, header "Deliver to Kritarth Raipur 492012", bottom sticky bar
+     *  on 25 Sep: NO block, header "Deliver to Ramesh Bhopal 492012", bottom sticky bar
      *  "Amount to pay ₹192.42" + primary "SELECT ADDRESS" (→ "Proceed" once one is selected). */
     layout: "block" | "live";
     headerPin: string;
@@ -102,12 +102,12 @@ const newState = (p: Partial<St>): St => ({
 });
 const fmt = (a: Addr) => `${a.addressLine1}, ${a.addressLine2}, ${a.city}, ${a.state} - ${a.zipcode}`;
 
-let HEADER = `<header><span>Delivery Address</span> <span>Raipur 492001</span> <a href="/medicines-cart">Cart</a></header>`;
+let HEADER = `<header><span>Delivery Address</span> <span>Bhopal 462001</span> <a href="/medicines-cart">Cart</a></header>`;
 const setHeader = (st: St) => {
     HEADER =
         st.layout === "live"
-            ? `<header><div class="HeaderLocation"><span>Deliver to</span> <b>Kritarth</b> <span>Raipur ${st.headerPin}</span></div> <span class="avatar">K</span> <a href="/medicines-cart">Cart</a><nav class="HeaderNav"><a>Buy Medicines</a> <a>Find Doctors</a> <a>Lab Tests</a> <a>Circle Membership</a> <a>Health Records</a></nav></header>`
-            : `<header><span>Delivery Address</span> <span>Raipur 492001</span> <a href="/medicines-cart">Cart</a></header>`;
+            ? `<header><div class="HeaderLocation"><span>Deliver to</span> <b>Ramesh</b> <span>Bhopal ${st.headerPin}</span></div> <span class="avatar">K</span> <a href="/medicines-cart">Cart</a><nav class="HeaderNav"><a>Buy Medicines</a> <a>Find Doctors</a> <a>Lab Tests</a> <a>Circle Membership</a> <a>Health Records</a></nav></header>`
+            : `<header><span>Delivery Address</span> <span>Bhopal 462001</span> <a href="/medicines-cart">Cart</a></header>`;
 };
 function shell(title: string, body: string, script = ""): string {
     return `<!doctype html><html><head><title>${title}</title><style>
@@ -126,7 +126,7 @@ function cartPage(st: St): string {
         ? ""
         : sel
         ? `<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q"><div class="CartAddress_adressIcon__DQrWA"></div><div class="CartAddress_addressRightBx__NSyGg"><div class="CartAddress_addressDetail__k1chb"><p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>${sel.name || PROFILE.name}</p><p class="CartAddress_address__Nt8hI">${fmt(sel)}</p></div><div class="CartAddress_addActions__HESr9"><span class="CartAddress_actionBtn__HJq2T" id="act">Change</span></div></div></div></div>`
-        : `<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q CartAddress_addAdressBlock__sLaQL"><div class="CartAddress_adressIcon__DQrWA"></div><div class="CartAddress_addressRightBx__NSyGg"><div class="CartAddress_addressDetail__k1chb"><p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>${PROFILE.name}</p><p class="CartAddress_address__Nt8hI">Raipur 492001</p></div><div class="CartAddress_addressAction__clmEn"><span class="undefined" id="act">${st.saved.length ? "SELECT ADDRESS" : "ADD ADDRESS"}</span></div></div></div></div>`;
+        : `<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q CartAddress_addAdressBlock__sLaQL"><div class="CartAddress_adressIcon__DQrWA"></div><div class="CartAddress_addressRightBx__NSyGg"><div class="CartAddress_addressDetail__k1chb"><p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>${PROFILE.name}</p><p class="CartAddress_address__Nt8hI">Bhopal 462001</p></div><div class="CartAddress_addressAction__clmEn"><span class="undefined" id="act">${st.saved.length ? "SELECT ADDRESS" : "ADD ADDRESS"}</span></div></div></div></div>`;
     return shell(
         "Your Cart | Apollo Pharmacy",
         `<h1>YOUR CART</h1><p>1 ITEM IN YOUR CART</p>${block}
@@ -455,8 +455,8 @@ const target = addressTargetFrom(LABEL)!;
 const checkout = (p: Page, progress: string[], log: string[], dryRun = true) =>
     runApolloCodCheckout(p, {
         deadlineAt: Date.now() + 140_000,
-        pincode: "492001",
-        addressHints: ["C504", "SUNITA PARK"],
+        pincode: "462001",
+        addressHints: ["B12", "GREEN PARK"],
         addressTarget: target,
         recipientName: KAVACH_RECIPIENT,
         accountPhone: "+919876543210",
@@ -472,35 +472,35 @@ const checkout = (p: Page, progress: string[], log: string[], dryRun = true) =>
 
 async function main() {
     // ── unit ──
-    assert.equal(target.pincode, "492001");
-    assert.equal(target.flat, "C504");
-    assert.equal(target.society, "Sunita Park");
-    assert.equal(target.area, "Labhandih");
-    assert.equal(target.landmark, "Near Tulip Area Hotel");
-    assert.equal(target.city, "Raipur");
-    assert.equal(target.state, "Chhattisgarh");
-    assert.equal(target.line1, "C504, Sunita Park");
-    assert.deepEqual(target.searchQueries, ["Sunita Park Labhandih Raipur", "Sunita Park Raipur", "Labhandih Raipur", "492001"]);
-    const short = addressTargetFrom("C504 Sunita Park, Labhandih, Raipur 492001")!;
-    assert.equal(short.flat, "C504");
-    assert.equal(short.society, "Sunita Park");
-    assert.equal(short.city, "Raipur");
-    assert.ok(savedAddressMatches("c-504 , SUNITA PARK, LABHANDIH, RAIPUR, CHHATTISGARH - 492001", target));
-    assert.ok(savedAddressMatches("Flat C 504, Near Tulip, Labhandih, Raipur, Chhattisgarh - 492001", target));
-    assert.ok(savedAddressMatches("Sunita-Park Society, Labhandih, Raipur - 492001", target));
-    assert.ok(!savedAddressMatches("C504, Sunita Park, Raipur - 492013", target), "wrong pincode");
-    assert.ok(!savedAddressMatches("Flat 12, Shanti Nagar, Raipur - 492001", target), "same pincode, other street");
-    assert.ok(!savedAddressMatches("Raipur 492001", target), "header browse location is not an address");
+    assert.equal(target.pincode, "462001");
+    assert.equal(target.flat, "B12");
+    assert.equal(target.society, "Green Park");
+    assert.equal(target.area, "Arera");
+    assert.equal(target.landmark, "Near Lotus Area Hotel");
+    assert.equal(target.city, "Bhopal");
+    assert.equal(target.state, "Madhya Pradesh");
+    assert.equal(target.line1, "B12, Green Park");
+    assert.deepEqual(target.searchQueries, ["Green Park Arera Bhopal", "Green Park Bhopal", "Arera Bhopal", "462001"]);
+    const short = addressTargetFrom("B12 Green Park, Arera, Bhopal 462001")!;
+    assert.equal(short.flat, "B12");
+    assert.equal(short.society, "Green Park");
+    assert.equal(short.city, "Bhopal");
+    assert.ok(savedAddressMatches("b-12 , GREEN PARK, ARERA, BHOPAL, MADHYA PRADESH - 462001", target));
+    assert.ok(savedAddressMatches("Flat B 12, Near Lotus, Arera, Bhopal, Madhya Pradesh - 462001", target));
+    assert.ok(savedAddressMatches("Green-Park Society, Arera, Bhopal - 462001", target));
+    assert.ok(!savedAddressMatches("B12, Green Park, Bhopal - 462013", target), "wrong pincode");
+    assert.ok(!savedAddressMatches("Flat 12, Shanti Nagar, Bhopal - 462001", target), "same pincode, other street");
+    assert.ok(!savedAddressMatches("Bhopal 462001", target), "header browse location is not an address");
     const pick = pickSearchResult(
         [
-            { i: 0, text: "Sunita Park Kota, Rajasthan 324005" },
-            { i: 1, text: "Labhandih Raipur, Chhattisgarh" },
-            { i: 2, text: "Sunita Park Labhandih, Raipur, Chhattisgarh 492001, India" },
+            { i: 0, text: "Green Park Kota, Rajasthan 324005" },
+            { i: 1, text: "Arera Bhopal, Madhya Pradesh" },
+            { i: 2, text: "Green Park Arera, Bhopal, Madhya Pradesh 462001, India" },
         ],
         target,
     );
-    assert.equal(pick?.i, 2, "best search row = Sunita Park, Labhandih, Raipur 492001");
-    assert.equal(pickSearchResult([{ i: 0, text: "Sunita Park Kota, Rajasthan" }], target), null, "other city rejected");
+    assert.equal(pick?.i, 2, "best search row = Green Park, Arera, Bhopal 462001");
+    assert.equal(pickSearchResult([{ i: 0, text: "Green Park Kota, Rajasthan" }], target), null, "other city rejected");
     assert.equal(redactDiagText("call 9876543210 or +91 98765 43210, OTP is 519319"), "call [phone] or [phone], OTP is [redacted]");
     console.log("✓ unit: address parsing / saved-address matching / diag redaction");
 
@@ -508,8 +508,8 @@ async function main() {
     {
         const st = newState({
             places: [
-                { placeId: "p-far", addressName: "Sunita Park", addressDescription: "Kota, Rajasthan 324005", pincode: "324005", city: "Kota", state: "Rajasthan", area: "Kota" },
-                { placeId: "p1", addressName: "Sunita Park", addressDescription: "Labhandih, Raipur, Chhattisgarh 492001, India", pincode: "492001", city: "Raipur", state: "Chhattisgarh", area: "Labhandih, Raipur" },
+                { placeId: "p-far", addressName: "Green Park", addressDescription: "Kota, Rajasthan 324005", pincode: "324005", city: "Kota", state: "Rajasthan", area: "Kota" },
+                { placeId: "p1", addressName: "Green Park", addressDescription: "Arera, Bhopal, Madhya Pradesh 462001, India", pincode: "462001", city: "Bhopal", state: "Madhya Pradesh", area: "Arera, Bhopal" },
             ],
         });
         const progress: string[] = [];
@@ -517,25 +517,25 @@ async function main() {
         const out = await withPage(st, async (p) => {
             await p.goto(`${BASE}/medicines-cart`);
             const before = await readCartAddressBlock(p);
-            assert.equal(before.selected, false, "nothing selected (only the browse 'Raipur 492001')");
+            assert.equal(before.selected, false, "nothing selected (only the browse 'Bhopal 462001')");
             assert.equal(cartAddressEvidence(before, target), "none", "browse location is NOT counted as an address");
             return checkout(p, progress, log);
         });
         assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
         assert.equal(st.saveCalls.length, 1, "exactly one address saved");
         const saved = st.saveCalls[0]!;
-        assert.equal(saved.address1, "C504, Sunita Park");
-        assert.equal(saved.landmark, "Near Tulip Area Hotel");
+        assert.equal(saved.address1, "B12, Green Park");
+        assert.equal(saved.landmark, "Near Lotus Area Hotel");
         assert.equal(saved.recipientName, KAVACH_RECIPIENT, "care recipient's name from Kavach");
         assert.equal(saved.recipientContact, PROFILE.phone, "Apollo's own prefilled account phone kept");
         assert.equal(saved.addressType, "HOME");
         const sel = st.saved.find((a) => a.id === st.selectedId)!;
-        assert.equal(sel.zipcode, "492001");
-        assert.ok(st.searchQueries[0]!.includes("sunita park"), st.searchQueries.join(" | "));
+        assert.equal(sel.zipcode, "462001");
+        assert.ok(st.searchQueries[0]!.includes("green park"), st.searchQueries.join(" | "));
         assert.ok(st.requests.some((r) => /\/pay\//.test(r)), "reached /pay after the address popup");
         assert.equal(st.placeClicks, 0);
         assertNoLeaks(st);
-        console.log("✓ A no saved address: added C504, Sunita Park (Labhandih, Raipur 492001), selected, popup confirmed, reached COD (dry run)");
+        console.log("✓ A no saved address: added B12, Green Park (Arera, Bhopal 462001), selected, popup confirmed, reached COD (dry run)");
         console.log("  progress:", JSON.stringify(progress));
         console.log("  saved:", JSON.stringify(saved));
     }
@@ -544,8 +544,8 @@ async function main() {
     {
         const st = newState({
             saved: [
-                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
-                { id: "a2", addressLine1: "c-504 , SUNITA PARK", addressLine2: "LABHANDIH NEAR TULIP HOTEL", city: "RAIPUR", state: "CHHATTISGARH", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Bhopal", state: "Madhya Pradesh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a2", addressLine1: "b-12 , GREEN PARK", addressLine2: "ARERA NEAR LOTUS HOTEL", city: "BHOPAL", state: "MADHYA PRADESH", zipcode: "462001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
             ],
         });
         const progress: string[] = [];
@@ -560,14 +560,14 @@ async function main() {
         assert.equal(st.searchQueries.length, 0, "no location search");
         assert.equal(st.placeClicks, 0);
         assertNoLeaks(st);
-        console.log("✓ B saved address in a different format (c-504 , SUNITA PARK … - 492001), hidden behind 'View Other Saved Address': selected, no new address");
+        console.log("✓ B saved address in a different format (b-12 , GREEN PARK … - 462001), hidden behind 'View Other Saved Address': selected, no new address");
         console.log("  progress:", JSON.stringify(progress));
     }
 
     // ── C) Apollo's map puts the place in another pincode → stop, save nothing ──
     {
         const st = newState({
-            places: [{ placeId: "p2", addressName: "Sunita Park", addressDescription: "Labhandih, Raipur, Chhattisgarh", pincode: "492013", city: "Raipur", state: "Chhattisgarh", area: "Labhandih" }],
+            places: [{ placeId: "p2", addressName: "Green Park", addressDescription: "Arera, Bhopal, Madhya Pradesh", pincode: "462013", city: "Bhopal", state: "Madhya Pradesh", area: "Arera" }],
         });
         const log: string[] = [];
         const out = await withPage(st, async (p) => {
@@ -577,7 +577,7 @@ async function main() {
             return res;
         });
         assert.equal(out.status, "address_unverified", JSON.stringify(out));
-        assert.match(out.detail, /pincode 492013, not 492001/);
+        assert.match(out.detail, /pincode 462013, not 462001/);
         assert.equal(st.saveCalls.length, 0, "never saved a wrong-pincode address");
         assert.ok(!st.requests.some((r) => /\/delivery-options|\/pay\//.test(r)), "never went past the cart");
         assertNoLeaks(st);
@@ -585,7 +585,7 @@ async function main() {
         assert.ok(diag && diag.url.endsWith("/address-details?view=map"), JSON.stringify(diag?.url));
         assert.ok(!/9876543210/.test(diag.text), "phone redacted from diag text");
         assert.ok((diag.screenshotBytes ?? 0) > 1000 && diag.screenshotJpegBase64, "masked screenshot captured");
-        console.log("✓ C map pincode 492013 ≠ 492001 → stopped, nothing saved/placed; diagnostic captured (url, text, masked screenshot)");
+        console.log("✓ C map pincode 462013 ≠ 462001 → stopped, nothing saved/placed; diagnostic captured (url, text, masked screenshot)");
         console.log("  detail:", out.detail);
         console.log("  diag:", JSON.stringify({ stage: diag.stage, url: diag.url, text: diag.text.slice(0, 160), bytes: diag.screenshotBytes }));
     }
@@ -593,7 +593,7 @@ async function main() {
     // ── D) matching address already selected → no picker at all ──
     {
         const st = newState({
-            saved: [{ id: "a2", addressLine1: "C504, Sunita Park", addressLine2: "Labhandih", city: "Raipur", state: "Chhattisgarh", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone }],
+            saved: [{ id: "a2", addressLine1: "B12, Green Park", addressLine2: "Arera", city: "Bhopal", state: "Madhya Pradesh", zipcode: "462001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone }],
             selectedId: "a2",
         });
         const out = await withPage(st, async (p) => {
@@ -610,8 +610,8 @@ async function main() {
     {
         const st = newState({
             saved: [
-                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
-                { id: "a3", addressLine1: "C 504 Sunita Park", addressLine2: "Labhandih", city: "Raipur", state: "Chhattisgarh", zipcode: "492001", addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Bhopal", state: "Madhya Pradesh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a3", addressLine1: "B 12 Green Park", addressLine2: "Arera", city: "Bhopal", state: "Madhya Pradesh", zipcode: "462001", addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
             ],
         });
         const log: string[] = [];
@@ -628,9 +628,9 @@ async function main() {
     }
 
     // ── unit: header "Deliver to <name> <city> <pin>" is browse location only ──
-    assert.equal(addressEvidenceFromText("Deliver to Kritarth Raipur 492001 1 K Buy Medicines YOUR CART 1 ITEM Amount to pay ₹192.42 SELECT ADDRESS", "492001", ["C504"]), "none");
-    assert.equal(addressEvidenceFromText("Delivery Address Select Address Raipur 492001 Choose delivery type Delivering to", "492001", ["C504"]), "none");
-    assert.equal(addressEvidenceFromText("Deliver to Kritarth Raipur 492012 Choose delivery type Delivering to C504, Sunita Park, Labhandih, Raipur - 492001", "492001", ["C504"]), "full");
+    assert.equal(addressEvidenceFromText("Deliver to Ramesh Bhopal 462001 1 K Buy Medicines YOUR CART 1 ITEM Amount to pay ₹192.42 SELECT ADDRESS", "462001", ["B12"]), "none");
+    assert.equal(addressEvidenceFromText("Delivery Address Select Address Bhopal 462001 Choose delivery type Delivering to", "462001", ["B12"]), "none");
+    assert.equal(addressEvidenceFromText("Deliver to Ramesh Bhopal 492012 Choose delivery type Delivering to B12, Green Park, Arera, Bhopal - 462001", "462001", ["B12"]), "full");
     console.log("✓ unit: header 'Deliver to <name> <city> <pin>' never counts as the delivery pincode");
 
     // ── F) LIVE layout (no block, header 492012, bottom SELECT/ADD ADDRESS), no saved address → add new ──
@@ -638,7 +638,7 @@ async function main() {
         const st = newState({
             layout: "live",
             places: [
-                { placeId: "p1", addressName: "Sunita Park", addressDescription: "Labhandih, Raipur, Chhattisgarh 492001, India", pincode: "492001", city: "Raipur", state: "Chhattisgarh", area: "Labhandih, Raipur" },
+                { placeId: "p1", addressName: "Green Park", addressDescription: "Arera, Bhopal, Madhya Pradesh 462001, India", pincode: "462001", city: "Bhopal", state: "Madhya Pradesh", area: "Arera, Bhopal" },
             ],
         });
         const progress: string[] = [];
@@ -649,15 +649,15 @@ async function main() {
             assert.equal(before.found, false, "no CartAddress block (live layout)");
             assert.equal(before.cta, "ADD ADDRESS", JSON.stringify(before));
             assert.ok(ctaNeedsAddress(before));
-            assert.match(before.header, /Deliver to Kritarth Raipur 492012/);
+            assert.match(before.header, /Deliver to Ramesh Bhopal 492012/);
             assert.equal(cartAddressEvidence(before, target), "none");
             return checkout(p, progress, log);
         });
         assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
         assert.equal(st.saveCalls.length, 1, "exactly one address saved");
-        assert.equal(st.saveCalls[0]!.address1, "C504, Sunita Park");
+        assert.equal(st.saveCalls[0]!.address1, "B12, Green Park");
         assert.equal(st.saveCalls[0]!.recipientName, KAVACH_RECIPIENT);
-        assert.equal(st.saved.find((a) => a.id === st.selectedId)!.zipcode, "492001");
+        assert.equal(st.saved.find((a) => a.id === st.selectedId)!.zipcode, "462001");
         assert.ok(log.some((l) => l.startsWith("address_review_result") && l.includes('"ok":true')), "verified on Apollo's Deliver-to popup before payment");
         assert.ok(st.requests.some((r) => /\/pay\//.test(r)));
         assert.equal(st.placeClicks, 0);
@@ -671,8 +671,8 @@ async function main() {
         const st = newState({
             layout: "live",
             saved: [
-                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492012", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
-                { id: "a2", addressLine1: "c-504 , SUNITA PARK", addressLine2: "LABHANDIH NEAR TULIP HOTEL", city: "RAIPUR", state: "CHHATTISGARH", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Bhopal", state: "Madhya Pradesh", zipcode: "492012", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a2", addressLine1: "b-12 , GREEN PARK", addressLine2: "ARERA NEAR LOTUS HOTEL", city: "BHOPAL", state: "MADHYA PRADESH", zipcode: "462001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
             ],
         });
         const progress: string[] = [];
@@ -688,18 +688,18 @@ async function main() {
         assert.equal(st.saveCalls.length + st.searchQueries.length, 0, "no new address, no search");
         assert.ok(log.some((l) => l.startsWith("address_review_result") && l.includes('"ok":true')));
         assertNoLeaks(st);
-        console.log("✓ G live layout, bottom SELECT ADDRESS → drawer → View Other → 'c-504 , SUNITA PARK … - 492001' selected, verified on popup (dry run)");
+        console.log("✓ G live layout, bottom SELECT ADDRESS → drawer → View Other → 'b-12 , GREEN PARK … - 462001' selected, verified on popup (dry run)");
         console.log("  progress:", JSON.stringify(progress));
     }
 
-    // ── H) LIVE layout, another saved address pre-selected (bottom already Proceed), header shows 492001 ──
+    // ── H) LIVE layout, another saved address pre-selected (bottom already Proceed), header shows 462001 ──
     {
         const st = newState({
             layout: "live",
-            headerPin: "492001",
+            headerPin: "462001",
             saved: [
-                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
-                { id: "a2", addressLine1: "C504, Sunita Park", addressLine2: "Labhandih", city: "Raipur", state: "Chhattisgarh", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Bhopal", state: "Madhya Pradesh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a2", addressLine1: "B12, Green Park", addressLine2: "Arera", city: "Bhopal", state: "Madhya Pradesh", zipcode: "462001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
             ],
             selectedId: "a1",
         });
@@ -713,18 +713,18 @@ async function main() {
         assert.equal(st.selectedId, "a2", "switched via the popup's Change Address");
         assert.equal(st.saveCalls.length, 0);
         assertNoLeaks(st);
-        console.log("✓ H live layout, wrong address pre-selected (header says 492001 — ignored) → popup mismatch → Change Address → C504 selected → verified (dry run)");
+        console.log("✓ H live layout, wrong address pre-selected (header says 462001 — ignored) → popup mismatch → Change Address → B12 selected → verified (dry run)");
         console.log("  progress:", JSON.stringify(progress));
     }
 
-    // ── I) LIVE layout, wrong address pre-selected, NO popup, header 492001 → must stop before payment ──
+    // ── I) LIVE layout, wrong address pre-selected, NO popup, header 462001 → must stop before payment ──
     {
         const st = newState({
             layout: "live",
-            headerPin: "492001",
+            headerPin: "462001",
             noReviewPopup: true,
             saved: [
-                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Bhopal", state: "Madhya Pradesh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
             ],
             selectedId: "a1",
         });
@@ -737,7 +737,7 @@ async function main() {
         assert.ok(!st.requests.some((r) => /\/pay\//.test(r)), "never reached payment");
         assert.equal(st.placeClicks, 0);
         assertNoLeaks(st);
-        console.log("✓ I live layout, wrong address, no popup, header 'Deliver to Kritarth Raipur 492001' → stopped before payment:", out.detail);
+        console.log("✓ I live layout, wrong address, no popup, header 'Deliver to Ramesh Bhopal 462001' → stopped before payment:", out.detail);
     }
 
     // ── unit: upsell controls are on the Gemini block list ──
@@ -752,8 +752,8 @@ async function main() {
     const selectedLive = (p: Partial<St>) =>
         newState({
             layout: "live",
-            headerPin: "492001",
-            saved: [{ id: "a2", addressLine1: "C504, Sunita Park", addressLine2: "Labhandih", city: "Raipur", state: "Chhattisgarh", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: "Kritarth Agrawal", mobileNumber: PROFILE.phone }],
+            headerPin: "462001",
+            saved: [{ id: "a2", addressLine1: "B12, Green Park", addressLine2: "Arera", city: "Bhopal", state: "Madhya Pradesh", zipcode: "462001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: "Ramesh Agrawal", mobileNumber: PROFILE.phone }],
             selectedId: "a2",
             ...p,
         });

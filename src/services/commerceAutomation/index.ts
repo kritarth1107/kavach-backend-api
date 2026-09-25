@@ -55,7 +55,6 @@ export {
 } from "./guestCatalogSearch.service";
 
 export {
-    SMOKE_DEFAULT_DELIVERY_ADDRESS,
     resolveDeliveryAddressLabel,
     appendDeliveryAddressToGoal,
 } from "./smokeDeliveryAddress";

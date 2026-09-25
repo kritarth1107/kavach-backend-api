@@ -26,7 +26,7 @@ const common: Record<CheckoutStepKey, string> = {
     proceed_checkout:
         "Click the button that continues from the cart to checkout (e.g. 'Proceed', 'Checkout', 'Continue', 'Select address').",
     select_address:
-        "Select the saved delivery address with pincode 492001 (C504, Sunita Park, Labhandih, Raipur) and continue ('Deliver here' / 'Continue'). Do not pick an address in another city.",
+        "Select the saved delivery address with pincode {PINCODE} and continue ('Deliver here' / 'Continue'). Do not pick an address with a different pincode.",
     dismiss_upsell:
         "Close or skip any popup, drawer or banner that offers a membership, plan, subscription, offer or coupon (the close ✕, 'Skip', 'No thanks', 'Maybe later').",
     reach_payment:

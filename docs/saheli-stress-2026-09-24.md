@@ -1,8 +1,8 @@
 # Saheli WhatsApp stress transcript — 2026-09-24
 
 - **Date (IST):** Thursday 24 Sep 2026 (~20:45–21:40 IST)
-- **Method:** `POST https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/mock` JSON `{ "from": "917694829888", "text": "..." }` (~2.5–3s spacing)
-- **Care recipient from:** `917694829888` (+917694829888)
+- **Method:** `POST https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/mock` JSON `{ "from": "<test-elder-number>", "text": "..." }` (~2.5–3s spacing)
+- **Care recipient from:** `<test-elder-number>` (<test-elder-number>)
 - **Caregiver:** kritarth@kavach.care
 - **Baseline backend SHA:** `268a9b71f26129f8b823a9d5819b740f2820e197`
 - **Fix SHAs pushed (backend main):**

@@ -2,10 +2,10 @@
 
 **Goal:** User smoke of SHARED commerce pipeline across pharmacy + grocery/food.  
 **Do not** use Hermes. Prefer mock WA first; live Meta WA only if Meta delivery is healthy.  
-**Phone:** `917694829888` / `7694829888` — OTP SMS may be sent by partner sites when login is enabled; paste into WA only after Saheli asks.
+**Phone:** `<test-elder-number>` / `<test-elder-number>` — OTP SMS may be sent by partner sites when login is enabled; paste into WA only after Saheli asks.
 
 **Default delivery (when elder has none saved):**  
-`C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH, 492001`  
+`<recipient saved address>`  
 Always **confirm-before-pay**; prefer **COD**.
 
 **Flags (Cloud Run):**
@@ -20,7 +20,7 @@ Always **confirm-before-pay**; prefer **COD**.
 ```bash
 POST https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/mock
 Content-Type: application/json
-{"from":"917694829888","text":"..."}
+{"from":"<test-elder-number>","text":"..."}
 ```
 Space turns ~2.5–3s ( ~5s after guest search).
 
@@ -84,11 +84,11 @@ While `pharmacyDraft` or `browserTaskDraft` is `awaiting_sku_confirm` / `running
 
 1. Deploy this SHA to Cloud Run (`main`).
 2. Confirm `BROWSER_PHARMACY_LOGIN=on` if live OTP is intended.
-3. One mock `cancel` on `917694829888` if a parked session might still be open.
+3. One mock `cancel` on `<test-elder-number>` if a parked session might still be open.
 4. Do **not** fire OTP against the phone during deploy-only tasks.
 
 ## Out of scope tonight
 
-- Live OTP / COD / WhatsApp smoke against `7694829888`  
+- Live OTP / COD / WhatsApp smoke against `<test-elder-number>`  
 - Hermes  
 - LLM stack changes  

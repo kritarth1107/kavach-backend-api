@@ -149,12 +149,12 @@ async function main() {
         billLines: ["Item total ₹30", "Delivery ₹20"],
         payableTotal: "₹50",
         selectedPaymentMethod: "Cash on Delivery",
-        deliveryAddress: "C504, Sunita Park, Labhandih, Raipur 492001",
+        deliveryAddress: "B12, Green Park, Arera Colony, Bhopal 462001",
         orderId: null,
         eta: null,
         ...o,
     });
-    const baseOpts = { partner: "zepto", deadlineAt: Date.now() + 120_000, skuName: "Amul Taaza Milk 500ml", confirmedTotalRupees: 50 };
+    const baseOpts = { partner: "zepto", deadlineAt: Date.now() + 120_000, skuName: "Amul Taaza Milk 500ml", confirmedTotalRupees: 50, pincode: "462001" };
 
     await t("generic checkout: amount went up → amount_changed, no Place click", async () => {
         clicked.length = 0;

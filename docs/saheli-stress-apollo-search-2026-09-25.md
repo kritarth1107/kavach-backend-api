@@ -1,8 +1,8 @@
 # Saheli WhatsApp stress transcript — Apollo + search-before-login — 2026-09-25
 
 - **Date (IST):** Friday 25 Sep 2026 (~02:22–02:26 IST)
-- **Method:** `POST https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/mock` JSON `{ "from": "917694829888", "text": "..." }` (~2.5–3s spacing; ~5s after guest Apollo search)
-- **Care recipient from:** `917694829888` (+917694829888)
+- **Method:** `POST https://kavach-backend-303943038694.asia-south1.run.app/api/webhooks/whatsapp/mock` JSON `{ "from": "<test-elder-number>", "text": "..." }` (~2.5–3s spacing; ~5s after guest Apollo search)
+- **Care recipient from:** `<test-elder-number>` (<test-elder-number>)
 - **Focus:** Apollo pharmacy guest catalog + search-before-login; OTP hard-capped
 - **Baseline backend SHA (at test time):** `f49d9f2df19c9945d612a73cdf7688301de0372e`
 - **Fix + transcript SHA (pushed main):** `451692f0a5ff19517a43329522b6f40e295966aa`
@@ -380,9 +380,9 @@ Small/obvious patches in `src/services/pharmacyOrderFlow.service.ts` (same PR/co
 
 ### Live COD order attempt (real)
 
-- **from:** `917694829888`
+- **from:** `<test-elder-number>`
 - **Product:** Limcee 500 mg Chewable Orange Tablet 15's — ₹24.50 (pick `3` after guest list)
-- **Address intended:** C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH, 492001
+- **Address intended:** <recipient saved address>
 - **Payment:** COD only
 - **Outcome:** **NEED_OTP_FROM_USER** — blocked after Opening Apollo / login SMS to ••••9888. No OTP invented; stopped (no retry spam).
 
@@ -417,5 +417,5 @@ No silent pay — I'll ask you to confirm item+total+address before checkout.
 No code yet? Check the SMS thread from Apollo, then reply *retry* or *cancel*.
 ```
 
-**Coordinator handoff:** User must paste the Apollo SMS OTP from phone `7694829888` into WhatsApp/mock as the next message. After OTP: send full address string if asked, confirm **COD only**, capture order id.
+**Coordinator handoff:** User must paste the Apollo SMS OTP from phone `<test-elder-number>` into WhatsApp/mock as the next message. After OTP: send full address string if asked, confirm **COD only**, capture order id.
 

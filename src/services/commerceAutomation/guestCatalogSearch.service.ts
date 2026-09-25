@@ -451,6 +451,8 @@ export async function searchGuestCatalog(input: {
     userId?: string;
     /** Delivery pincode — Apollo reports per-pincode stock; OOS SKUs are dropped. */
     pincode?: string;
+    /** The care recipient's own saved address (grocery/food sites set their location to it). */
+    address?: string;
 }): Promise<GuestCatalogSearchResult> {
     const partner = String(input.partner || "").toLowerCase() as CommercePartnerKey;
     const query = normalizeCatalogQuery(input.query).slice(0, 120);
@@ -563,14 +565,17 @@ export async function searchGuestCatalog(input: {
         }
         // Food / grocery: browser only (never MCP), location = the Kavach address.
         if (partner === "instamart") {
+            if (!input.address) {
+                return { hits: [], searched: false, unavailableReason: "I need your delivery address first.", partner, query };
+            }
             const { instamartSearch } = await import("./swiggyGuest.service");
-            const res = await instamartSearch({ query });
+            const res = await instamartSearch({ query, address: input.address });
             if (!res.location.ok || !res.location.pincodeMatch) {
                 return {
                     hits: [],
                     searched: true,
                     unavailableReason:
-                        "I couldn't set Instamart's location to your saved address (C504, Sunita Park, Raipur 492001), so I won't show prices from another area. Please try again in a bit.",
+                        "I couldn't set Instamart's location to your saved address, so I won't show prices from another area. Please try again in a bit.",
                     partner,
                     query,
                 };
@@ -591,8 +596,8 @@ export async function searchGuestCatalog(input: {
                 unavailableReason: hits.length
                     ? undefined
                     : res.items.length
-                      ? `Instamart (Raipur 492001) shows nothing matching "${query}". Try another name.`
-                      : `Instamart's page didn't show any products for your address (Raipur 492001) just now — the store may be closed at this hour or the site didn't load for me. Please try again in a while.`,
+                      ? `Instamart shows nothing matching "${query}" near you. Try another name.`
+                      : `Instamart's page didn't show any products for your address just now — the store may be closed at this hour or the site didn't load for me. Please try again in a while.`,
                 partner,
                 query,
             };
@@ -616,7 +621,7 @@ export async function searchGuestCatalog(input: {
                     `I can't browse ${label} without signing in yet, so I can't show live items or prices for your address. ` +
                     (partner === "zomato"
                         ? `I can show open restaurants near you on *Swiggy* instead.`
-                        : `Reply *confirm* to sign in to ${label} in my browser (an OTP SMS will come) and I'll search there for Raipur 492001 — or say *order ${query} from Instamart*.`),
+                        : `Reply *confirm* to sign in to ${label} in my browser (an OTP SMS will come) and I'll search there for your address — or say *order ${query} from Instamart*.`),
                 partner,
                 query,
             };

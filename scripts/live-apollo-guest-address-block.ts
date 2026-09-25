@@ -34,7 +34,7 @@ import { cartAddressEvidence, addressTargetFrom, readCartAddressBlock } from "..
     const page = await ctx.newPage();
     try {
         const item = { name: "Little's Soft Cleansing Baby Wipes, 30 Units", productUrl: "https://www.apollopharmacy.in/otc/little-s-soft-cleansing-baby-wipes-30-s", qty: 1 };
-        const r = await addExactSkuToApolloCart(page, item, { deadlineAt: Date.now() + 70_000, pincode: "492001" });
+        const r = await addExactSkuToApolloCart(page, item, { deadlineAt: Date.now() + 70_000, pincode: "462001" });
         console.log("seed add →", r.status, r.detail);
         await page.goto(APOLLO_CART_URL, { waitUntil: "domcontentloaded" });
         let blk = await readCartAddressBlock(page);
@@ -42,7 +42,7 @@ import { cartAddressEvidence, addressTargetFrom, readCartAddressBlock } from "..
             await page.waitForTimeout(700);
             blk = await readCartAddressBlock(page);
         }
-        const target = addressTargetFrom("C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH, 492001")!;
+        const target = addressTargetFrom("B12, GREEN PARK, ARERA, NEAR LOTUS AREA HOTEL, BHOPAL, MADHYA PRADESH, 462001")!;
         console.log("CartAddress block (guest):", JSON.stringify(blk), "evidence:", cartAddressEvidence(blk, target));
         const html = await page
             .evaluate(() => (document.querySelector('[class*="CartAddress_addressMain"]') as HTMLElement | null)?.outerHTML.replace(/\s+/g, " ").slice(0, 700) || "")

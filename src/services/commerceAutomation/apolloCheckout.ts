@@ -3,7 +3,7 @@
  * (parked after the confirm-before-pay card). Runs ONLY after the user replied
  * "confirm" to that exact card.
  *
- *   /medicines-cart → ensure delivery address (select saved C504/Sunita Park 492001 or add it
+ *   /medicines-cart → ensure delivery address (select the recipient's saved address or add it
  *   via Apollo's own Add New Address flow — see apolloAddress.ts) → Proceed → "Deliver to"
  *   confirm popup (verify + Proceed)
  *   → /delivery-options → PROCEED → /pay/<id> → "Pay on Delivery" (COD)
@@ -85,7 +85,7 @@ export type ApolloCheckoutOutcome =
 export type ApolloCheckoutOptions = {
     deadlineAt: number;
     pincode?: string;
-    /** Distinctive address fragments, e.g. ["C504", "Sunita Park"]. */
+    /** Distinctive address fragments, e.g. ["B12", "Green Park"]. */
     addressHints?: string[];
     /** Full parsed delivery address (select a matching saved address or add this one). */
     addressTarget?: AddressTarget | null;
