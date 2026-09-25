@@ -210,7 +210,23 @@ export async function getChannelIdentitiesHandler(req: Request, res: Response) {
     res.json({ success: true, data: { identities: rows } });
 }
 
+/**
+ * Mock channel endpoints impersonate any phone and (peek) read that person's messages, so in
+ * production they need the mock secret header. Unauthorized → 404 (don't advertise the route).
+ */
+function isMockAuthorized(req: Request): boolean {
+    if (process.env.NODE_ENV !== "production" && process.env.WHATSAPP_MOCK_OPEN === "1") return true;
+    const expected = process.env.WHATSAPP_MOCK_SECRET?.trim();
+    const provided = String(req.get("x-kavach-mock-secret") ?? "");
+    if (!expected || !provided || provided.length !== expected.length) return false;
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
 export async function postWhatsAppMockWebhook(req: Request, res: Response) {
+    if (!isMockAuthorized(req)) {
+        res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
     const { buildWhatsAppMockPeek } = await import("../services/whatsappMockPeek.service");
     // {"from":"91…","peek":true} → read-only: latest Saheli outbound messages (incl. the async
     // confirm-before-pay card) + draft summary. Does NOT route any message.
@@ -267,6 +283,9 @@ function isValidHealthSecret(provided: unknown): boolean {
 
 function isValidWebhookDebugAuth(req: Request): boolean {
     if (isValidHealthSecret(req.query.HEALTH_SECRET)) return true;
+    // The old verify token was committed to a public repo; accept it only once it's rotated
+    // (WHATSAPP_META_VERIFY_TOKEN_ROTATED=1 set together with a new secret token).
+    if (process.env.WHATSAPP_META_VERIFY_TOKEN_ROTATED !== "1") return false;
 
     const provided = String(req.query.verify_token ?? "");
     const expected = config.whatsapp.meta.webhookVerifyToken;
@@ -523,6 +542,10 @@ async function processMetaInboundMessages(
 }
 
 export async function postPhoneMockWebhook(req: Request, res: Response) {
+    if (!isMockAuthorized(req)) {
+        res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
     const { reply } = await phoneMockAdapter.receive({
         channelType: ChannelType.PHONE,
         channelIdentifier: req.body.from,
@@ -534,6 +557,10 @@ export async function postPhoneMockWebhook(req: Request, res: Response) {
 }
 
 export async function postSpeakerMockWebhook(req: Request, res: Response) {
+    if (!isMockAuthorized(req)) {
+        res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
     const { reply } = await smartSpeakerMockAdapter.receive({
         channelType: ChannelType.SMART_SPEAKER,
         channelIdentifier: req.body.deviceId,

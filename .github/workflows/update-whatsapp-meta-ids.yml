@@ -23,7 +23,7 @@ env:
   GCP_REGION: asia-south1
   SERVICE: kavach-backend
   BACKEND_URL: https://kavach-backend-303943038694.asia-south1.run.app
-  WEBHOOK_VERIFY_TOKEN: kavach_wa_verify_k9X2mP7nQ4vL8sR3
+  WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN }}
 
 jobs:
   update:

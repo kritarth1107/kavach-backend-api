@@ -131,9 +131,8 @@ const config: AppConfig = {
             appId: process.env.WHATSAPP_META_APP_ID || "",
             appSecret: process.env.WHATSAPP_META_APP_SECRET || "",
             accessToken: process.env.WHATSAPP_META_ACCESS_TOKEN || "",
-            webhookVerifyToken:
-                process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN ||
-                "kavach_wa_verify_k9X2mP7nQ4vL8sR3",
+            // No committed fallback: the repo is public.
+            webhookVerifyToken: process.env.WHATSAPP_META_WEBHOOK_VERIFY_TOKEN || "",
             graphVersion: process.env.WHATSAPP_META_GRAPH_VERSION || "v22.0",
         },
     },
