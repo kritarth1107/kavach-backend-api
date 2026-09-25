@@ -889,8 +889,8 @@ async function startParkedCheckoutFromWhatsApp(
             delivered = true;
             console.warn("[pharmacy-checkout] WA watchdog fired");
             void push(
-                `Apollo's checkout is taking unusually long. I will *not* place the order twice — ` +
-                    `if you don't get the order number here in 2 minutes, please check Apollo → My Orders.`,
+                `${label}'s checkout is taking unusually long. I will *not* place the order twice — ` +
+                    `if you don't get the order number here in 2 minutes, please check ${label} → My Orders.`,
             );
         }, CHECKOUT_BUDGET_MS + 20_000);
         watchdog.unref?.();

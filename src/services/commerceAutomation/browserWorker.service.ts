@@ -6,6 +6,9 @@
  *   auto → playwright if Chromium launchable, else dry_run
  * Cloud Run image installs Chromium (bookworm + playwright --with-deps); prefer auto|playwright in prod.
  */
+import { runGenericCodCheckout, verifyGenericCart } from "./agentLayer/stepEngine";
+import { debugPortArgs, pickDebugPort, registerBrowserDebugPort } from "./agentLayer/cdpRegistry";
+import { guardComputerUseClick } from "./agentLayer/guardrails";
 import type { BrowserAction } from "./geminiComputerUse.service";
 import { planBrowserActions } from "./geminiComputerUse.service";
 import {
@@ -34,6 +37,7 @@ import {
     currentBrowserGeneration,
     parkBrowserForCheckout,
     takeParkedCheckout,
+    peekParkedCheckout,
     closeCheckoutSession,
     checkoutParkTtlMs,
     type ParkedCheckoutSession,
@@ -616,14 +620,17 @@ class PlaywrightBrowserWorker implements BrowserWorker {
         }
 
         const launchMs = Math.min(Number(process.env.BROWSER_LAUNCH_MS) || 15_000, 45_000);
+        const debugPort = pickDebugPort();
         const browser = await raceWithDeadline(
             pw.chromium.launch({
                 headless: true,
-                args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+                // Local-only CDP port so the Stagehand fallback can attach to this same browser.
+                args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", ...debugPortArgs(debugPort)],
             }),
             launchMs,
             "Playwright chromium.launch",
         );
+        registerBrowserDebugPort(browser, debugPort);
 
         let context: import("playwright").BrowserContext | null = null;
         let modelUsed: string | undefined;
@@ -959,7 +966,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                             retainBrowser = true;
                             context = null;
                         }
-                        return {
+                        const out: BrowserTaskResult = {
                             status: gated.status!,
                             message: msg,
                             steps,
@@ -969,6 +976,27 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                             confirm: gated.confirm,
                             partner: String(playbook.partner),
                         };
+                        if (
+                            gated.status === "need_user_confirm" &&
+                            context &&
+                            !isTaskCancelled(input) &&
+                            isGenericCheckoutPartner(String(playbook.partner), input.goal)
+                        ) {
+                            const replaced = await parkGenericConfirm({
+                                result: out,
+                                browser,
+                                context,
+                                page,
+                                taskInput: input,
+                                partner: String(playbook.partner),
+                                goal: input.goal,
+                                generation: input.browserGeneration ?? currentBrowserGeneration(input.familyId, input.userId),
+                            });
+                            if (replaced) return replaced;
+                            retainBrowser = true;
+                            context = null;
+                        }
+                        return out;
                     }
                     if (action.type === "need_user_confirm") {
                         // Should have halted above
@@ -1318,6 +1346,27 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             const target = await describeClickTarget(page, action).catch(() => "remove");
             if (CART_REMOVE_BLOCK_RE.test(target)) {
                 console.warn("blocked Gemini cart remove/delete click:", target.replace(/\s+/g, " ").slice(0, 100));
+                return { halt: false };
+            }
+        }
+
+        // Hard guardrail (always, confirmed or not): the model never clicks non-COD payment,
+        // memberships/upsells, or Place order. Placement is deterministic code in the step engine.
+        if ((action.type === "click" || action.type === "press") && !isRideGoal(ctx.goal)) {
+            const target = await describeClickTarget(page, action).catch(() => "");
+            const t = `${target} ${action.text || ""} ${action.selector || ""}`;
+            const verdict = guardComputerUseClick(t);
+            if (!verdict.ok) {
+                console.warn(`blocked Gemini ${verdict.reason} click:`, verdict.matched, t.replace(/\s+/g, " ").slice(0, 100));
+                if (verdict.reason === "place_order") {
+                    return {
+                        halt: true,
+                        status: ctx.userConfirmed ? "error" : "need_user_confirm",
+                        message: ctx.userConfirmed
+                            ? "I stopped before placing the order — placing is only done by my checked COD step. Nothing was ordered or paid."
+                            : "Ready to place — reply *confirm* with item/total/address check, or *cancel*.",
+                    };
+                }
                 return { halt: false };
             }
         }
@@ -1928,6 +1977,27 @@ export async function submitParkedBrowserOtp(input: {
                 reason: result.message.slice(0, 200),
             }).catch(() => null);
         }
+        // Non-Apollo sites: verify the cart in code, then park for the step-engine checkout.
+        if (
+            result.status === "need_user_confirm" &&
+            result.mode === "playwright" &&
+            !state.timedOut &&
+            !cancelled() &&
+            isGenericCheckoutPartner(parked.partner, parked.goal)
+        ) {
+            const replaced = await parkGenericConfirm({
+                result,
+                browser: parked.browser,
+                context: parked.context,
+                page: parked.page,
+                taskInput: parked.input,
+                partner: parked.partner,
+                goal: parked.goal,
+                generation: parked.generation,
+            }).catch(() => null);
+            if (replaced) return replaced;
+            if (peekParkedCheckout(input.familyId, input.userId)) state.retain = true;
+        }
         // Keep the signed-in page (cart built) for the user's "confirm" — never re-login for checkout.
         if (
             result.status === "need_user_confirm" &&
@@ -2002,8 +2072,49 @@ function parkSignedInCheckout(args: {
     args.result.confirm = { ...(args.result.confirm || {}), cardId: row.cardId };
     const mins = Math.max(1, Math.round(checkoutParkTtlMs() / 60_000));
     args.result.message =
-        `${args.result.message}\n_I'm keeping Apollo signed in with this cart for ~${mins} min, so *confirm* places it without a new code._`;
+        `${args.result.message}\n_I'm keeping ${partnerLabel(args.partner)} signed in with this cart for ~${mins} min, so *confirm* places it without a new code._`;
     return row;
+}
+
+/** Non-Apollo commerce sites whose confirm → checkout runs through the agent-layer step engine. */
+function isGenericCheckoutPartner(partner: string, goal: string): boolean {
+    return partner !== "apollo" && partner !== "uber" && isAllowedOrderSite(partner) && !isRideGoal(goal);
+}
+
+/**
+ * Non-Apollo confirm card: verify the live cart in code (exactly the item ×1, no membership)
+ * and park the signed-in page for checkout. Returns a replacement error result when the cart
+ * can't be verified (fail closed — no card), or null when parked OK.
+ */
+async function parkGenericConfirm(args: {
+    result: BrowserTaskResult;
+    browser: import("playwright").Browser;
+    context: import("playwright").BrowserContext;
+    page: import("playwright").Page;
+    taskInput: RunBrowserTaskInput;
+    partner: string;
+    goal: string;
+    generation: number;
+}): Promise<BrowserTaskResult | null> {
+    const label = partnerLabel(args.partner);
+    const skuName = args.result.confirm?.items?.[0]?.replace(/\s*×\d+.*$/, "").trim() || null;
+    const v = await verifyGenericCart(args.page, { partner: args.partner, skuName, log: logCheckout }).catch(() => null);
+    if (!v || !v.ok) {
+        return {
+            ...args.result,
+            status: "error",
+            failureReason: "cart_mismatch",
+            confirm: undefined,
+            message: v
+                ? `I stopped before checkout on *${label}* — the cart didn't look right (${v.detail}). Nothing was ordered or paid.`
+                : `I couldn't double-check the *${label}* cart, so I stopped here. Nothing was ordered or paid.`,
+        };
+    }
+    if (v.payableTotal && !args.result.confirm?.totalLabel) {
+        args.result.confirm = { ...(args.result.confirm || {}), totalLabel: v.payableTotal };
+    }
+    parkSignedInCheckout(args);
+    return null;
 }
 
 /**
@@ -2042,7 +2153,18 @@ export type ParkedCheckoutRun = {
  * signed-in page and place a Cash-on-Delivery order. Never logs in again, never sends
  * an SMS, never selects a payment method other than COD.
  */
-export async function continueParkedCheckout(input: {
+export async function continueParkedCheckout(input: Parameters<typeof continueParkedCheckoutInner>[0]): Promise<ParkedCheckoutRun> {
+    const partner = peekParkedCheckout(input.familyId, input.userId)?.partner;
+    const run = await continueParkedCheckoutInner(input);
+    if (partner && partner !== "apollo") {
+        // Checkout copy below was written for Apollo; name the real site for others.
+        const label = partnerLabel(partner);
+        run.message = run.message.replace(/\bApollo(?: Pharmacy)?\b/g, label);
+    }
+    return run;
+}
+
+async function continueParkedCheckoutInner(input: {
     familyId: string;
     userId: string;
     cardId?: string;
@@ -2119,7 +2241,12 @@ export async function continueParkedCheckout(input: {
         accountPhone: accountPhone ? "set" : null,
     });
 
-    const workPromise = runApolloCodCheckout(session.page, {
+    const runner =
+        session.partner === "apollo"
+            ? runApolloCodCheckout
+            : (page: import("playwright").Page, o: Parameters<typeof runApolloCodCheckout>[1]) =>
+                  runGenericCodCheckout(page, { ...o, partner: session.partner });
+    const workPromise = runner(session.page, {
         deadlineAt: startedAt + budgetMs - 3_000,
         pincode,
         addressHints: addressHintsFrom(addressLabel),

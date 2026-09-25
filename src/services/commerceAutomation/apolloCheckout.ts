@@ -17,6 +17,8 @@
  *   - Gemini is a bounded navigation fallback that can never touch payment / place.
  *   - dryRun stops right before the Place order click.
  */
+import { SITE_CONFIGS } from "./agentLayer/siteConfigs";
+import { stagehandStep } from "./agentLayer/stagehandFallback.service";
 import type { Page } from "playwright";
 import { planBrowserActions } from "./geminiComputerUse.service";
 import {
@@ -1259,6 +1261,20 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             geminiSteps++;
             log("gemini_fallback", { stage, step: geminiSteps });
             await sayOnce("gemini", "still working on the checkout screen…");
+            // Self-healing step first (Stagehand observe → code guardrails → act), then the
+            // older Gemini computer-use step. Neither can pay, pick COD, remove items or place.
+            const goal =
+                stage === "cart"
+                    ? SITE_CONFIGS.apollo.goals.proceed_checkout
+                    : stage === "delivery_options"
+                      ? SITE_CONFIGS.apollo.goals.select_address
+                      : SITE_CONFIGS.apollo.goals.reach_payment;
+            const sh = await stagehandStep(page, { goal, log });
+            log("stagehand_fallback", { stage, status: sh.status });
+            if (sh.status === "acted") {
+                stageSince = Date.now();
+                continue;
+            }
             const n = await geminiNavigateStep(page, { stage, pincode: opts.pincode, hints, step: geminiSteps, maxSteps: geminiMax, log });
             if (n > 0) stageSince = Date.now();
             continue;

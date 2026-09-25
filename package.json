@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",
+    "@browserbasehq/stagehand": "3.7.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
@@ -33,7 +34,8 @@
     "resend": "^6.18.1",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
