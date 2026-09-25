@@ -41,6 +41,8 @@ export type CheckoutStage =
     | "address"
     /** Apollo's "Deliver to" confirm popup after cart Proceed (address + recipient + Proceed). */
     | "address_review"
+    /** Circle membership (or similar) upsell drawer — always skipped, never added. */
+    | "upsell"
     | "delivery_options"
     | "payment"
     | "success"
@@ -112,6 +114,13 @@ const BASE = "https://www.apollopharmacy.in";
 const PAY_BLOCK_RE =
     /pay|place\s*order|upi|card|net\s*banking|netbanking|wallet|pay\s*later|simpl|lazypay|cash|\bcod\b|buy\s*now|log\s*out|logout|sign\s*out|remove|delete|clear\s*cart|add\s*new\s*address|circle|membership/i;
 
+/**
+ * Upsell / membership controls nothing may ever click (Circle "Add Plan", plan radios,
+ * "Add to cart" inside the Circle drawer, subscribe / upgrade / join).
+ */
+export const UPSELL_BLOCK_RE =
+    /add\s*plan|choose\s*a\s*plan|best\s*value|\b(?:3|6|12)\s*(?:m\b|months?)|\bplan\b|circle|membership|subscri|upgrade|\bjoin\b|add\s*to\s*cart|CircleDetails|circlePlan|type="?radio|\bradio\b/i;
+
 /** Cart-removal controls Gemini must never touch (removal is deterministic code only, pre-add). */
 export const CART_REMOVE_BLOCK_RE =
     /\b(remove|delete|dustbin|trash|clear\s*cart|empty\s*cart|decrease|decrement)\b|deleteicon|dustbi|trash|remove|minus/i;
@@ -139,7 +148,7 @@ export async function describeClickTarget(
                             const h = el as HTMLElement;
                             const cls = typeof h.className === "string" ? h.className : "";
                             // Own text only (ancestor text would be the whole card / page); classes for the chain.
-                            parts.push(`${i === 0 ? (h.innerText || "").slice(0, 80) : ""} ${h.getAttribute("aria-label") || ""} ${h.getAttribute("title") || ""} ${cls}`);
+                            parts.push(`${i === 0 ? (h.innerText || "").slice(0, 80) : ""} ${h.getAttribute("aria-label") || ""} ${h.getAttribute("title") || ""} ${cls} ${h.getAttribute("type") === "radio" ? "radio" : ""}`);
                             if (h.id === "checkbox-cod" || /cod|payment|pay/i.test(cls)) parts.push("pay");
                         }
                         return parts.join(" ");
@@ -159,7 +168,7 @@ export async function describeClickTarget(
                             for (let i = 0; el && i < 4; i++, el = el.parentElement) {
                                 const h = el as HTMLElement;
                                 const cls = typeof h.className === "string" ? h.className : "";
-                                parts.push(`${(h.innerText || "").slice(0, 80)} ${h.getAttribute("aria-label") || ""} ${h.getAttribute("title") || ""} ${cls}`);
+                                parts.push(`${(h.innerText || "").slice(0, 80)} ${h.getAttribute("aria-label") || ""} ${h.getAttribute("title") || ""} ${cls} ${h.getAttribute("type") === "radio" ? "radio" : ""}`);
                                 if (h.id === "checkbox-cod" || /cod|payment|pay/i.test(cls)) parts.push("pay");
                             }
                             return parts.join(" ");
@@ -244,6 +253,149 @@ async function addressPickerVisible(page: Page): Promise<boolean> {
         .catch(() => false);
 }
 
+/* ───────────── Circle membership / upsell drawer (always skipped, never added) ───────────── */
+
+/**
+ * Apollo's cart, after Proceed (checkForCirclePopup), opens a right-side "CircleDetails" drawer:
+ * "Save 15% on Medicines…", "Choose a Plan" (3/6/12 months, 12M pre-selected), footer
+ * "Skip Savings" (secondary) + "Add Plan" (primary), X at the top. Skip Savings runs
+ * handleSkipSavings → closes it AND continues the pending action (delivery options); X only closes.
+ */
+export async function upsellOpen(page: Page): Promise<boolean> {
+    return page
+        .evaluate(() => {
+            // on-screen only (a closed drawer may sit translated off-canvas with a real size).
+            // (no named helpers inside evaluate: tsx/esbuild would inject __name() into the page)
+            document.querySelectorAll("[data-kv-vis]").forEach((e) => e.removeAttribute("data-kv-vis"));
+            Array.from(document.querySelectorAll('button, [role="button"], [role="dialog"], [class*="modal" i], [class*="drawer" i], [class*="Dialog"], [class*="sheet" i], [class*="CircleDetails_"], [aria-label], i, span, svg')).forEach((e) => {
+                const r = (e as HTMLElement).getBoundingClientRect();
+                if (!(r.width > 0 && r.height > 0)) return;
+                if (r.right <= 0 || r.bottom <= 0 || r.left >= window.innerWidth || r.top >= window.innerHeight) return;
+                const cs = getComputedStyle(e as HTMLElement);
+                if (cs.visibility === "hidden" || cs.opacity === "0") return;
+                e.setAttribute("data-kv-vis", "1");
+            });
+            if (Array.from(document.querySelectorAll('[class*="CircleDetails_stickyFooter"], [class*="CircleDetails_circlePlanWrapper"]')).some((e) => e.hasAttribute("data-kv-vis"))) return true;
+            const btns = Array.from(document.querySelectorAll("button, [role='button']")).filter((e) => e.hasAttribute("data-kv-vis")) as HTMLElement[];
+            if (btns.some((b) => /^\s*skip\s*savings\s*$/i.test(b.innerText || ""))) return true;
+            if (btns.some((b) => /^\s*add\s*plan\s*$/i.test(b.innerText || ""))) return true;
+            // Generic membership/offer dialog with a decline button
+            const dialogs = Array.from(document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="drawer" i], [class*="Dialog"], [class*="sheet" i]')).filter((e) => e.hasAttribute("data-kv-vis")) as HTMLElement[];
+            return dialogs.some((d) => {
+                const t = (d.innerText || "").toLowerCase();
+                if (/double-check the details|choose from saved address|add new address|search for society/.test(t)) return false;
+                return (
+                    /(circle|membership|choose a plan|join now|subscribe)/.test(t) &&
+                    Array.from(d.querySelectorAll("button, [role='button']")).some((b) =>
+                        /^\s*(skip(\s*savings)?|no,?\s*thanks|not\s*now|maybe\s*later|continue\s*without[a-z ]*)\s*$/i.test((b as HTMLElement).innerText || ""),
+                    )
+                );
+            });
+        })
+        .catch(() => false);
+}
+
+/** Press "Skip Savings" (or a plain decline), else the drawer's X, else Escape. Never "Add Plan" / radios. */
+export async function dismissUpsell(page: Page): Promise<"skip" | "close" | "escape"> {
+    const how = await page
+        .evaluate(() => {
+            document.querySelectorAll("[data-kavach-upsell]").forEach((e) => e.removeAttribute("data-kavach-upsell"));
+            // on-screen only (a closed drawer may sit translated off-canvas with a real size).
+            // (no named helpers inside evaluate: tsx/esbuild would inject __name() into the page)
+            document.querySelectorAll("[data-kv-vis]").forEach((e) => e.removeAttribute("data-kv-vis"));
+            Array.from(document.querySelectorAll('button, [role="button"], [role="dialog"], [class*="modal" i], [class*="drawer" i], [class*="Dialog"], [class*="sheet" i], [class*="CircleDetails_"], [aria-label], i, span, svg')).forEach((e) => {
+                const r = (e as HTMLElement).getBoundingClientRect();
+                if (!(r.width > 0 && r.height > 0)) return;
+                if (r.right <= 0 || r.bottom <= 0 || r.left >= window.innerWidth || r.top >= window.innerHeight) return;
+                const cs = getComputedStyle(e as HTMLElement);
+                if (cs.visibility === "hidden" || cs.opacity === "0") return;
+                e.setAttribute("data-kv-vis", "1");
+            });
+            const btns = Array.from(document.querySelectorAll("button, [role='button']")).filter((e) => e.hasAttribute("data-kv-vis")) as HTMLElement[];
+            const skip =
+                btns.find((b) => /^\s*skip\s*savings\s*$/i.test(b.innerText || "")) ||
+                btns.find((b) => {
+                    const t = b.innerText || "";
+                    if (!/^\s*(skip|no,?\s*thanks|not\s*now|maybe\s*later|continue\s*without[a-z ]*)\s*$/i.test(t)) return false;
+                    let el: HTMLElement | null = b;
+                    for (let i = 0; el && i < 12; i++, el = el.parentElement) {
+                        if (/circle|membership|choose a plan/i.test((el.innerText || "").slice(0, 3000)) && el !== document.body) return true;
+                    }
+                    return false;
+                });
+            if (skip && !/add\s*plan|add\s*to\s*cart/i.test(skip.innerText || "")) {
+                skip.setAttribute("data-kavach-upsell", "skip");
+                return "skip";
+            }
+            // Drawer root: climb from the plan block / Add Plan button to a fixed-position container.
+            const anchor =
+                (document.querySelector('[class*="CircleDetails_stickyFooter"], [class*="CircleDetails_circlePlanWrapper"]') as HTMLElement | null) ||
+                btns.find((b) => /^\s*add\s*plan\s*$/i.test(b.innerText || "")) ||
+                null;
+            let root: HTMLElement | null = anchor;
+            while (root && root !== document.body) {
+                const cs = getComputedStyle(root);
+                if (cs.position === "fixed" || root.getAttribute("role") === "dialog" || /drawer|modal|Dialog|sheet/i.test(root.className || "")) break;
+                root = root.parentElement;
+            }
+            const scope = root && root !== document.body ? root : document;
+            const cands = (Array.from(scope.querySelectorAll("button, [role='button'], [aria-label], i, span, svg")) as HTMLElement[]).filter((e) => {
+                if (!e.hasAttribute("data-kv-vis")) return false;
+                const lbl = `${e.getAttribute("aria-label") || ""} ${typeof e.className === "string" ? e.className : (e.getAttribute("class") || "")} ${(e.innerText || e.textContent || "").trim()}`;
+                if (/add\s*plan|add\s*to\s*cart|radio/i.test(lbl)) return false;
+                return /close|dismiss|cross|icon-ic_cross|^\s*[×✕✖xX]\s*$/i.test(lbl) || /^\s*[×✕✖]\s*$/.test(e.innerText || "");
+            });
+            if (cands.length) {
+                // top-most, then right-most
+                cands.sort((a, b) => {
+                    const ra = a.getBoundingClientRect();
+                    const rb = b.getBoundingClientRect();
+                    return ra.top - rb.top || rb.right - ra.right;
+                });
+                cands[0]!.setAttribute("data-kavach-upsell", "close");
+                return "close";
+            }
+            return "escape";
+        })
+        .catch(() => "escape" as const);
+    if (how === "escape") {
+        await page.keyboard.press("Escape").catch(() => undefined);
+        return "escape";
+    }
+    const el = page.locator(`[data-kavach-upsell="${how}"]`).first();
+    await el.click({ timeout: 3000 }).catch(async () => {
+        await el.evaluate((e) => (e as HTMLElement).click()).catch(() => undefined);
+    });
+    return how;
+}
+
+/** Circle / membership / plan text on a checkout line or the payment summary. */
+export const MEMBERSHIP_LINE_RE = /circle\s*(?:membership|plan|subscription)|\bmembership\b|\b(?:3|6|12)\s*months?\s*plan\b|\bcircle\b.{0,30}₹\s*(?:99|149|199)\b/i;
+
+/**
+ * Payment-page gate: a membership/plan with a price in the order summary. Price-anchored so
+ * the global nav link "Circle Membership" or a price-less banner doesn't trip it.
+ */
+export const MEMBERSHIP_PRICED_RE =
+    /(?:circle\s*(?:membership|plan|subscription)|\bmembership\b|\b(?:3|6|12)\s*months?\s*(?:circle\s*)?plan\b)[^₹]{0,40}₹\s*\d+|₹\s*\d+(?:\.\d+)?[^₹]{0,25}(?:circle\s*(?:membership|plan)|\bmembership\b)/i;
+
+/** Payment page text without the global header / nav (which always shows "Circle Membership"). */
+async function paymentSummaryText(page: Page): Promise<string> {
+    const t = await page
+        .evaluate(() => {
+            const clone = document.body.cloneNode(true) as HTMLElement;
+            clone
+                .querySelectorAll('header, nav, footer, [class*="header" i], [class*="navbar" i], [class*="navigation" i], script, style, noscript')
+                .forEach((e) => e.remove());
+            return clone.textContent || "";
+        })
+        .catch(() => "");
+    return t
+        .replace(/\s+/g, " ")
+        .replace(/buy medicines\s*find doctors\s*lab tests\s*circle membership\s*health records/gi, " ")
+        .slice(0, 20000);
+}
+
 export async function detectCheckoutStage(page: Page): Promise<CheckoutStage> {
     const url = safeUrl(page);
     if (/\/order-status\//i.test(url)) {
@@ -257,6 +409,7 @@ export async function detectCheckoutStage(page: Page): Promise<CheckoutStage> {
         return "success";
     }
     if (await loginPopupVisible(page)) return "login";
+    if (await upsellOpen(page)) return "upsell";
     if (/\/pay\//i.test(url)) return "payment";
     if (/prescription-review/i.test(url)) return "rx_review";
     if (/\/address-details/i.test(url)) return "address";
@@ -505,7 +658,7 @@ async function geminiNavigateStep(
             }
             if (action.type !== "click") continue; // no typing / goto / press / done / confirm
             const targetText = await describeClickTarget(page, action);
-            if (PAY_BLOCK_RE.test(targetText) || CART_REMOVE_BLOCK_RE.test(targetText)) {
+            if (PAY_BLOCK_RE.test(targetText) || CART_REMOVE_BLOCK_RE.test(targetText) || UPSELL_BLOCK_RE.test(targetText) || (await upsellOpen(page))) {
                 opts.log?.("gemini_click_blocked", { text: targetText.slice(0, 120) });
                 continue;
             }
@@ -584,6 +737,8 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
     let addressRuns = 0;
     const MAX_ADDRESS_RUNS = 3;
     let reviewChanges = 0;
+    let upsellSkips = 0;
+    let proceedAfterUpsell = false;
     let reviewHandled = 0;
     const target: AddressTarget | null =
         opts.addressTarget ??
@@ -724,6 +879,19 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                 }
                 continue;
             }
+            case "upsell": {
+                if (upsellSkips >= 5) {
+                    return { status: "stuck", stage, url: safeUrl(page), detail: "Apollo's Circle membership offer kept coming back (not added)" };
+                }
+                upsellSkips++;
+                const how = await dismissUpsell(page);
+                log("upsell_dismiss", { how, n: upsellSkips });
+                await sayOnce("upsell", "skipped Apollo's Circle membership offer (not added) — continuing…");
+                await sleep(page, 1800);
+                proceedAfterUpsell = true;
+                stageSince = Date.now();
+                continue;
+            }
             case "address_review": {
                 if (!target) {
                     return { status: "address_unverified", url: safeUrl(page), detail: "Apollo asked to confirm a delivery address but none was given" };
@@ -768,7 +936,8 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                     if (stop) return stop;
                     continue;
                 }
-                if (proceedClicks < 3 && (proceedClicks === 0 || stuckMs > 6_000)) {
+                if (proceedClicks < 5 && (proceedClicks === 0 || stuckMs > 6_000 || (proceedAfterUpsell && stuckMs > 1_200))) {
+                    proceedAfterUpsell = false;
                     if (opts.skuName) {
                         // Hard guard: exactly the confirmed product ×1 before Proceed (Proceed →
                         // delivery options → order creation uses whatever is in this cart).
@@ -904,9 +1073,24 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                             detail: `${chk.reason}${chk.lines.length ? ` (${describeCartLines(chk.lines)})` : ""}`,
                         };
                     }
+                    if (MEMBERSHIP_LINE_RE.test(chk.line.name)) {
+                        return { status: "cart_mismatch", url: safeUrl(page), detail: `a Circle membership / plan is in the order (${chk.line.name.slice(0, 80)})` };
+                    }
                     preplaceVerifiedAt = Date.now();
                 }
+                {
+                    // Hard gate: no Circle / membership / plan anywhere in the payment summary.
+                    const payText = await paymentSummaryText(page);
+                    const hit = payText.match(MEMBERSHIP_PRICED_RE);
+                    if (hit) {
+                        log("membership_gate", { hit: hit[0] });
+                        return { status: "cart_mismatch", url: safeUrl(page), detail: `Apollo's payment page lists "${hit[0]}" — I won't pay for a membership` };
+                    }
+                }
                 const payable = fresh.payable;
+                if (typeof opts.confirmedTotalRupees === "number" && typeof payable !== "number") {
+                    return { status: "stuck", stage, url: safeUrl(page), detail: "couldn't read Apollo's payable amount before Place order" };
+                }
                 const payableLabel = typeof payable === "number" ? `₹${payable.toFixed(2).replace(/\.00$/, "")}` : fresh.ctaText;
                 if (
                     typeof opts.confirmedTotalRupees === "number" &&

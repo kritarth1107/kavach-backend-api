@@ -20,7 +20,7 @@ import {
     cartAddressEvidence,
     ctaNeedsAddress,
 } from "../src/services/commerceAutomation/apolloAddress";
-import { addressEvidenceFromText, runApolloCodCheckout } from "../src/services/commerceAutomation/apolloCheckout";
+import { addressEvidenceFromText, MEMBERSHIP_PRICED_RE, runApolloCodCheckout, UPSELL_BLOCK_RE } from "../src/services/commerceAutomation/apolloCheckout";
 import { captureCheckoutDiagnostic, getLastCheckoutDiagnostic, redactDiagText } from "../src/services/commerceAutomation/checkoutDiagnostics.service";
 
 const BASE = "https://www.apollopharmacy.in";
@@ -62,6 +62,13 @@ type St = {
     layout: "block" | "live";
     headerPin: string;
     noReviewPopup: boolean;
+    /** Circle membership drawer after the Deliver-to popup's Proceed (as seen live 25 Sep 11:44 PM). */
+    circle: "none" | "skip" | "xonly";
+    circleShown: number;
+    planAdded: number;
+    /** Extra line on the payment page summary + payable override (membership gate tests). */
+    payExtra: string;
+    payAmount: number;
 };
 const newState = (p: Partial<St>): St => ({
     saved: [],
@@ -78,6 +85,11 @@ const newState = (p: Partial<St>): St => ({
     layout: "block",
     headerPin: "492012",
     noReviewPopup: false,
+    circle: "none",
+    circleShown: 0,
+    planAdded: 0,
+    payExtra: "",
+    payAmount: 192.42,
     ...p,
 });
 const fmt = (a: Addr) => `${a.addressLine1}, ${a.addressLine2}, ${a.city}, ${a.state} - ${a.zipcode}`;
@@ -86,7 +98,7 @@ let HEADER = `<header><span>Delivery Address</span> <span>Raipur 492001</span> <
 const setHeader = (st: St) => {
     HEADER =
         st.layout === "live"
-            ? `<header><div class="HeaderLocation"><span>Deliver to</span> <b>Kritarth</b> <span>Raipur ${st.headerPin}</span></div> <span class="avatar">K</span> <a href="/medicines-cart">Cart</a></header>`
+            ? `<header><div class="HeaderLocation"><span>Deliver to</span> <b>Kritarth</b> <span>Raipur ${st.headerPin}</span></div> <span class="avatar">K</span> <a href="/medicines-cart">Cart</a><nav class="HeaderNav"><a>Buy Medicines</a> <a>Find Doctors</a> <a>Lab Tests</a> <a>Circle Membership</a> <a>Health Records</a></nav></header>`
             : `<header><span>Delivery Address</span> <span>Raipur 492001</span> <a href="/medicines-cart">Cart</a></header>`;
 };
 function shell(title: string, body: string, script = ""): string {
@@ -118,6 +130,25 @@ ${live
 <div id="drawer"></div>`,
         `
 const saved = ${JSON.stringify(st.saved)}; const selected = ${JSON.stringify(sel || null)}; const noReview = ${JSON.stringify(st.noReviewPopup)};
+const circle = ${JSON.stringify(st.circle)};
+function toDelivery() { location.href = '/delivery-options'; }
+async function afterReview() {
+  if (circle === 'none') return toDelivery();
+  const r = await post('/__mock/circle-check', {});
+  if (!r.show) return toDelivery();
+  // Right-side Circle drawer (CircleDetails_*): 12M pre-selected, Skip Savings + Add Plan, X on top.
+  document.body.insertAdjacentHTML('beforeend', '<div class="MuiDrawer-paper CircleDrawer" style="position:fixed;top:0;right:0;width:330px;height:100%;background:#fff;z-index:50;border-left:1px solid #999">'
+    + '<div style="text-align:right"><i class="icon-ic_cross" role="button" aria-label="close" id="cx" style="display:inline-block;width:16px;height:16px;cursor:pointer">✕</i></div>'
+    + '<div class="CircleDetails_circlePlanWrapper__8qAQ5"><p>Save 15% on Medicines &amp; get Free Lab test worth ₹500 (with 12M plan)</p><p>Cashback Earned ₹10</p><p>Choose a Plan</p>'
+    + ['3 Months ₹99', '6 Months ₹149', '12 Months ₹199'].map((t, i) => '<label class="CircleListingCard_circleListDetailBx__VgazQ" style="display:block"><span>' + t + '</span><input type="radio" name="plan" class="planRadio" ' + (i === 2 ? 'checked' : '') + '></label>').join('')
+    + '</div><div class="CircleDetails_stickyFooter__eRrB6" style="position:absolute;bottom:0;left:0;right:0">'
+    + (circle === 'skip' ? '<div class="CircleDetails_leftBx__jtLvC CircleDetails_skipButtonBx__J-8xg"><button class="CircleDetails_btnCta__Xt+T3" id="skip">Skip Savings</button></div>' : '')
+    + '<div class="CircleDetails_rightBx__RncGH"><button class="CircleDetails_btnCta__Xt+T3" id="addPlan">Add Plan</button></div></div></div>');
+  document.querySelectorAll('.planRadio').forEach(x => x.addEventListener('click', () => post('/__mock/plan-radio', {})));
+  document.getElementById('addPlan').addEventListener('click', async () => { await post('/__mock/add-plan', {}); });
+  const sk = document.getElementById('skip'); if (sk) sk.addEventListener('click', () => { document.querySelector('.CircleDrawer').remove(); toDelivery(); });
+  document.getElementById('cx').addEventListener('click', async () => { await post('/__mock/circle-dismiss', {}); document.querySelector('.CircleDrawer').remove(); });
+}
 const fmt = a => a.addressLine1 + ', ' + a.addressLine2 + ', ' + a.city + ', ' + a.state + ' - ' + a.zipcode;
 const card = (a, i) => '<div class="NewSavedAddressCard_savedAddressChild__qpbH-" data-id="' + a.id + '"><div class="NewSavedAddressCard_addressType__4PcLi"><div class="NewSavedAddressCard_heading__lhm66"><div class="NewSavedAddressCard_sentenceCase__8OE3R">' + a.addressType.toLowerCase() + '</div></div><div class="NewSavedAddressCard_iconSection__KWTEl"><i class="del" style="display:inline-block;width:14px;height:14px;background:#c00"></i></div></div><div class="NewSavedAddressCard_addressDesc__iB4Jq">' + fmt(a) + '</div></div>';
 const post = (u, b) => fetch(u, { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(b || {}) }).then(r => r.json());
@@ -168,7 +199,8 @@ document.getElementById('proceed').addEventListener('click', () => {
   D.querySelector('.ConfirmCartAddressDialog_changBtn__T1tWj').addEventListener('click', openSheet);
   document.getElementById('rvProceed').addEventListener('click', () => {
     if (!document.getElementById('rn').value.trim() || !/^[6789]\\d{9}$/.test(document.getElementById('rc').value)) return;
-    location.href = '/delivery-options';
+    D.innerHTML = '';
+    afterReview();
   });
 });`,
     );
@@ -255,6 +287,19 @@ async function installMock(ctx: BrowserContext, st: St): Promise<void> {
                 const words = q.split(/\s+/).filter((w) => w.length > 2);
                 return json(st.places.filter((p) => words.some((w) => `${p.addressName} ${p.addressDescription}`.toLowerCase().includes(w))));
             }
+            case "/__mock/circle-check": {
+                // Apollo shows the Circle drawer on Proceed until it's skipped / dismissed
+                const show = st.circle !== "none" && st.circleShown < 2 && !(st as St & { circleDismissed?: boolean }).circleDismissed;
+                if (show) st.circleShown++;
+                return json({ show });
+            }
+            case "/__mock/circle-dismiss":
+                (st as St & { circleDismissed?: boolean }).circleDismissed = true;
+                return json({ ok: true });
+            case "/__mock/add-plan":
+            case "/__mock/plan-radio":
+                st.planAdded++;
+                return json({ ok: true });
             case "/__mock/pick":
                 st.pickedPlaceId = body().placeId;
                 st.editId = null;
@@ -293,9 +338,9 @@ async function installMock(ctx: BrowserContext, st: St): Promise<void> {
             }
             default:
                 if (u.pathname.startsWith("/pay/")) {
-                    return html(shell("Payment", `<h2>Payment options</h2><p>Amount to pay ₹192.42</p>
+                    return html(shell("Payment", `<h2>Payment options</h2><div class="OrderSummary"><p>Wet wipes ×1</p>${st.payExtra ? `<p>${st.payExtra}</p>` : ""}<p>Amount to pay ₹${st.payAmount}</p></div>
 <div class="codContainer__a"><div class="codCard__b"><div role="button" id="codHead">Pay on Delivery</div><input type="radio" id="checkbox-cod"></div>
-<button id="place" aria-label="Pay rupees 192.42">Place order for ₹192.42</button></div>`,
+<button id="place" aria-label="Pay rupees ${st.payAmount}">Place order for ₹${st.payAmount}</button></div>`,
                         `document.getElementById('codHead').addEventListener('click', () => { document.getElementById('checkbox-cod').checked = true; });
 document.getElementById('place').addEventListener('click', async () => { await fetch('/__mock/place', { method: 'POST' }); location.href = '/order-status/TXN77/success'; });`));
                 }
@@ -615,6 +660,83 @@ async function main() {
         assert.equal(st.placeClicks, 0);
         assertNoLeaks(st);
         console.log("✓ I live layout, wrong address, no popup, header 'Deliver to Kritarth Raipur 492001' → stopped before payment:", out.detail);
+    }
+
+    // ── unit: upsell controls are on the Gemini block list ──
+    for (const t of ["Add Plan", "12 Months ₹199 Best Value", "input radio planRadio", "CircleDetails_btnCta__Xt+T3", "Join Circle", "Add to cart"]) {
+        assert.ok(UPSELL_BLOCK_RE.test(t), `blocked: ${t}`);
+    }
+    assert.ok(!UPSELL_BLOCK_RE.test("Proceed"), "Proceed not blocked");
+    assert.ok(MEMBERSHIP_PRICED_RE.test("Circle Membership 12 Months ₹199"));
+    assert.ok(!MEMBERSHIP_PRICED_RE.test("Buy Medicines Find Doctors Lab Tests Health Records Wet wipes ×1 Amount to pay ₹192.42"));
+    console.log("✓ unit: Circle 'Add Plan' / plan radios / membership lines blocked; Proceed allowed");
+
+    const selectedLive = (p: Partial<St>) =>
+        newState({
+            layout: "live",
+            headerPin: "492001",
+            saved: [{ id: "a2", addressLine1: "C504, Sunita Park", addressLine2: "Labhandih", city: "Raipur", state: "Chhattisgarh", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: "Kritarth Agrawal", mobileNumber: PROFILE.phone }],
+            selectedId: "a2",
+            ...p,
+        });
+
+    // ── J) live: address selected, Proceed → Deliver-to popup → Circle drawer (12M pre-selected) → Skip Savings ──
+    {
+        const st = selectedLive({ circle: "skip" });
+        const progress: string[] = [];
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, progress, log);
+        });
+        assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.equal(st.circleShown, 1);
+        assert.equal(st.planAdded, 0, "never clicked Add Plan or a plan radio");
+        assert.ok(log.some((l) => l.startsWith("upsell_dismiss") && l.includes('"how":"skip"')), log.join("\n"));
+        assert.match((out as { payableLabel?: string }).payableLabel || "", /192\.42/);
+        assertNoLeaks(st);
+        console.log("✓ J Circle drawer after the Deliver-to popup → 'Skip Savings' → delivery options → COD ₹192.42 (dry run), plan never added");
+        console.log("  progress:", JSON.stringify(progress));
+    }
+
+    // ── K) live: Circle drawer WITHOUT Skip Savings → X close → Proceed again → continues ──
+    {
+        const st = selectedLive({ circle: "xonly" });
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, [], log);
+        });
+        assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.equal(st.planAdded, 0);
+        assert.ok(log.some((l) => l.startsWith("upsell_dismiss") && l.includes('"how":"close"')), log.join("\n"));
+        assertNoLeaks(st);
+        console.log("✓ K Circle drawer with only X + Add Plan → X → Proceed again → popup → COD (dry run), plan never added");
+    }
+
+    // ── L) payment page shows a Circle plan line (same total) → hard stop before Place order ──
+    {
+        const st = selectedLive({ payExtra: "Circle Membership 12 Months ₹199" });
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, [], []);
+        });
+        assert.equal(out.status, "cart_mismatch", JSON.stringify(out));
+        assert.match(out.detail, /membership/i);
+        assert.equal(st.placeClicks, 0);
+        console.log("✓ L payment summary lists 'Circle Membership 12 Months ₹199' → stopped before Place order:", out.detail);
+    }
+
+    // ── M) payable higher than the card (plan sneaked in, no text) → amount_changed, no Place ──
+    {
+        const st = selectedLive({ payAmount: 391.42 });
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, [], []);
+        });
+        assert.equal(out.status, "amount_changed", JSON.stringify(out));
+        assert.equal(st.placeClicks, 0);
+        console.log("✓ M payable ₹391.42 > card ₹192.42 → amount_changed, stopped before Place order");
     }
 
     console.log("\nALL APOLLO ADDRESS FLOW TESTS PASSED (mocked Apollo, no OTP, no real order)");
