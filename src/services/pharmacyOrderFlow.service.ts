@@ -206,12 +206,10 @@ function confirmCopy(draft: PharmacyDraft): string {
             return `${i + 1}. ${o.name}${price ? ` — ${price}` : ""}`;
         });
         return [
-            `Found on *${partner}*:`,
+            `Found on *${partner}* 💊`,
             ...lines,
             ``,
-            `Reply *1* / *2* / *3*, or *confirm* for #1 — then I'll open login/OTP for that exact item.`,
-            `Or send another name. Reply *cancel* to stop.`,
-            `_I only help order what you ask — I don't diagnose or suggest treatments._`,
+            `Reply *1*, *2* or *3* (or *confirm* for #1). Cash on Delivery only.`,
         ].join("\n");
     }
     const lines = draft.items.map((i) => {
@@ -235,17 +233,12 @@ function confirmCopy(draft: PharmacyDraft): string {
     const addr = draft.addressLabel ? draft.addressLabel : "your saved delivery address";
     const hasLive = draft.items.some((i) => typeof i.pricePaise === "number");
     return [
-        hasLive
-            ? `Found on *${partner}* — reply *confirm* to order this (login/OTP next):`
-            : `*${partner}* — reply *confirm* to open the site for this item (login/OTP may be asked; I don't have a guest price yet):`,
+        hasLive ? `Found on *${partner}* 💊` : `*${partner}* — no live price yet 💊`,
         ...lines,
+        `Total: ${total}`,
+        `📍 ${addr}`,
         ``,
-        `Deliver to: ${addr}`,
-        `Item total: ${total}`,
-        `Payment: prefer *COD* (I'll still ask confirm-before-pay — no silent pay).`,
-        ``,
-        `Reply *confirm* to continue, *cancel* to stop, or send another name / *prescription photo* for Rx.`,
-        `_I only help order what you ask — I don't diagnose or suggest treatments._`,
+        `Reply *confirm* to order (I'll ask for the OTP next), or *cancel*. Cash on Delivery only.`,
     ].join("\n");
 }
 
@@ -360,8 +353,37 @@ export async function handlePharmacyWhatsAppTurn(input: {
     mediaUrl?: string;
     isRxPhoto?: boolean;
 }): Promise<{ text: string; draft?: PharmacyDraft } | null> {
-    const text = input.text.trim();
+    let text = input.text.trim();
     let draft = await loadDraft(input.phone);
+
+    // Interrupts while a medicine order is open: unrelated chat → companion (order stays open).
+    if (draft && draft.phase !== "idle" && draft.phase !== "placed" && !input.isRxPhoto && !input.mediaUrl) {
+        const { classifyOrderInterrupt } = await import("./commerceAutomation/orderInterrupt.service");
+        const pickPhase = draft.phase === "ask_list_or_rx" || draft.phase === "pick_partner" || draft.phase === "confirm_basket";
+        const looksPartnerPick = PARTNER_PICK.test(text);
+        const intr = looksPartnerPick
+            ? { intent: "flow_reply" as const, source: "rules" as const }
+            : await classifyOrderInterrupt({
+                  phone: input.phone,
+                  text,
+                  phase: pickPhase ? "awaiting_sku_confirm" : draft.phase,
+                  partnerLabel: draft.partner ? partnerLabel(draft.partner) : "pharmacy",
+                  itemHint: draft.items.map((i) => i.name).join(", ").slice(0, 80),
+              });
+        void import("./activityLog.service").then(({ logActivity }) =>
+            logActivity({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind: "order_interrupt",
+                title: `Message during medicine order: ${intr.intent}`,
+                detail: text,
+                data: { phase: draft!.phase, intent: intr.intent, source: intr.source },
+            }),
+        );
+        if (intr.intent === "unrelated") return null;
+        if (intr.intent === "cancel") text = "cancel";
+    }
 
     if (/^(cancel|stop|never ?mind|cancel all(?: browsing)?)$/i.test(text) && draft) {
         const { abortBrowserSessionForUser } = await import(
@@ -381,7 +403,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
             },
         ).catch(() => undefined);
         return {
-            text: "Okay — cancelled the medicine order. No more OTP asks from this attempt.",
+            text: "Okay, cancelled ✅ Nothing was ordered or paid.",
         };
     }
 
@@ -406,7 +428,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
         await saveDraft(input.phone, draft);
         if (!draft.partner) {
             return {
-                text: "Got the prescription photo. Which pharmacy — *Apollo*, *PharmEasy*, or *Tata 1mg*?",
+                text: "Got the prescription photo. Which pharmacy — *Apollo* or *PharmEasy*?",
                 draft,
             };
         }
@@ -448,7 +470,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
                 return {
                     text:
                         `Got it:\n${lines}\n\n` +
-                        "Which pharmacy — *Apollo*, *PharmEasy*, or *Tata 1mg*?",
+                        "Which pharmacy — *Apollo* or *PharmEasy*?",
                     draft,
                 };
             }
@@ -456,7 +478,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
                 text:
                     "Sure — I can order medicines for you.\n\n" +
                     "Send me the *list* (e.g. Vit C tablets) or a *prescription photo*.\n" +
-                    "Which pharmacy — *Apollo*, *PharmEasy*, or *Tata 1mg*?",
+                    "Which pharmacy — *Apollo* or *PharmEasy*?",
                 draft,
             };
         }
@@ -512,7 +534,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
         if (!draft.partner) {
             await saveDraft(input.phone, draft);
             return {
-                text: "Which pharmacy — *Apollo*, *PharmEasy*, or *Tata 1mg*?",
+                text: "Which pharmacy — *Apollo* or *PharmEasy*?",
                 draft,
             };
         }
