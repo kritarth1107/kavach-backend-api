@@ -128,6 +128,22 @@ export async function deliverCareNudge(input: {
         console.warn(
             `Care nudge delivery failed for ${input.recipientUserId} (${input.nudgeKind})`,
         );
+    } else {
+        const { logActivity } = await import("./activityLog.service");
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            kind: "nudge",
+            title: `Care nudge: ${input.title}`.slice(0, 200),
+            detail: text,
+            data: {
+                source: "care_nudge",
+                nudgeKind: input.nudgeKind,
+                scheduleId: input.scheduleId,
+                scheduledTime: input.time,
+                channel: target.channel,
+            },
+        });
     }
     return delivery.delivered;
 }

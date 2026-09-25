@@ -297,6 +297,23 @@ export async function deliverSaheliOutreach(payload: {
             channelIdentifier: channelTarget.channelIdentifier,
         });
         delivered = delivery.delivered;
+        if (delivered) {
+            const { logActivity } = await import("./activityLog.service");
+            void logActivity({
+                familyId: payload.familyId,
+                recipientUserId: payload.recipientUserId,
+                kind: "nudge",
+                title: "Saheli check-in",
+                detail: reply,
+                data: {
+                    source: "outreach",
+                    outreachKind,
+                    slot: slot ?? null,
+                    topicBucket: topicBucket ?? null,
+                    channel: channelTarget.channel,
+                },
+            });
+        }
     }
 
     if (slot) {

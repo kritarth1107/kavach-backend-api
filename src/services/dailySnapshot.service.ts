@@ -16,7 +16,7 @@ export function serializeSnapshot(doc: Partial<IDailySnapshot> | null | undefine
         highlights: doc.highlights ?? [],
         concerns: doc.concerns ?? [],
         mood: doc.mood ?? null,
-        counts: doc.counts ?? { messages: 0, voiceNotes: 0, orders: 0, rides: 0, reminders: 0, healthFlags: 0 },
+        counts: doc.counts ?? { messages: 0, voiceNotes: 0, orders: 0, rides: 0, reminders: 0, healthFlags: 0, nudges: 0 },
         model: doc.modelName ?? null,
         generatedAt: doc.generatedAt ? new Date(doc.generatedAt).toISOString() : null,
         source: doc.source ?? "scheduled",
@@ -46,6 +46,7 @@ export async function generateDailySnapshot(input: {
         rides: rows.filter((r) => r.kind === "ride").length,
         reminders: rows.filter((r) => r.kind === "reminder").length,
         healthFlags: rows.filter((r) => r.kind === "health" && r.severity === "error").length,
+        nudges: rows.filter((r) => r.kind === "nudge").length,
     };
     const base = { familyId: input.familyId, recipientUserId: input.recipientUserId, dayKey, source: input.source, counts };
     if (!rows.length) {

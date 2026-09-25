@@ -17,6 +17,7 @@ export interface IDailySnapshot {
         rides: number;
         reminders: number;
         healthFlags: number;
+        nudges?: number;
     };
     modelName?: string;
     source: "scheduled" | "on_demand";
@@ -42,6 +43,7 @@ const dailySnapshotSchema = new Schema<IDailySnapshotDocument>(
             rides: { type: Number, default: 0 },
             reminders: { type: Number, default: 0 },
             healthFlags: { type: Number, default: 0 },
+            nudges: { type: Number, default: 0 },
         },
         modelName: { type: String },
         source: { type: String, enum: ["scheduled", "on_demand"], default: "scheduled" },

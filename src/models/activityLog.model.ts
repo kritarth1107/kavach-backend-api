@@ -20,6 +20,7 @@ export type ActivityKind =
     | "mood"
     | "health"
     | "caregiver_alert"
+    | "nudge"
     | "diag";
 
 export const ACTIVITY_KINDS: ActivityKind[] = [
@@ -37,6 +38,7 @@ export const ACTIVITY_KINDS: ActivityKind[] = [
     "mood",
     "health",
     "caregiver_alert",
+    "nudge",
     "diag",
 ];
 
