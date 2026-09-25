@@ -18,8 +18,9 @@ import {
     savedAddressMatches,
     readCartAddressBlock,
     cartAddressEvidence,
+    ctaNeedsAddress,
 } from "../src/services/commerceAutomation/apolloAddress";
-import { runApolloCodCheckout } from "../src/services/commerceAutomation/apolloCheckout";
+import { addressEvidenceFromText, runApolloCodCheckout } from "../src/services/commerceAutomation/apolloCheckout";
 import { captureCheckoutDiagnostic, getLastCheckoutDiagnostic, redactDiagText } from "../src/services/commerceAutomation/checkoutDiagnostics.service";
 
 const BASE = "https://www.apollopharmacy.in";
@@ -55,6 +56,12 @@ type St = {
     placeClicks: number;
     requests: string[];
     forbidden: string[];
+    /** "block" = cart with the CartAddress block; "live" = the real signed-in desktop cart seen
+     *  on 25 Sep: NO block, header "Deliver to Kritarth Raipur 492012", bottom sticky bar
+     *  "Amount to pay ₹192.42" + primary "SELECT ADDRESS" (→ "Proceed" once one is selected). */
+    layout: "block" | "live";
+    headerPin: string;
+    noReviewPopup: boolean;
 };
 const newState = (p: Partial<St>): St => ({
     saved: [],
@@ -68,33 +75,49 @@ const newState = (p: Partial<St>): St => ({
     placeClicks: 0,
     requests: [],
     forbidden: [],
+    layout: "block",
+    headerPin: "492012",
+    noReviewPopup: false,
     ...p,
 });
 const fmt = (a: Addr) => `${a.addressLine1}, ${a.addressLine2}, ${a.city}, ${a.state} - ${a.zipcode}`;
 
+let HEADER = `<header><span>Delivery Address</span> <span>Raipur 492001</span> <a href="/medicines-cart">Cart</a></header>`;
+const setHeader = (st: St) => {
+    HEADER =
+        st.layout === "live"
+            ? `<header><div class="HeaderLocation"><span>Deliver to</span> <b>Kritarth</b> <span>Raipur ${st.headerPin}</span></div> <span class="avatar">K</span> <a href="/medicines-cart">Cart</a></header>`
+            : `<header><span>Delivery Address</span> <span>Raipur 492001</span> <a href="/medicines-cart">Cart</a></header>`;
+};
 function shell(title: string, body: string, script = ""): string {
     return `<!doctype html><html><head><title>${title}</title><style>
 .hidden{display:none} [class*="Modalbox"]{position:fixed;top:0;right:0;width:420px;height:100%;background:#fff;border:1px solid #999;overflow:auto;z-index:10}
 button,span,[class*="savedAddressChild"],[class*="searchItemList"]{cursor:pointer;display:inline-block;min-width:20px;min-height:16px}
 [class*="savedAddressChild"],[class*="searchItemList"]{display:block;padding:6px;border:1px solid #ddd;margin:4px}
 </style></head><body>
-<header><span>Delivery Address</span> <span>Raipur 492001</span> <a href="/medicines-cart">Cart</a></header>
+${HEADER}
 <main id="app">${body}</main><script>${script}</script></body></html>`;
 }
 
 function cartPage(st: St): string {
     const sel = st.saved.find((a) => a.id === st.selectedId);
-    const block = sel
+    const live = st.layout === "live";
+    const block = live
+        ? ""
+        : sel
         ? `<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q"><div class="CartAddress_adressIcon__DQrWA"></div><div class="CartAddress_addressRightBx__NSyGg"><div class="CartAddress_addressDetail__k1chb"><p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>${sel.name || PROFILE.name}</p><p class="CartAddress_address__Nt8hI">${fmt(sel)}</p></div><div class="CartAddress_addActions__HESr9"><span class="CartAddress_actionBtn__HJq2T" id="act">Change</span></div></div></div></div>`
         : `<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q CartAddress_addAdressBlock__sLaQL"><div class="CartAddress_adressIcon__DQrWA"></div><div class="CartAddress_addressRightBx__NSyGg"><div class="CartAddress_addressDetail__k1chb"><p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>${PROFILE.name}</p><p class="CartAddress_address__Nt8hI">Raipur 492001</p></div><div class="CartAddress_addressAction__clmEn"><span class="undefined" id="act">${st.saved.length ? "SELECT ADDRESS" : "ADD ADDRESS"}</span></div></div></div></div>`;
     return shell(
         "Your Cart | Apollo Pharmacy",
         `<h1>YOUR CART</h1><p>1 ITEM IN YOUR CART</p>${block}
 <div class="MedicineProductCard_root__udJYP"><div class="MedicineProductCard_titleBx__V"><h2 class="MedicineProductCard_title__MJ4MD">${SKU}</h2></div><p class="MedicineProductCard_text__lcvKS">Qty 1</p></div>
-<h3>Cart Breakdown</h3><p>Amount to pay</p><p>₹192.42</p><button title="Proceed" id="proceed">Proceed</button>
+<h3>Cart Breakdown</h3><p>Total Bill Incl. charges 279 192.42</p>
+${live
+    ? `<div class="CartFooter_root" style="position:fixed;bottom:0;left:0;right:0;background:#fff"><div class="CartFooter_amt"><p class="CartFooter_lbl">Amount to pay<span class="CartFooter_chev"></span></p><p class="CartFooter_val">₹192.42</p></div><div class="CartFooter_cta"><button class="Button_primaryPharma" id="proceed">${sel ? "Proceed" : st.saved.length ? "SELECT ADDRESS" : "ADD ADDRESS"}</button></div></div>`
+    : `<p>Amount to pay</p><p>₹192.42</p><button title="Proceed" id="proceed">Proceed</button>`}
 <div id="drawer"></div>`,
         `
-const saved = ${JSON.stringify(st.saved)}; const selected = ${JSON.stringify(sel || null)};
+const saved = ${JSON.stringify(st.saved)}; const selected = ${JSON.stringify(sel || null)}; const noReview = ${JSON.stringify(st.noReviewPopup)};
 const fmt = a => a.addressLine1 + ', ' + a.addressLine2 + ', ' + a.city + ', ' + a.state + ' - ' + a.zipcode;
 const card = (a, i) => '<div class="NewSavedAddressCard_savedAddressChild__qpbH-" data-id="' + a.id + '"><div class="NewSavedAddressCard_addressType__4PcLi"><div class="NewSavedAddressCard_heading__lhm66"><div class="NewSavedAddressCard_sentenceCase__8OE3R">' + a.addressType.toLowerCase() + '</div></div><div class="NewSavedAddressCard_iconSection__KWTEl"><i class="del" style="display:inline-block;width:14px;height:14px;background:#c00"></i></div></div><div class="NewSavedAddressCard_addressDesc__iB4Jq">' + fmt(a) + '</div></div>';
 const post = (u, b) => fetch(u, { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(b || {}) }).then(r => r.json());
@@ -137,10 +160,12 @@ function openSheet() {
     });
   });
 }
-document.getElementById('act').addEventListener('click', openSheet);
+const actEl = document.getElementById('act'); if (actEl) actEl.addEventListener('click', openSheet);
 document.getElementById('proceed').addEventListener('click', () => {
   if (!selected) { openSheet(); return; }
+  if (noReview) { location.href = '/delivery-options'; return; }
   D.innerHTML = '<div class="ConfirmCartAddressDialog_AddressModalboxClass__rAY-q" role="dialog"><h2>Deliver to</h2><div class="ConfirmCartAddressDialog_heading">Delivery Address</div><div class="NewSavedAddressCard_savedAddressChild__x"><div class="desc">' + fmt(selected) + '</div></div><button class="ConfirmCartAddressDialog_changBtn__T1tWj">Change Address</button><div class="ConfirmCartAddressDialog_extraInfo__Pgn3F"><label>Recipient*</label><input type="text" id="rn" value="' + (selected.name || '') + '"><label>Recipient Contact*</label><input type="tel" name="recipientContact" id="rc" value="' + (selected.mobileNumber || '') + '"><p>Double-check the details so your order reaches the right hands!</p></div><div class="actions"><button id="rvProceed">Proceed</button></div></div>';
+  D.querySelector('.ConfirmCartAddressDialog_changBtn__T1tWj').addEventListener('click', openSheet);
   document.getElementById('rvProceed').addEventListener('click', () => {
     if (!document.getElementById('rn').value.trim() || !/^[6789]\\d{9}$/.test(document.getElementById('rc').value)) return;
     location.href = '/delivery-options';
@@ -284,6 +309,7 @@ document.getElementById('place').addEventListener('click', async () => { await f
 }
 
 async function withPage<T>(st: St, fn: (p: Page) => Promise<T>): Promise<T> {
+    setHeader(st);
     const browser = await chromium.launch({ headless: true });
     try {
         const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -476,6 +502,119 @@ async function main() {
         assert.equal(st.saved.length, 2);
         assertNoLeaks(st);
         console.log("✓ E saved address missing map coordinates → Apollo's editor → updated + selected, no duplicate");
+    }
+
+    // ── unit: header "Deliver to <name> <city> <pin>" is browse location only ──
+    assert.equal(addressEvidenceFromText("Deliver to Kritarth Raipur 492001 1 K Buy Medicines YOUR CART 1 ITEM Amount to pay ₹192.42 SELECT ADDRESS", "492001", ["C504"]), "none");
+    assert.equal(addressEvidenceFromText("Delivery Address Select Address Raipur 492001 Choose delivery type Delivering to", "492001", ["C504"]), "none");
+    assert.equal(addressEvidenceFromText("Deliver to Kritarth Raipur 492012 Choose delivery type Delivering to C504, Sunita Park, Labhandih, Raipur - 492001", "492001", ["C504"]), "full");
+    console.log("✓ unit: header 'Deliver to <name> <city> <pin>' never counts as the delivery pincode");
+
+    // ── F) LIVE layout (no block, header 492012, bottom SELECT/ADD ADDRESS), no saved address → add new ──
+    {
+        const st = newState({
+            layout: "live",
+            places: [
+                { placeId: "p1", addressName: "Sunita Park", addressDescription: "Labhandih, Raipur, Chhattisgarh 492001, India", pincode: "492001", city: "Raipur", state: "Chhattisgarh", area: "Labhandih, Raipur" },
+            ],
+        });
+        const progress: string[] = [];
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            const before = await readCartAddressBlock(p);
+            assert.equal(before.found, false, "no CartAddress block (live layout)");
+            assert.equal(before.cta, "ADD ADDRESS", JSON.stringify(before));
+            assert.ok(ctaNeedsAddress(before));
+            assert.match(before.header, /Deliver to Kritarth Raipur 492012/);
+            assert.equal(cartAddressEvidence(before, target), "none");
+            return checkout(p, progress, log);
+        });
+        assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.equal(st.saveCalls.length, 1, "exactly one address saved");
+        assert.equal(st.saveCalls[0]!.address1, "C504, Sunita Park");
+        assert.equal(st.saveCalls[0]!.recipientName, KAVACH_RECIPIENT);
+        assert.equal(st.saved.find((a) => a.id === st.selectedId)!.zipcode, "492001");
+        assert.ok(log.some((l) => l.startsWith("address_review_result") && l.includes('"ok":true')), "verified on Apollo's Deliver-to popup before payment");
+        assert.ok(st.requests.some((r) => /\/pay\//.test(r)));
+        assert.equal(st.placeClicks, 0);
+        assertNoLeaks(st);
+        console.log("✓ F live layout (no block, header 492012, bottom ADD ADDRESS), no saved address → added + selected via bottom button, verified on the popup, reached COD (dry run)");
+        console.log("  progress:", JSON.stringify(progress));
+    }
+
+    // ── G) LIVE layout, bottom SELECT ADDRESS, matching saved address in another format behind View Other ──
+    {
+        const st = newState({
+            layout: "live",
+            saved: [
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492012", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a2", addressLine1: "c-504 , SUNITA PARK", addressLine2: "LABHANDIH NEAR TULIP HOTEL", city: "RAIPUR", state: "CHHATTISGARH", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
+            ],
+        });
+        const progress: string[] = [];
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            const before = await readCartAddressBlock(p);
+            assert.equal(before.cta, "SELECT ADDRESS");
+            return checkout(p, progress, log);
+        });
+        assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.equal(st.selectedId, "a2");
+        assert.equal(st.saveCalls.length + st.searchQueries.length, 0, "no new address, no search");
+        assert.ok(log.some((l) => l.startsWith("address_review_result") && l.includes('"ok":true')));
+        assertNoLeaks(st);
+        console.log("✓ G live layout, bottom SELECT ADDRESS → drawer → View Other → 'c-504 , SUNITA PARK … - 492001' selected, verified on popup (dry run)");
+        console.log("  progress:", JSON.stringify(progress));
+    }
+
+    // ── H) LIVE layout, another saved address pre-selected (bottom already Proceed), header shows 492001 ──
+    {
+        const st = newState({
+            layout: "live",
+            headerPin: "492001",
+            saved: [
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+                { id: "a2", addressLine1: "C504, Sunita Park", addressLine2: "Labhandih", city: "Raipur", state: "Chhattisgarh", zipcode: "492001", latitude: 21.25, longitude: 81.66, addressType: "HOME", name: PROFILE.name, mobileNumber: PROFILE.phone },
+            ],
+            selectedId: "a1",
+        });
+        const progress: string[] = [];
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, progress, log);
+        });
+        assert.equal(out.status, "dry_run_stop", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.equal(st.selectedId, "a2", "switched via the popup's Change Address");
+        assert.equal(st.saveCalls.length, 0);
+        assertNoLeaks(st);
+        console.log("✓ H live layout, wrong address pre-selected (header says 492001 — ignored) → popup mismatch → Change Address → C504 selected → verified (dry run)");
+        console.log("  progress:", JSON.stringify(progress));
+    }
+
+    // ── I) LIVE layout, wrong address pre-selected, NO popup, header 492001 → must stop before payment ──
+    {
+        const st = newState({
+            layout: "live",
+            headerPin: "492001",
+            noReviewPopup: true,
+            saved: [
+                { id: "a1", addressLine1: "Flat 12, Shanti Nagar", addressLine2: "Tatibandh", city: "Raipur", state: "Chhattisgarh", zipcode: "492099", latitude: 21.2, longitude: 81.6, addressType: "OFFICE", name: PROFILE.name, mobileNumber: PROFILE.phone },
+            ],
+            selectedId: "a1",
+        });
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, [], log);
+        });
+        assert.equal(out.status, "address_unverified", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.ok(!st.requests.some((r) => /\/pay\//.test(r)), "never reached payment");
+        assert.equal(st.placeClicks, 0);
+        assertNoLeaks(st);
+        console.log("✓ I live layout, wrong address, no popup, header 'Deliver to Kritarth Raipur 492001' → stopped before payment:", out.detail);
     }
 
     console.log("\nALL APOLLO ADDRESS FLOW TESTS PASSED (mocked Apollo, no OTP, no real order)");

@@ -33,6 +33,7 @@ import {
     ensureApolloDeliveryAddress,
     handleAddressReviewPopup,
     type AddressTarget,
+    clickReviewChangeAddress,
 } from "./apolloAddress";
 
 export type CheckoutStage =
@@ -235,6 +236,8 @@ async function addressPickerVisible(page: Page): Promise<boolean> {
                 const r = (n as HTMLElement).getBoundingClientRect();
                 if (r.width < 150 || r.height < 120) return false;
                 const t = ((n as HTMLElement).innerText || "").toLowerCase();
+                // The cart page itself (bottom bar "Amount to pay … SELECT ADDRESS") is not a picker.
+                if (/amount to pay|your cart/.test(t) && !/saved address|add new address/.test(t)) return false;
                 return /saved address|deliver here|select (a )?(delivery )?address|choose (a )?(delivery )?address|add new address/.test(t);
             });
         })
@@ -271,15 +274,26 @@ async function addressEvidence(
     hints: string[] = [],
 ): Promise<"full" | "pincode" | "none"> {
     if (!pincode) return "none";
-    const text = await bodyText(page, 12000);
-    // Skip the global header ("Delivery Address / Raipur 492001" is just browse location)
+    const raw = await bodyText(page, 12000);
+    return addressEvidenceFromText(raw, pincode, hints);
+}
+
+/**
+ * Pure: strip Apollo's global header — "Deliver to <name> <city> <pin>" (signed in) or
+ * "Delivery Address / Select Address | <city> <pin>" (guest) — which is only the BROWSE
+ * location, then look for the pincode (+ street hint) in the page body only.
+ */
+export function addressEvidenceFromText(raw: string, pincode: string, hints: string[] = []): "full" | "pincode" | "none" {
+    let text = raw.replace(/\s+/g, " ").trim();
+    text = text.replace(/^\s*deliver(?:y)?\s*(?:to|address)\b(?:\s*select\s*address)?\s*[^0-9]{0,60}?\b\d{6}\b/i, " ");
+    text = text.replace(/^\s*delivery\s*address\s*select\s*address\b/i, " ");
     const idx = text.search(/your\s*cart|choose\s*delivery\s*type|amount\s*to\s*pay|deliver(?:y|ing)?\s*to|shipping\s*address|payment\s*options/i);
     const body = idx > 0 ? text.slice(idx) : text;
     const lowerBody = body.toLowerCase();
     const pinInBody = new RegExp(`\\b${pincode}\\b`).test(body);
     const hintHit = hints.some((h) => h && lowerBody.includes(h.toLowerCase()));
     if (pinInBody && hintHit) return "full";
-    if (pinInBody || new RegExp(`\\b${pincode}\\b`).test(text)) return "pincode";
+    if (pinInBody) return "pincode";
     return "none";
 }
 
@@ -568,6 +582,8 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
     let addressVerified: "full" | "pincode" | "none" = opts.priorAddressVerified ?? "none";
     let addressEnsured = false;
     let addressRuns = 0;
+    const MAX_ADDRESS_RUNS = 3;
+    let reviewChanges = 0;
     let reviewHandled = 0;
     const target: AddressTarget | null =
         opts.addressTarget ??
@@ -603,8 +619,14 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             };
         }
         addressEnsured = true;
-        addressVerified = "full";
-        if (r.how !== "added_new") await sayOnce("addr_ok", `delivery address ${target.line1}, ${target.pincode} ✓`);
+        if (r.evidence === "full") {
+            addressVerified = "full";
+            if (r.how !== "added_new") await sayOnce("addr_ok", `delivery address ${target.line1}, ${target.pincode} ✓`);
+        } else {
+            // Selected on Apollo but the cart doesn't print it: verified on the next screen, or we stop.
+            if (r.how === "selected_saved") await sayOnce("addr_sel", `selected your saved Apollo address ${target.line1}, ${target.pincode} — confirming it on the next screen…`);
+            else if (r.how === "cart_proceed") await sayOnce("addr_pending", `Apollo already has a delivery address selected — I'll check it's ${target.line1}, ${target.pincode} before payment…`);
+        }
         stageSince = Date.now();
         return null;
     };
@@ -683,12 +705,12 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             }
             case "address": {
                 // Apollo's Deliver-to drawer or /address-details form.
-                if (target && !addressEnsured && addressRuns < 2) {
+                if (target && !addressEnsured && addressRuns < MAX_ADDRESS_RUNS) {
                     const stop = await ensureAddress();
                     if (stop) return stop;
                     continue;
                 }
-                if (addressRuns >= 2 && !addressEnsured) {
+                if (addressRuns >= MAX_ADDRESS_RUNS && !addressEnsured) {
                     return { status: "address_unverified", url: safeUrl(page), detail: "couldn't set the delivery address on Apollo" };
                 }
                 // Address already ensured but a picker is open again → close it, back to the cart.
@@ -716,6 +738,20 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                     log,
                 });
                 log("address_review_result", { ok: r.ok, reason: r.ok ? undefined : r.reason });
+                if (!r.ok && r.mismatch && reviewChanges < 1 && addressRuns < MAX_ADDRESS_RUNS && remaining(opts.deadlineAt) > 30_000) {
+                    // Apollo pre-selected another saved address (the cart doesn't print it) → use the
+                    // popup's own "Change Address" → Deliver-to drawer → select / add the target.
+                    reviewChanges++;
+                    reviewHandled--;
+                    await sayOnce("addr_change", `Apollo had a different delivery address selected — switching to ${target.line1}, ${target.pincode}…`);
+                    if (await clickReviewChangeAddress(page, Math.min(opts.deadlineAt - 3_000, Date.now() + 8_000))) {
+                        addressEnsured = false;
+                        addressVerified = "none";
+                        stageSince = Date.now();
+                        continue;
+                    }
+                    return { status: "address_unverified", url: safeUrl(page), detail: `${r.reason}; Apollo's Change Address didn't open the address picker` };
+                }
                 if (!r.ok) return { status: "address_unverified", url: safeUrl(page), detail: r.reason };
                 addressVerified = "full";
                 await sayOnce("review", `Apollo confirmed delivery to ${target.line1}, ${target.pincode} ✓ — continuing…`);
@@ -725,7 +761,7 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             }
             case "cart": {
                 if (target && !addressEnsured) {
-                    if (addressRuns >= 2) {
+                    if (addressRuns >= MAX_ADDRESS_RUNS) {
                         return { status: "address_unverified", url: safeUrl(page), detail: "couldn't set the delivery address on Apollo" };
                     }
                     const stop = await ensureAddress();

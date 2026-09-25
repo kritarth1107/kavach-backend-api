@@ -182,12 +182,50 @@ export type CartAddressState = {
     /** The block's action link text ("Change", "SELECT ADDRESS", "ADD ADDRESS", …). */
     action: string;
     billTo: string;
+    /**
+     * Label of the cart's bottom sticky-bar primary button next to "Amount to pay"
+     * ("SELECT ADDRESS" / "ADD ADDRESS" while no delivery address is selected, else "Proceed").
+     * On the live signed-in desktop cart this bar is the ONLY address entry point (no block).
+     */
+    cta: string;
+    /** Header "Deliver to <name> <city> <pin>" — browse location only, never a delivery address. */
+    header: string;
 };
+
+const EMPTY_CART_ADDR: CartAddressState = { found: false, selected: false, text: "", action: "", billTo: "", cta: "", header: "" };
+/** Bottom-bar CTA labels Apollo's cart API sends while no delivery address is selected. */
+export const ADDRESS_CTA_RE = /^\s*(select\s*address|add\s*address|add\s*details|\+\s*add)\s*$/i;
+export function ctaNeedsAddress(st: Pick<CartAddressState, "cta">): boolean {
+    return ADDRESS_CTA_RE.test(st.cta || "");
+}
 
 export async function readCartAddressBlock(page: Page): Promise<CartAddressState> {
     return page
         .evaluate(() => {
-            const out = { found: false, selected: false, text: "", action: "", billTo: "" };
+            const out = { found: false, selected: false, text: "", action: "", billTo: "", cta: "", header: "" };
+            const bodyTxt = (document.body.innerText || "").replace(/\s+/g, " ");
+            const hm = bodyTxt.slice(0, 400).match(/deliver(?:y)?\s*(?:to|address)\s+.{0,60}?\b\d{6}\b/i);
+            out.header = hm ? hm[0].trim() : "";
+            // Bottom sticky bar: the primary button that shares a container with "Amount to pay".
+            const amt = (Array.from(document.querySelectorAll("p, span, div")) as HTMLElement[]).filter(
+                (e) => e.children.length <= 1 && /^\s*amount to pay\s*$/i.test(e.innerText || "") && e.getBoundingClientRect().width > 0,
+            );
+            for (const a of amt) {
+                let box: HTMLElement | null = a;
+                for (let i = 0; i < 6 && box && !out.cta; i++) {
+                    box = box.parentElement;
+                    if (!box) break;
+                    const btn = (Array.from(box.querySelectorAll("button")) as HTMLElement[]).find((b) => b.getBoundingClientRect().width > 0);
+                    if (btn) out.cta = (btn.innerText || "").replace(/\s+/g, " ").trim();
+                }
+                if (out.cta) break;
+            }
+            if (!out.cta) {
+                const b = (Array.from(document.querySelectorAll("button")) as HTMLElement[]).find(
+                    (x) => x.getBoundingClientRect().width > 0 && /^\s*(select\s*address|add\s*address|add\s*details)\s*$/i.test(x.innerText || ""),
+                );
+                if (b) out.cta = (b.innerText || "").replace(/\s+/g, " ").trim();
+            }
             const blocks = Array.from(document.querySelectorAll('[class*="CartAddress_addressBlock"]')) as HTMLElement[];
             const block = blocks.find((b) => b.getBoundingClientRect().width > 0) || blocks[0];
             if (!block) return out;
@@ -204,7 +242,7 @@ export async function readCartAddressBlock(page: Page): Promise<CartAddressState
             out.selected = !isAdd && Boolean(out.text);
             return out;
         })
-        .catch(() => ({ found: false, selected: false, text: "", action: "", billTo: "" }));
+        .catch(() => ({ ...EMPTY_CART_ADDR }));
 }
 
 /** Evidence from the cart block only: full = selected address has pin + flat/society. */
@@ -269,8 +307,13 @@ async function clickButtonByText(page: Page, re: RegExp, timeout = 3000): Promis
 
 async function openDeliverToSheet(page: Page, until: number): Promise<boolean> {
     if (await deliverToSheetOpen(page)) return true;
-    const act = page.locator('[class*="CartAddress_addActions"] span, [class*="CartAddress_addressAction"] span').first();
-    if (!(await act.isVisible().catch(() => false))) return false;
+    let act = page.locator('[class*="CartAddress_addActions"] span, [class*="CartAddress_addressAction"] span').first();
+    if (!(await act.isVisible().catch(() => false))) {
+        // Live signed-in cart without the block: the bottom-bar "SELECT ADDRESS" button runs Apollo's
+        // SELECT_ADDRESS action → onAddressChangeCTAClicked → opens the same Deliver-to drawer.
+        act = page.locator("button").filter({ hasText: ADDRESS_CTA_RE }).first();
+        if (!(await act.isVisible().catch(() => false))) return false;
+    }
     await act.click({ timeout: 3000 }).catch(async () => {
         await act.evaluate((e) => (e as HTMLElement).click()).catch(() => undefined);
     });
@@ -299,6 +342,12 @@ async function readSavedCards(page: Page): Promise<SavedCard[]> {
 
 export type EnsureAddressResult =
     | { ok: true; how: "already_selected" | "selected_saved" | "added_new"; addressText: string; evidence: "full" }
+    /**
+     * Cart has no address block (live signed-in desktop layout): an address is selected on Apollo
+     * (bottom bar says Proceed) but its text isn't on the cart — it MUST still be verified on the
+     * "Deliver to" popup / delivery options before payment.
+     */
+    | { ok: true; how: "selected_saved" | "added_new" | "cart_proceed"; addressText: string; evidence: "pending" }
     | { ok: false; step: string; reason: string };
 
 export type EnsureAddressOptions = {
@@ -319,18 +368,39 @@ async function gotoCart(page: Page, deadlineAt: number): Promise<void> {
             .goto(CART_URL, { waitUntil: "domcontentloaded", timeout: Math.max(2_000, Math.min(20_000, remaining(deadlineAt) - 3_000)) })
             .catch(() => undefined);
     }
-    await waitFor(page, Math.min(deadlineAt - 2_000, Date.now() + 12_000), async () => (await readCartAddressBlock(page)).found, 500);
+    await waitFor(
+        page,
+        Math.min(deadlineAt - 2_000, Date.now() + 12_000),
+        async () => {
+            const st = await readCartAddressBlock(page);
+            return st.found || Boolean(st.cta) || (await deliverToSheetOpen(page));
+        },
+        500,
+    );
 }
 
-async function verifyCartSelected(page: Page, target: AddressTarget, deadlineAt: number, waitMs = 12_000): Promise<CartAddressState | null> {
+/**
+ * After selecting / saving: block layout → the block must show the target (full);
+ * no-block layout → the bottom bar must stop asking for an address (pending: verify later).
+ */
+async function verifyCartSelected(
+    page: Page,
+    target: AddressTarget,
+    deadlineAt: number,
+    waitMs = 12_000,
+): Promise<{ evidence: "full"; st: CartAddressState } | { evidence: "pending"; st: CartAddressState } | null> {
     await gotoCart(page, deadlineAt);
     let st = await readCartAddressBlock(page);
     const until = Math.min(deadlineAt - 1_500, Date.now() + waitMs);
-    while (Date.now() < until && cartAddressEvidence(st, target) !== "full") {
+    const done = async () =>
+        cartAddressEvidence(st, target) === "full" || (!st.found && Boolean(st.cta) && !ctaNeedsAddress(st) && !(await deliverToSheetOpen(page)));
+    while (Date.now() < until && !(await done())) {
         await sleep(page, 600);
         st = await readCartAddressBlock(page);
     }
-    return cartAddressEvidence(st, target) === "full" ? st : null;
+    if (cartAddressEvidence(st, target) === "full") return { evidence: "full", st };
+    if (!st.found && Boolean(st.cta) && !ctaNeedsAddress(st) && !(await deliverToSheetOpen(page))) return { evidence: "pending", st };
+    return null;
 }
 
 export const phone10 = (p?: string) => {
@@ -366,8 +436,28 @@ export async function ensureApolloDeliveryAddress(
     if (!/\/address-details/i.test(safeUrl(page))) {
         await gotoCart(page, opts.deadlineAt);
         const st = await readCartAddressBlock(page);
-        log("address_cart_block", { found: st.found, selected: st.selected, text: st.text.slice(0, 120), action: st.action });
-        if (!st.found && !(await deliverToSheetOpen(page))) return fail("cart_block", "Apollo's cart didn't show its delivery-address section");
+        const sheetOpen = await deliverToSheetOpen(page);
+        log("address_cart_block", {
+            found: st.found,
+            selected: st.selected,
+            text: st.text.slice(0, 120),
+            action: st.action,
+            cta: st.cta,
+            header: st.header.replace(/^(deliver(?:y)?\s*(?:to|address))\s+\S+/i, "$1 [name]"),
+            sheetOpen,
+        });
+        if (!st.found && !sheetOpen) {
+            if (st.cta && !ctaNeedsAddress(st) && /proceed|continue|checkout/i.test(st.cta)) {
+                // No block, bottom bar already says Proceed → Apollo has some address selected but the
+                // cart doesn't print it (header "Deliver to … <pin>" is only the browse location).
+                // It's verified on the Deliver-to popup (Change Address if wrong) before payment.
+                log("address_pending", { cta: st.cta });
+                return { ok: true, how: "cart_proceed", addressText: "", evidence: "pending" };
+            }
+            if (!ctaNeedsAddress(st)) {
+                return fail("cart_block", `Apollo's cart showed no delivery-address section or Select Address button${st.cta ? ` (button: "${st.cta}")` : ""}`);
+            }
+        }
         if (cartAddressEvidence(st, target) === "full") {
             return { ok: true, how: "already_selected", addressText: st.text, evidence: "full" };
         }
@@ -375,7 +465,7 @@ export async function ensureApolloDeliveryAddress(
         // 2) Deliver-to drawer → saved addresses
         if (remaining(opts.deadlineAt) < 15_000) return fail("open_sheet", "not enough time left to pick the address");
         if (!(await openDeliverToSheet(page, Math.min(opts.deadlineAt - 3_000, Date.now() + 8_000)))) {
-            return fail("open_sheet", `Apollo's address picker didn't open (cart shows "${st.action || "no address action"}")`);
+            return fail("open_sheet", `Apollo's address picker didn't open (cart shows "${st.action || st.cta || "no address action"}")`);
         }
         await sleep(page, 600);
         let cards = await readSavedCards(page);
@@ -403,7 +493,8 @@ export async function ensureApolloDeliveryAddress(
             );
             if (!/\/address-details/i.test(safeUrl(page))) {
                 const ok = await verifyCartSelected(page, target, opts.deadlineAt, 10_000);
-                if (ok) return { ok: true, how: "selected_saved", addressText: ok.text, evidence: "full" };
+                if (ok?.evidence === "full") return { ok: true, how: "selected_saved", addressText: ok.st.text, evidence: "full" };
+                if (ok) return { ok: true, how: "selected_saved", addressText: match.text, evidence: "pending" };
                 return fail("select_saved", "picked the saved address but Apollo's cart didn't show it as the delivery address");
             }
             log("address_saved_needs_update", {});
@@ -475,7 +566,9 @@ export async function ensureApolloDeliveryAddress(
     const ok = await verifyCartSelected(page, target, opts.deadlineAt, 14_000);
     if (ok) {
         await say(`delivery address ${target.line1}, ${target.pincode} saved on Apollo ✓`);
-        return { ok: true, how: "added_new", addressText: ok.text, evidence: "full" };
+        return ok.evidence === "full"
+            ? { ok: true, how: "added_new", addressText: ok.st.text, evidence: "full" }
+            : { ok: true, how: "added_new", addressText: target.line1, evidence: "pending" };
     }
     return fail("verify_new", "saved the address but Apollo's cart didn't show it as the delivery address");
 }
@@ -607,7 +700,7 @@ export async function handleAddressReviewPopup(
     page: Page,
     target: Pick<AddressTarget, "pincode" | "flat" | "society">,
     opts: { recipientName?: string; accountPhone?: string; log?: EnsureAddressOptions["log"] },
-): Promise<{ ok: true; text: string } | { ok: false; reason: string; text: string }> {
+): Promise<{ ok: true; text: string } | { ok: false; reason: string; text: string; mismatch?: boolean }> {
     const info = await page
         .evaluate(() => {
             const extra =
@@ -634,7 +727,12 @@ export async function handleAddressReviewPopup(
     if (!info) return { ok: false, reason: "couldn't read Apollo's delivery-address popup", text: "" };
     opts.log?.("address_review", { text: info.text.replace(/\b[6-9]\d{9}\b/g, "[phone]").slice(0, 200) });
     if (!savedAddressMatches(info.text, target)) {
-        return { ok: false, reason: `Apollo's delivery popup shows a different address (needs ${target.pincode} ${target.flat || target.society || ""})`, text: info.text };
+        return {
+            ok: false,
+            mismatch: true,
+            reason: `Apollo's delivery popup shows a different address (needs ${target.pincode} ${target.flat || target.society || ""})`,
+            text: info.text,
+        };
     }
     const root = page.locator('[data-kavach-review="1"]').first();
     const inputs = root.locator("input");
@@ -659,4 +757,15 @@ export async function handleAddressReviewPopup(
         await btn.evaluate((e) => (e as HTMLElement).click()).catch(() => undefined);
     });
     return { ok: true, text: info.text };
+}
+
+/** On the "Deliver to" popup: press its own "Change Address" (opens the Deliver-to drawer). */
+export async function clickReviewChangeAddress(page: Page, until: number): Promise<boolean> {
+    const root = page.locator('[data-kavach-review="1"]').first();
+    const btn = root.locator("button, [role='button'], span").filter({ hasText: /^\s*change\s*address\s*$/i }).first();
+    if (!(await btn.isVisible().catch(() => false))) return false;
+    await btn.click({ timeout: 3000 }).catch(async () => {
+        await btn.evaluate((e) => (e as HTMLElement).click()).catch(() => undefined);
+    });
+    return waitFor(page, until, () => deliverToSheetOpen(page));
 }
