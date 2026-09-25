@@ -109,9 +109,9 @@ export async function deliverOutboundMessage(payload: {
                     bodyParameters: [payload.content.slice(0, 120)],
                 });
             } else {
-                const rich =
-                    payload.whatsappPayloads ??
-                    composeWhatsAppReply(payload.content, { kind: "schedule_missed" });
+                // Proactive sends (nudges, outreach, reminders) go out as ONLY the message —
+                // no trailing "Anything else I can help with?" quick-action bubble.
+                const rich = payload.whatsappPayloads ?? composeWhatsAppReply(payload.content, { kind: "plain" });
                 await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content, rich);
             }
         } else {

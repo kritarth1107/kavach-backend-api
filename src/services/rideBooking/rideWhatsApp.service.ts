@@ -184,9 +184,10 @@ async function maybeNotifyCaregivers(input: {
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
-        message: `Amma booked a ${providerLabel(input.draft.provider)} ride: ${from} → ${to}. Notify only — no approval needed.`,
+        message: `Booked a ${providerLabel(input.draft.provider)} ride: ${from} → ${to}.`,
         urgency: "low",
-        kind: "order_placed",
+        // Dashboard activity feed only (caregiver WhatsApp = orders + health red flags).
+        kind: "ride",
     });
 }
 

@@ -34,34 +34,13 @@ function kavachWhatsAppLine(): string {
     return config.whatsapp.kavachNumber;
 }
 
-const GUEST_WELCOME = `👋 *Welcome to Saheli!*
+const GUEST_WELCOME = `👋 *Hi, I'm Saheli* — Kavach's family companion on WhatsApp.
 
-Hi — I'm *Saheli*, Kavach's family companion on WhatsApp. No extra setup needed; just message me from your phone.
+I can chat and check in, send medicine reminders, and order medicines (Apollo, PharmEasy), groceries & food (Instamart, Swiggy, Zepto, Blinkit, Zomato) or book an Uber — always confirming first, Cash on Delivery.
 
-*Kavach* helps families stay connected — gentle check-ins, medicine reminders, and ordering (Instamart/Swiggy/Zepto *or any site* via private browser).
+I don't recognise this number yet. ✨ Sign up at *app.kavach.care*, or ask your caregiver to invite this same number. Our line: *${kavachWhatsAppLine()}*`;
 
-*What I can help with:*
-💬 Warm conversations and daily check-ins
-📋 Medicine and care reminders
-🛒 Food, grocery, medicine, or any-site shop (confirm before pay; soft care tips when relevant)
-
-Our WhatsApp line: *${kavachWhatsAppLine()}*
-
-Not on Kavach yet?
-✨ *Sign up at app.kavach.care*
-👨‍👩‍👧 Or ask your caregiver to invite you with the *same mobile number* you use on WhatsApp
-
-How can I help you today? 💚`;
-
-const GUEST_FOLLOWUP = `👋 *Welcome to Saheli!*
-
-Thanks for messaging me. I don't recognise this number yet.
-
-✨ *Sign up at app.kavach.care*
-
-👨‍👩‍👧 Or ask your caregiver to invite you using the *same mobile number* you use on WhatsApp
-
-Once you're on the family, I can help from right here. 💚`;
+const GUEST_FOLLOWUP = `I don't recognise this number yet 🙏 Sign up at *app.kavach.care*, or ask your caregiver to invite this same WhatsApp number — then I can help right here. 💚`;
 
 function isCaregiver(role: FamilyRole): boolean {
     return role === FamilyRole.PRIMARY_CAREGIVER || role === FamilyRole.CO_CAREGIVER;
@@ -224,7 +203,7 @@ async function withVoiceReply(out: OutboundMessage): Promise<OutboundMessage> {
     return out;
 }
 
-export async function handleWhatsAppInbound(body: {
+type WhatsAppInboundBody = {
     from?: string;
     text?: string;
     interactiveId?: string;
@@ -233,7 +212,36 @@ export async function handleWhatsAppInbound(body: {
     mediaUrl?: string;
     mediaType?: string;
     mediaCaption?: string;
-}): Promise<OutboundMessage> {
+};
+
+/**
+ * Entry point. Wraps the router so every care-recipient reply lands in the caregiver
+ * activity feed (inbound is logged inside, after STT, so voice notes carry the transcript).
+ */
+export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<OutboundMessage> {
+    const out = await handleWhatsAppInboundCore(body);
+    void (async () => {
+        try {
+            const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
+            const who = await resolveWhatsAppSender(phone).catch(() => null);
+            if (!who || who.role !== FamilyRole.CARE_RECIPIENT || !out?.content?.trim()) return;
+            const { logActivity } = await import("./activityLog.service");
+            await logActivity({
+                familyId: who.familyId,
+                recipientUserId: who.userId,
+                actorUserId: who.userId,
+                kind: "message_out",
+                title: out.modality === "voice" ? "Saheli replied (voice)" : "Saheli replied",
+                detail: out.content,
+            });
+        } catch {
+            /* never block */
+        }
+    })();
+    return out;
+}
+
+async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<OutboundMessage> {
     const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
     let text = String(body.text ?? "").trim();
 
@@ -301,6 +309,36 @@ export async function handleWhatsAppInbound(body: {
         // generic error copy: ask warmly (text only — no TTS of a fallback).
         if (!voiceTranscript && isVoicePlaceholder(text)) {
             return outbound(phone, VOICE_NOT_CAUGHT_REPLY);
+        }
+    }
+
+    if (identity.role === FamilyRole.CARE_RECIPIENT) {
+        const recipientId = identity.userId;
+        const familyId = identity.familyId;
+        void import("./activityLog.service").then(({ logActivity }) =>
+            logActivity({
+                familyId,
+                recipientUserId: recipientId,
+                actorUserId: recipientId,
+                kind: isVoiceMedia ? "voice_note" : "message_in",
+                title: isVoiceMedia ? "Voice note to Saheli" : body.mediaType ? `Shared ${body.mediaType}` : "Message to Saheli",
+                detail: text,
+            }),
+        );
+        // Health red flags → caregiver WhatsApp (keyword net immediately, Gemini screen async).
+        if (!messageLooksLikeEmergency(text)) {
+            void (async () => {
+                const { screenElderMessageForRedFlags } = await import("./saheliHealthRedFlag.service");
+                const elderName = await getFamilyMembersList(familyId, recipientId)
+                    .then((p) => p.members.find((m) => m.userId === recipientId)?.name)
+                    .catch(() => undefined);
+                await screenElderMessageForRedFlags({
+                    familyId,
+                    recipientUserId: recipientId,
+                    elderName: elderName || undefined,
+                    text,
+                });
+            })().catch(() => undefined);
         }
     }
 
@@ -724,7 +762,7 @@ export async function handleWhatsAppInbound(body: {
             replySource: "orderSession",
             fallbackUsed: "cancelAndSwitchReprocess",
         });
-        return handleWhatsAppInbound({
+        return handleWhatsAppInboundCore({
             ...body,
             text: orderFlowReply.reprocessText,
             interactiveId: undefined,

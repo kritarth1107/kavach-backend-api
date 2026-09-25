@@ -520,6 +520,19 @@ export async function quickOrder(input: {
     }
 
     const label = partnerLabel(partner);
+    {
+        // HARD: no MCP ordering for food/grocery — steer to the direct browser path.
+        const { MCP_ORDERING_DISABLED_COPY, isFoodGroceryBrowserOnly } = await import(
+            "./commerceAutomation/siteAllowlist"
+        );
+        if (isFoodGroceryBrowserOnly(mcpPartner)) return {
+            status: "partner_error",
+            partner: mcpPartner,
+            partnerLabel: label,
+            query,
+            message: MCP_ORDERING_DISABLED_COPY(label, query),
+        };
+    }
     const connected = await listFamilyConnectedPartners(input.familyId, input.actorUserId);
     const isConnected =
         (partner === OrderPartner.SWIGGY && connected.swiggy) ||

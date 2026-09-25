@@ -217,11 +217,7 @@ const registry: Partial<Record<CommercePartnerKey, CommerceAutomationAdapter>> =
 };
 
 export function getCommerceAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter {
-    // When browser-first is off, restore MCP adapters for Swiggy/Instamart/Zepto.
-    if (MCP_PARTNERS.has(partner) && !shouldPreferBrowserForPartner(partner)) {
-        const mcp = mcpRegistry[partner];
-        if (mcp) return mcp;
-    }
+    // Browser only — MCP adapters are never returned for ordering (see siteAllowlist.ts).
     const adapter = registry[partner];
     if (!adapter) throw new Error(`No commerce adapter for ${partner}`);
     return adapter;

@@ -1384,6 +1384,16 @@ export async function placeMcpOrder(input: {
     paymentLink?: string;
     rawSummary: string;
 }> {
+    // HARD: food/grocery orders go through the direct browser path only — MCP never places.
+    {
+        const { isFoodGroceryBrowserOnly, MCP_ORDERING_DISABLED_COPY } = await import(
+            "../../services/commerceAutomation/siteAllowlist"
+        );
+        if (isFoodGroceryBrowserOnly(input.partner)) {
+            const label = input.partner === "instamart" ? "Instamart" : input.partner === "swiggy" ? "Swiggy" : "Zepto";
+            throw new Error(MCP_ORDERING_DISABLED_COPY(label, input.items[0]?.name));
+        }
+    }
     const config = getMcpPartner(input.partner);
     return withMcpClient(input.partner, input.familyId, input.userId, async (client) => {
         const tools = (await client.listTools()).tools;

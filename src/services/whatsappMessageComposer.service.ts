@@ -678,40 +678,31 @@ export function buildCareNudgeMessages(input: {
     title: string;
     time: string;
 }): MetaWhatsAppPayload[] {
-    const messages: MetaWhatsAppPayload[] = [
-        { type: "text", text: { body: truncate(input.text, 4096) } },
-    ];
-
-    if (input.nudgeKind === "pre_reminder" || input.nudgeKind === "missed_followup") {
-        messages.push({
-            type: "interactive",
-            interactive: {
-                type: "button",
-                body: { text: truncate(`${input.title} (${input.time})`, 1024) },
-                action: {
-                    buttons: [
-                        {
-                            type: "reply",
-                            reply: {
-                                id: `done:${input.scheduleId}`,
-                                title: "Done",
+    // ONE message only: the nudge itself (with a single "Done" tap for reminders) —
+    // never a second follow-up bubble after it.
+    if (
+        (input.nudgeKind === "pre_reminder" || input.nudgeKind === "missed_followup") &&
+        input.text.length <= 1024
+    ) {
+        return [
+            {
+                type: "interactive",
+                interactive: {
+                    type: "button",
+                    body: { text: input.text },
+                    action: {
+                        buttons: [
+                            {
+                                type: "reply",
+                                reply: { id: `done:${input.scheduleId}`, title: "Done ✅" },
                             },
-                        },
-                        {
-                            type: "reply",
-                            reply: { id: "schedule_today", title: "Today's schedule" },
-                        },
-                        {
-                            type: "reply",
-                            reply: { id: "need_help", title: "Need help" },
-                        },
-                    ],
+                        ],
+                    },
                 },
             },
-        });
+        ];
     }
-
-    return messages;
+    return [{ type: "text", text: { body: truncate(input.text, 4096) } }];
 }
 
 export function buildScheduleCompanionMessages(text: string): MetaWhatsAppPayload[] {

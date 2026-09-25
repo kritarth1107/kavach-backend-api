@@ -13,6 +13,7 @@ import {
     saveBrowserProfileState,
 } from "./browserProfile.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
+import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
 import type { CommercePartnerKey } from "./types";
 import {
     bootstrapPharmacyLogin,
@@ -103,6 +104,8 @@ export type BrowserFailureReason =
     | "cart_not_empty"
     /** Cart doesn't hold exactly the confirmed product at qty 1 (confirm card withheld). */
     | "cart_mismatch"
+    /** Site outside the hard allowlist (siteAllowlist.ts). */
+    | "not_allowed"
     | "unknown";
 
 export type BrowserTaskResult = {
@@ -1485,6 +1488,18 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
 
 /** Public API — per-user profile + run. Always respects a hard WhatsApp-facing deadline. */
 export async function runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
+    // HARD allowlist — refuse before Chromium ever opens.
+    const allowPartner = resolvePlaybook(input.partner, input.goal, input.startUrl).partner;
+    if (!isAllowedOrderSite(String(allowPartner))) {
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: String(allowPartner || "generic"),
+            steps: 0,
+            failureReason: "not_allowed",
+            message: refuseSiteCopy(String(allowPartner)),
+        };
+    }
     const deadlineMs = browserTaskDeadlineMs(input);
     try {
         return await withBrowserGate(

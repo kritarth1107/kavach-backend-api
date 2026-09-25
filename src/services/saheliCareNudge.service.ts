@@ -62,6 +62,15 @@ export async function deliverCareNudge(input: {
         dateKey: input.dateKey,
         nudgeKind: input.nudgeKind,
     };
+    {
+        // Nudge gate: quiet ≥60 min + no active job/flow (checked again right before send).
+        const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
+        const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        if (!gate.ok) {
+            console.log(`Care nudge deferred (${gate.reason}) for ${input.recipientUserId} (${input.nudgeKind})`);
+            return false;
+        }
+    }
     const attemptId = await claimNudgeAttempt(slotKey, text);
     if (!attemptId) {
         return false;
@@ -85,6 +94,20 @@ export async function deliverCareNudge(input: {
         return false;
     }
 
+    {
+        const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
+        const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        if (!gate.ok) {
+            console.log(`Care nudge dropped at send (${gate.reason}) for ${input.recipientUserId}`);
+            await finalizeNudgeAttempt(attemptId, {
+                delivered: false,
+                channel: target.channel,
+                terminal: false,
+                reason: `gated:${gate.reason}`,
+            });
+            return false;
+        }
+    }
     const delivery = await deliverOutboundMessage({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,

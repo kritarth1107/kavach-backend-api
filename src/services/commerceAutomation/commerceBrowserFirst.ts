@@ -45,21 +45,22 @@ export function browserFirstPartnerSet(): Set<string> {
     );
 }
 
-/** True when this partner should use private-browser order path (not MCP) for WA. */
+/**
+ * HARD: food/grocery (Instamart/Swiggy/Zepto/Blinkit/Zomato) always order through the
+ * direct browser path — MCP ordering never successfully placed an order. The env flags are
+ * ignored for these five (kept only for backwards-compatible reads elsewhere).
+ */
 export function shouldPreferBrowserForPartner(partner: string | null | undefined): boolean {
     if (!partner) return false;
+    const key = partner.toLowerCase();
+    if ((DEFAULT_BROWSER_FIRST_PARTNERS as readonly string[]).includes(key)) return true;
     if (!isCommerceBrowserFirstEnabled()) return false;
-    return browserFirstPartnerSet().has(partner.toLowerCase());
+    return browserFirstPartnerSet().has(key);
 }
 
-/** True when MCP is still the preferred primary path for this partner. */
-export function shouldPreferMcpForPartner(partner: string | null | undefined): boolean {
-    if (!partner) return false;
-    const key = partner.toLowerCase();
-    // Historical MCP partners; only prefer MCP when browser-first is off for them.
-    const mcpCapable = key === "swiggy" || key === "instamart" || key === "zepto";
-    if (!mcpCapable) return false;
-    return !shouldPreferBrowserForPartner(key);
+/** MCP is never the ordering path any more (read-only search at most). */
+export function shouldPreferMcpForPartner(_partner: string | null | undefined): boolean {
+    return false;
 }
 
 export function browserFirstPartnerRegexSource(): string {

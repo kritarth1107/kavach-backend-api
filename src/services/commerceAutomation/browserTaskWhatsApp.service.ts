@@ -7,7 +7,7 @@
  */
 import WhatsappSession from "../../models/whatsappSession.model";
 import { FamilyRole } from "../../types/family.types";
-import { notifyCaregivers } from "../saheliCaregiverAlert.service";
+import { logActivity } from "../activityLog.service";
 import {
     runBrowserTask,
     submitParkedBrowserOtp,
@@ -41,6 +41,8 @@ import {
     siteKeyToPartnerKey,
 } from "./siteResolve";
 import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
+import { classifyOrderInterrupt, type OrderInterrupt } from "./orderInterrupt.service";
+import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
 
 export type BrowserTaskPhase =
     | "idle"
@@ -145,43 +147,38 @@ function extractOrderQuery(text: string, partner: string): string {
 function skuConfirmCopy(draft: BrowserTaskDraft): string {
     const label = partnerLabel(String(draft.partner || "the site"));
     const opts = draft.catalogOptions ?? [];
-    const addr = draft.addressLabel
-        ? `Deliver to: ${draft.addressLabel}`
-        : "";
+    const addr = draft.addressLabel ? `📍 ${draft.addressLabel}` : "";
     if (opts.length > 1) {
         const lines = opts.slice(0, 3).map((o, i) => {
             const price = formatInr(o.pricePaise);
-            return `${i + 1}. ${o.name}${price ? ` — ${price}` : ""}`;
+            return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}`;
         });
         return [
-            `Found on *${label}*:`,
+            `Found on *${label}* 🛒`,
             ...lines,
-            ``,
             addr,
-            `Reply *1* / *2* / *3*, or *confirm* for #1 — login/OTP only after you pick.`,
-            `Prefer *COD* at checkout — I'll still ask confirm-before-pay.`,
-            `Or send another name. Reply *cancel* to stop.`,
+            ``,
+            `Reply *1*, *2* or *3* (or *confirm* for #1). Cash on Delivery only.`,
         ]
-            .filter(Boolean)
+            .filter((l, i, a) => l !== "" || a[i - 1] !== "")
             .join("\n");
     }
     const sku = draft.selectedSku || opts[0];
     if (sku) {
         const price = formatInr(sku.pricePaise);
         return [
-            `Found on *${label}*:`,
-            `• ${sku.name}${price ? ` — ${price}` : ""}`,
-            ``,
+            `Found on *${label}* 🛒`,
+            `${sku.name}${price ? ` — *${price}*` : ""}`,
             addr,
-            `Reply *confirm* to order this (login/OTP next), or send another name / *cancel*.`,
-            `Prefer *COD* at checkout — I'll still ask confirm-before-pay.`,
+            ``,
+            `Reply *confirm* to order (I'll ask for the OTP next), or *cancel*. Cash on Delivery only.`,
         ]
             .filter(Boolean)
             .join("\n");
     }
     return (
         draft.lastMessage ||
-        `I couldn't get a live guest price for *${label}* yet. Reply *confirm* to open the site (login/OTP may be asked), or *cancel*. Prefer *COD* — confirm-before-pay either way.`
+        `I couldn't see a live price on *${label}* yet. Reply *confirm* to open the site (it may ask for an OTP), or *cancel*.`
     );
 }
 
@@ -278,10 +275,63 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     recipientUserId: string;
     actorRole: FamilyRole | null;
 }): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
-    const text = input.text.trim();
+    let text = input.text.trim();
     let draft = await loadDraft(input.phone);
 
+    // ── Interrupts while an order job is open ────────────────────────────────
+    // Order-related → apply; unrelated → null so the companion answers and the job continues.
+    if (draft && ACTIVE_ORDER_PHASES.has(draft.phase)) {
+        const label = partnerLabel(String(draft.partner || "the site"));
+        const intr = await classifyOrderInterrupt({
+            phone: input.phone,
+            text,
+            phase: draft.phase,
+            partnerLabel: label,
+            itemHint: draft.selectedSku?.name,
+        });
+        const startsOtherOrder =
+            intr.intent !== "flow_reply" && intr.intent !== "cancel" && messageLooksLikeBrowserTask(text);
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_interrupt",
+            title: `Message during ${label} order: ${startsOtherOrder ? "new_order" : intr.intent}`,
+            detail: text,
+            data: { phase: draft.phase, intent: intr.intent, source: intr.source },
+        });
+        if (startsOtherOrder && draft.phase !== "awaiting_sku_confirm") {
+            return {
+                text: `Your *${label}* order is still in progress 🛒 — reply *cancel* first if you'd like to start a new one.`,
+                draft,
+            };
+        }
+        if (intr.intent === "unrelated" && !startsOtherOrder) return null;
+        if (intr.intent === "status") {
+            return { text: await orderStatusReply(input, draft), draft };
+        }
+        if (intr.intent === "cancel") {
+            text = "cancel";
+        }
+        if (intr.intent === "change") {
+            const changed = await applyOrderChange(input, draft, intr, text);
+            if (changed.reply) return changed.reply;
+            if (changed.searchText) {
+                draft = changed.draft;
+                text = changed.searchText;
+            }
+        }
+    }
+
     if (/^(cancel|stop|never ?mind|cancel all(?: browsing)?)$/i.test(text) && (draft || /cancel\s+all/i.test(text))) {
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_cancelled",
+            title: `${partnerLabel(String(draft?.partner || "order"))}: cancelled by user`,
+            data: { phase: draft?.phase || null, checkoutInFlight: isCheckoutInFlight(input.familyId, input.actorUserId) },
+        });
         await abortBrowserSessionForUser(input.familyId, input.actorUserId, { phone: input.phone });
         clearOtpAskDedupe(input.familyId, input.actorUserId);
         await WhatsappSession.findOneAndUpdate(
@@ -294,11 +344,11 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         if (isCheckoutInFlight(input.familyId, input.actorUserId)) {
             return {
                 text:
-                    "Stopping the Apollo checkout now. If Apollo had already accepted the order I'll tell you here — " +
+                    "Stopping the checkout now ✋ If the site had already accepted the order I'll tell you here — " +
                     "otherwise nothing was ordered or paid.",
             };
         }
-        return { text: "Okay — cancelled. Nothing was ordered or paid — no more OTP asks from this attempt." };
+        return { text: "Okay, cancelled ✅ Nothing was ordered or paid." };
     }
 
     // "order again" after an expired signed-in session → fresh guest search card for the SAME
@@ -340,7 +390,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
 
         const browserGeneration = beginBrowserGeneration(input.familyId, input.actorUserId);
         void (async () => {
-            const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
+            const { routeBrowserProgress } = await import("./browserProgressNotify.service");
             try {
                 const result = await runBrowserTask({
                     familyId: input.familyId,
@@ -353,20 +403,20 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                     deadlineMs: retryDeadline,
                     loginPhone: retryLoginPhone,
                     browserGeneration,
-                    onProgress: async (_stage, detail) => {
+                    onProgress: async (stage, detail) => {
                         if (!detail?.trim()) return;
                         if (!isBrowserGenerationCurrent(input.familyId, input.actorUserId, browserGeneration)) {
                             return;
                         }
-                        if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, detail)) {
-                            return;
-                        }
-                        await pushWhatsAppBrowserFollowUp({
+                        await routeBrowserProgress({
                             phone: input.phone,
                             familyId: input.familyId,
                             recipientUserId: input.recipientUserId,
+                            actorUserId: input.actorUserId,
+                            stage,
+                            partner: String(retryPartner || ""),
                             text: detail.trim(),
-                        }).catch(() => undefined);
+                        });
                     },
                 });
                 await notifyPharmacyBrowserBackgroundResult({
@@ -390,8 +440,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
 
         return {
             text:
-                `Retrying *${partnerLabel(String(retryPartner || "the site"))}*…\n` +
-                `Watch for stage updates (still opening… / on login page…), then paste the OTP if asked.\n` +
+                `Retrying *${partnerLabel(String(retryPartner || "the site"))}* — I'll message you when I need the OTP. ` +
                 `Reply *cancel* to stop.`,
             draft,
         };
@@ -603,7 +652,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 90_000,
             );
             void (async () => {
-                const { notifyPharmacyBrowserBackgroundResult, pushWhatsAppBrowserFollowUp } =
+                const { notifyPharmacyBrowserBackgroundResult, routeBrowserProgress } =
                     await import("./browserProgressNotify.service");
                 try {
                     const result = await runBrowserTask({
@@ -617,7 +666,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                         browserGeneration,
                         productUrl: draft!.selectedSku?.productUrl,
                         deliveryAddress: draft!.addressLabel,
-                        onProgress: async (_stage, detail) => {
+                        onProgress: async (stage, detail) => {
                             if (!detail?.trim()) return;
                             if (
                                 !isBrowserGenerationCurrent(
@@ -628,21 +677,15 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                             ) {
                                 return;
                             }
-                            if (
-                                shouldSuppressDuplicateOtpAsk(
-                                    input.familyId,
-                                    input.actorUserId,
-                                    detail,
-                                )
-                            ) {
-                                return;
-                            }
-                            await pushWhatsAppBrowserFollowUp({
+                            await routeBrowserProgress({
                                 phone: input.phone,
                                 familyId: input.familyId,
                                 recipientUserId: input.recipientUserId,
+                                actorUserId: input.actorUserId,
+                                stage,
+                                partner: String(draft!.partner || ""),
                                 text: detail.trim(),
-                            }).catch(() => undefined);
+                            });
                         },
                     });
                     await notifyPharmacyBrowserBackgroundResult({
@@ -664,22 +707,19 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 }
             })();
 
-            const priceBit = price ? ` (${price})` : "";
             return {
-                text:
-                    `Opening *${partnerLabel(String(playbook.partner))}* for: ${skuName || draft.goal.slice(0, 80)}` +
-                    `${priceBit}\n\n` +
-                    `Deliver to: ${draft.addressLabel}\n` +
-                    `I'll sign in with your WhatsApp number when asked.\n` +
-                    `*Paste the SMS OTP only after I ask* — I never read your device SMS.\n\n` +
-                    `No silent pay — confirm item+total+address before checkout. Prefer *COD*.\n` +
-                    `Reply *cancel* to stop.`,
+                text: workingAckCopy(String(playbook.partner)),
                 draft,
             };
         }
         // Re-search on new product text
         if (text.length >= 3 && !/^\d{4,8}$/.test(text)) {
-            const partner = draft.partner || partnerFromText(text);
+            const mentioned = partnerFromText(text);
+            const partner =
+                mentioned !== "generic" && messageLooksLikeBrowserTask(text) ? mentioned : draft.partner || mentioned;
+            if (!isAllowedOrderSite(String(partner))) {
+                return { text: refuseSiteCopy(String(partner)), draft };
+            }
             const query = extractOrderQuery(text, String(partner));
             const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
             const { extractPincode } = await import("./apolloPostOtp");
@@ -729,6 +769,9 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         const resolved = resolveSiteFromMessage(text, { forceBrowser: true });
         const partner = partnerFromText(text);
         const playbook = resolvePlaybook(partner, text, resolved.startUrl);
+        if (!isAllowedOrderSite(String(playbook.partner))) {
+            return { text: refuseSiteCopy(String(playbook.partner === "generic" ? partner : playbook.partner)) };
+        }
         const query = extractOrderQuery(text, String(playbook.partner));
 
         // SEARCH FIRST — guest/MCP catalog. Do not open login until SKU confirm.
@@ -830,7 +873,9 @@ async function startParkedCheckoutFromWhatsApp(
     await saveDraft(input.phone, draft);
 
     void (async () => {
-        const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
+        const { pushWhatsAppBrowserFollowUp, routeBrowserProgress } = await import(
+            "./browserProgressNotify.service"
+        );
         const push = (text: string) =>
             pushWhatsAppBrowserFollowUp({
                 phone: input.phone,
@@ -857,22 +902,56 @@ async function startParkedCheckoutFromWhatsApp(
                 recipientUserId: input.recipientUserId,
                 onProgress: async (d) => {
                     if (delivered) return;
-                    await push(d);
-                },
-            });
-            const stillCurrent = isBrowserGenerationCurrent(input.familyId, input.actorUserId, gen);
-            if (run.status === "placed" || run.status === "placed_unverified") {
-                await saveDraft(input.phone, null).catch(() => undefined);
-                if (run.status === "placed" && input.actorRole === FamilyRole.CARE_RECIPIENT) {
-                    void notifyCaregivers({
+                    // Checkout steps → activity log only (never WhatsApp).
+                    await routeBrowserProgress({
+                        phone: input.phone,
                         familyId: input.familyId,
                         recipientUserId: input.recipientUserId,
                         actorUserId: input.actorUserId,
-                        message:
-                            `Amma placed an Apollo order via Saheli (Cash on Delivery)` +
-                            `${run.orderIds ? ` — order ${run.orderIds}` : ""}${run.totalLabel ? `, ${run.totalLabel}` : ""}. Notify only.`,
-                        urgency: "low",
-                        kind: "order_placed",
+                        stage: "checkout",
+                        partner: String(draft.partner || "apollo"),
+                        text: d,
+                    });
+                },
+            });
+            const stillCurrent = isBrowserGenerationCurrent(input.familyId, input.actorUserId, gen);
+            void logActivity({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind:
+                    run.status === "placed" || run.status === "placed_unverified"
+                        ? "order_placed"
+                        : "order_failed",
+                severity: run.status === "placed" ? "info" : "warn",
+                title: `${label}: checkout ${run.status}`,
+                detail: run.message,
+                data: {
+                    status: run.status,
+                    orderIds: run.orderIds || null,
+                    totalLabel: run.totalLabel || null,
+                    payment: "COD",
+                },
+            });
+            if (run.status === "placed" || run.status === "placed_unverified") {
+                await saveDraft(input.phone, null).catch(() => undefined);
+                // Caregiver WhatsApp: short order-placed note (item, total, COD, ETA, order id).
+                if (run.status === "placed" && input.actorRole === FamilyRole.CARE_RECIPIENT) {
+                    const { notifyCaregiversOrderPlaced } = await import("../saheliCaregiverAlert.service");
+                    const { getFamilyMembersList } = await import("../familyMember.service");
+                    const elderName = await getFamilyMembersList(input.familyId, input.actorUserId)
+                        .then((p) => p.members.find((m) => m.userId === input.recipientUserId)?.name)
+                        .catch(() => undefined);
+                    void notifyCaregiversOrderPlaced({
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                        actorUserId: input.actorUserId,
+                        elderName: elderName || undefined,
+                        partnerLabel: label,
+                        item: draft.selectedSku?.name || draft.confirm?.items?.[0],
+                        totalLabel: run.totalLabel || draft.confirm?.totalLabel,
+                        etaLabel: extractEtaLabel(`${run.message}\n${run.outcome && "detail" in run.outcome ? run.outcome.detail : ""}`),
+                        orderId: run.orderIds,
                     });
                 }
             } else if (stillCurrent) {
@@ -911,9 +990,7 @@ async function startParkedCheckoutFromWhatsApp(
     })();
 
     return {
-        text:
-            `Placing your order on *${label}* — *Cash on Delivery* only, on the same signed-in cart (no new code).\n` +
-            `I'll send the Apollo order number here in 1–2 minutes (setting the delivery address can take a bit).`,
+        text: `Placing your *${label}* order (Cash on Delivery) — I'll send the order number here in a minute or two.`,
         draft,
     };
 }
@@ -989,9 +1066,8 @@ async function runParkedOtpContinuation(args: {
     otp: string;
     draft: BrowserTaskDraft;
 }): Promise<void> {
-    const { notifyPharmacyBrowserBackgroundResult, pushWhatsAppBrowserFollowUp } = await import(
-        "./browserProgressNotify.service"
-    );
+    const { notifyPharmacyBrowserBackgroundResult, pushWhatsAppBrowserFollowUp, routeBrowserProgress } =
+        await import("./browserProgressNotify.service");
     const partner = (args.draft.partner as CommercePartnerKey) || "apollo";
     const label = partnerLabel(String(partner));
     const gen = currentBrowserGeneration(args.familyId, args.actorUserId);
@@ -1047,7 +1123,16 @@ async function runParkedOtpContinuation(args: {
             otp: args.otp,
             onProgress: async (detail) => {
                 if (!isBrowserGenerationCurrent(args.familyId, args.actorUserId, gen)) return;
-                await push(detail);
+                // Post-OTP steps (signed in, adding to cart…) → activity log only.
+                await routeBrowserProgress({
+                    phone: args.phone,
+                    familyId: args.familyId,
+                    recipientUserId: args.recipientUserId,
+                    actorUserId: args.actorUserId,
+                    stage: "post_otp",
+                    partner: String(partner),
+                    text: detail,
+                });
             },
         });
         if (!isBrowserGenerationCurrent(args.familyId, args.actorUserId, gen) && result?.status !== "need_user_confirm") {
@@ -1160,12 +1245,123 @@ async function maybeNotifyCaregivers(
     if (input.actorRole !== FamilyRole.CARE_RECIPIENT) return;
     if (result.status !== "done" && draft.phase !== "done") return;
     const label = partnerLabel(String(draft.partner || result.partner || "web"));
-    void notifyCaregivers({
+    // Dashboard activity feed only — caregiver WhatsApp is reserved for safety alerts.
+    void logActivity({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
-        message: `Amma used Saheli browse on ${label} — ${draft.goal.slice(0, 100)}. Notify only — no approval needed.`,
-        urgency: "low",
         kind: "order_placed",
+        title: `${label}: done (dry-run host)`,
+        detail: `${draft.goal.replace(/login_phone=\S+/gi, "").slice(0, 160)} — ${result.message.slice(0, 300)}`,
     });
+}
+
+const ACTIVE_ORDER_PHASES = new Set<BrowserTaskPhase>([
+    "awaiting_sku_confirm",
+    "running",
+    "awaiting_otp",
+    "awaiting_confirm",
+]);
+
+/** The one short "working on it" ack the elder gets while the browser runs. */
+export function workingAckCopy(partner: string): string {
+    return `On it 🛒 Opening *${partnerLabel(partner)}* — I'll message you when I need the OTP. Reply *cancel* to stop.`;
+}
+
+/** Status question mid-order → answer from job state (+ last logged step). Pure-ish. */
+export async function orderStatusReply(
+    input: { familyId: string; actorUserId: string; recipientUserId: string },
+    draft: BrowserTaskDraft,
+): Promise<string> {
+    const label = partnerLabel(String(draft.partner || "the site"));
+    const item = draft.selectedSku?.name ? ` for *${draft.selectedSku.name}*` : "";
+    if (isCheckoutInFlight(input.familyId, input.actorUserId)) {
+        return `Placing your *${label}* order now (Cash on Delivery) ⏳ The order number will come here shortly.`;
+    }
+    if (draft.phase === "awaiting_confirm") {
+        return `Your *${label}* order${item} is ready 📦 Reply *confirm* to place it (Cash on Delivery), or *cancel*.`;
+    }
+    if (draft.phase === "awaiting_otp") {
+        return `Waiting for the login code from *${label}* 🔐 Paste the SMS OTP here when it arrives.`;
+    }
+    if (draft.phase === "awaiting_sku_confirm") {
+        return skuConfirmCopy(draft);
+    }
+    const { latestOrderStep } = await import("../activityLog.service");
+    const last = await latestOrderStep(input.recipientUserId);
+    const step =
+        last?.detail && last.kind === "order_step"
+            ? ` Last step: ${String(last.detail).replace(/\*/g, "").slice(0, 90)}`
+            : "";
+    return `Still working on your *${label}* order${item} ⏳${step}`;
+}
+
+/**
+ * "change" interrupt: new item / qty / address. Returns either a direct reply, or a
+ * search text to fall into the SKU re-search path (draft moved to awaiting_sku_confirm).
+ */
+async function applyOrderChange(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    draft: BrowserTaskDraft,
+    intr: OrderInterrupt,
+    text: string,
+): Promise<{ reply?: { text: string; draft?: BrowserTaskDraft }; searchText?: string; draft: BrowserTaskDraft }> {
+    const label = partnerLabel(String(draft.partner || "the site"));
+    if (isCheckoutInFlight(input.familyId, input.actorUserId)) {
+        return {
+            draft,
+            reply: { text: `I'm already placing this *${label}* order — reply *cancel* to stop it before it goes through.`, draft },
+        };
+    }
+    if (intr.quantity && intr.quantity > 1 && !intr.item && !intr.address) {
+        return {
+            draft,
+            reply: {
+                text: `For safety I order one pack at a time 🙏 Reply *confirm* for 1, or *cancel*.`,
+                draft,
+            },
+        };
+    }
+    if (intr.address && !intr.item) {
+        draft.addressLabel = intr.address.slice(0, 200);
+        if (draft.confirm) draft.confirm.addressLabel = draft.addressLabel;
+        if (draft.phase === "awaiting_sku_confirm") {
+            await saveDraft(input.phone, draft);
+            return { draft, reply: { text: skuConfirmCopy(draft), draft } };
+        }
+        // Mid-login / confirm card: the cart was built for the old address → rebuild + re-confirm.
+        await abortBrowserSessionForUser(input.familyId, input.actorUserId, { phone: input.phone });
+        const restarted = await restartOrderFromDraft(input, draft);
+        if (restarted) {
+            return {
+                draft,
+                reply: { text: `Updated the delivery address 📍\n\n${restarted.text}`, draft: restarted.draft },
+            };
+        }
+        await saveDraft(input.phone, draft);
+        return { draft, reply: { text: `Updated the address 📍 Reply *order again* to rebuild the order for it.`, draft } };
+    }
+    const itemText = (intr.item || text).trim();
+    if (draft.phase !== "awaiting_sku_confirm") {
+        // New item mid-order: stop the current browser run safely, then search again (re-confirm).
+        await abortBrowserSessionForUser(input.familyId, input.actorUserId, { phone: input.phone });
+        draft = {
+            phase: "awaiting_sku_confirm",
+            goal: itemText.slice(0, 240),
+            partner: draft.partner,
+            siteKey: draft.siteKey,
+            startUrl: undefined,
+            addressLabel: draft.addressLabel || draft.confirm?.addressLabel,
+        };
+        await saveDraft(input.phone, draft);
+    }
+    return { draft, searchText: itemText };
+}
+
+/** Best-effort ETA phrase from the site's success page text ("Delivery by Sat, 27 Sep"). */
+export function extractEtaLabel(text: string): string | undefined {
+    const m = text.match(
+        /\b(?:deliver(?:y|ed)?|arriv(?:e|ing|al)|expected)\s*(?:by|in|on|within|:)\s*([^.\n|]{3,40})/i,
+    );
+    return m?.[1]?.replace(/\*/g, "").trim() || undefined;
 }

@@ -14,6 +14,7 @@ import {
     isBrowserGenerationCurrent,
     shouldSuppressDuplicateOtpAsk,
 } from "./parkedOtpSession.service";
+import { logActivity } from "../activityLog.service";
 
 export type BrowserTaskDraftPatch = {
     phase: "idle" | "running" | "awaiting_otp" | "awaiting_confirm" | "done";
@@ -61,6 +62,9 @@ export function formatPharmacyBrowserFollowUp(
     if (result.status === "error") {
         const base = result.message?.trim() || `${label} browser hit a problem.`;
         const reason = result.failureReason;
+        if (reason === "not_allowed") {
+            return { text: base, clearSession: true, phase: "idle" };
+        }
         const blocked =
             reason === "captcha" ||
             /captcha|bot check|access denied|bot wall/i.test(base) ||
@@ -120,11 +124,8 @@ export function formatPharmacyBrowserFollowUp(
             );
         return {
             text: [
-                tip,
-                base.slice(0, 220),
-                ``,
-                `Nothing was ordered or paid.`,
-                `Reply *retry* to try again, or *cancel* to stop.`,
+                `${tip} Nothing was ordered or paid.`,
+                `Reply *retry* to try again, or *cancel*.`,
             ].join("\n"),
             // Keep draft (except kill-switch) so *retry* still works; phase awaiting_otp
             // is gated in WA handler — digits ignored unless OTP was actually requested/parked.
@@ -184,15 +185,10 @@ export function formatPharmacyBrowserFollowUp(
 
     return {
         text: [
-            result.message?.includes("paste")
+            result.message && /wrong|expired|incorrect|invalid|didn'?t work|new code/i.test(result.message)
                 ? result.message
-                : [
-                      `*${label}* is waiting for your login code — *paste the SMS OTP here*.`,
-                      `(I never read your device SMS — only what you send me on WhatsApp.)`,
-                  ].join("\n"),
-            ``,
-            `No code yet? Check the SMS thread from ${label}, then reply *retry* or *cancel*.`,
-            `No silent pay — I'll ask you to confirm item+total+address before checkout. Prefer *COD*.`,
+                : `🔐 *${label}* sent a login code to your phone — please *paste the SMS OTP here*.`,
+            `No code? Reply *retry* or *cancel*.`,
         ].join("\n"),
         clearSession: false,
         phase: "awaiting_otp",
@@ -207,6 +203,14 @@ export async function pushWhatsAppBrowserFollowUp(input: {
 }): Promise<boolean> {
     const text = input.text.trim();
     if (!text) return false;
+    void logActivity({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        kind: "message_out",
+        title: "Saheli → WhatsApp (order)",
+        detail: text,
+        data: { source: "browser" },
+    });
     // Readable via POST /api/webhooks/whatsapp/mock {"from":…,"peek":true} (confirm-card check).
     try {
         const { recordSaheliOutbound } = await import("../whatsappMockPeek.service");
@@ -238,6 +242,57 @@ export async function pushWhatsAppBrowserFollowUp(input: {
 }
 
 /**
+ * Background order progress: ALWAYS goes to the activity log (caregiver dashboard);
+ * only the OTP ask (stage `otp_ready`) is forwarded to the elder's WhatsApp.
+ * Step chatter ("still opening…", "adding to cart…", "placing…") never hits WhatsApp.
+ */
+export async function routeBrowserProgress(input: {
+    phone: string;
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    text: string;
+    stage?: string;
+    partner?: string;
+}): Promise<void> {
+    const text = input.text.trim();
+    if (!text) return;
+    void logActivity({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        kind: "order_step",
+        title: `${partnerLabel(String(input.partner || "order"))}: ${input.stage || "step"}`,
+        detail: text,
+        data: { stage: input.stage || null, partner: input.partner || null },
+    });
+    if (!shouldForwardProgressToWhatsApp(input.stage)) return;
+    if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, text)) return;
+    await pushWhatsAppBrowserFollowUp({
+        phone: input.phone,
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        text,
+    }).catch(() => undefined);
+}
+
+/** Pure — which progress stages the elder sees on WhatsApp (OTP ask only). */
+export function shouldForwardProgressToWhatsApp(stage?: string | null): boolean {
+    return stage === "otp_ready";
+}
+
+function activityKindForResult(result: BrowserTaskResult): {
+    kind: "order_confirm_card" | "order_placed" | "order_failed" | "order_cancelled" | "order_step";
+    severity: "info" | "warn" | "error";
+} {
+    if (result.status === "need_user_confirm") return { kind: "order_confirm_card", severity: "info" };
+    if (result.status === "done") return { kind: "order_placed", severity: "info" };
+    if (result.status === "cancelled") return { kind: "order_cancelled", severity: "info" };
+    if (result.status === "error") return { kind: "order_failed", severity: "warn" };
+    return { kind: "order_step", severity: "info" };
+}
+
+/**
  * After pharmacy confirm's background runBrowserTask resolves: update session draft + WA push.
  * Never throws — caller may void this.
  */
@@ -256,6 +311,29 @@ export async function notifyPharmacyBrowserBackgroundResult(input: {
         partner: input.partner,
         goal: input.goal,
     });
+    {
+        const k = activityKindForResult(input.result);
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: k.kind,
+            severity: k.severity,
+            title: `${partnerLabel(String(input.result.partner || input.partner))}: ${input.result.status}${
+                input.result.failureReason ? ` (${input.result.failureReason})` : ""
+            }`,
+            detail: input.result.message,
+            data: {
+                status: input.result.status,
+                failureReason: input.result.failureReason || null,
+                confirm: input.result.confirm || null,
+                url: input.result.url ? String(input.result.url).slice(0, 200) : null,
+                steps: input.result.steps,
+                mode: input.result.mode,
+                goal: input.goal.replace(/login_phone=\S+/gi, "").slice(0, 200),
+            },
+        });
+    }
 
     if (follow.clearSession) {
         await WhatsappSession.findOneAndUpdate(

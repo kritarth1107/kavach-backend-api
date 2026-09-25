@@ -729,29 +729,29 @@ export async function handlePharmacyWhatsAppTurn(input: {
         const { beginBrowserGeneration } = await import(
             "./commerceAutomation/parkedOtpSession.service"
         );
-        const {
-            isBrowserGenerationCurrent,
-            shouldSuppressDuplicateOtpAsk,
-        } = await import("./commerceAutomation/parkedOtpSession.service");
+        const { isBrowserGenerationCurrent } = await import(
+            "./commerceAutomation/parkedOtpSession.service"
+        );
         const browserGeneration = beginBrowserGeneration(input.familyId, input.actorUserId);
         void (async () => {
             const {
                 notifyPharmacyBrowserBackgroundResult,
-                pushWhatsAppBrowserFollowUp,
+                routeBrowserProgress,
             } = await import("./commerceAutomation/browserProgressNotify.service");
-            const progressPush = async (detail: string) => {
+            // Steps → activity log; only the OTP ask reaches the elder's WhatsApp.
+            const progressPush = async (detail: string, stage?: string) => {
                 if (!isBrowserGenerationCurrent(input.familyId, input.actorUserId, browserGeneration)) {
                     return;
                 }
-                if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, detail)) {
-                    return;
-                }
-                await pushWhatsAppBrowserFollowUp({
+                await routeBrowserProgress({
                     phone: input.phone,
                     familyId: input.familyId,
                     recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    stage,
+                    partner: String(partner),
                     text: detail,
-                }).catch(() => undefined);
+                });
             };
             try {
                 const result = await runBrowserTask({
@@ -764,8 +764,8 @@ export async function handlePharmacyWhatsAppTurn(input: {
                     browserGeneration,
                     productUrl,
                     deliveryAddress: draft.addressLabel,
-                    onProgress: async (_stage, detail) => {
-                        if (detail && detail.trim()) await progressPush(detail.trim());
+                    onProgress: async (stage, detail) => {
+                        if (detail && detail.trim()) await progressPush(detail.trim(), stage);
                     },
                 });
                 await notifyPharmacyBrowserBackgroundResult({
@@ -805,21 +805,9 @@ export async function handlePharmacyWhatsAppTurn(input: {
             }
         })();
 
-        const priceBit = draft.items
-            .map((i) => (typeof i.pricePaise === "number" ? formatInr(i.pricePaise) : ""))
-            .filter(Boolean)
-            .join(", ");
+        const { workingAckCopy } = await import("./commerceAutomation/browserTaskWhatsApp.service");
         return {
-            text:
-                `Opening *${partnerLabel(partner)}* for: ${summary}` +
-                (priceBit ? ` (${priceBit})` : "") +
-                `\n\n` +
-                `I'll sign in with your WhatsApp number when *${partnerLabel(partner)}* asks.\n` +
-                `Watch for updates (still opening… / on login page… / requested code…).\n` +
-                `*Paste the SMS OTP only after I ask* — I never read your device SMS.\n\n` +
-                `No silent pay — I'll ask you to confirm item+total+address before checkout.\n` +
-                `Prefer *COD* when the site offers it.\n` +
-                `Reply *cancel* to stop.`,
+            text: workingAckCopy(partner),
             draft,
         };
     }

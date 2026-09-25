@@ -424,6 +424,11 @@ export async function startOrderFlow(input: {
     const partner = await pickOrderPartner(orderMessage, input.familyId, input.actorUserId);
     const mcpPartner = orderPartnerToMcp(partner);
     if (!mcpPartner) return null;
+    // MCP order sessions are off for food/grocery — let the browser path / companion handle it.
+    {
+        const { isFoodGroceryBrowserOnly } = await import("./commerceAutomation/siteAllowlist");
+        if (isFoodGroceryBrowserOnly(mcpPartner)) return null;
+    }
 
     const connected = await listFamilyConnectedPartners(input.familyId, input.actorUserId);
     const isConnected =
@@ -828,6 +833,16 @@ export async function submitOrderFlowCart(input: {
 }): Promise<{ flow: OrderFlowPayload; order: Record<string, unknown> }> {
     const session = await loadSessionForActor(input.sessionId, input.familyId, input.actorUserId);
     if (!session.cartItems.length) throw new AppError("Cart is empty", 400);
+    {
+        // HARD: MCP checkout disabled for food/grocery — direct browser path only.
+        const { isFoodGroceryBrowserOnly, MCP_ORDERING_DISABLED_COPY } = await import(
+            "./commerceAutomation/siteAllowlist"
+        );
+        if (isFoodGroceryBrowserOnly(String(session.partner))) {
+            const label = String(session.partner).charAt(0).toUpperCase() + String(session.partner).slice(1);
+            throw new AppError(MCP_ORDERING_DISABLED_COPY(label, session.cartItems[0]?.name), 409);
+        }
+    }
 
     const selected = session.addresses.find((a) => a.id === session.selectedAddressId);
     const commerceUserId =

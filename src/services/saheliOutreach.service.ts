@@ -111,6 +111,15 @@ export async function deliverSaheliOutreach(payload: {
         if (existing) return null;
     }
 
+    {
+        // Gate #1 (before spending on generation): quiet ≥60 min and no active job/flow.
+        const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
+        const gate = await canSendProactiveNudge({ familyId: payload.familyId, recipientUserId: payload.recipientUserId });
+        if (!gate.ok) {
+            console.log(`Saheli outreach skipped (${gate.reason}) for ${payload.recipientUserId}`);
+            return null;
+        }
+    }
     const membersPayload = await getFamilyMembersList(payload.familyId, payload.recipientUserId);
     const displayName = resolveRecipientName(membersPayload.members, payload.recipientUserId);
     const ctx = await ensureAiContext(payload.familyId, payload.recipientUserId, displayName);
@@ -273,6 +282,13 @@ export async function deliverSaheliOutreach(payload: {
 
     let delivered = true;
     if (channelTarget && channelTarget.channel !== "dashboard") {
+        // Gate #2: re-check right before sending (an order may have started during generation).
+        const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
+        const gate = await canSendProactiveNudge({ familyId: payload.familyId, recipientUserId: payload.recipientUserId });
+        if (!gate.ok) {
+            console.log(`Saheli outreach dropped at send (${gate.reason}) for ${payload.recipientUserId}`);
+            return null;
+        }
         const delivery = await deliverOutboundMessage({
             familyId: payload.familyId,
             recipientUserId: payload.recipientUserId,

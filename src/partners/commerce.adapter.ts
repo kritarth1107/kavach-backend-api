@@ -125,6 +125,13 @@ export async function payCommerceOrder(input: {
 }) {
     const mcpPartner = orderPartnerToMcp(input.partner);
 
+    // HARD: never place Swiggy/Instamart/Zepto via MCP — browser path only.
+    if (mcpPartner) {
+        const { MCP_ORDERING_DISABLED_COPY } = await import("../services/commerceAutomation/siteAllowlist");
+        const label = mcpPartner === "instamart" ? "Instamart" : mcpPartner === "swiggy" ? "Swiggy" : "Zepto";
+        throw new Error(MCP_ORDERING_DISABLED_COPY(label, input.items?.[0]?.name));
+    }
+
     if (input.familyId && mcpPartner) {
         const mcpUserId = await resolveFamilyMcpUserId(
             input.familyId,
