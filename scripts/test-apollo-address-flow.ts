@@ -69,6 +69,11 @@ type St = {
     /** Extra line on the payment page summary + payable override (membership gate tests). */
     payExtra: string;
     payAmount: number;
+    /** "list" = old single-page COD card; "tabs" = live /pay/<id> (payments-fe, Juspay) left nav, UPI default. */
+    payLayout: "list" | "tabs";
+    codDisabledReason: string;
+    /** Clicks on anything payment-related other than the COD tab / COD card / Place order. */
+    payForbidden: string[];
 };
 const newState = (p: Partial<St>): St => ({
     saved: [],
@@ -90,6 +95,9 @@ const newState = (p: Partial<St>): St => ({
     planAdded: 0,
     payExtra: "",
     payAmount: 192.42,
+    payLayout: "list",
+    codDisabledReason: "",
+    payForbidden: [],
     ...p,
 });
 const fmt = (a: Addr) => `${a.addressLine1}, ${a.addressLine2}, ${a.city}, ${a.state} - ${a.zipcode}`;
@@ -251,6 +259,68 @@ document.getElementById('save').addEventListener('click', async () => {
     );
 }
 
+/**
+ * Live /pay/<id> (payments-fe): header logo only (title empty), left nav
+ * nav[aria-label="Payment methods"] with Juspay_desktopNavItem buttons (UPI active by default),
+ * middle panel shows only the selected method (UPI → "Pay By QR" + "Click to Scan"), right
+ * summary SubTotal / To Pay. COD tab → the COD component from the bundle: COD_codContainer >
+ * COD_codSectionHeading "Pay on Delivery" > COD_codCard > COD_codCardHeader[role=button]
+ * (title / subtitle, radio#checkbox-cod unchecked because selectedPaymentMethod is "COD", not
+ * "COD:default") → header click → radio checked + button.COD_codPayCta
+ * aria-label="Pay rupees X" "Place order for ₹X" → createAndUpdateOrder → /order-status/<id>/success.
+ */
+function payTabsPage(st: St): string {
+    const tabs: Array<[string, string, string]> = [
+        ["UPI", "UPI", "Google Pay, PhonePe, Paytm &amp; more"],
+        ["CARD", "Credit/Debit Cards", "Mastercard, Visa, Rupay &amp; more"],
+        ["PAY_LATER", "Pay Later", "Lazypay"],
+        ["WALLET", "Wallets", "Amazon Pay Balance"],
+        ["NB", "Net Banking", "SBI, ICICI, AXIS, Kotak Bank &amp; more"],
+        ["COD", "Pay on Delivery", st.codDisabledReason || "Pay via Cash on Delivery"],
+    ];
+    const dis = Boolean(st.codDisabledReason);
+    const nav = tabs
+        .map(
+            ([code, title, sub], i) =>
+                `<li><button type="button" data-code="${code}" class="${code === "COD" && dis ? "Juspay_desktopNavItemDisabled__IJdj_" : i === 0 ? "Juspay_desktopNavItemActive__Qaj1b" : "Juspay_desktopNavItem__3yG8K"}" ${code === "COD" && dis ? 'disabled aria-disabled="true"' : 'aria-disabled="false"'}><div class="Juspay_desktopNavItemInner__6OWeR"><div class="Juspay_desktopNavIcon__MoQoz"><img alt="${title} icon"></div><div class="Juspay_desktopNavText__OJc5Z"><div class="Juspay_desktopNavTitle__IAhiL">${title}${code === "CARD" ? '<span class="Juspay_desktopNavOffersCount__QjGqx">2 Offers</span>' : ""}</div><div class="Juspay_desktopNavSubtitle___X3HV">${sub}</div></div></div></button></li>`,
+        )
+        .join("");
+    return `<!doctype html><html><head><title></title><style>button{cursor:pointer} .row{display:flex;gap:16px} nav{width:240px}</style></head><body>
+<div class="logo">Apollo PHARMACY</div>
+<div class="row"><nav class="Juspay_desktopNav__kDXp2" aria-label="Payment methods"><ul class="Juspay_desktopNavList__D4VJF">${nav}</ul></nav>
+<div id="panel" style="width:330px"></div>
+<div class="summary"><p>SubTotal ₹${st.payAmount}</p><p>To Pay ₹${st.payAmount}</p>${st.payExtra ? `<p>${st.payExtra}</p>` : ""}</div></div>
+<p>100% Secured Payments Powered By Paytm PayU</p>
+<script>
+const amt = ${JSON.stringify(st.payAmount.toFixed(2))};
+const P = document.getElementById('panel');
+const bad = (w) => fetch('/__mock/pay-forbidden?what=' + encodeURIComponent(w));
+function show(code) {
+  document.querySelectorAll('nav button').forEach(b => { if (!b.disabled) b.className = b.dataset.code === code ? 'Juspay_desktopNavItemActive__Qaj1b' : 'Juspay_desktopNavItem__3yG8K'; });
+  if (code === 'UPI') {
+    P.innerHTML = '<h3>Pay By QR</h3><div class="qr"><p>Scan the QR using any UPI App</p><button id="scan">Click to Scan</button></div>';
+    document.getElementById('scan').addEventListener('click', () => bad('qr'));
+    return;
+  }
+  if (code !== 'COD') { P.innerHTML = '<h3>' + code + '</h3><button class="payNow">Pay Now</button>'; P.querySelector('.payNow').addEventListener('click', () => bad('paynow-' + code)); return; }
+  P.innerHTML = '<div class="COD_codContainer__pmbK1"><div class="COD_codSectionHeading__0fGd4">Pay on Delivery</div><div class="COD_codCard__BiMek " aria-disabled="false"><div class="COD_codCardHeader__0thPc" role="button" aria-expanded="false" id="codHead"><div class="COD_codIcon__yiGax" aria-hidden="true"><img alt="Pay on Delivery"></div><div class="COD_codTextBlock___1fAQ"><div class="COD_codTitle__TRP2l">Pay on Delivery</div><div class="COD_codSubtitle__BVxUt ">Pay by Cash</div></div><label class="Payment_imgBx"><input name="" type="radio" id="checkbox-cod"></label></div><div id="ctaSlot"></div></div></div>';
+  const toggle = (want) => {
+    const r = document.getElementById('checkbox-cod'); r.checked = typeof want === 'boolean' ? want : !r.checked;
+    document.getElementById('codHead').setAttribute('aria-expanded', String(r.checked));
+    const slot = document.getElementById('ctaSlot');
+    slot.innerHTML = r.checked ? '<button type="button" class="COD_codPayCta__6j5rz " aria-label="Pay rupees ' + amt + '">Place order for \u20b9' + amt + '</button>' : '';
+    const b = slot.querySelector('button');
+    if (b) b.addEventListener('click', async (e) => { e.stopPropagation(); await fetch('/__mock/place', { method: 'POST' }); location.href = '/order-status/260925183059499939/success'; });
+  };
+  document.getElementById('codHead').addEventListener('click', () => toggle());
+  document.getElementById('codHead').querySelector('label').addEventListener('click', (e) => e.stopPropagation());
+  document.getElementById('checkbox-cod').addEventListener('change', (e) => toggle(e.target.checked));
+}
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { if (b.disabled) return; if (b.dataset.code !== 'COD') bad('tab-' + b.dataset.code); show(b.dataset.code); }));
+setTimeout(() => show('UPI'), 400); // UPI selected by default after load
+</script></body></html>`;
+}
+
 async function installMock(ctx: BrowserContext, st: St): Promise<void> {
     await ctx.route("**/*", async (route: Route) => {
         const req = route.request();
@@ -337,6 +407,14 @@ async function installMock(ctx: BrowserContext, st: St): Promise<void> {
                     `document.getElementById('go').addEventListener('click', () => { location.href = '/pay/9001'; });`));
             }
             default:
+                if (u.pathname.startsWith("/pay/") && st.payLayout === "tabs") return html(payTabsPage(st));
+                if (u.pathname.startsWith("/order-status/")) {
+                    return html(shell("Order Status", `<h1>Order Placed!</h1><p>Order ID(s) : 18273645</p><p>Amount to be paid ₹${st.payAmount}</p>`));
+                }
+                if (u.pathname === "/__mock/pay-forbidden") {
+                    st.payForbidden.push(u.searchParams.get("what") || "?");
+                    return json({ ok: true });
+                }
                 if (u.pathname.startsWith("/pay/")) {
                     return html(shell("Payment", `<h2>Payment options</h2><div class="OrderSummary"><p>Wet wipes ×1</p>${st.payExtra ? `<p>${st.payExtra}</p>` : ""}<p>Amount to pay ₹${st.payAmount}</p></div>
 <div class="codContainer__a"><div class="codCard__b"><div role="button" id="codHead">Pay on Delivery</div><input type="radio" id="checkbox-cod"></div>
@@ -374,7 +452,7 @@ function assertNoLeaks(st: St): void {
 }
 
 const target = addressTargetFrom(LABEL)!;
-const checkout = (p: Page, progress: string[], log: string[]) =>
+const checkout = (p: Page, progress: string[], log: string[], dryRun = true) =>
     runApolloCodCheckout(p, {
         deadlineAt: Date.now() + 140_000,
         pincode: "492001",
@@ -384,7 +462,7 @@ const checkout = (p: Page, progress: string[], log: string[]) =>
         accountPhone: "+919876543210",
         confirmedTotalRupees: 192.42,
         skuName: SKU,
-        dryRun: true, // stop right before Place order even on the mock
+        dryRun, // default: stop right before Place order even on the mock
         geminiMaxSteps: 0,
         progress: async (d) => {
             progress.push(d);
@@ -737,6 +815,54 @@ async function main() {
         assert.equal(out.status, "amount_changed", JSON.stringify(out));
         assert.equal(st.placeClicks, 0);
         console.log("✓ M payable ₹391.42 > card ₹192.42 → amount_changed, stopped before Place order");
+    }
+
+    // ── N) live /pay/<id> tabbed layout (UPI + QR default) → Pay on Delivery tab → COD card → Place order ONCE ──
+    {
+        const st = selectedLive({ circle: "skip", payLayout: "tabs" });
+        const progress: string[] = [];
+        const log: string[] = [];
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, progress, log, false); // full run on the MOCK (all traffic intercepted)
+        });
+        assert.equal(out.status, "placed", `${JSON.stringify(out)}\n${log.join("\n")}`);
+        assert.equal((out as { orderIds?: string }).orderIds, "18273645");
+        assert.equal(st.placeClicks, 1, "Place order clicked exactly once");
+        assert.deepEqual(st.payForbidden, [], "never clicked UPI / QR / cards / pay later / wallets / net banking");
+        assert.equal(st.planAdded, 0);
+        assert.ok(log.some((l) => l.startsWith("cod_tab") && l.includes('"kind":"clicked"')), log.join("\n"));
+        assert.ok(log.some((l) => l.startsWith("pay_amounts") && l.includes('"toPay":192.42')), log.join("\n"));
+        assertNoLeaks(st);
+        console.log("✓ N live /pay/<id> tabs (UPI+QR default) → 'Pay on Delivery' tab → COD card → To Pay ₹192.42 = card → Place order once → order 18273645 (mock)");
+        console.log("  progress:", JSON.stringify(progress));
+    }
+
+    // ── O) tabbed /pay with Pay on Delivery disabled → honest cod_unavailable, nothing clicked ──
+    {
+        const st = selectedLive({ payLayout: "tabs", codDisabledReason: "Pay on Delivery is not available for this pincode" });
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, [], [], false);
+        });
+        assert.equal(out.status, "cod_unavailable", JSON.stringify(out));
+        assert.match(out.detail, /not available for this pincode/);
+        assert.equal(st.placeClicks, 0);
+        assert.deepEqual(st.payForbidden, []);
+        console.log("✓ O tabbed /pay, Pay on Delivery disabled → cod_unavailable with Apollo's reason, nothing clicked");
+    }
+
+    // ── P) tabbed /pay, To Pay higher than the card → amount_changed, no Place ──
+    {
+        const st = selectedLive({ payLayout: "tabs", payAmount: 211.42 });
+        const out = await withPage(st, async (p) => {
+            await p.goto(`${BASE}/medicines-cart`);
+            return checkout(p, [], [], false);
+        });
+        assert.equal(out.status, "amount_changed", JSON.stringify(out));
+        assert.equal(st.placeClicks, 0);
+        assert.deepEqual(st.payForbidden, []);
+        console.log("✓ P tabbed /pay, To Pay ₹211.42 > card ₹192.42 → amount_changed, no Place order");
     }
 
     console.log("\nALL APOLLO ADDRESS FLOW TESTS PASSED (mocked Apollo, no OTP, no real order)");

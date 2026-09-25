@@ -112,7 +112,7 @@ export type ApolloCheckoutOptions = {
 
 const BASE = "https://www.apollopharmacy.in";
 const PAY_BLOCK_RE =
-    /pay|place\s*order|upi|card|net\s*banking|netbanking|wallet|pay\s*later|simpl|lazypay|cash|\bcod\b|buy\s*now|log\s*out|logout|sign\s*out|remove|delete|clear\s*cart|add\s*new\s*address|circle|membership/i;
+    /pay|place\s*order|upi|card|net\s*banking|netbanking|wallet|pay\s*later|simpl|lazypay|cash|\bcod\b|buy\s*now|log\s*out|logout|sign\s*out|remove|delete|clear\s*cart|add\s*new\s*address|circle|membership|\bqr\b|scan/i;
 
 /**
  * Upsell / membership controls nothing may ever click (Circle "Add Plan", plan radios,
@@ -515,14 +515,67 @@ async function readCodState(page: Page): Promise<CodState> {
         .catch(() => ({ kind: "absent" as const }));
 }
 
+/**
+ * Apollo /pay/<id> (payments-fe, Juspay) desktop layout: a left "Payment methods" nav
+ * (nav[aria-label="Payment methods"] > ul.Juspay_desktopNavList > li > button.Juspay_desktopNavItem*,
+ * title in .Juspay_desktopNavTitle, subtitle in .Juspay_desktopNavSubtitle). UPI is selected by
+ * default; the middle panel renders ONLY the selected method, so the COD card (#checkbox-cod /
+ * .COD_codContainer / "Place order for ₹X") doesn't exist until the "Pay on Delivery" tab is
+ * clicked. Clicks only that tab — never UPI / cards / pay later / wallets / net banking / QR.
+ */
+async function selectCodNavTab(page: Page): Promise<{ kind: "clicked" | "active" | "absent" } | { kind: "disabled"; reason: string }> {
+    const r = await page
+        .evaluate(() => {
+            document.querySelectorAll("[data-kavach-codtab]").forEach((e) => e.removeAttribute("data-kavach-codtab"));
+            const nav =
+                (document.querySelector('nav[aria-label="Payment methods" i]') as HTMLElement | null) ||
+                (document.querySelector('[class*="desktopNavList"]') as HTMLElement | null) ||
+                (document.querySelector('[class*="desktopNav"]') as HTMLElement | null);
+            if (!nav) return { kind: "absent" as const };
+            const btns = Array.from(nav.querySelectorAll("button")) as HTMLButtonElement[];
+            const cod = btns.find((b) => {
+                const title = ((b.querySelector('[class*="desktopNavTitle"]') as HTMLElement | null)?.innerText || "").trim();
+                const all = (b.innerText || "").replace(/\s+/g, " ").trim();
+                return /^pay\s*on\s*delivery\b|^cash\s*on\s*delivery\b|^cod\b/i.test(title) || /^(pay\s*on\s*delivery|cash\s*on\s*delivery)\b/i.test(all);
+            });
+            if (!cod) return { kind: "absent" as const };
+            const sub = ((cod.querySelector('[class*="desktopNavSubtitle"]') as HTMLElement | null)?.innerText || "").trim();
+            if (cod.disabled || cod.getAttribute("aria-disabled") === "true" || /desktopNavItemDisabled/.test(cod.className || "")) {
+                return { kind: "disabled" as const, reason: sub || "Apollo disabled Pay on Delivery for this order" };
+            }
+            if (/desktopNavItemActive/.test(cod.className || "")) return { kind: "active" as const };
+            cod.setAttribute("data-kavach-codtab", "1");
+            return { kind: "clicked" as const };
+        })
+        .catch(() => ({ kind: "absent" as const }));
+    if (r.kind !== "clicked") return r;
+    const tab = page.locator('[data-kavach-codtab="1"]').first();
+    await tab.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => undefined);
+    await tab.click({ timeout: 3000 }).catch(async () => {
+        await tab.evaluate((e) => (e as HTMLElement).click()).catch(() => undefined);
+    });
+    return r;
+}
+
+/** "To Pay ₹X" from the /pay summary (right column). */
+async function readToPay(page: Page): Promise<number | undefined> {
+    const t = (await bodyText(page, 12000)).replace(/\s+/g, " ").replace(/,/g, "");
+    const m = t.match(/\bto\s*pay\s*₹\s*(\d+(?:\.\d{1,2})?)/i);
+    return m ? Number(m[1]) : undefined;
+}
+
 async function selectCod(page: Page): Promise<boolean> {
     // Click the COD card header (role=button), fall back to the radio itself.
     const clicked = await page
         .evaluate(() => {
             const radio = document.getElementById("checkbox-cod") as HTMLInputElement | null;
-            let el: HTMLElement | null = radio;
-            while (el && !/codCard/i.test(el.className || "")) el = el.parentElement;
-            const header = el?.querySelector('[role="button"]') as HTMLElement | null;
+            // Apollo: .COD_codCardHeader[role=button] contains the radio (onClick → select COD:default)
+            let header = (radio?.closest('[role="button"]') as HTMLElement | null) || null;
+            if (!header) {
+                let el: HTMLElement | null = radio;
+                while (el && !/codCard/i.test(el.className || "")) el = el.parentElement;
+                header = (el?.querySelector('[role="button"]') as HTMLElement | null) || null;
+            }
             if (header) {
                 header.scrollIntoView({ block: "center" });
                 header.click();
@@ -791,6 +844,7 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
     let lastStage: CheckoutStage | null = null;
     let stageSince = Date.now();
     let codSelectTries = 0;
+    let codTabTries = 0;
     let preplaceVerifiedAt = 0;
 
     let stage = await detectCheckoutStage(page);
@@ -1017,6 +1071,20 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                     };
                 }
                 let cod = await readCodState(page);
+                if (cod.kind === "absent" && codTabTries < 3) {
+                    // Tabbed /pay/<id> layout: open the "Pay on Delivery" tab first.
+                    const tab = await selectCodNavTab(page);
+                    log("cod_tab", { ...tab, try: codTabTries + 1 });
+                    if (tab.kind === "disabled") return { status: "cod_unavailable", url: safeUrl(page), detail: tab.reason };
+                    if (tab.kind === "clicked" || tab.kind === "active") {
+                        codTabTries++;
+                        const until = Math.min(opts.deadlineAt - 3_000, Date.now() + 6_000);
+                        while (Date.now() < until && cod.kind === "absent") {
+                            await sleep(page, 400);
+                            cod = await readCodState(page);
+                        }
+                    }
+                }
                 if (cod.kind === "absent") {
                     await page.mouse.wheel(0, 900).catch(() => undefined);
                     await sleep(page, 900);
@@ -1090,6 +1158,18 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                 const payable = fresh.payable;
                 if (typeof opts.confirmedTotalRupees === "number" && typeof payable !== "number") {
                     return { status: "stuck", stage, url: safeUrl(page), detail: "couldn't read Apollo's payable amount before Place order" };
+                }
+                const toPay = await readToPay(page);
+                log("pay_amounts", { cta: payable, toPay, card: opts.confirmedTotalRupees });
+                if (typeof opts.confirmedTotalRupees === "number" && typeof toPay === "number" && toPay > opts.confirmedTotalRupees + 1) {
+                    const lbl = `₹${toPay.toFixed(2).replace(/\.00$/, "")}`;
+                    return {
+                        status: "amount_changed",
+                        payableLabel: lbl,
+                        addressVerified,
+                        url: safeUrl(page),
+                        detail: `Apollo's "To Pay" is ${lbl}, the card said ₹${opts.confirmedTotalRupees}`,
+                    };
                 }
                 const payableLabel = typeof payable === "number" ? `₹${payable.toFixed(2).replace(/\.00$/, "")}` : fresh.ctaText;
                 if (
