@@ -107,8 +107,12 @@ export class ChannelMockAdapter implements ChannelAdapter {
             inbound.channelIdentifier,
         );
 
+        // WhatsApp routing (inbound._routing) synthesizes TTS itself after fallback checks —
+        // skip here so each voice turn makes at most one ElevenLabs call.
         const voice =
-            inbound.modality === "voice" ? await textToSpeech(turn.reply) : { text: turn.reply };
+            inbound.modality === "voice" && !inbound._routing
+                ? await textToSpeech(turn.reply)
+                : { text: turn.reply };
 
         const outbound: OutboundMessage = {
             channelType: this.channelType,

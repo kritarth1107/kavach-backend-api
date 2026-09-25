@@ -212,6 +212,17 @@ export async function getChannelIdentitiesHandler(req: Request, res: Response) {
 
 export async function postWhatsAppMockWebhook(req: Request, res: Response) {
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
+    const mockMessageId =
+        typeof req.body?.messageId === "string" ? req.body.messageId.trim() : "";
+    if (mockMessageId) {
+        const { claimWhatsAppInboundMessage } = await import(
+            "../services/whatsappInboundDedupe.service"
+        );
+        if (!(await claimWhatsAppInboundMessage(`mock:${mockMessageId}`, req.body?.from))) {
+            res.json({ success: true, data: { duplicate: true, reply: null } });
+            return;
+        }
+    }
     const reply = await handleWhatsAppInbound(req.body);
     res.json({ success: true, data: { reply } });
 }
@@ -345,6 +356,53 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
 
     console.log(`Meta WhatsApp webhook: ${messages.length} message(s), enabled=${isMetaWhatsAppEnabled()}`);
 
+    // Dedupe by WhatsApp message id (cross-instance) so Meta retries never cause a
+    // second reply, then ACK immediately — Meta retries slow webhooks, and a voice turn
+    // (download + STT + agent + TTS) can take far longer than its patience.
+    const { claimWhatsAppInboundMessage } = await import("../services/whatsappInboundDedupe.service");
+    const fresh: typeof messages = [];
+    for (const inbound of messages) {
+        if (await claimWhatsAppInboundMessage(inbound.messageId, inbound.from)) {
+            fresh.push(inbound);
+        } else {
+            console.log(
+                `Meta WhatsApp webhook: duplicate delivery ignored (msg=${String(inbound.messageId).slice(-10)})`,
+            );
+        }
+    }
+    res.status(200).json({
+        success: true,
+        data: { processed: fresh.length, duplicates: messages.length - fresh.length },
+    });
+    if (!fresh.length) return;
+
+    // CPU stays allocated after the response (--no-cpu-throttling on Cloud Run).
+    void processMetaInboundMessages(req.body, messages.length, fresh).catch((err) => {
+        console.error(
+            "Meta WhatsApp background processing crashed:",
+            err instanceof Error ? err.message : err,
+        );
+    });
+}
+
+async function processMetaInboundMessages(
+    rawBody: unknown,
+    parsedCount: number,
+    messages: import("../clients/metaWhatsApp.client").MetaInboundMessage[],
+) {
+    const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
+    const {
+        formatMetaSendError,
+        isMetaWhatsAppEnabled,
+        markMetaWhatsAppInboundSeen,
+        sendViaMetaWhatsApp,
+        startMetaWhatsAppTypingRefresh,
+    } = await import("../clients/metaWhatsApp.client");
+    const { recordWhatsAppWebhookEvent } = await import("../services/whatsappWebhookLog.service");
+    const { VOICE_NOT_CAUGHT_REPLY, WARM_NEUTRAL_REPLY } = await import(
+        "../services/saheliElderFacts.service"
+    );
+
     for (const inbound of messages) {
         let replySent = false;
         let replyPreview: string | undefined;
@@ -412,13 +470,12 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             error = err instanceof Error ? err.message : String(err);
             console.error("Meta WhatsApp inbound failed:", error);
             if (isMetaWhatsAppEnabled()) {
+                const isVoiceIn = inbound.mediaType === "voice" || inbound.mediaType === "audio";
+                const fallbackText = isVoiceIn ? VOICE_NOT_CAUGHT_REPLY : WARM_NEUTRAL_REPLY;
                 try {
-                    await sendViaMetaWhatsApp(
-                        inbound.from,
-                        "Saheli is having a small hiccup. Please try again in a moment.",
-                    );
+                    await sendViaMetaWhatsApp(inbound.from, fallbackText);
                     replySent = true;
-                    replyPreview = "Saheli is having a small hiccup. Please try again in a moment.";
+                    replyPreview = fallbackText;
                 } catch (sendErr) {
                     sendError =
                         sendErr instanceof Error
@@ -432,8 +489,8 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
         }
 
         recordWhatsAppWebhookEvent({
-            body: req.body,
-            messagesParsed: messages.length,
+            body: rawBody,
+            messagesParsed: parsedCount,
             processed: 1,
             replySent,
             replyPreview,
@@ -444,8 +501,6 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
             typingShown,
         });
     }
-
-    res.status(200).json({ success: true, data: { processed: messages.length } });
 }
 
 export async function postPhoneMockWebhook(req: Request, res: Response) {

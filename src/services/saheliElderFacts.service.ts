@@ -34,15 +34,70 @@ export function buildGreetingReply(displayName: string, memoryHook?: string | nu
     return base;
 }
 
-/** Warm neutral when AI fails mid-thread — never a greeting. */
+/**
+ * Warm neutral when AI fails mid-thread — never a greeting, never generic
+ * "try again in a moment" error copy (product rule: no generic errors).
+ */
+export const WARM_NEUTRAL_REPLY =
+    "Main yahin hoon, aapke saath 🙏 Aapki baat poori tarah samajh nahi paayi — ek baar phir se bataiye, main dhyaan se sun rahi hoon.";
+export const WARM_NEUTRAL_CARE_REPLY =
+    "Main yahin hoon aapke saath 🙏 Aapne jo bataya, woh maine note kar liya hai. Thoda aur bataiye — abhi kaisa lag raha hai?";
+export const WARM_OFFLINE_REPLY =
+    "Main yahin hoon 🙏 Abhi mera connection thoda dheema hai — aapki baat mere paas hai, bas ek baar phir bhej dijiye, main turant jawab doongi.";
+export const VOICE_NOT_CAUGHT_REPLY =
+    "Maaf kijiye, aapka voice note mujhe saaf sunai nahi diya 🙏 Ek baar phir bol dijiye, ya likh kar bhej dijiye — main yahin hoon.";
+
 export function buildWarmNeutralReply(opts?: { careAware?: boolean; offline?: boolean }): string {
-    if (opts?.offline) {
-        return "Saheli is reconnecting — please try again in a moment.";
-    }
-    if (opts?.careAware) {
-        return "I'm here with you. I've noted what you shared — please try again in a moment if you need anything else.";
-    }
-    return "I'm here — please try again in a moment.";
+    if (opts?.offline) return WARM_OFFLINE_REPLY;
+    if (opts?.careAware) return WARM_NEUTRAL_CARE_REPLY;
+    return WARM_NEUTRAL_REPLY;
+}
+
+const FALLBACK_COPY = [
+    WARM_NEUTRAL_REPLY,
+    WARM_NEUTRAL_CARE_REPLY,
+    WARM_OFFLINE_REPLY,
+    VOICE_NOT_CAUGHT_REPLY,
+];
+
+/** True for AI-failure / error fallback copy — never TTS these as voice notes. */
+export function isSaheliFallbackCopy(text: string | undefined | null): boolean {
+    const t = (text ?? "").trim();
+    if (!t) return false;
+    if (FALLBACK_COPY.some((c) => t === c || t.endsWith(c))) return true;
+    return /try again in a moment|small hiccup|Saheli is reconnecting|couldn't catch that voice note/i.test(
+        t,
+    );
+}
+
+/**
+ * Spoken/typed "are you there?" checks — "sun sakte ho?", "can you hear me", "hello?".
+ * These deserve a warm conversational reply, never a memory save or error.
+ */
+export function messageIsPresenceCheck(text: string): boolean {
+    const t = text
+        .trim()
+        .toLowerCase()
+        .replace(/[\s.!…,]+$/u, "");
+    if (!t || t.length > 50) return false;
+    // Only short, standalone checks — "sun rahi ho, dawai kab leni hai?" must reach the AI.
+    if (t.split(/\s+/).length > 6) return false;
+    return (
+        /\bsun\s*(?:pa\s*)?(?:sakte|sakti|sakta|rahe|rahi|raha)\s*(?:ho|hain|hai|hoon|ho\s+na)?\b/.test(t) ||
+        /\bsunai\s+(?:de\s+)?(?:raha|rahi|rahe)\b/.test(t) ||
+        /सुन\s*(?:पा\s*)?(?:सकते|सकती|सकता|रहे|रही|रहा)/u.test(t) ||
+        /सुनाई\s+(?:दे\s+)?(?:रहा|रही)/u.test(t) ||
+        /\bcan\s+you\s+(?:hear|listen\s+to)\s+me\b/.test(t) ||
+        /\b(?:are\s+)?you\s+(?:there|listening)\s*\??$/.test(t) ||
+        /\bkoi\s+hai\b/.test(t) ||
+        /^(?:saheli\s*)?(?:h[ae]llo+|hel+o+|हेलो|हैलो)(?:\s+(?:h[ae]llo+|saheli|हेलो|हैलो))*\s*\?+$/u.test(t) ||
+        /^(?:h[ae]llo+|हेलो|हैलो)\s+(?:h[ae]llo+|हेलो|हैलो)$/u.test(t) ||
+        /^saheli\s*\?+$/.test(t)
+    );
+}
+
+export function buildPresenceReply(): string {
+    return "Haan, main aapko achhe se sun rahi hoon 😊 Boliye, kya baat karni hai?";
 }
 
 export function messageAsksMemory(text: string): boolean {

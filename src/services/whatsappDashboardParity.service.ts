@@ -332,6 +332,30 @@ export async function tryHandleOrderStatusQuery(input: {
 }
 
 /**
+ * Returns the content to save only when the message is an explicit remember request.
+ * Questions (ending in "?") and greetings never trigger a memory save.
+ */
+export function extractExplicitRememberContent(raw: string): string | null {
+    const t = raw.trim();
+    if (!t || /\?\s*$/.test(t)) return null;
+    const lead = String.raw`^(?:(?:please|pls|plz|saheli|ji|and|also)[,\s]+)*`;
+    const en = new RegExp(
+        lead +
+            String.raw`(?:remember|note\s+(?:this|that|down|it)|save\s+(?:this|that|it)|keep\s+in\s+mind)\s*(?:that\s+)?[:,\-]?\s*["']?(.+?)["']?[.!]*\s*$`,
+        "i",
+    );
+    let m = t.match(en);
+    if (m?.[1]) return m[1].trim();
+    m = t.match(
+        /^(?:saheli[,\s]+)?yaad\s+rakh(?:na|o|iye|na\s+ji)?\s*(?:ki\s+)?[:,\-]?\s*(.{3,})$/i,
+    );
+    if (m?.[1]) return m[1].trim();
+    m = t.match(/^(.{3,}?)[,\s]+(?:ye\s+|yeh\s+)?yaad\s+rakh(?:na|o|iye)\b[\s.!]*$/i);
+    if (m?.[1]) return m[1].trim();
+    return null;
+}
+
+/**
  * 4. Memory fix/forget handler
  */
 export async function tryHandleMemoryAction(input: {
@@ -348,7 +372,11 @@ export async function tryHandleMemoryAction(input: {
     const fixMatch = text.match(/\b(?:fix|correct|update|change)\s+(?:memory\s+)?(?:about\s+)?["']?(.+?)["']?\s+to\s+["']?(.+?)["']?\s*$/i) ||
         text.match(/\b(?:actually|it'?s)\s+["']?(.+?)["']?\s*(?:not|,\s*not)\s+["']?(.+?)["']?\s*$/i);
 
-    const rememberMatch = text.match(/\b(?:remember|save|note)\s+(?:that\s+)?["']?(.+?)["']?\s*$/i);
+    // Explicit remember intent ONLY ("remember that…", "note this: …", "yaad rakhna ki …").
+    // A loose \b(remember|save|note)\b match turned spoken questions like "sun sakte ho?"
+    // into memory saves ("I'll remember that: …").
+    const rememberContent = extractExplicitRememberContent(text);
+    const rememberMatch = rememberContent ? ([text, rememberContent] as const) : null;
 
     if (!forgetMatch && !fixMatch && !rememberMatch) {
         return { handled: false };

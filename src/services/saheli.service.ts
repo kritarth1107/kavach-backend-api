@@ -356,6 +356,9 @@ function looksLikeThoughtSignatureLeak(reply: string): boolean {
 function sanitizeElderReply(reply: string, displayName: string): string {
     let out = trimElderReplyFluff(reply);
     if (looksLikeThoughtSignatureLeak(out)) {
+        console.warn(
+            `Saheli elder reply looked like a thought-signature/content-block leak — warm neutral used (len=${out.length}, head=${JSON.stringify(out.slice(0, 120))})`,
+        );
         return buildWarmNeutralReply();
     }
     const first = displayName.split(/\s+/)[0]?.trim();
@@ -594,7 +597,10 @@ async function elderReplyWithAi(
     } catch (err) {
         const statusCode = err instanceof AppError ? err.statusCode : undefined;
         const aiError = err instanceof Error ? err.message : String(err);
-        console.warn("Saheli AI elder reply fallback:", err);
+        console.warn(
+            `Saheli AI elder reply fallback (status=${statusCode ?? "n/a"}): ${aiError.slice(0, 300)}`,
+            err,
+        );
         if (waChannel) {
             recordWhatsAppAiDebug({
                 familyId,
@@ -668,12 +674,17 @@ async function elderReplyWithAi(
                 ? offlineFallback
                 : messageIsGreeting(message)
                   ? buildGreetingReply(displayName)
-                  : offlineSaheliMessage();
+                  : waChannel
+                    ? buildWarmNeutralReply({ offline: true })
+                    : offlineSaheliMessage();
             if (waChannel) {
                 recordWhatsAppAiDebug({
                     familyId,
                     recipientUserId,
                     actorUserId: recipientUserId,
+                    contextChars,
+                    aiError,
+                    aiStatusCode: statusCode,
                     fallbackUsed: "offlineSaheliMessage",
                     replySource: "ai",
                 });
@@ -708,6 +719,9 @@ async function elderReplyWithAi(
                 familyId,
                 recipientUserId,
                 actorUserId: recipientUserId,
+                contextChars,
+                aiError,
+                aiStatusCode: statusCode,
                 fallbackUsed: careAware ? "warmNeutralCareAware" : "warmNeutral",
                 replySource: "ai",
             });

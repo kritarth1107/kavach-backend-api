@@ -303,7 +303,10 @@ export async function aiPostElderChatWithRetry(
             return await aiPostChat({ ...payload, useAgent: payload.useAgent ?? true });
         } catch (err) {
             lastErr = err;
-            if (attempt < retries - 1 && isAiEngineOfflineError(err)) {
+            // Never re-run a timed-out agent turn: 3× the write timeout blows past Meta's
+            // webhook patience (→ retries → duplicate replies) and the first run may still land.
+            const timedOut = err instanceof Error && /timed out/i.test(err.message);
+            if (attempt < retries - 1 && isAiEngineOfflineError(err) && !timedOut) {
                 await sleep(delays[attempt] ?? 2000);
                 continue;
             }

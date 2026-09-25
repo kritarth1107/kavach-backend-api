@@ -21,6 +21,12 @@ import type { WhatsAppReplyContext } from "../types/whatsappMessage.types";
 import { messageLooksLikeEmergency } from "./saheliEmergency.service";
 import { tryHandleWhatsAppDashboardAction } from "./whatsappDashboardParity.service";
 import { stampCompanionVoice } from "./saheliCompanionVoice.service";
+import {
+    VOICE_NOT_CAUGHT_REPLY,
+    buildPresenceReply,
+    isSaheliFallbackCopy,
+    messageIsPresenceCheck,
+} from "./saheliElderFacts.service";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -195,6 +201,29 @@ async function resolveCaregiverSubject(input: {
     };
 }
 
+async function withVoiceReply(out: OutboundMessage): Promise<OutboundMessage> {
+    if (!out.content?.trim() || isSaheliFallbackCopy(out.content)) return out;
+    try {
+        const { textToSpeech } = await import("../channels/voicePipeline");
+        const spoken = await textToSpeech(out.content);
+        if (spoken.audioBuffer || spoken.audioBase64) {
+            return {
+                ...out,
+                modality: "voice",
+                audioBuffer: spoken.audioBuffer,
+                audioBase64: spoken.audioBase64,
+                audioMimeType: spoken.mimeType || "audio/mpeg",
+            };
+        }
+    } catch (err) {
+        console.warn(
+            "WhatsApp reply TTS failed (sending text only):",
+            err instanceof Error ? err.message : err,
+        );
+    }
+    return out;
+}
+
 export async function handleWhatsAppInbound(body: {
     from?: string;
     text?: string;
@@ -217,6 +246,62 @@ export async function handleWhatsAppInbound(body: {
         identity = await resolveWhatsAppSender(phone);
     } catch {
         return handleGuestMessage(phone);
+    }
+
+    // STT runs BEFORE emergency / language / intent checks so spoken emergencies escalate.
+    // Voice/audio: download from Meta (or mock audioBase64) + STT, then continue with transcript.
+    const isVoiceMedia =
+        body.mediaType === "voice" ||
+        body.mediaType === "audio" ||
+        body.modality === "voice";
+    let voiceTranscript: string | undefined;
+    const hasVoiceAudio = Boolean(body.mediaUrl || body.audioBase64?.trim());
+    const isVoicePlaceholder = (t: string) =>
+        !t.trim() || /^\[(voice|audio) (message|shared)\]$/i.test(t.trim());
+    if (isVoiceMedia && hasVoiceAudio) {
+        const sttStarted = Date.now();
+        try {
+            const { speechToText } = await import("../channels/voicePipeline");
+            let audioBuffer: Buffer | undefined;
+            let mimeType: string | undefined;
+            if (body.mediaUrl) {
+                const { downloadMedia } = await import("../clients/metaWhatsApp.client");
+                const media = await downloadMedia(body.mediaUrl);
+                audioBuffer = media.buffer;
+                mimeType = media.mimeType;
+                console.log(
+                    `WhatsApp voice media downloaded (${media.buffer.length} bytes, ${media.mimeType}) in ${Date.now() - sttStarted}ms`,
+                );
+            }
+            voiceTranscript = await speechToText({
+                audioBuffer,
+                audioBase64: audioBuffer ? undefined : body.audioBase64,
+                mimeType,
+                fallbackText: isVoicePlaceholder(text) ? undefined : text,
+            });
+            if (voiceTranscript.trim() && !isVoicePlaceholder(voiceTranscript)) {
+                text = voiceTranscript.trim();
+                console.log(
+                    `WhatsApp voice STT ok (${voiceTranscript.length} chars, ${Date.now() - sttStarted}ms) from ${phone.slice(0, 6)}…`,
+                );
+            } else {
+                voiceTranscript = undefined;
+                console.warn(
+                    `WhatsApp voice STT returned empty transcript (${Date.now() - sttStarted}ms)`,
+                );
+            }
+        } catch (err) {
+            voiceTranscript = undefined;
+            console.warn(
+                `WhatsApp voice STT/download failed after ${Date.now() - sttStarted}ms:`,
+                err instanceof Error ? err.message : err,
+            );
+        }
+        // Never push "[voice message]" into the AI / intent router, and never answer with
+        // generic error copy: ask warmly (text only — no TTS of a fallback).
+        if (!voiceTranscript && isVoicePlaceholder(text)) {
+            return outbound(phone, VOICE_NOT_CAUGHT_REPLY);
+        }
     }
 
     if (identity.role === FamilyRole.CARE_RECIPIENT && messageLooksLikeEmergency(text)) {
@@ -258,39 +343,18 @@ export async function handleWhatsAppInbound(body: {
         }
     }
 
-    // Voice/audio: download from Meta + STT, then continue into elder AI with transcript.
-    const isVoiceMedia =
-        body.mediaType === "voice" ||
-        body.mediaType === "audio" ||
-        body.modality === "voice";
-    let voiceTranscript: string | undefined;
-    if (isVoiceMedia && body.mediaUrl && identity.role === FamilyRole.CARE_RECIPIENT) {
-        try {
-            const { downloadMedia } = await import("../clients/metaWhatsApp.client");
-            const { speechToText } = await import("../channels/voicePipeline");
-            const media = await downloadMedia(body.mediaUrl);
-            voiceTranscript = await speechToText({
-                audioBuffer: media.buffer,
-                mimeType: media.mimeType,
-                fallbackText:
-                    text && !/^\[(voice|audio) (message|shared)\]$/i.test(text)
-                        ? text
-                        : undefined,
-            });
-            if (voiceTranscript.trim()) {
-                text = voiceTranscript.trim();
-                console.log(
-                    `WhatsApp voice STT ok (${voiceTranscript.length} chars) from ${phone.slice(0, 6)}…`,
-                );
-            } else {
-                console.warn("WhatsApp voice STT returned empty transcript");
-            }
-        } catch (err) {
-            console.warn(
-                "WhatsApp voice STT failed:",
-                err instanceof Error ? err.message : err,
-            );
+    // "Sun sakte ho?" / "can you hear me" / "hello?" → warm conversational presence reply
+    // (never a memory save, never an error). Voice gets a spoken reply too.
+    if (messageIsPresenceCheck(text)) {
+        const presence = await stampCompanionVoice(buildPresenceReply(), {
+            familyId: identity.familyId,
+            recipientUserId: identity.userId,
+        });
+        let presenceOut = outbound(phone, presence);
+        if (isVoiceMedia) {
+            presenceOut = await withVoiceReply(presenceOut);
         }
+        return presenceOut;
     }
 
     if (
@@ -320,10 +384,7 @@ export async function handleWhatsAppInbound(body: {
         }
         // Voice with transcript continues to elder AI.
         if (isMediaOnly && isVoice && !text) {
-            return outbound(
-                phone,
-                "I couldn't catch that voice note clearly — could you type it or try again?",
-            );
+            return outbound(phone, VOICE_NOT_CAUGHT_REPLY);
         }
     }
 
@@ -732,7 +793,7 @@ export async function handleWhatsAppInbound(body: {
         channelIdentifier: phone,
         modality: body.modality ?? "text",
         content: text,
-        audioBase64: body.audioBase64,
+        audioBase64: voiceTranscript ? undefined : body.audioBase64,
         timestamp: new Date(),
         _routing: {
             familyId: identity.familyId,
@@ -753,25 +814,9 @@ export async function handleWhatsAppInbound(body: {
     }
 
     // Voice replies: synthesize ElevenLabs audio when key present (else text-only).
-    if (isVoiceMedia && out.content?.trim()) {
-        try {
-            const { textToSpeech } = await import("../channels/voicePipeline");
-            const spoken = await textToSpeech(out.content);
-            if (spoken.audioBuffer || spoken.audioBase64) {
-                out = {
-                    ...out,
-                    modality: "voice",
-                    audioBuffer: spoken.audioBuffer,
-                    audioBase64: spoken.audioBase64,
-                    audioMimeType: spoken.mimeType || "audio/mpeg",
-                };
-            }
-        } catch (err) {
-            console.warn(
-                "WhatsApp reply TTS failed (sending text only):",
-                err instanceof Error ? err.message : err,
-            );
-        }
+    // Error/fallback copy is never spoken.
+    if (isVoiceMedia && out.content?.trim() && !isSaheliFallbackCopy(out.content)) {
+        out = await withVoiceReply(out);
     }
 
     return out;
