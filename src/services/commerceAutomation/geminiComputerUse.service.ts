@@ -232,7 +232,13 @@ export async function planBrowserActions(
         .filter(Boolean)
         .join("\n");
 
-    const res = await fetch(url, {
+    // Hard per-call timeout: a hung Vertex request must never stall the WA flow silently.
+    const ctrl = new AbortController();
+    const abortTimer = setTimeout(() => ctrl.abort(), Number(process.env.BROWSER_PLAN_TIMEOUT_MS) || 25_000);
+    let res: Response;
+    try {
+        res = await fetch(url, {
+        signal: ctrl.signal,
         method: "POST",
         headers: {
             Authorization: `Bearer ${token}`,
@@ -260,9 +266,18 @@ export async function planBrowserActions(
             },
         }),
     });
+    } catch (err) {
+        clearTimeout(abortTimer);
+        console.warn(
+            "Gemini browser plan request failed/timed out:",
+            err instanceof Error ? err.message : err,
+        );
+        return { modelUsed: model, thought: "plan_timeout", actions: [{ type: "wait", ms: 500 }] };
+    }
 
     if (!res.ok) {
         const body = await res.text().catch(() => "");
+        clearTimeout(abortTimer);
         console.warn(`Gemini browser plan failed (${res.status}): ${body.slice(0, 240)}`);
         return {
             modelUsed: model,
@@ -277,9 +292,14 @@ export async function planBrowserActions(
         };
     }
 
-    const json = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-    };
+    let json: { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+    try {
+        json = (await res.json()) as typeof json;
+    } catch {
+        return { modelUsed: model, thought: "plan_body_timeout", actions: [{ type: "wait", ms: 500 }] };
+    } finally {
+        clearTimeout(abortTimer);
+    }
     const rawText = json.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
     if (!rawText) {
         return { modelUsed: model, actions: [{ type: "wait", ms: 800 }] };

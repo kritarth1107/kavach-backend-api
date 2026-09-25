@@ -278,11 +278,15 @@ async function attachGuestCatalog(
     const query = (draft.searchQuery || draft.items.map((i) => i.name).join(" ")).trim();
     draft.searchQuery = query;
     const { searchGuestCatalog } = await import("./commerceAutomation/guestCatalogSearch.service");
+    // Resolve delivery address first so Apollo stock is checked at that pincode.
+    draft = await ensurePharmacyDeliveryAddress(draft, ctx);
+    const { extractPincode } = await import("./commerceAutomation/apolloPostOtp");
     const result = await searchGuestCatalog({
-        partner: draft.partner,
+        partner: draft.partner!,
         query,
         familyId: ctx.familyId,
         userId: ctx.userId,
+        pincode: extractPincode(draft.addressLabel),
     });
     if (!result.hits.length) {
         draft.catalogOptions = undefined;
@@ -677,10 +681,19 @@ export async function handlePharmacyWhatsAppTurn(input: {
                 })
             ).label;
         }
+        // Single guest-searched SKU → "exact SKU" goal so the post-login step adds THAT product
+        // (product page → Add → cart) instead of a free-form Gemini search.
+        const only = draft.items.length === 1 ? draft.items[0] : undefined;
+        const exactName = only?.name?.replace(/[|@]/g, " ").trim();
         const goal = appendDeliveryAddressToGoal(
-            `Order from ${partnerLabel(partner)}: ${summary}`,
+            only && exactName && only.productUrl
+                ? `Order exact SKU from ${partnerLabel(partner)}: ${exactName}${
+                      typeof only.pricePaise === "number" ? ` @ ${formatInr(only.pricePaise)}` : ""
+                  }`
+                : `Order from ${partnerLabel(partner)}: ${summary}`,
             draft.addressLabel,
         );
+        const productUrl = only?.productUrl;
 
         // phase "running" until bootstrap actually requests SMS + OTP UI.
         // Premature awaiting_otp lets digit-ish noise / stale pending queue fire false "Got the code".
@@ -748,6 +761,8 @@ export async function handlePharmacyWhatsAppTurn(input: {
                     deadlineMs,
                     loginPhone,
                     browserGeneration,
+                    productUrl,
+                    deliveryAddress: draft.addressLabel,
                     onProgress: async (_stage, detail) => {
                         if (detail && detail.trim()) await progressPush(detail.trim());
                     },

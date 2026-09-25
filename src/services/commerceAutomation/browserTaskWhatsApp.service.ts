@@ -397,57 +397,22 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             draft.lastMessage = ackText;
             draft.phase = "running";
             await saveDraft(input.phone, draft);
-            void (async () => {
-                const {
-                    notifyPharmacyBrowserBackgroundResult,
-                } = await import("./browserProgressNotify.service");
-                try {
-                    const result = await submitParkedBrowserOtp({
-                        familyId: input.familyId,
-                        userId: input.actorUserId,
-                        otp: text,
-                    });
-                    if (!result) {
-                        await notifyPharmacyBrowserBackgroundResult({
-                            phone: input.phone,
-                            familyId: input.familyId,
-                            recipientUserId: input.recipientUserId,
-                            actorUserId: input.actorUserId,
-                            goal: draft!.goal,
-                            partner: (draft!.partner as import("./types").CommercePartnerKey) || "apollo",
-                            otpChallengeId: draft!.otpChallengeId,
-                            result: {
-                                status: "error",
-                                mode: "playwright",
-                                partner: String(draft!.partner || "apollo"),
-                                steps: 0,
-                                failureReason: "chromium_crash",
-                                message:
-                                    "The login page closed before I could enter your code. Reply *retry* to open again — don't paste until I ask.",
-                            },
-                        });
-                        return;
-                    }
-                    await notifyPharmacyBrowserBackgroundResult({
-                        phone: input.phone,
-                        familyId: input.familyId,
-                        recipientUserId: input.recipientUserId,
-                        actorUserId: input.actorUserId,
-                        goal: draft!.goal,
-                        partner: (draft!.partner as import("./types").CommercePartnerKey) || "apollo",
-                        otpChallengeId: draft!.otpChallengeId,
-                        result,
-                    });
-                } catch (err) {
-                    console.warn(
-                        "parked OTP submit failed:",
-                        err instanceof Error ? err.message : err,
-                    );
-                }
-            })();
-            // Duplicate inbound (Meta retry) after first ACK: silent / short noop
-            if (!ackOnce) {
-                return { text: "Still signing in with that code…", draft };
+            // Meta webhook retries (same digits) must not drive the page twice; a NEW code
+            // after "wrong/expired code" must (claimGotCodeAck is per-generation only).
+            const drive = claimParkedOtpDrive(input.familyId, input.actorUserId, text);
+            if (drive) {
+                void runParkedOtpContinuation({
+                    phone: input.phone,
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    otp: text,
+                    draft: { ...draft },
+                });
+            }
+            // Duplicate inbound (Meta retry) after first ACK: short noop
+            if (!drive || !ackOnce) {
+                return { text: drive ? "Trying that code…" : "Still signing in with that code…", draft };
             }
             return { text: ackText, draft };
         }
@@ -610,6 +575,8 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                         deadlineMs,
                         loginPhone,
                         browserGeneration,
+                        productUrl: draft!.selectedSku?.productUrl,
+                        deliveryAddress: draft!.addressLabel,
                         onProgress: async (_stage, detail) => {
                             if (!detail?.trim()) return;
                             if (
@@ -675,11 +642,13 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             const partner = draft.partner || partnerFromText(text);
             const query = extractOrderQuery(text, String(partner));
             const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+            const { extractPincode } = await import("./apolloPostOtp");
             const result = await searchGuestCatalog({
                 partner: String(partner),
                 query,
                 familyId: input.familyId,
                 userId: input.actorUserId,
+                pincode: extractPincode(draft.addressLabel),
             });
             draft.goal = text.slice(0, 240);
             draft.partner = partner;
@@ -723,18 +692,21 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         const query = extractOrderQuery(text, String(playbook.partner));
 
         // SEARCH FIRST — guest/MCP catalog. Do not open login until SKU confirm.
-        const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
-        const catalog = await searchGuestCatalog({
-            partner: String(playbook.partner),
-            query,
-            familyId: input.familyId,
-            userId: input.actorUserId,
-        });
+        // Resolve the delivery address first so stock is checked at that pincode.
         const { resolveDeliveryAddressLabel } = await import("./smokeDeliveryAddress");
         const addr = await resolveDeliveryAddressLabel({
             familyId: input.familyId,
             userId: input.actorUserId,
             partner: String(playbook.partner),
+        });
+        const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+        const { extractPincode } = await import("./apolloPostOtp");
+        const catalog = await searchGuestCatalog({
+            partner: String(playbook.partner),
+            query,
+            familyId: input.familyId,
+            userId: input.actorUserId,
+            pincode: extractPincode(addr.label),
         });
 
         draft = {
@@ -772,6 +744,187 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     }
 
     return null;
+}
+
+/** Per-user last OTP we drove into a parked page (dedupe Meta webhook retries only). */
+const lastDrivenOtp = new Map<string, { otp: string; at: number }>();
+function claimParkedOtpDrive(familyId: string, userId: string, otp: string): boolean {
+    const key = `${familyId}:${userId}`;
+    const prev = lastDrivenOtp.get(key);
+    const now = Date.now();
+    if (prev && prev.otp === otp && now - prev.at < 180_000) return false;
+    lastDrivenOtp.set(key, { otp, at: now });
+    return true;
+}
+
+/**
+ * Background: OTP → parked page → verify → add exact SKU → confirm card.
+ * Guarantees ONE honest WhatsApp follow-up (confirm card / error / re-ask) within ~90s.
+ */
+async function runParkedOtpContinuation(args: {
+    phone: string;
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    otp: string;
+    draft: BrowserTaskDraft;
+}): Promise<void> {
+    const { notifyPharmacyBrowserBackgroundResult, pushWhatsAppBrowserFollowUp } = await import(
+        "./browserProgressNotify.service"
+    );
+    const partner = (args.draft.partner as CommercePartnerKey) || "apollo";
+    const label = partnerLabel(String(partner));
+    const gen = currentBrowserGeneration(args.familyId, args.actorUserId);
+    let delivered = false;
+    const push = async (text: string) => {
+        const ok = await pushWhatsAppBrowserFollowUp({
+            phone: args.phone,
+            familyId: args.familyId,
+            recipientUserId: args.recipientUserId,
+            text,
+        }).catch(() => false);
+        if (!ok) console.warn("[pharmacy-login] WA follow-up send failed", { len: text.length });
+        return ok;
+    };
+    // Safety net: even if something below hangs (Meta send, Mongo, Chromium), say so by ~100s.
+    const watchdog = setTimeout(() => {
+        if (delivered) return;
+        if (!isBrowserGenerationCurrent(args.familyId, args.actorUserId, gen)) return;
+        delivered = true;
+        console.warn("[pharmacy-login] post-OTP watchdog fired — sending honest timeout");
+        void push(
+            `I entered your code on *${label}*, but I couldn't finish adding the item in time. ` +
+                `Nothing was ordered or paid. Reply *retry* or *cancel*.`,
+        );
+    }, 100_000);
+    watchdog.unref?.();
+
+    const notify = async (result: BrowserTaskResult) => {
+        if (delivered) return;
+        delivered = true;
+        // Result of the user's own OTP paste — never swallow it as a "duplicate OTP ask".
+        clearOtpAskDedupe(args.familyId, args.actorUserId);
+        if (result.failureReason === "out_of_stock") {
+            await notifyOutOfStockWithAlternatives(args, result);
+            return;
+        }
+        await notifyPharmacyBrowserBackgroundResult({
+            phone: args.phone,
+            familyId: args.familyId,
+            recipientUserId: args.recipientUserId,
+            actorUserId: args.actorUserId,
+            goal: args.draft.goal,
+            partner,
+            otpChallengeId: args.draft.otpChallengeId,
+            result,
+        });
+    };
+
+    try {
+        const result = await submitParkedBrowserOtp({
+            familyId: args.familyId,
+            userId: args.actorUserId,
+            otp: args.otp,
+            onProgress: async (detail) => {
+                if (!isBrowserGenerationCurrent(args.familyId, args.actorUserId, gen)) return;
+                await push(detail);
+            },
+        });
+        if (!isBrowserGenerationCurrent(args.familyId, args.actorUserId, gen) && result?.status !== "need_user_confirm") {
+            // User cancelled / started over meanwhile — stay quiet (cancel already replied).
+            delivered = true;
+            return;
+        }
+        await notify(
+            result ?? {
+                status: "error",
+                mode: "playwright",
+                partner: String(partner),
+                steps: 0,
+                failureReason: "chromium_crash",
+                message:
+                    "The login page closed before I could enter your code. Reply *retry* to open again — don't paste until I ask.",
+            },
+        );
+    } catch (err) {
+        console.warn("[pharmacy-login] parked OTP submit failed:", err instanceof Error ? err.message : err);
+        await notify({
+            status: "error",
+            mode: "playwright",
+            partner: String(partner),
+            steps: 0,
+            failureReason: "unknown",
+            message: `Something broke after I entered your code (${
+                err instanceof Error ? err.message.slice(0, 100) : "error"
+            }). Nothing was ordered or paid.`,
+        }).catch(() => undefined);
+    } finally {
+        clearTimeout(watchdog);
+    }
+}
+
+/** Exact SKU unavailable at the pincode → offer in-stock alternatives (guest search, no OTP). */
+async function notifyOutOfStockWithAlternatives(
+    args: { phone: string; familyId: string; recipientUserId: string; actorUserId: string; draft: BrowserTaskDraft },
+    result: BrowserTaskResult,
+): Promise<void> {
+    const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
+    const partner = (args.draft.partner as CommercePartnerKey) || "apollo";
+    const label = partnerLabel(String(partner));
+    const { extractPincode, parseExactSkuFromGoal } = await import("./apolloPostOtp");
+    const skuName = args.draft.selectedSku?.name || parseExactSkuFromGoal(args.draft.goal)?.name || "";
+    const addressLabel =
+        args.draft.addressLabel ||
+        args.draft.confirm?.addressLabel ||
+        args.draft.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
+    const pincode = extractPincode(addressLabel);
+    let options: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
+    try {
+        const { searchGuestCatalog, alternativeQueryForSku } = await import("./guestCatalogSearch.service");
+        const alt = await searchGuestCatalog({
+            partner: String(partner),
+            query: alternativeQueryForSku(skuName || args.draft.goal),
+            familyId: args.familyId,
+            userId: args.actorUserId,
+            pincode,
+        });
+        const skipId = args.draft.selectedSku?.id;
+        options = alt.hits
+            .filter((h) => h.id !== skipId && h.name !== skuName && !h.requiresRx)
+            .slice(0, 3)
+            .map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
+    } catch {
+        options = [];
+    }
+    const lines = [result.message];
+    if (options.length) {
+        lines.push("", `In stock on *${label}*${pincode ? ` for ${pincode}` : ""}:`);
+        options.forEach((o, i) => lines.push(`${i + 1}. ${o.name} — ${formatInr(o.pricePaise)}`));
+        lines.push("", `Reply *1* / *2* / *3* to pick one (you're already signed in), or *cancel*.`);
+    } else {
+        lines.push("", `Send another medicine name to search again, or *cancel*.`);
+    }
+    const text = lines.join("\n");
+    const next: BrowserTaskDraft = {
+        ...args.draft,
+        addressLabel,
+        phase: "awaiting_sku_confirm",
+        catalogOptions: options.length ? options : undefined,
+        selectedSku: undefined,
+        lastMessage: text,
+        otpChallengeId: undefined,
+    };
+    await saveDraft(args.phone, next);
+    await WhatsappSession.findOneAndUpdate(
+        { phone: args.phone },
+        { $unset: { pendingCommerceOtp: 1 }, $set: { updatedAt: new Date() } },
+    ).catch(() => undefined);
+    await pushWhatsAppBrowserFollowUp({
+        phone: args.phone,
+        familyId: args.familyId,
+        recipientUserId: args.recipientUserId,
+        text,
+    });
 }
 
 async function maybeNotifyCaregivers(

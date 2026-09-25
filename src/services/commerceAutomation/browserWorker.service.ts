@@ -32,6 +32,15 @@ import {
     clearActiveBrowserTask,
     currentBrowserGeneration,
 } from "./parkedOtpSession.service";
+import {
+    addExactSkuToApolloCart,
+    extractPincode,
+    formatApolloConfirmCard,
+    isOtpScreenVisible,
+    parseExactSkuFromGoal,
+    readApolloCart,
+    waitForOtpAccepted,
+} from "./apolloPostOtp";
 
 export type BrowserTaskStatus =
     | "running"
@@ -49,6 +58,12 @@ export type BrowserFailureReason =
     | "site_slow"
     | "busy"
     | "disabled"
+    /** Signed in fine, but the exact SKU is out of stock / unavailable at the pincode. */
+    | "out_of_stock"
+    /** Apollo rejected the pasted code or kept showing the code screen. */
+    | "otp_rejected"
+    /** Signed in, but cart / confirm didn't finish inside the WA deadline. */
+    | "post_otp_timeout"
     | "unknown";
 
 export type BrowserTaskResult = {
@@ -88,6 +103,10 @@ export type RunBrowserTaskInput = {
     partner?: CommercePartnerKey | "generic";
     /** Override playbook start URL (product link or resolved domain). */
     startUrl?: string;
+    /** Exact SKU product page (guest search) — used after login to add that SKU deterministically. */
+    productUrl?: string;
+    /** Full delivery address (pincode drives per-pincode stock + address pick). */
+    deliveryAddress?: string;
     /** Resume after OTP paste */
     otp?: string;
     /** Resume after WhatsApp confirm */
@@ -539,6 +558,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
     readonly mode = "playwright" as const;
 
     async runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
+        const taskStartedAt = Date.now();
         const maxSteps = Math.min(input.maxSteps ?? 20, 30);
         const playbook = resolvePlaybook(input.partner, input.goal, input.startUrl);
         const profile = await getOrCreateBrowserProfile(input.familyId, input.userId);
@@ -738,12 +758,28 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                         screenshotPath: shot,
                     };
                 }
-                // already_logged_in → fall through to Gemini search/cart loop
+                // already_logged_in → deterministic exact-SKU add (Apollo), else Gemini search/cart loop
                 await notifyProgress(
                     input,
                     "searching",
-                    `*${partnerLabel(String(playbook.partner))}* signed in — finding your medicines…`,
+                    `*${partnerLabel(String(playbook.partner))}* signed in ✓ — adding your item to cart…`,
                 );
+                if (String(playbook.partner) === "apollo") {
+                    const det = await apolloExactSkuToConfirm({
+                        page,
+                        goal: input.goal,
+                        startUrl: input.startUrl,
+                        productUrl: input.productUrl,
+                        deliveryAddress: input.deliveryAddress,
+                        deadlineAt: taskStartedAt + browserTaskDeadlineMs(input) - 6_000,
+                        isCancelled: () => isTaskCancelled(input),
+                        progress: async (d) => notifyProgress(input, "searching", d),
+                    });
+                    if (det) {
+                        await this.persist(context, input, playbook.partner, page.url());
+                        return det;
+                    }
+                }
             } else if (pharmacyPartner && !input.otp && !input.userConfirmed && !input.loginPhone) {
                 console.warn(
                     "pharmacy browser task missing loginPhone — Gemini must find Login unaided",
@@ -923,8 +959,13 @@ class PlaywrightBrowserWorker implements BrowserWorker {
         partner: string;
         generation: number;
         goal: string;
+        /** Absolute epoch ms — loop stops ~8s before and returns an honest error. */
+        deadlineAt?: number;
+        /** Extra instruction for Gemini (e.g. "cart already has the SKU; select address"). */
+        extraHint?: string;
     }): Promise<{ result: BrowserTaskResult; retainBrowser: boolean }> {
         const { page, context, browser, input } = args;
+        const deadlineAt = args.deadlineAt ?? Date.now() + 80_000;
         const playbook = resolvePlaybook(
             input.partner || (args.partner as CommercePartnerKey),
             args.goal,
@@ -954,8 +995,11 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     },
                 };
             }
+            if (Date.now() > deadlineAt - 8_000) {
+                break;
+            }
             steps += 1;
-            const screenshot = await page.screenshot({ type: "png", fullPage: false });
+            const screenshot = await page.screenshot({ type: "png", fullPage: false, timeout: 10_000 });
             const url = page.url();
             const title = await page.title().catch(() => "");
             let accessibilityHint = "";
@@ -1004,7 +1048,9 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 goal: input.goal,
                 playbookHint: `${playbook.searchHint} ${playbook.otpHint} ${playbook.confirmHint}${
                     input.loginPhone ? ` login_phone=${input.loginPhone}` : ""
-                }. Already signed in — search SKU, add to cart, stop at confirm-before-pay. NEVER click Send OTP/Resend.`,
+                }. Already signed in — search SKU, add to cart, stop at confirm-before-pay. NEVER click Send OTP/Resend.${
+                    args.extraHint ? ` ${args.extraHint}` : ""
+                }`,
                 step: steps,
                 maxSteps,
                 otpProvided: true,
@@ -1012,12 +1058,21 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             });
             modelUsed = planned.modelUsed;
 
+            // Signed in: only guard Continue/Send-OTP clicks while an OTP box is actually on screen
+            // (post-login "Continue"/"Proceed" buttons on cart/checkout are legitimate).
+            const otpVisibleNow = await isOtpScreenVisible(page).catch(() => false);
             for (const action of planned.actions) {
                 const gated = await this.applyAction(page, action, {
                     userConfirmed,
                     goal: input.goal,
-                    blockPharmacyOtpSend: true,
+                    blockPharmacyOtpSend: otpVisibleNow,
                 });
+                if (gated.halt && gated.status === "need_otp" && !otpVisibleNow) {
+                    // Gemini hiccup / HTTP fallback says "paste OTP" but we're past login —
+                    // never re-ask for a code (and never go silent); keep going until deadline.
+                    console.warn("[pharmacy-login] post-OTP: ignoring bogus need_otp (no OTP field visible)");
+                    continue;
+                }
                 if (gated.halt) {
                     await this.persist(context, input, playbook.partner, page.url());
                     let msg = gated.message!;
@@ -1065,14 +1120,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             result: {
                 status: "error",
                 message:
-                    `Signed in to *${partnerLabel(args.partner)}* but couldn't finish finding the item in time. ` +
-                    `Reply *retry* or *cancel* — nothing was ordered.`,
+                    `Signed in to *${partnerLabel(args.partner)}* ✓ but couldn't finish the cart/confirm step in time. ` +
+                    `Reply *retry* (no new code needed if Apollo keeps you signed in) or *cancel* — nothing was ordered.`,
                 steps,
                 url: page.url(),
                 modelUsed,
                 mode: "playwright",
                 partner: args.partner,
-                failureReason: "site_slow",
+                failureReason: "post_otp_timeout",
             },
         };
     }
@@ -1406,14 +1461,98 @@ export async function runBrowserTask(input: RunBrowserTaskInput): Promise<Browse
 
 
 
-/** Inject WA-pasted OTP into a parked live Playwright page, then continue search/cart. */
+/** Hard budget for everything after the OTP paste (WA must hear back within ~90s). */
+export const POST_OTP_BUDGET_MS = Math.min(
+    Math.max(Number(process.env.BROWSER_POST_OTP_BUDGET_MS) || 85_000, 45_000),
+    110_000,
+);
+
+function logPostOtp(event: string, extra?: Record<string, unknown>): void {
+    try {
+        console.log(`[pharmacy-login] post-OTP ${event} ${extra ? JSON.stringify(extra) : ""}`.trim());
+    } catch {
+        /* ignore */
+    }
+}
+
+/**
+ * Apollo exact-SKU: product page → stock check at pincode → Add 1 → cart → confirm card.
+ * Returns null when the deterministic path couldn't add (caller falls back to Gemini).
+ */
+export async function apolloExactSkuToConfirm(args: {
+    page: import("playwright").Page;
+    goal: string;
+    startUrl?: string;
+    productUrl?: string;
+    deliveryAddress?: string;
+    deadlineAt: number;
+    isCancelled?: () => boolean;
+    progress?: (detail: string) => Promise<void>;
+}): Promise<BrowserTaskResult | null> {
+    const sku = parseExactSkuFromGoal(args.goal, args.productUrl || args.startUrl);
+    if (!sku?.productUrl) {
+        logPostOtp("no_exact_sku", { hasProductUrl: Boolean(args.productUrl || args.startUrl), goal: args.goal.slice(0, 80) });
+        return null;
+    }
+    const addressLabel =
+        args.deliveryAddress?.trim() || args.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
+    const pincode = extractPincode(addressLabel);
+    const label = partnerLabel("apollo");
+    const added = await addExactSkuToApolloCart(args.page, sku, { deadlineAt: args.deadlineAt, pincode });
+    logPostOtp("add_to_cart", { status: added.status, detail: added.detail });
+    if (args.isCancelled?.()) {
+        return { status: "cancelled", mode: "playwright", partner: "apollo", steps: 2, message: "Cancelled." };
+    }
+    if (added.status === "out_of_stock") {
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: "apollo",
+            steps: 2,
+            url: args.page.url(),
+            failureReason: "out_of_stock",
+            message:
+                `Signed in to *${label}* ✓ — but *${sku.name}* is ${added.detail}` +
+                `${pincode && !/pincode/.test(added.detail) ? ` (delivery ${pincode})` : ""}. Nothing was added or ordered.`,
+        };
+    }
+    if (added.status !== "added") return null;
+    await args.progress?.(`added ✓ — checking the cart total & delivery address…`);
+    const cart = await readApolloCart(args.page, sku, { deadlineAt: args.deadlineAt, pincode });
+    logPostOtp("cart", {
+        itemSeen: cart?.itemSeen,
+        total: cart?.totalLabel,
+        addrPin: cart?.addressMatchesPincode,
+        cod: cart?.codMentioned,
+    });
+    const card = formatApolloConfirmCard({ sku, cart, addressLabel });
+    return {
+        status: "need_user_confirm",
+        mode: "playwright",
+        partner: "apollo",
+        steps: 3,
+        url: args.page.url(),
+        message: card.message,
+        confirm: { items: card.items, totalLabel: card.totalLabel, addressLabel: card.addressLabel },
+    };
+}
+
+/**
+ * Inject WA-pasted OTP into a parked live Playwright page, make sure Apollo accepted it,
+ * then (same page) add the exact SKU → read cart → need_user_confirm.
+ * ALWAYS resolves within POST_OTP_BUDGET_MS with an honest result (never hangs / never silent).
+ */
 export async function submitParkedBrowserOtp(input: {
     familyId: string;
     userId: string;
     otp: string;
+    /** WA progress lines (e.g. "signed in ✓ — adding … to cart…"). */
+    onProgress?: (detail: string) => void | Promise<void>;
+    budgetMs?: number;
 }): Promise<BrowserTaskResult | null> {
     const parked = takeParkedBrowserOtpSession(input.familyId, input.userId);
     if (!parked || parked.aborted) {
+        logPostOtp("no_parked_session", { aborted: parked?.aborted ?? null });
         if (parked) await closeTakenPark(parked);
         return null;
     }
@@ -1421,97 +1560,89 @@ export async function submitParkedBrowserOtp(input: {
         parked.generation != null &&
         !isBrowserGenerationCurrent(input.familyId, input.userId, parked.generation)
     ) {
+        logPostOtp("stale_generation", { parkedGen: parked.generation });
         await closeTakenPark(parked);
         return null;
     }
-    let retain = false;
-    try {
+    const startedAt = Date.now();
+    const budgetMs = input.budgetMs ?? POST_OTP_BUDGET_MS;
+    const deadlineAt = startedAt + budgetMs;
+    const state = { retain: false, timedOut: false };
+    const cancelled = () =>
+        parked.generation != null &&
+        !isBrowserGenerationCurrent(input.familyId, input.userId, parked.generation);
+    const progress = async (detail: string) => {
+        if (state.timedOut || cancelled()) return;
+        try {
+            await input.onProgress?.(detail);
+        } catch {
+            /* ignore */
+        }
+    };
+    const repark = () => {
+        if (state.timedOut) return;
+        parkBrowserForOtp({
+            familyId: parked.familyId,
+            userId: parked.userId,
+            partner: parked.partner,
+            goal: parked.goal,
+            generation: parked.generation,
+            browser: parked.browser,
+            context: parked.context,
+            page: parked.page,
+            taskInput: parked.input,
+        });
+        state.retain = true;
+    };
+    const label = partnerLabel(parked.partner);
+    logPostOtp("start", { partner: parked.partner, gen: parked.generation, url: parked.page.url(), budgetMs });
+
+    const work = async (): Promise<BrowserTaskResult> => {
         const filled = await fillOtpOnPage(parked.page, input.otp.trim());
+        logPostOtp("filled", { filled: filled.filled, reason: filled.reason });
         if (!filled.filled) {
-            parkBrowserForOtp({
-                familyId: parked.familyId,
-                userId: parked.userId,
-                partner: parked.partner,
-                goal: parked.goal,
-                generation: parked.generation,
-                browser: parked.browser,
-                context: parked.context,
-                page: parked.page,
-                taskInput: parked.input,
-            });
-            retain = true;
+            repark();
             return {
                 status: "need_otp",
                 mode: "playwright",
                 partner: parked.partner,
                 steps: 1,
                 message:
-                    `Couldn't find the OTP box on the open *${partnerLabel(parked.partner)}* page. ` +
-                    `Paste the code again, or reply *retry* / *cancel*.`,
+                    `Couldn't find the code box on the open *${label}* page — please paste the code again, or reply *retry* / *cancel*.`,
             };
         }
 
-        // Wait for Apollo to accept OTP before saving cookies / searching
-        const settleUntil = Date.now() + 12_000;
-        while (Date.now() < settleUntil) {
-            if (
-                parked.generation != null &&
-                !isBrowserGenerationCurrent(input.familyId, input.userId, parked.generation)
-            ) {
-                return {
-                    status: "cancelled",
-                    mode: "playwright",
-                    partner: parked.partner,
-                    steps: 1,
-                    message: "Cancelled.",
-                };
-            }
-            const stillOtp = await parked.page
-                .locator(
-                    'input[name^="digit"], input[id^="digit"], input[autocomplete="one-time-code"]',
-                )
-                .first()
-                .isVisible()
-                .catch(() => false);
-            if (!stillOtp) break;
-            const blob = await parked.page
-                .evaluate(() => (document.body?.innerText || "").slice(0, 2000).toLowerCase())
-                .catch(() => "");
-            if (/invalid|incorrect|wrong\s*otp|expired/i.test(blob)) {
-                parkBrowserForOtp({
-                    familyId: parked.familyId,
-                    userId: parked.userId,
-                    partner: parked.partner,
-                    goal: parked.goal,
-                    generation: parked.generation,
-                    browser: parked.browser,
-                    context: parked.context,
-                    page: parked.page,
-                    taskInput: parked.input,
-                });
-                retain = true;
-                return {
-                    status: "need_otp",
-                    mode: "playwright",
-                    partner: parked.partner,
-                    steps: 1,
-                    message:
-                        `That code wasn't accepted by *${partnerLabel(parked.partner)}*. ` +
-                        `Paste a fresh SMS OTP, or reply *retry* / *cancel*.`,
-                };
-            }
-            if (/log\s*out|sign\s*out|hello,\s*[a-z]/i.test(blob) && !/enter\s*otp/i.test(blob)) {
-                break;
-            }
-            await parked.page.waitForTimeout(500);
+        const acceptance = await waitForOtpAccepted(parked.page, {
+            deadlineAt,
+            maxWaitMs: 18_000,
+            isCancelled: cancelled,
+        });
+        logPostOtp("acceptance", { status: acceptance.status, clicked: acceptance.clicked, url: parked.page.url() });
+        if (cancelled()) {
+            return { status: "cancelled", mode: "playwright", partner: parked.partner, steps: 1, message: "Cancelled." };
+        }
+        if (acceptance.status === "invalid" || acceptance.status === "still_otp") {
+            repark();
+            return {
+                status: "need_otp",
+                mode: "playwright",
+                partner: parked.partner,
+                steps: 1,
+                failureReason: "otp_rejected",
+                message:
+                    acceptance.status === "invalid"
+                        ? `*${label}* said that code is wrong or expired — please paste the newest SMS code, or reply *retry* / *cancel*.`
+                        : `I entered the code${acceptance.clicked.length ? ` and tapped *${acceptance.clicked[0]}*` : ""}, but *${label}* is still showing the code screen (code may have expired). ` +
+                          `Please paste the newest SMS code here, or reply *retry* / *cancel*.`,
+            };
         }
 
         try {
-            const state = await parked.context.storageState();
+            const st = await parked.context.storageState();
             await saveBrowserProfileState({
                 familyId: input.familyId,
                 userId: input.userId,
-                storageStateJson: JSON.stringify(state),
+                storageStateJson: JSON.stringify(st),
                 lastPartner: parked.partner,
                 lastUrl: parked.page.url(),
             });
@@ -1519,7 +1650,13 @@ export async function submitParkedBrowserOtp(input: {
             /* ignore */
         }
 
-        // Continue search → cart → confirm on the SAME live page (do not close early)
+        const sku = parseExactSkuFromGoal(parked.goal, parked.input.productUrl || parked.input.startUrl);
+        const addressLabel =
+            parked.input.deliveryAddress?.trim() || parked.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
+        const pincode = extractPincode(addressLabel);
+        const shortName = sku ? sku.name.replace(/\s*\(.*?\)\s*/g, " ").trim().slice(0, 60) : "your item";
+        await progress(`signed in ✓ — adding ${shortName} to cart…`);
+
         const taskInput: RunBrowserTaskInput = {
             ...parked.input,
             otp: input.otp.trim(),
@@ -1530,6 +1667,23 @@ export async function submitParkedBrowserOtp(input: {
             browserGeneration: parked.generation,
         };
         const worker = new PlaywrightBrowserWorker();
+
+        // Deterministic Apollo path: exact product page → Add → cart → confirm card
+        if (parked.partner === "apollo") {
+            const det = await apolloExactSkuToConfirm({
+                page: parked.page,
+                goal: parked.goal,
+                startUrl: parked.input.startUrl,
+                productUrl: parked.input.productUrl,
+                deliveryAddress: parked.input.deliveryAddress,
+                deadlineAt,
+                isCancelled: cancelled,
+                progress,
+            });
+            if (det) return det;
+            await progress(`still working — finding *${shortName}* on ${label}…`);
+        }
+
         const continued = await worker.continueParkedAfterOtp({
             browser: parked.browser,
             context: parked.context,
@@ -1538,23 +1692,52 @@ export async function submitParkedBrowserOtp(input: {
             partner: parked.partner,
             generation: parked.generation,
             goal: parked.goal,
+            deadlineAt,
+            extraHint: sku
+                ? `Exact SKU: "${sku.name}"${sku.productUrl ? ` (product page ${sku.productUrl})` : ""}. Add quantity 1 only; select delivery address${pincode ? ` with pincode ${pincode}` : ""}; prefer COD; then emit need_user_confirm with real item, total and address.`
+                : undefined,
         });
-        if (continued.retainBrowser) {
-            retain = true;
-        }
+        if (continued.retainBrowser) state.retain = true;
+        logPostOtp("gemini_done", { status: continued.result.status, steps: continued.result.steps });
         return continued.result;
+    };
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const timeout = new Promise<BrowserTaskResult>((resolve) => {
+            timer = setTimeout(() => {
+                state.timedOut = true;
+                logPostOtp("timeout", { budgetMs, url: (() => { try { return parked.page.url(); } catch { return ""; } })() });
+                resolve({
+                    status: "error",
+                    mode: "playwright",
+                    partner: parked.partner,
+                    steps: 0,
+                    failureReason: "post_otp_timeout",
+                    message:
+                        `I entered your code on *${label}*, but the cart step didn't finish within ${Math.round(budgetMs / 1000)}s. ` +
+                        `Nothing was ordered or paid.`,
+                });
+            }, budgetMs);
+        });
+        const result = await Promise.race([work(), timeout]);
+        logPostOtp("result", { status: result.status, reason: result.failureReason, ms: Date.now() - startedAt });
+        return result;
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        logPostOtp("error", { msg: msg.slice(0, 200) });
         return {
             status: "error",
             mode: "playwright",
             partner: parked.partner,
             steps: 0,
             failureReason: /closed|Target/i.test(msg) ? "chromium_crash" : "unknown",
-            message: `OTP submit failed: ${msg.slice(0, 160)}. Reply *retry* or *cancel*.`,
+            message: `Something broke after I entered your code on *${label}* (${msg.slice(0, 120)}). Nothing was ordered or paid.`,
         };
     } finally {
-        if (!retain && !hasParkedBrowserOtpSession(input.familyId, input.userId)) {
+        if (timer) clearTimeout(timer);
+        if (state.timedOut || (!state.retain && !hasParkedBrowserOtpSession(input.familyId, input.userId))) {
+            // Closing Chromium also unblocks any still-running page op in work()
             await closeTakenPark(parked);
         }
     }

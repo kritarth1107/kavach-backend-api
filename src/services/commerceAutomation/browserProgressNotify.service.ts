@@ -65,6 +65,20 @@ export function formatPharmacyBrowserFollowUp(
             reason === "captcha" ||
             /captcha|bot check|access denied|bot wall/i.test(base) ||
             (/blocked the browser/i.test(base) && reason !== "no_login_button");
+        if (reason === "out_of_stock" || reason === "post_otp_timeout") {
+            return {
+                text: [
+                    base.slice(0, 300),
+                    ``,
+                    reason === "out_of_stock"
+                        ? `Send another medicine name to search again, or *cancel*.`
+                        : `Nothing was ordered or paid. Reply *retry* (Apollo should keep you signed in — no new code) or *cancel*.`,
+                ].join("\n"),
+                clearSession: false,
+                // Signed in already — digits must NOT be treated as a new OTP.
+                phase: "running",
+            };
+        }
         const tip =
             reason === "captcha" || blocked
                 ? `${label} looks blocked (CAPTCHA / bot wall).`

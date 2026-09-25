@@ -21,6 +21,8 @@ export type GuestCatalogHit = SearchHit & {
     packLabel?: string;
     productUrl?: string;
     mrpPaise?: number;
+    /** Live stock at the delivery pincode when the partner reports it. */
+    inStock?: boolean;
     source: "apollo_public" | "pharmeasy_public" | "mcp" | "none";
 };
 
@@ -57,6 +59,22 @@ function formatInr(paise?: number): string {
     return Number.isInteger(rupees) ? `₹${rupees}` : `₹${rupees.toFixed(2)}`;
 }
 
+/** "vitamin c", "vit c", typo "bitamic c", "vitamin-c", "ascorbic". */
+export function isVitaminCQuery(query: string): boolean {
+    return /\b[bv]i?t[a-z]{0,6}\s*-?\s*c\b|\bascorbic\b|\bvito-?c\b/i.test(query);
+}
+
+/** Query for "similar in-stock items" when the exact SKU is unavailable. */
+export function alternativeQueryForSku(name: string): string {
+    const n = (name || "").toLowerCase();
+    if (isVitaminCQuery(n) || /\b(limcee|celin|sukcee|lemonsec)\b/.test(n)) return "vitamin c";
+    const first = n.replace(/\(.*?\)/g, " ").replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).filter((t) => t.length >= 3)[0];
+    return first || n.slice(0, 40);
+}
+
+const NON_ORAL_RE = /\b(injection|inj|ampoule|vial|infusion|iv)\b/i;
+const TOPICAL_RE = /\b(cream|serum|gel|face\s*wash|lotion|toner|sunscreen|mask)\b/i;
+
 /** Prefer names that contain query tokens (e.g. vitamin+c → Limcee Vit C, not Evion Vit E). */
 function rankGuestHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[] {
     const tokens = query
@@ -70,8 +88,16 @@ function rankGuestHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[
         for (const tok of tokens) {
             if (n.includes(tok)) s += tok.length >= 3 ? 3 : 1;
         }
+        const hit = hits.find((h) => h.name === name);
+        const wantsInjection = NON_ORAL_RE.test(query) || /\brx\b/i.test(query);
+        // Rx injections / vials never outrank OTC oral SKUs unless explicitly asked for
+        if (!wantsInjection && (hit?.requiresRx || NON_ORAL_RE.test(n))) s -= 60;
+        // Out of stock at the delivery pincode → bottom
+        if (hit?.inStock === false) s -= 100;
         // Boost classic OTC Vit C brands / SKUs (Limcee name has no "vitamin" token)
-        if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+        if (isVitaminCQuery(query)) {
+            if (!TOPICAL_RE.test(query) && TOPICAL_RE.test(n)) s -= 12;
+            if (/\b(tablet|chewable|capsule|effervescent)\b/i.test(n)) s += 3;
             if (/\blimcee\b/i.test(n) && !/zinc/i.test(n)) s += 20;
             else if (/\bcelin\b|\bsukcee\b|\blimcee\b/i.test(n)) s += 14;
             if (/vitamin[-\s]*c|ascorbic/i.test(n) && /500/i.test(n) && /tablet|chewable/i.test(n)) s += 6;
@@ -160,7 +186,7 @@ async function mintApolloPublicToken(): Promise<string | null> {
     return token;
 }
 
-async function searchApolloPublic(query: string): Promise<GuestCatalogHit[]> {
+async function searchApolloPublic(query: string, pincode = ""): Promise<GuestCatalogHit[]> {
     const token = await mintApolloPublicToken();
     if (!token) return [];
     const { ok, json } = await fetchJson(APOLLO_SEARCH, {
@@ -183,7 +209,7 @@ async function searchApolloPublic(query: string): Promise<GuestCatalogHit[]> {
             productsPerPage: 16,
             selSortBy: "relevance",
             filters: [],
-            pincode: "",
+            pincode: pincode || "",
         }),
     });
     if (!ok || !json) return [];
@@ -210,10 +236,14 @@ async function searchApolloPublic(query: string): Promise<GuestCatalogHit[]> {
             mrpPaise: rupeesToPaise(p.price) ?? rupeesToPaise(p.mrp),
             requiresRx: Number(p.isPrescriptionRequired) === 1,
             packLabel,
+            inStock:
+                pincode && typeof p.status === "string"
+                    ? !/out[-\s]*of[-\s]*stock|unavailable/i.test(String(p.status))
+                    : undefined,
             productUrl: urlKey ? `https://www.apollopharmacy.in/otc/${urlKey}` : undefined,
             source: "apollo_public",
         });
-        if (hits.length >= 8) break;
+        if (hits.length >= 12) break;
     }
     return hits;
 }
@@ -300,6 +330,8 @@ export async function searchGuestCatalog(input: {
     query: string;
     familyId?: string;
     userId?: string;
+    /** Delivery pincode — Apollo reports per-pincode stock; OOS SKUs are dropped. */
+    pincode?: string;
 }): Promise<GuestCatalogSearchResult> {
     const partner = String(input.partner || "").toLowerCase() as CommercePartnerKey;
     const query = input.query.trim().slice(0, 120);
@@ -315,16 +347,20 @@ export async function searchGuestCatalog(input: {
 
     try {
         if (partner === "apollo") {
-            let raw = await searchApolloPublic(query);
-            if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
-                const brandHits = await searchApolloPublic("limcee");
+            const pin = /^[1-9]\d{5}$/.test(String(input.pincode || "")) ? String(input.pincode) : "";
+            let raw = await searchApolloPublic(query, pin);
+            if (isVitaminCQuery(query)) {
+                const brandHits = await searchApolloPublic("limcee", pin);
                 raw = dedupeHits([...raw, ...brandHits]);
             }
+            // Drop SKUs Apollo says are out of stock at this pincode (keep all if that empties the list)
+            const stocked = raw.filter((h) => h.inStock !== false);
+            if (stocked.length) raw = stocked;
             const hits = filterWeakHits(
                 query,
                 rankGuestHits(query, raw).filter((h) => {
                     // Never offer Vitamin E / Evion for a Vit C ask
-                    if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+                    if (isVitaminCQuery(query)) {
                         const n = h.name.toLowerCase();
                         if (/\bevion\b|vitamin\s*e\b/.test(n) && !/vitamin\s*c|ascorbic|limcee|celin/.test(n)) {
                             return false;
@@ -347,7 +383,7 @@ export async function searchGuestCatalog(input: {
         if (partner === "pharmeasy") {
             let raw = await searchPharmeasyPublic(query);
             // Vit C often returns Iron/Amla multi-vits on PE — also pull Limcee/Celin brand hits.
-            if (/vitamin\s*c|vit\s*c|ascorbic/i.test(query)) {
+            if (isVitaminCQuery(query)) {
                 const brandHits = await searchPharmeasyPublic("limcee");
                 raw = dedupeHits([...raw, ...brandHits]);
             }
