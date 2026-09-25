@@ -544,7 +544,7 @@ async function elderReplyWithAi(
         const ctx = await ensureAiContext(familyId, recipientUserId, displayName);
         const companion = await getCompanionProfile(familyId, recipientUserId);
         const lang = (companion.preferredLanguage ?? "english") as SaheliLanguage;
-        const result = await aiPostElderChatWithRetry({
+        const elderChatPayload = {
             aiFamilyId: ctx.aiFamilyId,
             aiElderId: ctx.aiElderId,
             message,
@@ -562,10 +562,34 @@ async function elderReplyWithAi(
             actorUserId: recipientUserId,
             kavachFamilyId: familyId,
             kavachRecipientUserId: recipientUserId,
-        });
+        };
+        let staleConversationRecovered = false;
+        let result: Awaited<ReturnType<typeof aiPostElderChatWithRetry>>;
+        try {
+            result = await aiPostElderChatWithRetry(elderChatPayload);
+        } catch (chatErr) {
+            // Stored conversation id no longer exists in the AI engine for this family
+            // (re-tenant / DB reset) → every WA turn 404'd into warm-neutral fallback.
+            // Fall back to the elder's primary conversation and persist the fresh id.
+            const staleConversation =
+                chatErr instanceof AppError &&
+                chatErr.statusCode === 404 &&
+                /conversation not found/i.test(chatErr.message);
+            if (!staleConversation || !elderChatPayload.conversationId) throw chatErr;
+            console.warn(
+                `Saheli elder chat: stale AI conversation id for recipient ${recipientUserId.slice(0, 8)}… — retrying on primary conversation`,
+            );
+            result = await aiPostElderChatWithRetry({
+                ...elderChatPayload,
+                conversationId: undefined,
+            });
+            staleConversationRecovered = true;
+        }
         const conversationId =
-            result.conversation_id || conversationIdOverride || `${familyId}:${recipientUserId}:elder`;
-        if (result.conversation_id && !conversationIdOverride) {
+            result.conversation_id ||
+            (staleConversationRecovered ? undefined : conversationIdOverride) ||
+            `${familyId}:${recipientUserId}:elder`;
+        if (result.conversation_id && (!conversationIdOverride || staleConversationRecovered)) {
             await persistConversationId(familyId, recipientUserId, result.conversation_id);
         }
         const rawReply = result.reply.trim() || "I'm here. Tell me more when you're ready.";
