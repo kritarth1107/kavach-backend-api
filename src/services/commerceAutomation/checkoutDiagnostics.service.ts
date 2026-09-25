@@ -45,7 +45,7 @@ function redactUrl(u: string): string {
 
 export async function captureCheckoutDiagnostic(
     page: Page | undefined | null,
-    meta: { familyId?: string; userId?: string; flow: CheckoutDiagnostic["flow"]; stage: string; reason: string },
+    meta: { familyId?: string; userId?: string; recipientUserId?: string; flow: CheckoutDiagnostic["flow"]; stage: string; reason: string },
 ): Promise<CheckoutDiagnostic | null> {
     if (!page) return null;
     try {
@@ -117,6 +117,28 @@ export async function captureCheckoutDiagnostic(
         /* ignore */
     }
     if (meta.familyId && meta.userId) last.set(browserSessionKey(meta.familyId, meta.userId), diag);
+    if (meta.familyId && meta.userId) {
+        // Caregiver dashboard (activity feed) — never WhatsApp. Small screenshots only.
+        void import("../activityLog.service").then(({ logActivity }) =>
+            logActivity({
+                familyId: meta.familyId,
+                recipientUserId: meta.recipientUserId || meta.userId,
+                actorUserId: meta.userId,
+                kind: "diag",
+                severity: "warn",
+                title: `Browser diagnostic: ${diag.flow}/${diag.stage}`,
+                detail: `${diag.reason}\n${diag.title}\n${diag.text.slice(0, 1500)}`,
+                data: {
+                    stage: diag.stage,
+                    url: diag.url,
+                    screenshotDataUrl:
+                        diag.screenshotJpegBase64 && (diag.screenshotBytes ?? 0) <= 200_000
+                            ? `data:image/jpeg;base64,${diag.screenshotJpegBase64}`
+                            : undefined,
+                },
+            }),
+        );
+    }
     return diag;
 }
 

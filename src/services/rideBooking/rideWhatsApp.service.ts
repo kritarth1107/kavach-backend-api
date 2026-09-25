@@ -178,6 +178,21 @@ async function maybeNotifyCaregivers(input: {
 }): Promise<void> {
     if (input.actorRole !== FamilyRole.CARE_RECIPIENT) return;
     if (input.draft.phase !== "done") return;
+    void import("../activityLog.service").then(({ logActivity }) =>
+        logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "ride",
+            title: `${providerLabel(input.draft.provider)} ride booked`,
+            detail: `${input.draft.pickup?.shortLabel || "pickup"} → ${input.draft.drop?.shortLabel || "drop"}`,
+            data: {
+                provider: input.draft.provider || null,
+                from: input.draft.pickup?.shortLabel || null,
+                to: input.draft.drop?.shortLabel || null,
+            },
+        }),
+    );
     const from = input.draft.pickup?.shortLabel || "pickup";
     const to = input.draft.drop?.shortLabel || "drop";
     void notifyCaregivers({

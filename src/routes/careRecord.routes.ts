@@ -22,7 +22,26 @@ import {
     patchPartnerOrderSettingsHandler,
 } from "../controllers/integrationPartner.controller";
 
+import {
+    getActivityHandler,
+    getDailySnapshotHandler,
+    listDailySnapshotsHandler,
+    postDailySnapshotHandler,
+} from "../controllers/activity.controller";
+
 const router = Router();
+
+// Express 4: forward async errors (AppError 403/404/429) to the error middleware.
+const wrap =
+    (fn: (req: import("express").Request, res: import("express").Response) => Promise<void>) =>
+    (req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) =>
+        fn(req, res).catch(next);
+
+// Caregiver activity feed + daily snapshot (docs/activity-api-contract.md)
+router.get("/:familyId/subjects/:subjectUserId/activity", protect, wrap(getActivityHandler));
+router.get("/:familyId/subjects/:subjectUserId/daily-snapshot", protect, wrap(getDailySnapshotHandler));
+router.post("/:familyId/subjects/:subjectUserId/daily-snapshot", protect, wrap(postDailySnapshotHandler));
+router.get("/:familyId/subjects/:subjectUserId/daily-snapshots", protect, wrap(listDailySnapshotsHandler));
 
 router.get("/:familyId/subjects/:subjectUserId/care-record/events", protect, getCareRecordEventsHandler);
 router.get("/:familyId/subjects/:subjectUserId/care-record/timeline", protect, getCareRecordTimelineHandler);

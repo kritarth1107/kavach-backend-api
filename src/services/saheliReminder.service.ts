@@ -216,6 +216,17 @@ export async function createSaheliReminder(input: {
         status: "active" as SaheliReminderStatus,
         createdBy: input.actorUserId,
     });
+    void import("./activityLog.service").then(({ logActivity }) =>
+        logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "reminder",
+            title: "Reminder created",
+            detail: text,
+            data: { reminderId: doc.reminderId, status: "created", times: doc.times },
+        }),
+    );
 
     return { ok: true, reminder: serialize(doc) };
 }
@@ -412,6 +423,17 @@ async function fireReminderMessage(input: {
         terminal: delivery.reason === "invalid_recipient",
         reason: delivery.delivered ? undefined : delivery.reason ?? "send_failed",
     });
+    void import("./activityLog.service").then(({ logActivity }) =>
+        logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            kind: "reminder",
+            title: delivery.delivered ? "Reminder sent" : "Reminder not delivered",
+            detail: text,
+            severity: delivery.delivered ? "info" : "warn",
+            data: { reminderId: input.reminder.reminderId, status: delivery.delivered ? "fired" : "failed" },
+        }),
+    );
 
     if (delivery.delivered) {
         await SaheliReminder.updateOne(

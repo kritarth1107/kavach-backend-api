@@ -19,6 +19,8 @@ async function runTick() {
                 `Saheli reminder tick: sent=${reminders.sent} scanned=${reminders.scanned}`,
             );
         }
+        const { runDailySnapshotTick } = await import("../services/dailySnapshot.service");
+        void runDailySnapshotTick().catch((e) => console.warn("daily snapshot tick failed:", e));
     } catch (err) {
         console.warn("Care nudge tick failed:", err);
     } finally {
