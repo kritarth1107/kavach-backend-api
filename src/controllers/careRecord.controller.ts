@@ -273,6 +273,7 @@ export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
     }
 
     const { probeMetaWhatsAppCredentials } = await import("../clients/metaWhatsApp.client");
+    const { getTtsDebugSnapshot } = await import("../channels/voicePipeline");
 
     const limit = Math.min(Number(req.query.limit) || 50, 100);
     const snapshot = getWhatsAppWebhookDebugSnapshot();
@@ -286,6 +287,7 @@ export async function getWhatsAppMetaWebhookDebug(req: Request, res: Response) {
             realEventCount: realEvents.length,
             latestRealEventAt: realEvents[0]?.receivedAt ?? null,
             credentialProbe: await probeMetaWhatsAppCredentials(),
+            tts: getTtsDebugSnapshot(),
             events,
         },
     });

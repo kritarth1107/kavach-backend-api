@@ -220,6 +220,40 @@ export async function speechToText(input: SttInput): Promise<string> {
     return "";
 }
 
+/** Saheli default voice: "Anika – Natural Conversations" (Indian female, Hindi/Hinglish). */
+export const DEFAULT_ELEVENLABS_VOICE_ID = "A5W9pR9OjIbu80J0WuDW";
+export const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
+
+function envNumber(name: string, fallback: number): number {
+    const raw = process.env[name]?.trim();
+    if (!raw) return fallback;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+export function getTtsVoiceConfig() {
+    return {
+        voiceId: process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE_ID,
+        modelId: process.env.ELEVENLABS_MODEL_ID?.trim() || DEFAULT_ELEVENLABS_MODEL_ID,
+        voiceSettings: {
+            stability: envNumber("ELEVENLABS_STABILITY", 0.45),
+            similarity_boost: envNumber("ELEVENLABS_SIMILARITY", 0.75),
+            style: envNumber("ELEVENLABS_STYLE", 0.2),
+            use_speaker_boost: process.env.ELEVENLABS_SPEAKER_BOOST?.trim() !== "false",
+        },
+    };
+}
+
+let lastTts:
+    | { at: string; voiceId: string; modelId: string; ok: boolean; bytes?: number; status?: number }
+    | null = null;
+
+/** Non-secret TTS runtime snapshot (for /meta/debug). */
+export function getTtsDebugSnapshot() {
+    const cfg = getTtsVoiceConfig();
+    return { configured: Boolean(elevenLabsApiKey()), ...cfg, lastTts };
+}
+
 export async function textToSpeech(
     text: string,
 ): Promise<{ audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string }> {
@@ -232,8 +266,8 @@ export async function textToSpeech(
         return { text: trimmed };
     }
 
-    const voiceId = process.env.ELEVENLABS_VOICE_ID?.trim() || "JBFqnCBsd6RMkjVDRZzb";
-    const modelId = process.env.ELEVENLABS_MODEL_ID?.trim() || "eleven_multilingual_v2";
+    const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig();
+    const started = Date.now();
 
     try {
         const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
@@ -246,19 +280,23 @@ export async function textToSpeech(
             body: JSON.stringify({
                 text: trimmed.slice(0, 2500),
                 model_id: modelId,
-                voice_settings: {
-                    stability: 0.45,
-                    similarity_boost: 0.75,
-                },
+                voice_settings: voiceSettings,
             }),
         });
         if (!res.ok) {
             const body = await res.text().catch(() => "");
-            console.warn(`ElevenLabs TTS failed (${res.status}): ${body.slice(0, 200)}`);
+            lastTts = { at: new Date().toISOString(), voiceId, modelId, ok: false, status: res.status };
+            console.warn(
+                `ElevenLabs TTS failed (${res.status}) voice=${voiceId} model=${modelId}: ${body.slice(0, 200)}`,
+            );
             return { text: trimmed };
         }
         const ab = await res.arrayBuffer();
         const buffer = Buffer.from(ab);
+        lastTts = { at: new Date().toISOString(), voiceId, modelId, ok: true, bytes: buffer.length };
+        console.log(
+            `TTS: ElevenLabs ok voice=${voiceId} model=${modelId} bytes=${buffer.length} ms=${Date.now() - started}`,
+        );
         return {
             text: trimmed,
             audioBuffer: buffer,
