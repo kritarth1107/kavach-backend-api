@@ -346,6 +346,8 @@ export type CartSummary = {
     addressMatchesPincode: boolean;
     codMentioned: boolean;
     raw: string;
+    /** Real cart line items read from the page (for the exactly-one-item guard). */
+    cartLines?: CartSnapshot;
 };
 
 export function parseCartText(raw: string, sku: ExactSku, pincode?: string): CartSummary & { qty?: number } {
@@ -442,9 +444,16 @@ export async function readApolloCart(
         await sleep(page, 800);
         summary = parseCartText(await bodyText(page, 6000), sku, opts.pincode);
     }
+    const cartLines = await waitForCartSnapshot(page, Math.min(opts.deadlineAt - 4_000, Date.now() + 6_000));
+    summary.cartLines = cartLines;
+    const line = cartLines.lines.length === 1 ? cartLines.lines[0] : undefined;
+    if (line && cartLineMatchesSku(line.name, sku.name)) {
+        summary.itemSeen = true;
+        if (typeof line.qty === "number") summary.qty = line.qty;
+    }
     if (opts.pincode && !summary.addressMatchesPincode) {
         const picked = await trySelectAddressByPincode(page, opts.pincode, opts.deadlineAt);
-        if (picked) summary = parseCartText(await bodyText(page, 6000), sku, opts.pincode);
+        if (picked) summary = { ...parseCartText(await bodyText(page, 6000), sku, opts.pincode), cartLines, itemSeen: summary.itemSeen, qty: summary.qty };
     }
     return summary;
 }
@@ -454,6 +463,10 @@ export function formatApolloConfirmCard(input: {
     sku: ExactSku;
     cart: CartSummary | null;
     addressLabel?: string;
+    /** Other line items removed from the user's Apollo cart before adding this one. */
+    removedCount?: number;
+    /** True when the cart was verified to hold exactly this item at qty 1. */
+    cartVerifiedExact?: boolean;
 }): { message: string; items: string[]; totalLabel: string; addressLabel: string } {
     const price = formatPaise(input.sku.pricePaise);
     const qty = input.cart?.qty && input.cart.itemSeen ? input.cart.qty : input.sku.qty;
@@ -469,6 +482,8 @@ export function formatApolloConfirmCard(input: {
     const lines = [
         `*Confirm before pay — Apollo:*`,
         `• ${item}`,
+        input.cartVerifiedExact ? `Cart: only this item, qty ${qty} ✓` : "",
+        input.removedCount ? `_(Removed ${input.removedCount} other item${input.removedCount === 1 ? "" : "s"} that were already in your Apollo cart.)_` : "",
         ``,
         `Total: ${totalLabel}`,
         `Deliver to: ${addressLabel}${verifiedAddr === false ? " _(please double-check — Apollo's cart didn't show this pincode yet)_" : ""}`,
@@ -478,4 +493,245 @@ export function formatApolloConfirmCard(input: {
         `Reply *confirm* to place with COD, or *cancel*. Nothing is paid until you confirm.`,
     ].filter((l, i, arr) => l !== "" || (arr[i - 1] ?? "") !== "");
     return { message: lines.join("\n"), items: [item], totalLabel, addressLabel };
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Cart line items (Apollo /medicines-cart) — deterministic read / cleanup / guard
+ *
+ * Apollo renders each real cart line as `MedicineProductCard_root` with a title
+ * (`MedicineProductCard_title`), a "Qty N" chip (`MedicineProductCard_text`) and a
+ * dustbin (`MedicineProductCard_deleteIcon`). Tapping the dustbin makes the page
+ * itself call cart-service save-cart with quantity 0 (no confirm dialog). An empty
+ * cart shows "YOUR CART IS EMPTY". Recommendation rails ("LAST MINUTE BUYS") use
+ * other components and are never read as cart lines.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export const APOLLO_CART_URL = "https://www.apollopharmacy.in/medicines-cart";
+const CART_LINE_SEL = '[class*="MedicineProductCard_root"]';
+const CART_TITLE_SEL = '[class*="MedicineProductCard_title"]';
+const CART_QTY_SEL = '[class*="MedicineProductCard_text"], [class*="MedicineProductCard_optionHead"]';
+const CART_DELETE_SEL = '[class*="MedicineProductCard_deleteIcon"], [class*="dustbicIcon"], [class*="deleteIcon"]';
+
+export type CartLine = { name: string; qty?: number; qtyText?: string };
+export type CartSnapshot = {
+    /** loaded = line items rendered; empty = Apollo says the cart is empty; unknown = not (yet) readable. */
+    state: "loaded" | "empty" | "unknown";
+    lines: CartLine[];
+    /** "N ITEM(S) IN YOUR CART" header, when shown. */
+    headerCount?: number;
+};
+
+/** Pure: build a snapshot from what the page shows (unit-testable). */
+export function snapshotFromDom(input: {
+    lines: Array<{ name: string; qtyText?: string }>;
+    bodyText: string;
+}): CartSnapshot {
+    const lines: CartLine[] = input.lines
+        .map((l) => {
+            const name = (l.name || "").replace(/\s+/g, " ").trim();
+            const qtyText = (l.qtyText || "").replace(/\s+/g, " ").trim();
+            const m = qtyText.match(/\bqty\s*[:\-]?\s*(\d{1,3})\b/i) || qtyText.match(/^(\d{1,3})$/);
+            return { name, qtyText, qty: m ? Number(m[1]) : undefined };
+        })
+        .filter((l) => l.name);
+    const text = input.bodyText || "";
+    const hdr = text.match(/(\d{1,3})\s*items?\s*in\s*your\s*cart/i);
+    const headerCount = hdr ? Number(hdr[1]) : undefined;
+    const emptyText = /your\s*cart\s*is\s*empty|no\s*items\s*in\s*(your\s*)?cart|cart\s*is\s*empty/i.test(text);
+    let state: CartSnapshot["state"] = "unknown";
+    if (lines.length) state = "loaded";
+    else if (emptyText || headerCount === 0) state = "empty";
+    return { state, lines, headerCount };
+}
+
+export async function readCartLines(page: Page): Promise<CartSnapshot> {
+    const raw = await page
+        .evaluate(
+            ({ lineSel, titleSel, qtySel }) => {
+                const cards = Array.from(document.querySelectorAll(lineSel)).filter((c) => {
+                    const r = (c as HTMLElement).getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                });
+                return {
+                    lines: cards.map((c) => ({
+                        name: (c.querySelector(titleSel)?.textContent || "").trim(),
+                        qtyText: (c.querySelector(qtySel)?.textContent || "").trim(),
+                    })),
+                    bodyText: (document.body?.innerText || "").slice(0, 6000),
+                };
+            },
+            { lineSel: CART_LINE_SEL, titleSel: CART_TITLE_SEL, qtySel: CART_QTY_SEL },
+        )
+        .catch(() => ({ lines: [] as Array<{ name: string; qtyText?: string }>, bodyText: "" }));
+    return snapshotFromDom(raw);
+}
+
+/** Wait until the cart page shows either line items or an explicit empty state. */
+export async function waitForCartSnapshot(page: Page, untilAt: number): Promise<CartSnapshot> {
+    let snap = await readCartLines(page);
+    while (snap.state === "unknown" && Date.now() < untilAt) {
+        await sleep(page, 600);
+        snap = await readCartLines(page);
+    }
+    // Lines render progressively — give the list a beat to settle and re-read once.
+    if (snap.state === "loaded") {
+        await sleep(page, 700);
+        const again = await readCartLines(page);
+        if (again.state !== "unknown") snap = again;
+    }
+    return snap;
+}
+
+async function openCart(page: Page, deadlineAt: number): Promise<void> {
+    await page
+        .goto(APOLLO_CART_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: Math.max(2_000, Math.min(25_000, remaining(deadlineAt) - 5_000)),
+        })
+        .catch(() => undefined);
+}
+
+function normName(s: string): string[] {
+    return s
+        .toLowerCase()
+        .replace(/\(.*?\)/g, " ")
+        .replace(/&/g, " and ")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((t) => t.length >= 2 && !/^(and|the|with|of|for|pack|count|units?)$/.test(t));
+}
+
+/** Cart line title is the confirmed product (search name minus the "(pack label)" suffix). */
+export function cartLineMatchesSku(lineName: string, skuName: string): boolean {
+    const want = normName(skuName);
+    const have = new Set(normName(lineName));
+    if (!want.length || !have.size) return false;
+    const hit = want.filter((t) => have.has(t)).length;
+    const head = want.slice(0, 3).every((t) => have.has(t));
+    return head && hit / want.length >= 0.8;
+}
+
+export type ExactCartCheck = { ok: true; line: CartLine } | { ok: false; reason: string; lines: CartLine[] };
+
+/** Hard guard: the cart holds EXACTLY one line — the confirmed product at qty 1. */
+export function checkCartExactlySku(snap: CartSnapshot, skuName: string): ExactCartCheck {
+    if (snap.state === "unknown") return { ok: false, reason: "couldn't read the Apollo cart", lines: [] };
+    if (snap.state === "empty" || !snap.lines.length) return { ok: false, reason: "the Apollo cart is empty", lines: [] };
+    if (snap.lines.length !== 1) {
+        return { ok: false, reason: `the Apollo cart has ${snap.lines.length} items, expected only 1`, lines: snap.lines };
+    }
+    if (typeof snap.headerCount === "number" && snap.headerCount !== 1) {
+        return { ok: false, reason: `Apollo says ${snap.headerCount} items are in the cart, expected 1`, lines: snap.lines };
+    }
+    const line = snap.lines[0]!;
+    if (!cartLineMatchesSku(line.name, skuName)) {
+        return { ok: false, reason: `the cart item is "${line.name}", not the confirmed product`, lines: snap.lines };
+    }
+    if (line.qty !== 1) {
+        return {
+            ok: false,
+            reason: line.qty == null ? `couldn't read the quantity of "${line.name}"` : `quantity is ${line.qty}, expected 1`,
+            lines: snap.lines,
+        };
+    }
+    return { ok: true, line };
+}
+
+export function describeCartLines(lines: CartLine[], max = 4): string {
+    const shown = lines.slice(0, max).map((l) => `${l.name.slice(0, 60)}${l.qty ? ` ×${l.qty}` : ""}`);
+    return shown.join("; ") + (lines.length > max ? `; +${lines.length - max} more` : "");
+}
+
+export type CartCleanupOutcome =
+    | { status: "already_empty"; removed: 0; removedNames: []; ms: number }
+    | { status: "emptied"; removed: number; removedNames: string[]; ms: number }
+    | { status: "failed"; removed: number; removedNames: string[]; remaining: CartLine[]; detail: string; ms: number };
+
+/**
+ * Deterministically empty the signed-in Apollo cart BEFORE the target item is added:
+ * open /medicines-cart, tap Apollo's own dustbin on every real cart line, then reload
+ * the cart and require Apollo's explicit empty state. Code-only (never Gemini).
+ * Never touches payment / place order / anything outside the cart line cards.
+ */
+export async function emptyApolloCart(
+    page: Page,
+    opts: { deadlineAt: number; log?: (event: string, extra?: Record<string, unknown>) => void },
+): Promise<CartCleanupOutcome> {
+    const started = Date.now();
+    const log = opts.log ?? (() => undefined);
+    const removedNames: string[] = [];
+    const fail = (detail: string, remainingLines: CartLine[]): CartCleanupOutcome => ({
+        status: "failed",
+        removed: removedNames.length,
+        removedNames,
+        remaining: remainingLines,
+        detail,
+        ms: Date.now() - started,
+    });
+    if (remaining(opts.deadlineAt) < 20_000) return fail("not enough time to check the cart", []);
+
+    await openCart(page, opts.deadlineAt);
+    let snap = await waitForCartSnapshot(page, Math.min(opts.deadlineAt - 10_000, Date.now() + 15_000));
+    log("cart_initial", { state: snap.state, lines: snap.lines.length, header: snap.headerCount });
+    if (snap.state === "unknown") return fail("couldn't read the Apollo cart", []);
+    if (snap.state === "empty") return { status: "already_empty", removed: 0, removedNames: [], ms: Date.now() - started };
+
+    const initial = snap.lines.length;
+    const maxClicks = initial * 2 + 2;
+    const attemptsByName = new Map<string, number>();
+    for (let clicks = 0; snap.state === "loaded" && snap.lines.length && clicks < maxClicks; clicks++) {
+        if (remaining(opts.deadlineAt) < 12_000) return fail("ran out of time while clearing the cart", snap.lines);
+        const before = snap.lines.length;
+        const name = snap.lines[0]!.name;
+        const tries = (attemptsByName.get(name) ?? 0) + 1;
+        attemptsByName.set(name, tries);
+        if (tries > 2) return fail(`Apollo didn't remove "${name.slice(0, 60)}"`, snap.lines);
+        const del = page.locator(CART_LINE_SEL).first().locator(CART_DELETE_SEL).first();
+        if (!(await del.count().catch(() => 0))) return fail(`no remove control on "${name.slice(0, 60)}"`, snap.lines);
+        await del.scrollIntoViewIfNeeded({ timeout: 2_000 }).catch(() => undefined);
+        const clicked = await del
+            .click({ timeout: 4_000 })
+            .then(() => true)
+            .catch(() => false);
+        if (!clicked) {
+            // Icon-only control (CSS background) — fire the element's own click handler.
+            await del.evaluate((e) => (e as HTMLElement).click()).catch(() => undefined);
+        }
+        // Apollo removes straight away today; if a confirm sheet ever appears, accept only
+        // its own Remove/Yes button inside that dialog.
+        await sleep(page, 400);
+        const dialogBtn = page
+            .locator('[role="dialog"] button, [class*="odal" i] button, [class*="opup" i] button')
+            .filter({ hasText: /^\s*(remove|yes|yes,?\s*remove|delete|ok)\s*$/i })
+            .first();
+        if (await dialogBtn.isVisible().catch(() => false)) {
+            await dialogBtn.click({ timeout: 3_000 }).catch(() => undefined);
+        }
+        const settle = Math.min(opts.deadlineAt - 8_000, Date.now() + 8_000);
+        let next = await readCartLines(page);
+        while (Date.now() < settle && next.state === "loaded" && next.lines.length >= before) {
+            await sleep(page, 400);
+            next = await readCartLines(page);
+        }
+        if (next.state === "unknown") {
+            // Page re-rendering — wait for a definite state.
+            next = await waitForCartSnapshot(page, Math.min(opts.deadlineAt - 8_000, Date.now() + 6_000));
+        }
+        const now = next.state === "empty" ? 0 : next.lines.length;
+        if (now < before) removedNames.push(name);
+        log("cart_remove_click", { name: name.slice(0, 60), before, after: now, state: next.state });
+        snap = next;
+    }
+
+    // Verify from a fresh load of the cart (server state), not just the SPA's local list.
+    await openCart(page, opts.deadlineAt);
+    const verify = await waitForCartSnapshot(page, Math.min(opts.deadlineAt - 6_000, Date.now() + 15_000));
+    log("cart_verify", { state: verify.state, lines: verify.lines.length, header: verify.headerCount });
+    if (verify.state !== "empty") {
+        return fail(
+            verify.state === "unknown" ? "couldn't re-read the cart after removing items" : "items were still in the cart after removing",
+            verify.lines,
+        );
+    }
+    return { status: "emptied", removed: Math.max(removedNames.length, initial), removedNames, ms: Date.now() - started };
 }

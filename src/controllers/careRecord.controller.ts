@@ -211,6 +211,18 @@ export async function getChannelIdentitiesHandler(req: Request, res: Response) {
 }
 
 export async function postWhatsAppMockWebhook(req: Request, res: Response) {
+    const { buildWhatsAppMockPeek } = await import("../services/whatsappMockPeek.service");
+    // {"from":"91…","peek":true} → read-only: latest Saheli outbound messages (incl. the async
+    // confirm-before-pay card) + draft summary. Does NOT route any message.
+    if (req.body?.peek === true) {
+        const from = typeof req.body?.from === "string" ? req.body.from : "";
+        if (!from.replace(/\D/g, "")) {
+            res.status(400).json({ success: false, message: "from is required" });
+            return;
+        }
+        res.json({ success: true, data: { peek: await buildWhatsAppMockPeek(from) } });
+        return;
+    }
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     const mockMessageId =
         typeof req.body?.messageId === "string" ? req.body.messageId.trim() : "";
@@ -224,7 +236,9 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
         }
     }
     const reply = await handleWhatsAppInbound(req.body);
-    res.json({ success: true, data: { reply } });
+    const saheli =
+        typeof req.body?.from === "string" ? await buildWhatsAppMockPeek(req.body.from).catch(() => null) : null;
+    res.json({ success: true, data: { reply, saheli } });
 }
 
 export async function getWhatsAppMetaWebhook(req: Request, res: Response) {

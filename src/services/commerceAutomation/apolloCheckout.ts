@@ -17,6 +17,14 @@
  */
 import type { Page } from "playwright";
 import { planBrowserActions } from "./geminiComputerUse.service";
+import {
+    APOLLO_CART_URL,
+    checkCartExactlySku,
+    describeCartLines,
+    readCartLines,
+    waitForCartSnapshot,
+    type ExactCartCheck,
+} from "./apolloPostOtp";
 
 export type CheckoutStage =
     | "cart"
@@ -50,6 +58,8 @@ export type ApolloCheckoutOutcome =
           detail: string;
       }
     | { status: "address_unverified"; url: string; detail: string }
+    /** Cart/checkout doesn't hold exactly the confirmed product at qty 1 → nothing placed. */
+    | { status: "cart_mismatch"; url: string; detail: string }
     | { status: "order_failed"; url: string; detail: string }
     | { status: "rx_required"; url: string; detail: string }
     | { status: "cancelled"; url: string; detail: string }
@@ -63,6 +73,7 @@ export type ApolloCheckoutOptions = {
     addressHints?: string[];
     /** Numeric rupees from the card the user confirmed (payable must not exceed it). */
     confirmedTotalRupees?: number;
+    /** Confirmed product. When set, the cart must hold exactly this item ×1 before Proceed and before Place order. */
     skuName?: string;
     /** Stop right before clicking Place order (guest / test runs). */
     dryRun?: boolean;
@@ -82,6 +93,68 @@ export type ApolloCheckoutOptions = {
 const BASE = "https://www.apollopharmacy.in";
 const PAY_BLOCK_RE =
     /pay|place\s*order|upi|card|net\s*banking|netbanking|wallet|pay\s*later|simpl|lazypay|cash|\bcod\b|buy\s*now|log\s*out|logout|sign\s*out|remove|delete|clear\s*cart|add\s*new\s*address|circle|membership/i;
+
+/** Cart-removal controls Gemini must never touch (removal is deterministic code only, pre-add). */
+export const CART_REMOVE_BLOCK_RE =
+    /\b(remove|delete|dustbin|trash|clear\s*cart|empty\s*cart|decrease|decrement)\b|deleteicon|dustbi|trash|remove|minus/i;
+
+/**
+ * Describe what a Gemini click would hit: its own text/selector plus the target element's
+ * text, aria-label, and class names (icon-only buttons like Apollo's dustbin have no text).
+ */
+export async function describeClickTarget(
+    page: Page,
+    action: { selector?: string; x?: number; y?: number; text?: string; message?: string },
+): Promise<string> {
+    let out = `${action.text || ""} ${action.message || ""} ${action.selector || ""}`;
+    try {
+        if (action.selector) {
+            out +=
+                " " +
+                (await page
+                    .locator(action.selector)
+                    .first()
+                    .evaluate((start) => {
+                        const parts: string[] = [];
+                        let el: Element | null = start;
+                        for (let i = 0; el && i < 4; i++, el = el.parentElement) {
+                            const h = el as HTMLElement;
+                            const cls = typeof h.className === "string" ? h.className : "";
+                            // Own text only (ancestor text would be the whole card / page); classes for the chain.
+                            parts.push(`${i === 0 ? (h.innerText || "").slice(0, 80) : ""} ${h.getAttribute("aria-label") || ""} ${h.getAttribute("title") || ""} ${cls}`);
+                            if (h.id === "checkbox-cod" || /cod|payment|pay/i.test(cls)) parts.push("pay");
+                        }
+                        return parts.join(" ");
+                    })
+                    .catch(() => ""));
+        } else if (typeof action.x === "number" && typeof action.y === "number") {
+            const vp = page.viewportSize() || { width: 1280, height: 720 };
+            const cx = Math.round((action.x / 1000) * vp.width);
+            const cy = Math.round((action.y / 1000) * vp.height);
+            out +=
+                " " +
+                (await page
+                    .evaluate(
+                        ({ x, y }) => {
+                            const parts: string[] = [];
+                            let el: Element | null = document.elementFromPoint(x, y);
+                            for (let i = 0; el && i < 4; i++, el = el.parentElement) {
+                                const h = el as HTMLElement;
+                                const cls = typeof h.className === "string" ? h.className : "";
+                                parts.push(`${(h.innerText || "").slice(0, 80)} ${h.getAttribute("aria-label") || ""} ${h.getAttribute("title") || ""} ${cls}`);
+                                if (h.id === "checkbox-cod" || /cod|payment|pay/i.test(cls)) parts.push("pay");
+                            }
+                            return parts.join(" ");
+                        },
+                        { x: cx, y: cy },
+                    )
+                    .catch(() => "pay"));
+        }
+    } catch {
+        out += " pay";
+    }
+    return out;
+}
 
 function remaining(deadlineAt: number): number {
     return deadlineAt - Date.now();
@@ -449,37 +522,21 @@ async function geminiNavigateStep(
                 continue;
             }
             if (action.type !== "click") continue; // no typing / goto / press / done / confirm
-            let targetText = `${action.text || ""} ${action.message || ""}`;
-            if (action.selector) {
-                targetText += " " + ((await page.locator(action.selector).first().innerText({ timeout: 1000 }).catch(() => "")) || "");
-            } else if (typeof action.x === "number" && typeof action.y === "number") {
+            const targetText = await describeClickTarget(page, action);
+            if (PAY_BLOCK_RE.test(targetText) || CART_REMOVE_BLOCK_RE.test(targetText)) {
+                opts.log?.("gemini_click_blocked", { text: targetText.slice(0, 120) });
+                continue;
+            }
+            if (!action.selector && typeof action.x === "number" && typeof action.y === "number") {
                 const vp = page.viewportSize() || { width: 1280, height: 720 };
-                const cx = Math.round((action.x / 1000) * vp.width);
-                const cy = Math.round((action.y / 1000) * vp.height);
-                targetText += " " + (await page
-                    .evaluate(({ x, y }) => {
-                        let el = document.elementFromPoint(x, y) as HTMLElement | null;
-                        const parts: string[] = [];
-                        for (let i = 0; el && i < 4; i++, el = el.parentElement) {
-                            parts.push((el.innerText || el.getAttribute("aria-label") || "").slice(0, 120));
-                            if (el.id === "checkbox-cod" || /cod|payment|pay/i.test(el.className || "")) parts.push("pay");
-                        }
-                        return parts.join(" ");
-                    }, { x: cx, y: cy })
-                    .catch(() => "pay"));
-                if (PAY_BLOCK_RE.test(targetText)) {
-                    opts.log?.("gemini_click_blocked", { text: targetText.slice(0, 120) });
-                    continue;
-                }
-                await page.mouse.click(cx, cy).catch(() => undefined);
+                await page.mouse
+                    .click(Math.round((action.x / 1000) * vp.width), Math.round((action.y / 1000) * vp.height))
+                    .catch(() => undefined);
                 executed++;
                 await sleep(page, 1500);
                 continue;
             }
-            if (!action.selector || PAY_BLOCK_RE.test(targetText)) {
-                opts.log?.("gemini_click_blocked", { text: targetText.slice(0, 120) });
-                continue;
-            }
+            if (!action.selector) continue;
             await page.locator(action.selector).first().click({ timeout: 5000 }).catch(() => undefined);
             executed++;
             await sleep(page, 1500);
@@ -488,6 +545,34 @@ async function geminiNavigateStep(
         opts.log?.("gemini_error", { msg: err instanceof Error ? err.message.slice(0, 120) : String(err) });
     }
     return executed;
+}
+
+/**
+ * Re-read the cart from a fresh tab of the SAME signed-in context (the /pay page doesn't
+ * list line items). Read-only: opens /medicines-cart, reads the line cards, closes the tab.
+ */
+export async function verifyCartInFreshTab(
+    page: Page,
+    skuName: string,
+    deadlineAt: number,
+): Promise<ExactCartCheck & { read: boolean }> {
+    let tab: Page | null = null;
+    try {
+        tab = await page.context().newPage();
+        await tab
+            .goto(APOLLO_CART_URL, {
+                waitUntil: "domcontentloaded",
+                timeout: Math.max(2_000, Math.min(20_000, remaining(deadlineAt) - 6_000)),
+            })
+            .catch(() => undefined);
+        const snap = await waitForCartSnapshot(tab, Math.min(deadlineAt - 5_000, Date.now() + 14_000));
+        const chk = checkCartExactlySku(snap, skuName);
+        return { ...chk, read: snap.state !== "unknown" };
+    } catch (err) {
+        return { ok: false, reason: `couldn't open the cart (${err instanceof Error ? err.message.slice(0, 60) : "error"})`, lines: [], read: false };
+    } finally {
+        await tab?.close().catch(() => undefined);
+    }
 }
 
 /**
@@ -520,6 +605,7 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
     let lastStage: CheckoutStage | null = null;
     let stageSince = Date.now();
     let codSelectTries = 0;
+    let preplaceVerifiedAt = 0;
 
     let stage = await detectCheckoutStage(page);
     if (stage === "unknown" || stage === "address") {
@@ -610,6 +696,27 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                     log("address_evidence", { at: "cart", addressVerified });
                 }
                 if (proceedClicks < 3 && (proceedClicks === 0 || stuckMs > 6_000)) {
+                    if (opts.skuName) {
+                        // Hard guard: exactly the confirmed product ×1 before Proceed (Proceed →
+                        // delivery options → order creation uses whatever is in this cart).
+                        const snap = await waitForCartSnapshot(page, Math.min(opts.deadlineAt - 4_000, Date.now() + 5_000));
+                        if (snap.state === "unknown") {
+                            if (stuckMs > 15_000) {
+                                return { status: "stuck", stage, url: safeUrl(page), detail: "couldn't read the cart before checkout" };
+                            }
+                            await sleep(page, 800);
+                            continue;
+                        }
+                        const chk = checkCartExactlySku(snap, opts.skuName);
+                        log("cart_exact_guard", { at: "cart", ok: chk.ok, reason: chk.ok ? undefined : chk.reason });
+                        if (!chk.ok) {
+                            return {
+                                status: "cart_mismatch",
+                                url: safeUrl(page),
+                                detail: `${chk.reason}${chk.lines.length ? ` (${describeCartLines(chk.lines)})` : ""}`,
+                            };
+                        }
+                    }
                     const clicked = await clickProceed(page);
                     if (clicked) {
                         proceedClicks++;
@@ -714,6 +821,24 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                     }
                     await sleep(page, 800);
                     continue;
+                }
+                // Hard guard right before Place order: the cart behind this checkout must be
+                // exactly the confirmed product ×1 (checked before the amount, so a mixed cart
+                // never turns into a "re-confirm the new amount" card).
+                if (opts.skuName && Date.now() - preplaceVerifiedAt > 45_000) {
+                    const chk = await verifyCartInFreshTab(page, opts.skuName, opts.deadlineAt);
+                    log("cart_exact_guard", { at: "pre_place", ok: chk.ok, read: chk.read, reason: chk.ok ? undefined : chk.reason });
+                    if (!chk.ok) {
+                        if (!chk.read) {
+                            return { status: "stuck", stage, url: safeUrl(page), detail: "couldn't re-check the cart right before Place order" };
+                        }
+                        return {
+                            status: "cart_mismatch",
+                            url: safeUrl(page),
+                            detail: `${chk.reason}${chk.lines.length ? ` (${describeCartLines(chk.lines)})` : ""}`,
+                        };
+                    }
+                    preplaceVerifiedAt = Date.now();
                 }
                 const payable = fresh.payable;
                 const payableLabel = typeof payable === "number" ? `₹${payable.toFixed(2).replace(/\.00$/, "")}` : fresh.ctaText;

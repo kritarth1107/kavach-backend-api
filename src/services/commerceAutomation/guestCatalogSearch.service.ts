@@ -135,6 +135,62 @@ export function rankVitaminCHits(query: string, hits: GuestCatalogHit[]): GuestC
             a.name.length - b.name.length,
     );
 }
+/** "wet wipes", "baby wipes", "wipes". */
+export function isWipesQuery(query: string): boolean {
+    return /\bwipes?\b/i.test(query);
+}
+
+/** Wipes that aren't everyday baby / personal wet wipes (makeup, eyelid, surface, intimate, combos). */
+const WIPES_NOISE_RE =
+    /\b(make-?up|remover|niacinamide|hyaluronic|ocu-?wipes|eye|eyelid|intimate|feminine|vaginal|toilet|surface|disinfectant|floor|lens|glass|diapers?|combo|compo|pet|dog|cat)\b/i;
+const WIPES_BRAND_RE =
+    /\b(chicco|johnson'?s|himalaya|mother\s*sparsh|little'?s|apollo\s*(life|essentials|pharmacy)|luvlap|babio|pampers|huggies|mamy\s*poko|sebamed|mee\s*mee|savlon|baby\s*forest|doctor'?s\s*choice|dettol)\b/i;
+
+/** Everyday OTC baby / personal wet wipes pack (not makeup / eyelid / surface / combo). */
+export function isEverydayWetWipes(name: string): boolean {
+    const n = name.replace(/\(.*?\)/g, " ");
+    return /\bwipes?\b/i.test(n) && !WIPES_NOISE_RE.test(n);
+}
+
+/** Total wipes in the pack: "72 Count", "2x80", "30 Units", "(2x30 Wipes)". */
+export function wipesCount(name: string): number | undefined {
+    const x = name.match(/(\d{1,2})\s*x\s*(\d{1,3})/i);
+    if (x) return Number(x[1]) * Number(x[2]);
+    const c = name.match(/(\d{1,3})\s*(count|units?|wipes|pcs|pieces|s)\b/i);
+    return c ? Number(c[1]) : undefined;
+}
+
+function wipesScore(query: string, h: GuestCatalogHit): number {
+    const n = h.name.toLowerCase();
+    let s = 0;
+    if (WIPES_BRAND_RE.test(n)) s += 10;
+    if (/\b(wet|baby)\s*wipes\b/.test(n)) s += 8;
+    if (/\bbaby\b/i.test(query) && /\bbaby\b/.test(n)) s += 4;
+    const count = wipesCount(h.name);
+    if (typeof count === "number") {
+        if (count >= 50 && count <= 100) s += 4;
+        else if (count > 100) s += 1;
+        else if (count < 25) s -= 2;
+    }
+    const p = h.pricePaise ?? 1e9;
+    if (p <= 15_000) s += 4;
+    else if (p <= 25_000) s += 1;
+    else if (p > 40_000) s -= 4;
+    if (h.inStock === true) s += 3;
+    return s;
+}
+
+/** Wet-wipes asks: everyday OTC wipes in stock at the pincode, known brands, mid-size, cheap first. */
+export function rankWipesHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[] {
+    const clean = hits.filter((h) => !h.requiresRx && h.inStock !== false && isEverydayWetWipes(h.name));
+    return clean.sort(
+        (a, b) =>
+            wipesScore(query, b) - wipesScore(query, a) ||
+            (a.pricePaise ?? 1e9) - (b.pricePaise ?? 1e9) ||
+            a.name.length - b.name.length,
+    );
+}
+
 const TOPICAL_RE = /\b(cream|serum|gel|face\s*wash|lotion|toner|sunscreen|mask)\b/i;
 
 /** Prefer names that contain query tokens (e.g. vitamin+c → Limcee Vit C, not Evion Vit E). */
@@ -421,6 +477,22 @@ export async function searchGuestCatalog(input: {
                     unavailableReason:
                         hits.length === 0
                             ? `No in-stock vitamin C tablets on Apollo${pin ? ` for ${pin}` : ""} right now. Try another name.`
+                            : undefined,
+                    partner,
+                    query,
+                };
+            }
+            if (isWipesQuery(query)) {
+                // Canonical searches so "wet wipes" also sees everyday baby wipes (and vice versa).
+                const queries = Array.from(new Set(["wet wipes", "baby wipes", query.toLowerCase()]));
+                const lists = await Promise.all(queries.map((q) => searchApolloPublic(q, pin)));
+                const hits = rankWipesHits(query, dedupeHits(lists.flat()));
+                return {
+                    hits,
+                    searched: true,
+                    unavailableReason:
+                        hits.length === 0
+                            ? `No in-stock wet wipes on Apollo${pin ? ` for ${pin}` : ""} right now. Try another name.`
                             : undefined,
                     partner,
                     query,

@@ -63,7 +63,7 @@ const PARTNER_PICK =
     /\b(apollo|pharmeasy|pharm\s*easy|1\s*mg|tata\s*1mg|tata)\b/i;
 
 const OTC_HINT =
-    /\b(vita\w*\s*c|vit\s*c|vitamin\s*d|paracetamol|crocin|dolo|limcee|celin|shelcal|becosules|zincovit|revital|ors|electral|band[\s-]?aid|antiseptic|cough\s*syrup\s*otc)\b/i;
+    /\b(vita\w*\s*c|vit\s*c|vitamin\s*d|paracetamol|crocin|dolo|limcee|celin|shelcal|becosules|zincovit|revital|ors|electral|band[\s-]?aid|antiseptic|cough\s*syrup\s*otc|wet\s*wipes|baby\s*wipes|wipes)\b/i;
 
 function partnerFromText(text: string): CommercePartnerKey | undefined {
     const t = text.toLowerCase();

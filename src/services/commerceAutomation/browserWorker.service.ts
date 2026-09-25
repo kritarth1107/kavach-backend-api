@@ -39,17 +39,26 @@ import {
 } from "./parkedOtpSession.service";
 import {
     addressHintsFrom,
+    CART_REMOVE_BLOCK_RE,
+    describeClickTarget,
     rupeesFromLabel,
     runApolloCodCheckout,
     type ApolloCheckoutOutcome,
 } from "./apolloCheckout";
 import {
     addExactSkuToApolloCart,
+    cartLineMatchesSku,
+    checkCartExactlySku,
+    describeCartLines,
+    emptyApolloCart,
     extractPincode,
     formatApolloConfirmCard,
     isOtpScreenVisible,
     parseExactSkuFromGoal,
     readApolloCart,
+    readCartLines,
+    waitForCartSnapshot,
+    APOLLO_CART_URL,
     waitForOtpAccepted,
 } from "./apolloPostOtp";
 
@@ -75,6 +84,10 @@ export type BrowserFailureReason =
     | "otp_rejected"
     /** Signed in, but cart / confirm didn't finish inside the WA deadline. */
     | "post_otp_timeout"
+    /** Apollo cart already had other items and they could not be removed + verified. */
+    | "cart_not_empty"
+    /** Cart doesn't hold exactly the confirmed product at qty 1 (confirm card withheld). */
+    | "cart_mismatch"
     | "unknown";
 
 export type BrowserTaskResult = {
@@ -775,7 +788,9 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 await notifyProgress(
                     input,
                     "searching",
-                    `*${partnerLabel(String(playbook.partner))}* signed in ✓ — adding your item to cart…`,
+                    String(playbook.partner) === "apollo"
+                        ? `*Apollo* signed in ✓ — checking your cart first (I'll remove anything else in it), then adding your item…`
+                        : `*${partnerLabel(String(playbook.partner))}* signed in ✓ — adding your item to cart…`,
                 );
                 if (String(playbook.partner) === "apollo") {
                     const det = await apolloExactSkuToConfirm({
@@ -1280,6 +1295,15 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             }
         }
 
+        // Cart items are only ever removed by deterministic code (pre-add cleanup) — never Gemini.
+        if (action.type === "click" && !isRideGoal(ctx.goal)) {
+            const target = await describeClickTarget(page, action).catch(() => "remove");
+            if (CART_REMOVE_BLOCK_RE.test(target)) {
+                console.warn("blocked Gemini cart remove/delete click:", target.replace(/\s+/g, " ").slice(0, 100));
+                return { halt: false };
+            }
+        }
+
         // Safety: never click pay / request-ride without confirm
         if (!ctx.userConfirmed && (action.type === "click" || action.type === "press")) {
             const t = `${action.text || ""} ${action.selector || ""} ${action.message || ""}`.toLowerCase();
@@ -1527,6 +1551,48 @@ export async function apolloExactSkuToConfirm(args: {
         args.deliveryAddress?.trim() || args.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
     const pincode = extractPincode(addressLabel);
     const label = partnerLabel("apollo");
+    const shortName = sku.name.replace(/\s*\(.*?\)\s*/g, " ").trim().slice(0, 60);
+
+    // 1) Empty the user's existing Apollo cart FIRST (deterministic code only — never Gemini),
+    //    so nothing that was already in the cart can ride along with this order.
+    const cleanup = await emptyApolloCart(args.page, { deadlineAt: args.deadlineAt, log: logPostOtp });
+    logPostOtp("cart_cleanup", {
+        status: cleanup.status,
+        removed: cleanup.removed,
+        ms: cleanup.ms,
+        detail: cleanup.status === "failed" ? cleanup.detail : undefined,
+    });
+    if (args.isCancelled?.()) {
+        return { status: "cancelled", mode: "playwright", partner: "apollo", steps: 1, message: "Cancelled." };
+    }
+    if (cleanup.status === "failed") {
+        const left = cleanup.remaining.length ? ` Still in the cart: ${describeCartLines(cleanup.remaining)}.` : "";
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: "apollo",
+            steps: 1,
+            url: args.page.url(),
+            failureReason: "cart_not_empty",
+            message:
+                `Signed in to *${label}* ✓ — but your Apollo cart already had other item(s) and I couldn't clear it safely ` +
+                `(${cleanup.detail}${cleanup.removed ? `; removed ${cleanup.removed}` : ""}).${left}\n` +
+                `I stopped before adding *${shortName}* — nothing was ordered or paid, and I won't send a confirm card for a mixed cart.`,
+        };
+    }
+    // An older line of this same product was cleared too (re-added fresh at qty 1) — not "other".
+    const sameWasThere = cleanup.status === "emptied" && cleanup.removedNames.some((n) => cartLineMatchesSku(n, sku.name));
+    const othersRemoved = cleanup.status === "emptied" ? Math.max(0, cleanup.removed - (sameWasThere ? 1 : 0)) : 0;
+    if (cleanup.status === "emptied") {
+        await args.progress?.(
+            (othersRemoved
+                ? `your Apollo cart had ${othersRemoved} other item${othersRemoved === 1 ? "" : "s"} — removed ✓`
+                : `cleared the old cart line`) +
+                `${sameWasThere ? ` (plus an earlier ${shortName} line, re-adding it at qty 1)` : ""} — cart is empty now. Adding ${shortName}…`,
+        );
+    }
+
+    // 2) Add exactly 1 of the confirmed product.
     const added = await addExactSkuToApolloCart(args.page, sku, { deadlineAt: args.deadlineAt, pincode });
     logPostOtp("add_to_cart", { status: added.status, detail: added.detail });
     if (args.isCancelled?.()) {
@@ -1554,7 +1620,30 @@ export async function apolloExactSkuToConfirm(args: {
         addrPin: cart?.addressMatchesPincode,
         cod: cart?.codMentioned,
     });
-    const card = formatApolloConfirmCard({ sku, cart, addressLabel });
+    // 3) Hard guard: the cart must hold EXACTLY one line — this product at qty 1.
+    const exact = checkCartExactlySku(cart?.cartLines ?? (await readCartLines(args.page)), sku.name);
+    logPostOtp("cart_exact_guard", exact.ok ? { ok: true, line: exact.line.name.slice(0, 60) } : { ok: false, reason: exact.reason });
+    if (!exact.ok) {
+        return {
+            status: "error",
+            mode: "playwright",
+            partner: "apollo",
+            steps: 3,
+            url: args.page.url(),
+            failureReason: "cart_mismatch",
+            message:
+                `I added *${shortName}* on *${label}*, but the cart doesn't hold exactly 1 × that item (${exact.reason}` +
+                `${exact.lines.length ? `: ${describeCartLines(exact.lines)}` : ""}).\n` +
+                `So I did *not* send a confirm card — nothing was ordered or paid.`,
+        };
+    }
+    const card = formatApolloConfirmCard({
+        sku,
+        cart,
+        addressLabel,
+        removedCount: othersRemoved,
+        cartVerifiedExact: true,
+    });
     return {
         status: "need_user_confirm",
         mode: "playwright",
@@ -1563,6 +1652,46 @@ export async function apolloExactSkuToConfirm(args: {
         url: args.page.url(),
         message: card.message,
         confirm: { items: card.items, totalLabel: card.totalLabel, addressLabel: card.addressLabel },
+    };
+}
+
+/**
+ * Before any Apollo confirm card that did NOT come from the deterministic path: open the
+ * cart and require exactly one line (the confirmed product when known) at qty 1.
+ * Anything else → no card, honest error (nothing placed).
+ */
+export async function guardApolloConfirmCart(
+    page: import("playwright").Page,
+    result: BrowserTaskResult,
+    skuName: string | undefined,
+    deadlineAt: number,
+): Promise<BrowserTaskResult> {
+    await page
+        .goto(APOLLO_CART_URL, { waitUntil: "domcontentloaded", timeout: Math.max(2_000, Math.min(20_000, deadlineAt - Date.now() - 3_000)) })
+        .catch(() => undefined);
+    const snap = await waitForCartSnapshot(page, Math.min(deadlineAt - 2_000, Date.now() + 12_000));
+    let ok = false;
+    let reason = "";
+    if (skuName) {
+        const chk = checkCartExactlySku(snap, skuName);
+        ok = chk.ok;
+        if (!chk.ok) reason = `${chk.reason}${chk.lines.length ? `: ${describeCartLines(chk.lines)}` : ""}`;
+    } else {
+        ok = snap.state === "loaded" && snap.lines.length === 1 && snap.lines[0]!.qty === 1;
+        if (!ok) reason = snap.state === "loaded" ? `cart has ${describeCartLines(snap.lines)}` : "couldn't read the Apollo cart";
+    }
+    logPostOtp("gemini_card_cart_guard", { ok, reason: reason.slice(0, 160) });
+    if (ok) return result;
+    return {
+        status: "error",
+        mode: "playwright",
+        partner: "apollo",
+        steps: result.steps,
+        url: page.url(),
+        failureReason: "cart_mismatch",
+        message:
+            `The Apollo cart doesn't hold exactly 1 × the item you asked for (${reason}). ` +
+            `I did *not* send a confirm card — nothing was ordered or paid.`,
     };
 }
 
@@ -1684,7 +1813,11 @@ export async function submitParkedBrowserOtp(input: {
             parked.input.deliveryAddress?.trim() || parked.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
         const pincode = extractPincode(addressLabel);
         const shortName = sku ? sku.name.replace(/\s*\(.*?\)\s*/g, " ").trim().slice(0, 60) : "your item";
-        await progress(`signed in ✓ — adding ${shortName} to cart…`);
+        await progress(
+            parked.partner === "apollo"
+                ? `signed in ✓ — checking your Apollo cart first (I'll remove anything else in it), then adding ${shortName}…`
+                : `signed in ✓ — adding ${shortName} to cart…`,
+        );
 
         const taskInput: RunBrowserTaskInput = {
             ...parked.input,
@@ -1728,6 +1861,10 @@ export async function submitParkedBrowserOtp(input: {
         });
         if (continued.retainBrowser) state.retain = true;
         logPostOtp("gemini_done", { status: continued.result.status, steps: continued.result.steps });
+        if (parked.partner === "apollo" && continued.result.status === "need_user_confirm") {
+            // Gemini-built card: same hard guard as the deterministic path (exactly 1 line, qty 1).
+            return guardApolloConfirmCart(parked.page, continued.result, sku?.name, deadlineAt);
+        }
         return continued.result;
     };
 
@@ -1936,7 +2073,7 @@ export async function continueParkedCheckout(input: {
         pincode,
         addressHints: addressHintsFrom(addressLabel),
         confirmedTotalRupees,
-        skuName: sku?.name,
+        skuName: sku?.name || session.confirm?.items?.[0]?.replace(/\s*×\d+.*$/, "").trim() || undefined,
         priorAddressVerified: session.addressVerified,
         mayPlace: () => !cancelled() && Date.now() < startedAt + budgetMs - 8_000,
         isCancelled: cancelled,
@@ -2102,6 +2239,18 @@ export async function continueParkedCheckout(input: {
                 message:
                     `*${label}* showed a problem after *Place order (Cash on Delivery)*: ${outcome.detail.slice(0, 140)}\n` +
                     `Please check Apollo → My Orders — I won't retry automatically, so you don't get a duplicate.`,
+            };
+        case "cart_mismatch":
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "failed",
+                // Keep the WA draft so *order again* can rebuild the single-item cart.
+                noSession: true,
+                message:
+                    `I stopped before *Place order* on ${label}: the cart doesn't hold exactly 1 × ${item.replace(/\s+—\s+₹.*$/, "")} ` +
+                    `(${outcome.detail.slice(0, 180)}).\n` +
+                    `Nothing was ordered or paid. Reply *order again* to rebuild the cart (it will need a new OTP), or *cancel*.`,
             };
         case "cancelled":
             await closeCheckoutSession(session);

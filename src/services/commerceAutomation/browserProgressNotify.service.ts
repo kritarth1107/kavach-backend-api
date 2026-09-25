@@ -65,6 +65,20 @@ export function formatPharmacyBrowserFollowUp(
             reason === "captcha" ||
             /captcha|bot check|access denied|bot wall/i.test(base) ||
             (/blocked the browser/i.test(base) && reason !== "no_login_button");
+        if (reason === "cart_not_empty" || reason === "cart_mismatch") {
+            return {
+                text: [
+                    base.slice(0, 420),
+                    ``,
+                    reason === "cart_not_empty"
+                        ? `Please remove those items in the Apollo app (or reply *cancel*), then order again.`
+                        : `Reply *cancel*, then order again — I'll rebuild the cart with just this item.`,
+                ].join("\n"),
+                clearSession: false,
+                // Signed in already — digits must NOT be treated as a new OTP.
+                phase: "running",
+            };
+        }
         if (reason === "out_of_stock" || reason === "post_otp_timeout") {
             return {
                 text: [
@@ -193,6 +207,13 @@ export async function pushWhatsAppBrowserFollowUp(input: {
 }): Promise<boolean> {
     const text = input.text.trim();
     if (!text) return false;
+    // Readable via POST /api/webhooks/whatsapp/mock {"from":…,"peek":true} (confirm-card check).
+    try {
+        const { recordSaheliOutbound } = await import("../whatsappMockPeek.service");
+        recordSaheliOutbound(input.phone, text, "browser");
+    } catch {
+        /* ignore */
+    }
     try {
         if (isMetaWhatsAppEnabled()) {
             await sendViaMetaWhatsApp(input.phone, text);
