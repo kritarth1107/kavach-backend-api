@@ -236,6 +236,16 @@ export async function postPrivacyAudit(req: Request, res: Response) {
     res.json({ success: true, data });
 }
 
+export async function postSmokeFixtures(req: Request, res: Response) {
+    if (!isMockAuthorized(req)) {
+        res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
+    const { manageSmokeFixtures } = await import("../services/smokeFixtures.service");
+    const data = await manageSmokeFixtures(req.body?.action === "delete" ? "delete" : "create");
+    res.json({ success: true, data });
+}
+
 export async function postWhatsAppMockWebhook(req: Request, res: Response) {
     if (!isMockAuthorized(req)) {
         res.status(404).json({ success: false, message: "Not found" });

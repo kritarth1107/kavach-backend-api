@@ -9,12 +9,14 @@ import {
     postWhatsAppMetaWebhook,
     postWhatsAppMockWebhook,
     postPrivacyAudit,
+    postSmokeFixtures,
 } from "../controllers/careRecord.controller";
 
 const router = Router();
 
 router.post("/whatsapp/mock", postWhatsAppMockWebhook);
 router.post("/whatsapp/mock/privacy-audit", postPrivacyAudit);
+router.post("/whatsapp/mock/smoke-fixtures", postSmokeFixtures);
 router.get("/whatsapp/meta", getWhatsAppMetaWebhook);
 router.get("/whatsapp/meta/debug", getWhatsAppMetaWebhookDebug);
 router.post("/whatsapp/meta/setup", postWhatsAppMetaSetup);
