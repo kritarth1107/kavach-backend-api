@@ -336,7 +336,17 @@ export async function instamartSearch(input: {
             waitUntil: "domcontentloaded",
         });
         await waitForContent(page);
-        await page.waitForTimeout(2500);
+        const cardSel = '[data-testid="item-collection-card-full"]';
+        let found = await page.waitForSelector(cardSel, { timeout: 12_000 }).then(() => true).catch(() => false);
+        if (!found) {
+            await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+            found = await page.waitForSelector(cardSel, { timeout: 10_000 }).then(() => true).catch(() => false);
+        }
+        if (!found) {
+            const body = ((await page.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 300);
+            console.warn("[instamart-guest] no item cards", { url: page.url(), body });
+        }
+        await page.waitForTimeout(1500);
         const cards = (await page
             .locator('[data-testid="item-collection-card-full"]')
             .evaluateAll((els) =>

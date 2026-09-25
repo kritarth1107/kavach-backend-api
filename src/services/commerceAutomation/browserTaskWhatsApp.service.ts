@@ -978,7 +978,9 @@ async function grocerySearchCore(
         draft.catalogOptions = catalog.hits.slice(0, 5).map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
         if (catalog.hits.length === 1) draft.selectedSku = draft.catalogOptions[0];
     } else {
-        draft.lastMessage = catalog.unavailableReason || `Instamart shows nothing for "${query}" near you. Try another name, or *cancel*.`;
+        // Nothing to confirm: don't leave an empty draft that would ask for *confirm*.
+        await saveIfCurrent(input.phone, null, token);
+        return { text: catalog.unavailableReason || `I couldn't find "${query}" near you. Try another name.` };
     }
     await saveIfCurrent(input.phone, draft, token);
     return { text: skuConfirmCopy(draft), draft };

@@ -588,7 +588,11 @@ export async function searchGuestCatalog(input: {
             return {
                 hits,
                 searched: true,
-                unavailableReason: hits.length ? undefined : `Instamart (Raipur 492001) shows nothing matching "${query}". Try another name.`,
+                unavailableReason: hits.length
+                    ? undefined
+                    : res.items.length
+                      ? `Instamart (Raipur 492001) shows nothing matching "${query}". Try another name.`
+                      : `Instamart's page didn't show any products for your address (Raipur 492001) just now — the store may be closed at this hour or the site didn't load for me. Please try again in a while.`,
                 partner,
                 query,
             };
