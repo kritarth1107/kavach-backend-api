@@ -55,7 +55,23 @@ export type WhatsAppWebhookLogEntry = {
 let lastAiDebug: WhatsAppAiDebug | null = null;
 
 export function recordWhatsAppAiDebug(debug: Omit<WhatsAppAiDebug, "at">) {
-    lastAiDebug = { at: new Date().toISOString(), ...debug };
+    const prev = lastAiDebug;
+    const next: WhatsAppAiDebug = { at: new Date().toISOString(), ...debug };
+    // The turn-level summary record lands after the AI-failure record — keep the
+    // failure reason (aiError/status/fallback) from the same turn instead of wiping it.
+    if (
+        prev &&
+        prev.recipientUserId === next.recipientUserId &&
+        Date.now() - Date.parse(prev.at) < 60_000
+    ) {
+        if (next.aiError === undefined && prev.aiError) {
+            next.aiError = prev.aiError;
+            next.aiStatusCode = prev.aiStatusCode;
+        }
+        if (!next.fallbackUsed && prev.fallbackUsed) next.fallbackUsed = prev.fallbackUsed;
+        if (next.contextChars === undefined) next.contextChars = prev.contextChars;
+    }
+    lastAiDebug = next;
 }
 
 export function consumeWhatsAppAiDebug(): WhatsAppAiDebug | undefined {

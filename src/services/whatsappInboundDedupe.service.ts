@@ -3,6 +3,7 @@ import WhatsappInboundDedupe from "../models/whatsappInboundDedupe.model";
 /** Per-instance fast path (also covers a Mongo blip). */
 const recent = new Map<string, number>();
 const RECENT_TTL_MS = 30 * 60 * 1000;
+let indexReady: Promise<unknown> | undefined;
 
 function rememberLocal(id: string): boolean {
     const now = Date.now();
@@ -29,6 +30,9 @@ export async function claimWhatsAppInboundMessage(
     if (!id) return true;
     if (!rememberLocal(id)) return false;
     try {
+        // Ensure the unique index exists before the first claim (no-op afterwards).
+        indexReady ??= WhatsappInboundDedupe.init().catch(() => undefined);
+        await indexReady;
         await WhatsappInboundDedupe.create({ messageId: id, from: from?.slice(-4) });
         return true;
     } catch (err) {
