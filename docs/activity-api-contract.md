@@ -1,4 +1,9 @@
-# Caregiver activity feed + daily snapshot — API contract (v1, 2026-09-26)
+# Caregiver activity feed + daily snapshot — API contract (v1.1, 2026-09-26)
+
+**Changelog**
+- v1.1 (additive, backward compatible): new kind `nudge`; every order event carries `data.jobId` (+ alias
+  `data.orderId`) for grouping; snapshot `counts.nudges`.
+- v1: initial.
 
 Stable contract for kavach-dashboard. Backend owner: kavach-backend. If this changes, this file is updated first.
 
@@ -44,7 +49,7 @@ Response `200`:
         "dayKey": "2026-09-26",
         "createdAt": "2026-09-25T20:41:03.120Z",
         "actorUserId": "usr_…",
-        "data": { "stage": "checkout", "partner": "apollo" }
+        "data": { "stage": "checkout", "partner": "apollo", "jobId": "ord_mfz3k2ab1c9d", "orderId": "ord_mfz3k2ab1c9d" }
       }
     ],
     "nextBefore": "2026-09-25T20:40:11.004Z",
@@ -56,13 +61,25 @@ Response `200`:
 - `detail` is plain text (may contain WhatsApp `*bold*` markers; strip or render). OTPs/phone numbers are redacted server-side (`••••`).
 - `data` is optional, kind-specific, and never required for rendering (see table). Unknown keys must be ignored.
 
+### Order grouping (`data.jobId`)
+- Every order event — `order_step`, `order_confirm_card`, `order_placed`, `order_failed`, `order_cancelled`,
+  `order_interrupt` — has `data.jobId` (string, e.g. `ord_mfz3k2ab1c9d`). `data.orderId` is the same value (alias).
+  **Group order events by `jobId`.** It is Kavach's internal id for one order run, NOT the merchant's order number
+  (that is `order_placed.data.orderIds`).
+- One job per recipient at a time: it starts with the first order event and ends at `order_placed` / `order_failed` /
+  `order_cancelled` (those carry the same `jobId`), or after 45 min with no order events. A new order → new `jobId`.
+- A failed checkout that asks the elder to re-confirm (e.g. price changed) ends that job; the new confirm card starts a
+  new job.
+- `diag` rows logged during an active order also carry that `jobId` (optional; may be absent).
+- Rows written before v1.1 have no `jobId` — fall back to partner + time window for those.
+
 ### Event kinds (`kind`)
 | kind | meaning | typical `data` keys |
 |---|---|---|
 | `message_in` | elder texted Saheli | — |
 | `voice_note` | elder sent a voice note (`detail` = transcript) | — |
 | `message_out` | Saheli's reply to the elder | `source?: "browser"` |
-| `order_step` | background order progress step (not sent to WhatsApp) | `stage` (`launching`/`opening`/`login_page`/`otp_ready`/`searching`/`post_otp`/`checkout`/…), `partner` |
+| `order_step` | background order progress step (not sent to WhatsApp) | `jobId`, `stage` (`launching`/`opening`/`login_page`/`otp_ready`/`searching`/`post_otp`/`checkout`/…), `partner` |
 | `order_confirm_card` | confirm card (item/total/address) shown to elder | `status`, `confirm: {items?: string[], totalLabel?, addressLabel?}`, `partner?` |
 | `order_placed` | order placed (COD) | `status` (`placed`/`placed_unverified`), `orderIds?`, `totalLabel?`, `payment: "COD"` |
 | `order_failed` | order stopped / failed honestly | `status`, `failureReason?` |
@@ -73,6 +90,7 @@ Response `200`:
 | `mood` | mood mention/check-in | `mood?` |
 | `health` | health mention / red flag | `category` (e.g. `chest_pain`, `fall`, `dizziness`, `breathing`, `self_harm`, `missed_critical_meds`, `low_mood`, `other_concern`), `source` (`rules`/`gemini`), `deduped?` |
 | `caregiver_alert` | an alert to caregivers was raised | `kind`, `urgency`, `whatsapp: boolean` |
+| `nudge` | proactive message Saheli sent on her own (care-schedule nudge or companion check-in). Only sent after ≥60 min of no conversation and never during an active order/ride/OTP flow. | `source` (`care_nudge`/`outreach`), `nudgeKind?` (care_nudge), `scheduleId?`, `scheduledTime?` (`HH:mm` IST), `outreachKind?`, `slot?`, `topicBucket?`, `channel` |
 | `diag` | browser diagnostics (optional screenshot) | `screenshotDataUrl?` (small JPEG data URL), `url?`, `stage?` |
 
 `severity`: `info` | `warn` | `error` (`error` = health red flag / emergency — highlight it).
@@ -98,7 +116,7 @@ Response `200`:
       "highlights": ["Ordered Limcee 500mg from Apollo (₹98, COD) — order 360184572"],
       "concerns": ["Mentioned dizziness around 4 pm — caregiver was alerted"],
       "mood": "calm",
-      "counts": { "messages": 14, "voiceNotes": 2, "orders": 1, "rides": 0, "reminders": 3, "healthFlags": 1 },
+      "counts": { "messages": 14, "voiceNotes": 2, "orders": 1, "rides": 0, "reminders": 3, "healthFlags": 1, "nudges": 2 },
       "model": "gemini-3.5-pro",
       "generatedAt": "2026-09-26T15:30:00.000Z",
       "source": "scheduled"
@@ -110,6 +128,7 @@ Response `200`:
 - `status`: `ready` | `generating` | `failed` | `empty` (no activity that day; `summary` explains).
 - `mood`: free short word or `null`. `highlights` / `concerns`: arrays of short strings (may be empty).
 - `source`: `scheduled` | `on_demand`.
+- `counts.nudges` (v1.1) may be missing on older snapshots — treat as 0.
 
 ### Generate / regenerate (on demand)
 `POST /api/families/:familyId/subjects/:subjectUserId/daily-snapshot`
@@ -127,5 +146,7 @@ Schedule: backend generates yesterday's + today's snapshot automatically each ev
 
 ## Notes for the dashboard
 - No images or message bodies are pushed to caregivers on WhatsApp; this feed is the place to see them.
-- Caregiver WhatsApp is only sent for (1) orders placed by the elder and (2) health red flags; both also appear here
-  (`order_placed`, `health` + `caregiver_alert`).
+- Caregiver WhatsApp is only sent for: orders placed by the elder, health red flags / symptoms / emergencies,
+  lab alerts, missed critical tasks, and things the elder explicitly asked to share. Everything else (rides, moods,
+  routine updates, order steps) is dashboard-only. All of them appear here (`order_placed`, `health`, `caregiver_alert`
+  with `data.whatsapp` telling whether WhatsApp was also sent).
