@@ -48,7 +48,16 @@ jobs:
           docker push "$IMAGE:${{ github.sha }}"
           docker push "$IMAGE:latest"
           # --update-env-vars merges; does not wipe secrets (ELEVENLABS, Meta tokens, etc.).
-          # Browser automation: 4Gi / 2 CPU / concurrency=1; Chromium is in the image.
+          # Browser automation: 4Gi / 2 CPU; Chromium is in the image.
+          # max-instances=1: the parked OTP page and the parked signed-in checkout page (cart
+          # built, waiting for the user's "confirm") live in THIS process's memory. With >1
+          # instance a Meta webhook can land on an instance that doesn't hold the page →
+          # "session expired" / fresh login. Session affinity doesn't help (Meta sends no cookie).
+          # concurrency=4 (was 1): with a single instance, concurrency=1 would queue every
+          # webhook behind a long request. Browser state is keyed per user, Playwright runs are
+          # serialized by an in-process gate, and checkout/OTP work runs after the webhook
+          # responds, so a few concurrent requests are safe. Tradeoff: no horizontal scale-out and
+          # a deploy (new revision) drops any parked session — avoid deploying mid-order.
           # --no-cpu-throttling (CPU always allocated): WhatsApp browser work (parked OTP page →
           # post-OTP cart → WA follow-up) runs fire-and-forget AFTER the webhook responds; with
           # request-only CPU that work would be throttled to ~0 and stall silently.
@@ -61,11 +70,11 @@ jobs:
             --memory=4Gi \
             --cpu=2 \
             --no-cpu-throttling \
-            --concurrency=1 \
+            --concurrency=4 \
             --timeout=300 \
             --min-instances=1 \
-            --max-instances=3 \
-            --update-env-vars="WHATSAPP_PROVIDER=meta,KAVACH_WHATSAPP_NUMBER=+919203497046,WHATSAPP_META_PHONE_NUMBER_ID=1307628429102389,WHATSAPP_META_WABA_ID=1718021715926380,WHATSAPP_META_APP_ID=2105228567034032,WHATSAPP_META_WEBHOOK_VERIFY_TOKEN=kavach_wa_verify_k9X2mP7nQ4vL8sR3,WHATSAPP_META_GRAPH_VERSION=v22.0,BROWSER_WORKER_MODE=auto,BROWSER_TASK_DEADLINE_MS=75000,BROWSER_POST_OTP_BUDGET_MS=85000,BROWSER_PHARMACY_LOGIN=on,COMMERCE_BROWSER_FIRST=1,ELEVENLABS_VOICE_ID=A5W9pR9OjIbu80J0WuDW" \
+            --max-instances=1 \
+            --update-env-vars="WHATSAPP_PROVIDER=meta,KAVACH_WHATSAPP_NUMBER=+919203497046,WHATSAPP_META_PHONE_NUMBER_ID=1307628429102389,WHATSAPP_META_WABA_ID=1718021715926380,WHATSAPP_META_APP_ID=2105228567034032,WHATSAPP_META_WEBHOOK_VERIFY_TOKEN=kavach_wa_verify_k9X2mP7nQ4vL8sR3,WHATSAPP_META_GRAPH_VERSION=v22.0,BROWSER_WORKER_MODE=auto,BROWSER_TASK_DEADLINE_MS=75000,BROWSER_POST_OTP_BUDGET_MS=85000,BROWSER_CHECKOUT_BUDGET_MS=85000,BROWSER_CHECKOUT_PARK_TTL_MS=600000,BROWSER_PHARMACY_LOGIN=on,COMMERCE_BROWSER_FIRST=1,ELEVENLABS_VOICE_ID=A5W9pR9OjIbu80J0WuDW" \
             --quiet
 
       - name: Smoke test

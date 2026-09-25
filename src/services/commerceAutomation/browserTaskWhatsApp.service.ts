@@ -11,6 +11,8 @@ import { notifyCaregivers } from "../saheliCaregiverAlert.service";
 import {
     runBrowserTask,
     submitParkedBrowserOtp,
+    continueParkedCheckout,
+    CHECKOUT_BUDGET_MS,
     type BrowserTaskResult,
 } from "./browserWorker.service";
 import {
@@ -24,6 +26,10 @@ import {
     claimGotCodeAck,
     currentBrowserGeneration,
     hasPharmacyOtpSendBeenClaimed,
+    peekParkedCheckout,
+    claimCheckoutInFlight,
+    isCheckoutInFlight,
+    releaseCheckoutInFlight,
 } from "./parkedOtpSession.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
@@ -71,6 +77,8 @@ export type BrowserTaskDraft = {
         items?: string[];
         totalLabel?: string;
         addressLabel?: string;
+        /** Parked signed-in checkout page this card belongs to (confirm only this card). */
+        cardId?: string;
     };
     mode?: "playwright" | "dry_run";
 };
@@ -120,7 +128,7 @@ function extractOrderQuery(text: string, partner: string): string {
     let q = text
         .replace(
             new RegExp(
-                `\\b(?:from|on|via|at|using|with)\\s+${partner.replace(/_/g, "\\s*")}\b`,
+                `\\b(?:from|on|via|at|using|with)\\s+${partner.replace(/_/g, "\\s*")}\\b`,
                 "ig",
             ),
             " ",
@@ -283,7 +291,21 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 $set: { updatedAt: new Date() },
             },
         );
+        if (isCheckoutInFlight(input.familyId, input.actorUserId)) {
+            return {
+                text:
+                    "Stopping the Apollo checkout now. If Apollo had already accepted the order I'll tell you here — " +
+                    "otherwise nothing was ordered or paid.",
+            };
+        }
         return { text: "Okay — cancelled. Nothing was ordered or paid — no more OTP asks from this attempt." };
+    }
+
+    // "order again" after an expired signed-in session → fresh guest search card for the SAME
+    // SKU. Login/OTP only starts after the user confirms that card (never silently).
+    if (draft && /^(order\s*again|re-?order|start\s*again)$/i.test(text)) {
+        const restarted = await restartOrderFromDraft(input, draft);
+        if (restarted) return restarted;
     }
 
     // Re-kick browser after pharmacy/commerce soft failure (CAPTCHA / timeout / no OTP page)
@@ -441,7 +463,25 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         };
     }
 
+    if (
+        draft &&
+        draft.phase === "awaiting_confirm" &&
+        /^(confirm|confirm\s*order|place|place\s*order)$/i.test(text) &&
+        draft.mode !== "dry_run"
+    ) {
+        return startParkedCheckoutFromWhatsApp(input, draft);
+    }
+
+    // Real orders need the explicit word — "ok"/"yes"/"pay" could be replies to something else.
+    if (draft && draft.phase === "awaiting_confirm" && /^(yes|haan|ok|okay|pay)$/i.test(text) && draft.mode !== "dry_run") {
+        return {
+            text: `To place this ${partnerLabel(String(draft.partner || "Apollo"))} order with *Cash on Delivery*, reply *confirm*. Or *cancel*.`,
+            draft,
+        };
+    }
+
     if (draft && draft.phase === "awaiting_confirm" && /^(confirm|place|yes|haan|ok|pay)$/i.test(text)) {
+        // dry_run hosts only (no Chromium) — stubbed confirm, never a real order.
         const result = await runBrowserTask({
             familyId: input.familyId,
             userId: input.actorUserId,
@@ -744,6 +784,185 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     }
 
     return null;
+}
+
+
+const SESSION_EXPIRED_COPY =
+    "The Apollo login session expired, so I couldn't place the order — nothing was ordered or paid.\n" +
+    "Reply *order again* to restart — it will need a new OTP.";
+
+/**
+ * "confirm" on the confirm-before-pay card → continue checkout on the parked signed-in
+ * page (cart already built). Never starts a fresh login / SMS. Replies instantly; the
+ * order number (or an honest failure) follows on WhatsApp within ~90s.
+ */
+async function startParkedCheckoutFromWhatsApp(
+    input: {
+        phone: string;
+        familyId: string;
+        actorUserId: string;
+        recipientUserId: string;
+        actorRole: FamilyRole | null;
+    },
+    draft: BrowserTaskDraft,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const label = partnerLabel(String(draft.partner || "apollo"));
+    if (isCheckoutInFlight(input.familyId, input.actorUserId)) {
+        return { text: `Already placing your order on *${label}* — hang on, I'll message the result here.`, draft };
+    }
+    const cardId = draft.confirm?.cardId;
+    const parked = peekParkedCheckout(input.familyId, input.actorUserId);
+    if (!parked || !cardId || parked.cardId !== cardId) {
+        console.warn("[pharmacy-checkout] confirm without usable parked session", {
+            hasParked: Boolean(parked),
+            draftCard: cardId ?? null,
+            parkedCard: parked?.cardId ?? null,
+        });
+        draft.lastMessage = SESSION_EXPIRED_COPY;
+        await saveDraft(input.phone, draft);
+        return { text: SESSION_EXPIRED_COPY, draft };
+    }
+    if (!claimCheckoutInFlight(input.familyId, input.actorUserId)) {
+        return { text: `Already placing your order on *${label}* — hang on, I'll message the result here.`, draft };
+    }
+    const gen = currentBrowserGeneration(input.familyId, input.actorUserId);
+    draft.lastMessage = `Placing your order on *${label}* (Cash on Delivery)…`;
+    await saveDraft(input.phone, draft);
+
+    void (async () => {
+        const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
+        const push = (text: string) =>
+            pushWhatsAppBrowserFollowUp({
+                phone: input.phone,
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                text,
+            }).catch(() => false);
+        let delivered = false;
+        const watchdog = setTimeout(() => {
+            if (delivered) return;
+            delivered = true;
+            console.warn("[pharmacy-checkout] WA watchdog fired");
+            void push(
+                `Apollo's checkout is taking unusually long. I will *not* place the order twice — ` +
+                    `if you don't get the order number here in 2 minutes, please check Apollo → My Orders.`,
+            );
+        }, CHECKOUT_BUDGET_MS + 20_000);
+        watchdog.unref?.();
+        try {
+            const run = await continueParkedCheckout({
+                familyId: input.familyId,
+                userId: input.actorUserId,
+                cardId,
+                onProgress: async (d) => {
+                    if (delivered) return;
+                    await push(d);
+                },
+            });
+            const stillCurrent = isBrowserGenerationCurrent(input.familyId, input.actorUserId, gen);
+            if (run.status === "placed" || run.status === "placed_unverified") {
+                await saveDraft(input.phone, null).catch(() => undefined);
+                if (run.status === "placed" && input.actorRole === FamilyRole.CARE_RECIPIENT) {
+                    void notifyCaregivers({
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                        actorUserId: input.actorUserId,
+                        message:
+                            `Amma placed an Apollo order via Saheli (Cash on Delivery)` +
+                            `${run.orderIds ? ` — order ${run.orderIds}` : ""}${run.totalLabel ? `, ${run.totalLabel}` : ""}. Notify only.`,
+                        urgency: "low",
+                        kind: "order_placed",
+                    });
+                }
+            } else if (stillCurrent) {
+                const next = (await loadDraft(input.phone)) || draft;
+                if (run.reparked) {
+                    next.phase = "awaiting_confirm";
+                    next.confirm = { ...(next.confirm || {}), cardId: run.cardId || cardId };
+                    next.lastMessage = run.message;
+                    await saveDraft(input.phone, next).catch(() => undefined);
+                } else if (run.noSession || run.status === "no_session") {
+                    next.phase = "awaiting_confirm";
+                    next.confirm = { ...(next.confirm || {}), cardId: undefined };
+                    next.lastMessage = SESSION_EXPIRED_COPY;
+                    await saveDraft(input.phone, next).catch(() => undefined);
+                } else {
+                    await saveDraft(input.phone, null).catch(() => undefined);
+                }
+            }
+            if (!delivered || run.status === "placed" || run.status === "placed_unverified") {
+                delivered = true;
+                await push(run.message);
+            }
+        } catch (err) {
+            console.warn("[pharmacy-checkout] failed:", err instanceof Error ? err.message : err);
+            if (!delivered) {
+                delivered = true;
+                await push(
+                    `Something broke during Apollo checkout (${err instanceof Error ? err.message.slice(0, 100) : "error"}). ` +
+                        `Please check Apollo → My Orders before ordering again.`,
+                );
+            }
+        } finally {
+            clearTimeout(watchdog);
+            releaseCheckoutInFlight(input.familyId, input.actorUserId);
+        }
+    })();
+
+    return {
+        text:
+            `Placing your order on *${label}* — *Cash on Delivery* only, on the same signed-in cart (no new code).\n` +
+            `I'll send the Apollo order number here in about a minute.`,
+        draft,
+    };
+}
+
+/** Rebuild an exact-SKU card from the draft (guest search, no login) after an expired session. */
+async function restartOrderFromDraft(
+    input: { phone: string; familyId: string; actorUserId: string },
+    draft: BrowserTaskDraft,
+): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
+    const { parseExactSkuFromGoal, extractPincode } = await import("./apolloPostOtp");
+    const partner = (draft.partner && draft.partner !== "generic" ? draft.partner : "apollo") as CommercePartnerKey;
+    const skuName = draft.selectedSku?.name || parseExactSkuFromGoal(draft.goal)?.name;
+    const addressLabel =
+        draft.addressLabel ||
+        draft.confirm?.addressLabel ||
+        draft.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
+    if (!skuName) return null;
+    const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+    const query = skuName.replace(/\(.*?\)/g, " ").replace(/\s+/g, " ").trim();
+    const result = await searchGuestCatalog({
+        partner,
+        query,
+        familyId: input.familyId,
+        userId: input.actorUserId,
+        pincode: extractPincode(addressLabel),
+    });
+    const hit =
+        result.hits.find((h) => h.name.toLowerCase() === skuName.toLowerCase()) ||
+        result.hits.find((h) => h.name.toLowerCase().startsWith(query.toLowerCase())) ||
+        result.hits[0];
+    await abortBrowserSessionForUser(input.familyId, input.actorUserId);
+    const next: BrowserTaskDraft = {
+        phase: "awaiting_sku_confirm",
+        goal: `Order ${hit?.name || skuName} from ${partnerLabel(partner)}`.slice(0, 240),
+        partner,
+        siteKey: partner,
+        startUrl: draft.startUrl,
+        addressLabel,
+        selectedSku: hit
+            ? { id: hit.id, name: hit.name, pricePaise: hit.pricePaise, productUrl: hit.productUrl }
+            : undefined,
+        lastMessage: hit ? undefined : result.unavailableReason,
+    };
+    await saveDraft(input.phone, next);
+    return {
+        text: hit
+            ? skuConfirmCopy(next) + `\n_Confirming will sign in to ${partnerLabel(partner)} again — a new OTP SMS will come._`
+            : result.unavailableReason || `Couldn't find *${skuName}* again — send the medicine name to search.`,
+        draft: next,
+    };
 }
 
 /** Per-user last OTP we drove into a parked page (dedupe Meta webhook retries only). */

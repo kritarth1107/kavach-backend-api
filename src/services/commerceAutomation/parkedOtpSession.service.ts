@@ -62,6 +62,7 @@ export function beginBrowserGeneration(familyId: string, userId: string): number
     cancelledAtByKey.delete(key);
     activeTaskGenerationByKey.set(key, next);
     void disposeParked(key);
+    void disposeParkedCheckout(key);
     return next;
 }
 
@@ -180,6 +181,7 @@ export async function abortBrowserSessionForUser(
         parked.delete(key);
         await closeBrowserQuiet(row);
     }
+    await disposeParkedCheckout(key);
 }
 
 async function disposeParked(key: string): Promise<void> {
@@ -190,7 +192,7 @@ async function disposeParked(key: string): Promise<void> {
     await closeBrowserQuiet(row);
 }
 
-async function closeBrowserQuiet(row: ParkedBrowserOtpSession): Promise<void> {
+async function closeBrowserQuiet(row: { context: BrowserContext; browser: Browser }): Promise<void> {
     try {
         await row.context.close();
     } catch {
@@ -430,6 +432,165 @@ export function clearActiveBrowserTask(familyId: string, userId: string, generat
     if (activeTaskGenerationByKey.get(key) === generation) {
         activeTaskGenerationByKey.delete(key);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Signed-in checkout park: after the confirm-before-pay card is sent, the SAME
+// logged-in Chromium page (cart already built) waits here for the user's
+// "confirm" so checkout continues without a fresh login / second SMS.
+// In-memory → deploy runs a single Cloud Run instance (max-instances=1).
+// ---------------------------------------------------------------------------
+
+const CHECKOUT_PARK_TTL_MS = Math.min(
+    Math.max(Number(process.env.BROWSER_CHECKOUT_PARK_TTL_MS) || 600_000, 120_000),
+    900_000,
+);
+
+export type ParkedCheckoutSession = {
+    key: string;
+    familyId: string;
+    userId: string;
+    partner: string;
+    goal: string;
+    generation: number;
+    browser: Browser;
+    context: BrowserContext;
+    page: Page;
+    input: RunBrowserTaskInput;
+    /** Id of the exact confirm card this page belongs to (stored in the WA draft). */
+    cardId: string;
+    /** What the user was shown on that card. */
+    confirm?: { items?: string[]; totalLabel?: string; addressLabel?: string };
+    createdAt: number;
+    expiresAt: number;
+    aborted: boolean;
+    /** Set once "Place order" was clicked — never click it again on this page. */
+    placeClicked?: boolean;
+    /** Delivery address evidence seen on checkout screens before /pay. */
+    addressVerified?: "full" | "pincode" | "none";
+};
+
+const checkoutParked = new Map<string, ParkedCheckoutSession>();
+const checkoutInFlight = new Map<string, number>();
+
+export function checkoutParkTtlMs(): number {
+    return CHECKOUT_PARK_TTL_MS;
+}
+
+export function newConfirmCardId(): string {
+    return `card-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function parkBrowserForCheckout(input: {
+    familyId: string;
+    userId: string;
+    partner: string;
+    goal: string;
+    generation: number;
+    browser: Browser;
+    context: BrowserContext;
+    page: Page;
+    taskInput: RunBrowserTaskInput;
+    cardId?: string;
+    confirm?: ParkedCheckoutSession["confirm"];
+    placeClicked?: boolean;
+    addressVerified?: ParkedCheckoutSession["addressVerified"];
+}): ParkedCheckoutSession {
+    const key = browserSessionKey(input.familyId, input.userId);
+    const prev = checkoutParked.get(key);
+    if (prev && prev.page !== input.page) {
+        void closeBrowserQuiet(prev);
+    }
+    const now = Date.now();
+    const row: ParkedCheckoutSession = {
+        key,
+        familyId: input.familyId,
+        userId: input.userId,
+        partner: input.partner,
+        goal: input.goal,
+        generation: input.generation,
+        browser: input.browser,
+        context: input.context,
+        page: input.page,
+        input: input.taskInput,
+        cardId: input.cardId || newConfirmCardId(),
+        confirm: input.confirm,
+        createdAt: now,
+        expiresAt: now + CHECKOUT_PARK_TTL_MS,
+        aborted: false,
+        placeClicked: input.placeClicked,
+        addressVerified: input.addressVerified,
+    };
+    checkoutParked.set(key, row);
+    console.log(
+        `[pharmacy-checkout] parked signed-in page key=${key} card=${row.cardId} ttlMs=${CHECKOUT_PARK_TTL_MS}`,
+    );
+    const t = setTimeout(() => {
+        const cur = checkoutParked.get(key);
+        if (cur && cur.createdAt === now) {
+            console.log(`[pharmacy-checkout] park expired key=${key} card=${cur.cardId}`);
+            void disposeParkedCheckout(key);
+        }
+    }, CHECKOUT_PARK_TTL_MS + 500);
+    t.unref?.();
+    return row;
+}
+
+/** Look without taking (validates TTL / abort / page still open). */
+export function peekParkedCheckout(familyId: string, userId: string): ParkedCheckoutSession | null {
+    const key = browserSessionKey(familyId, userId);
+    const row = checkoutParked.get(key);
+    if (!row) return null;
+    let closed = false;
+    try {
+        closed = row.page.isClosed();
+    } catch {
+        closed = true;
+    }
+    if (row.aborted || closed || Date.now() > row.expiresAt) {
+        void disposeParkedCheckout(key);
+        return null;
+    }
+    return row;
+}
+
+export function takeParkedCheckout(familyId: string, userId: string): ParkedCheckoutSession | null {
+    const row = peekParkedCheckout(familyId, userId);
+    if (!row) return null;
+    checkoutParked.delete(row.key);
+    return row;
+}
+
+export async function disposeParkedCheckout(key: string): Promise<void> {
+    const row = checkoutParked.get(key);
+    if (!row) return;
+    checkoutParked.delete(key);
+    row.aborted = true;
+    await closeBrowserQuiet(row);
+}
+
+export async function closeCheckoutSession(row: ParkedCheckoutSession): Promise<void> {
+    row.aborted = true;
+    if (checkoutParked.get(row.key) === row) checkoutParked.delete(row.key);
+    await closeBrowserQuiet(row);
+}
+
+/** One checkout per user at a time (Meta retries / double "confirm"). */
+export function claimCheckoutInFlight(familyId: string, userId: string): boolean {
+    const key = browserSessionKey(familyId, userId);
+    const at = checkoutInFlight.get(key);
+    if (at && Date.now() - at < 150_000) return false;
+    checkoutInFlight.set(key, Date.now());
+    return true;
+}
+
+export function isCheckoutInFlight(familyId: string, userId: string): boolean {
+    const at = checkoutInFlight.get(browserSessionKey(familyId, userId));
+    return Boolean(at && Date.now() - at < 150_000);
+}
+
+export function releaseCheckoutInFlight(familyId: string, userId: string): void {
+    checkoutInFlight.delete(browserSessionKey(familyId, userId));
 }
 
 export function _parkedSessionCountForTests(): number {

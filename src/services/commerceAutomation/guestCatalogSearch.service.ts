@@ -73,6 +73,68 @@ export function alternativeQueryForSku(name: string): string {
 }
 
 const NON_ORAL_RE = /\b(injection|inj|ampoule|vial|infusion|iv)\b/i;
+
+/**
+ * Strip ordering chatter so the catalog sees only the product:
+ * "order vitamin c from apollo" → "vitamin c".
+ */
+export function normalizeCatalogQuery(raw: string): string {
+    const q = (raw || "")
+        .replace(/\b(?:from|on|via|at|using|with)\s+(?:apollo(?:\s*pharmacy)?|pharm\s*easy|tata\s*1\s*mg|1\s*mg|tata)\b/gi, " ")
+        .replace(/\b(apollo\s*pharmacy|apollo|pharmeasy|pharm\s*easy|tata\s*1\s*mg|1mg)\b/gi, " ")
+        .replace(/\b(order|buy|get|purchase|shop|please|pls|mujhe|chahiye|mangao|send|deliver|me|for)\b/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    return q || (raw || "").trim();
+}
+
+const VIT_C_BRAND_RE = /\b(limcee|celin|sukcee|vito-?c|redoxon)\b/i;
+const VIT_C_NAME_RE = /vitamin[-\s]*c\b|\bvit\.?\s*c\b|ascorbic/i;
+/** Combos / other supplements that merely mention vitamin C somewhere in a long title. */
+const VIT_C_NOISE_RE =
+    /\b(multi|multivitamin|omega|cod\s*liver|fish\s*oil|glutathione|collagen|biotin|b-?12|b\s*complex|d3|calcium|iron|hair|skin|glow|serum|cream|gel|face|lotion|mask|toner|sunscreen|protein|whey|amla\s*juice)\b/i;
+
+/** True single-ingredient-style vitamin C OTC product (Limcee, Celin, "Vitamin-C 500" …). */
+export function isTrueVitaminCProduct(name: string): boolean {
+    const n = name.toLowerCase();
+    if (NON_ORAL_RE.test(n)) return false;
+    if (VIT_C_BRAND_RE.test(n)) return true;
+    const head = n.replace(/\(.*?\)/g, " ").slice(0, 60);
+    if (!VIT_C_NAME_RE.test(head)) return false;
+    return !VIT_C_NOISE_RE.test(n);
+}
+
+function vitaminCScore(query: string, h: GuestCatalogHit): number {
+    const n = h.name.toLowerCase();
+    let s = 0;
+    if (/\blimcee\b/.test(n) && /500/.test(n) && !/zinc/.test(n)) s += 40;
+    else if (/\bcelin\b/.test(n) && /500/.test(n)) s += 34;
+    else if (/^vitamin[-\s]*c\s*500\b/.test(n)) s += 30;
+    else if (/\blimcee\b|\bcelin\b|\bsukcee\b/.test(n)) s += 20;
+    else s += 10;
+    if (/\b(chewable|tablet|tablets|strip)\b/.test(n)) s += 6;
+    if (/effervescent|bottle|gumm/.test(n)) s -= 4;
+    if (/capsule/.test(n)) s += /capsule/i.test(query) ? 4 : -2;
+    if (/\bzinc\b/.test(n) && !/zinc/i.test(query)) s -= 6;
+    if (h.inStock === true) s += 3;
+    return s;
+}
+
+/**
+ * Vitamin C asks: only true vitamin C OTC oral products, in stock at the pincode,
+ * never Rx / injections, ranked Limcee 500 → Celin 500 → Vitamin-C 500 chewable → rest.
+ */
+export function rankVitaminCHits(query: string, hits: GuestCatalogHit[]): GuestCatalogHit[] {
+    const clean = hits.filter(
+        (h) => !h.requiresRx && h.inStock !== false && isTrueVitaminCProduct(h.name),
+    );
+    return clean.sort(
+        (a, b) =>
+            vitaminCScore(query, b) - vitaminCScore(query, a) ||
+            (a.pricePaise ?? 1e9) - (b.pricePaise ?? 1e9) ||
+            a.name.length - b.name.length,
+    );
+}
 const TOPICAL_RE = /\b(cream|serum|gel|face\s*wash|lotion|toner|sunscreen|mask)\b/i;
 
 /** Prefer names that contain query tokens (e.g. vitamin+c → Limcee Vit C, not Evion Vit E). */
@@ -334,7 +396,7 @@ export async function searchGuestCatalog(input: {
     pincode?: string;
 }): Promise<GuestCatalogSearchResult> {
     const partner = String(input.partner || "").toLowerCase() as CommercePartnerKey;
-    const query = input.query.trim().slice(0, 120);
+    const query = normalizeCatalogQuery(input.query).slice(0, 120);
     if (!query) {
         return {
             hits: [],
@@ -348,11 +410,23 @@ export async function searchGuestCatalog(input: {
     try {
         if (partner === "apollo") {
             const pin = /^[1-9]\d{5}$/.test(String(input.pincode || "")) ? String(input.pincode) : "";
-            let raw = await searchApolloPublic(query, pin);
             if (isVitaminCQuery(query)) {
-                const brandHits = await searchApolloPublic("limcee", pin);
-                raw = dedupeHits([...raw, ...brandHits]);
+                // Canonical searches (typos like "bitamic c" / "vit c tablets" return junk upstream).
+                const queries = Array.from(new Set(["vitamin c", "limcee", "celin", query.toLowerCase()]));
+                const lists = await Promise.all(queries.map((q) => searchApolloPublic(q, pin)));
+                const hits = rankVitaminCHits(query, dedupeHits(lists.flat()));
+                return {
+                    hits,
+                    searched: true,
+                    unavailableReason:
+                        hits.length === 0
+                            ? `No in-stock vitamin C tablets on Apollo${pin ? ` for ${pin}` : ""} right now. Try another name.`
+                            : undefined,
+                    partner,
+                    query,
+                };
             }
+            let raw = await searchApolloPublic(query, pin);
             // Drop SKUs Apollo says are out of stock at this pincode (keep all if that empties the list)
             const stocked = raw.filter((h) => h.inStock !== false);
             if (stocked.length) raw = stocked;
@@ -384,8 +458,12 @@ export async function searchGuestCatalog(input: {
             let raw = await searchPharmeasyPublic(query);
             // Vit C often returns Iron/Amla multi-vits on PE — also pull Limcee/Celin brand hits.
             if (isVitaminCQuery(query)) {
-                const brandHits = await searchPharmeasyPublic("limcee");
-                raw = dedupeHits([...raw, ...brandHits]);
+                const extra = await Promise.all(["vitamin c", "limcee", "celin"].map((q) => searchPharmeasyPublic(q)));
+                raw = dedupeHits([...raw, ...extra.flat()]);
+                const vc = rankVitaminCHits(query, raw);
+                if (vc.length) {
+                    return { hits: vc, searched: true, partner, query };
+                }
             }
             const hits = filterWeakHits(query, rankGuestHits(query, raw));
             return {

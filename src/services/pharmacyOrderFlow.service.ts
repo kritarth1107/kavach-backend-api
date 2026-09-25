@@ -78,8 +78,9 @@ export function parseMedicineList(text: string): Array<{ name: string; quantity:
     // "Order vitamin c from apollo" → vitamin c only (not "from")
     // "Apollo and I need vit c tablets no prescription needed" / "order vitamic c capsules"
     let cleaned = text
-        .replace(/\bvita\w*\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c capsules ")
-        .replace(/\bvit\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c capsules ")
+        // Don't invent a dosage form: "capsules" made catalog search favour cod-liver-oil capsules.
+        .replace(/\bvita\w*\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c ")
+        .replace(/\bvit\s*c(?:\s+(?:capsules?|tablets?|tabs?|pills?))?/gi, " vitamin c ")
         // Strip "from/on/via/at <partner>" before bare partner wipe so "from" is not left as a token
         .replace(
             /\b(?:from|on|via|at|using|with)\s+(?:apollo|pharm\s*easy|pharmeasy|tata\s*1\s*mg|1\s*mg|tata)\b/gi,
@@ -94,11 +95,11 @@ export function parseMedicineList(text: string): Array<{ name: string; quantity:
         .replace(/\s+/g, " ")
         .trim();
     if (!cleaned && VITAMIN_C.test(text)) {
-        cleaned = "vitamin c capsules";
+        cleaned = "vitamin c";
     }
     if (!cleaned) {
         return VITAMIN_C.test(text)
-            ? [{ name: "vitamin c capsules", quantity: 1, requiresRx: false }]
+            ? [{ name: "vitamin c", quantity: 1, requiresRx: false }]
             : [];
     }
     const junkToken =
@@ -117,7 +118,7 @@ export function parseMedicineList(text: string): Array<{ name: string; quantity:
     if (VITAMIN_C.test(text)) {
         const hasVitC = items.some((i) => /vitamin\s*c/i.test(i.name));
         if (!hasVitC) {
-            items = [{ name: "vitamin c capsules", quantity: 1, requiresRx: false }, ...items].slice(0, 8);
+            items = [{ name: "vitamin c", quantity: 1, requiresRx: false }, ...items].slice(0, 8);
         } else {
             items = items.map((i) =>
                 /vitamin\s*c/i.test(i.name) ? { ...i, requiresRx: false } : i,

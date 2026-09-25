@@ -478,7 +478,7 @@ export async function handleWhatsAppInbound(body: {
                 bd!.phase === "awaiting_otp" ||
                 bd!.phase === "awaiting_confirm");
         const shortCtrl =
-            /^(status|order\s*status|ok|okay|okk|k|confirm|place|yes|haan|[123]|cancel|stop)$/i.test(
+            /^(status|order\s*status|ok|okay|okk|k|confirm|place|place\s*order|yes|haan|[123]|cancel|stop|order\s*again|re-?order)$/i.test(
                 text.trim(),
             );
         if (pharmActive && shortCtrl) {

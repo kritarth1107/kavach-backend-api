@@ -1,0 +1,823 @@
+/**
+ * Apollo checkout on the SAME signed-in Playwright page that built the cart
+ * (parked after the confirm-before-pay card). Runs ONLY after the user replied
+ * "confirm" to that exact card.
+ *
+ *   /medicines-cart → Proceed → (address pick: pincode / C504 Sunita Park)
+ *   → /delivery-options → PROCEED → /pay/<id> → "Pay on Delivery" (COD)
+ *   → "Place order for ₹X" → /order-status/<txn>/<status> ("Order ID(s) : …")
+ *
+ * Hard rules:
+ *   - Payment method is ALWAYS Cash on Delivery. If COD is missing / disabled → stop.
+ *   - Only this module clicks "Place order", and only the COD card's CTA, once.
+ *   - Payable amount above the confirmed total → stop and re-confirm.
+ *   - Login popup → session expired → stop (never start a new login / SMS).
+ *   - Gemini is a bounded navigation fallback that can never touch payment / place.
+ *   - dryRun stops right before the Place order click.
+ */
+import type { Page } from "playwright";
+import { planBrowserActions } from "./geminiComputerUse.service";
+
+export type CheckoutStage =
+    | "cart"
+    | "address"
+    | "delivery_options"
+    | "payment"
+    | "success"
+    | "order_failed"
+    | "login"
+    | "rx_review"
+    | "unknown";
+
+export type ApolloCheckoutOutcome =
+    | {
+          status: "placed";
+          orderIds?: string;
+          totalLabel?: string;
+          transactionId?: string;
+          addressVerified: "full" | "pincode" | "none";
+          url: string;
+          detail: string;
+      }
+    | { status: "placed_unverified"; totalLabel?: string; url: string; detail: string }
+    | { status: "cod_unavailable"; url: string; detail: string }
+    | { status: "session_expired"; url: string; detail: string }
+    | {
+          status: "amount_changed";
+          payableLabel: string;
+          addressVerified: "full" | "pincode" | "none";
+          url: string;
+          detail: string;
+      }
+    | { status: "address_unverified"; url: string; detail: string }
+    | { status: "order_failed"; url: string; detail: string }
+    | { status: "rx_required"; url: string; detail: string }
+    | { status: "cancelled"; url: string; detail: string }
+    | { status: "stuck"; stage: CheckoutStage; url: string; detail: string }
+    | { status: "dry_run_stop"; stage: CheckoutStage; payableLabel?: string; url: string; detail: string };
+
+export type ApolloCheckoutOptions = {
+    deadlineAt: number;
+    pincode?: string;
+    /** Distinctive address fragments, e.g. ["C504", "Sunita Park"]. */
+    addressHints?: string[];
+    /** Numeric rupees from the card the user confirmed (payable must not exceed it). */
+    confirmedTotalRupees?: number;
+    skuName?: string;
+    /** Stop right before clicking Place order (guest / test runs). */
+    dryRun?: boolean;
+    /** Checked immediately before the Place order click (timeout / cancel). */
+    mayPlace?: () => boolean;
+    isCancelled?: () => boolean;
+    progress?: (detail: string) => Promise<void>;
+    /** Set the moment Place order is clicked (caller must never re-click). */
+    onPlaceClicked?: () => void;
+    /** Address evidence already gathered on this page in an earlier run (resume on /pay). */
+    priorAddressVerified?: "full" | "pincode" | "none";
+    /** Max Gemini fallback steps (0 disables). */
+    geminiMaxSteps?: number;
+    log?: (event: string, extra?: Record<string, unknown>) => void;
+};
+
+const BASE = "https://www.apollopharmacy.in";
+const PAY_BLOCK_RE =
+    /pay|place\s*order|upi|card|net\s*banking|netbanking|wallet|pay\s*later|simpl|lazypay|cash|\bcod\b|buy\s*now|log\s*out|logout|sign\s*out|remove|delete|clear\s*cart|add\s*new\s*address|circle|membership/i;
+
+function remaining(deadlineAt: number): number {
+    return deadlineAt - Date.now();
+}
+
+async function sleep(page: Page, ms: number): Promise<void> {
+    await page.waitForTimeout(Math.max(0, ms)).catch(() => undefined);
+}
+
+async function bodyText(page: Page, max = 8000): Promise<string> {
+    return page
+        .evaluate((m) => (document.body?.innerText || "").slice(0, m), max)
+        .catch(() => "");
+}
+
+function safeUrl(page: Page): string {
+    try {
+        return page.url();
+    } catch {
+        return "";
+    }
+}
+
+export function rupeesFromLabel(label?: string): number | undefined {
+    if (!label) return undefined;
+    const m = label.replace(/,/g, "").match(/₹\s*(\d+(?:\.\d{1,2})?)/) || label.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)/);
+    if (!m) return undefined;
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+export function addressHintsFrom(addressLabel?: string): string[] {
+    if (!addressLabel) return [];
+    const hints: string[] = [];
+    const flat = addressLabel.split(",")[0]?.trim();
+    if (flat && flat.length >= 2 && flat.length <= 20) hints.push(flat);
+    const m = addressLabel.match(/\b([A-Za-z]+\s+(?:park|nagar|colony|society|enclave|residency|apartments?|towers?|vihar))\b/i);
+    if (m) hints.push(m[1]!);
+    return hints;
+}
+
+async function isVisible(page: Page, selector: string): Promise<boolean> {
+    const loc = page.locator(selector);
+    const n = Math.min(await loc.count().catch(() => 0), 6);
+    for (let i = 0; i < n; i++) {
+        if (await loc.nth(i).isVisible().catch(() => false)) return true;
+    }
+    return false;
+}
+
+async function loginPopupVisible(page: Page): Promise<boolean> {
+    if (/popup_state=open_login_popup/i.test(safeUrl(page))) return true;
+    return isVisible(page, 'input[placeholder*="phone number" i], input[placeholder*="mobile number" i]');
+}
+
+async function addressPickerVisible(page: Page): Promise<boolean> {
+    return page
+        .evaluate(() => {
+            const nodes = Array.from(document.querySelectorAll('[role="dialog"], [class*="modal" i], [class*="drawer" i], [class*="Dialog" i]'));
+            return nodes.some((n) => {
+                const r = (n as HTMLElement).getBoundingClientRect();
+                if (r.width < 150 || r.height < 120) return false;
+                const t = ((n as HTMLElement).innerText || "").toLowerCase();
+                return /saved address|deliver here|select (a )?(delivery )?address|choose (a )?(delivery )?address|add new address/.test(t);
+            });
+        })
+        .catch(() => false);
+}
+
+export async function detectCheckoutStage(page: Page): Promise<CheckoutStage> {
+    const url = safeUrl(page);
+    if (/\/order-status\//i.test(url)) {
+        const t = (await bodyText(page, 4000)).toLowerCase();
+        if (/order id\(s\)|order placed|order confirmed|order successful|placed successfully/.test(t) || /\/success\b/i.test(url)) {
+            return "success";
+        }
+        if (/fail|abort|cancel/.test(url.toLowerCase()) || /payment failed|order failed|transaction failed/.test(t)) {
+            return "order_failed";
+        }
+        return "success";
+    }
+    if (await loginPopupVisible(page)) return "login";
+    if (/\/pay\//i.test(url)) return "payment";
+    if (/prescription-review/i.test(url)) return "rx_review";
+    if (await addressPickerVisible(page)) return "address";
+    if (/\/delivery-options/i.test(url)) return "delivery_options";
+    if (/\/medicines-cart/i.test(url)) return "cart";
+    return "unknown";
+}
+
+/** Address evidence on the current page: full (pincode + street hint), pincode only, none. */
+async function addressEvidence(
+    page: Page,
+    pincode?: string,
+    hints: string[] = [],
+): Promise<"full" | "pincode" | "none"> {
+    if (!pincode) return "none";
+    const text = await bodyText(page, 12000);
+    // Skip the global header ("Delivery Address / Raipur 492001" is just browse location)
+    const idx = text.search(/your\s*cart|choose\s*delivery\s*type|amount\s*to\s*pay|deliver(?:y|ing)?\s*to|shipping\s*address|payment\s*options/i);
+    const body = idx > 0 ? text.slice(idx) : text;
+    const lowerBody = body.toLowerCase();
+    const pinInBody = new RegExp(`\\b${pincode}\\b`).test(body);
+    const hintHit = hints.some((h) => h && lowerBody.includes(h.toLowerCase()));
+    if (pinInBody && hintHit) return "full";
+    if (pinInBody || new RegExp(`\\b${pincode}\\b`).test(text)) return "pincode";
+    return "none";
+}
+
+/** Open the address picker (header / Change) and choose the card with the pincode (+ hints). */
+async function selectAddress(
+    page: Page,
+    pincode: string,
+    hints: string[],
+    deadlineAt: number,
+    log?: ApolloCheckoutOptions["log"],
+): Promise<boolean> {
+    if (remaining(deadlineAt) < 12_000) return false;
+    if (!(await addressPickerVisible(page))) {
+        const opener = page
+            .locator('button, [role="button"], a, label, p, span')
+            .filter({ hasText: /^\s*(select\s*address|change(\s*address)?|select\s*delivery\s*address|delivery\s*address)\s*$/i })
+            .first();
+        if (!(await opener.isVisible().catch(() => false))) return false;
+        await opener.click({ timeout: 3000 }).catch(() => undefined);
+        await sleep(page, 1800);
+    }
+    const picked = await page
+        .evaluate(
+            ({ pin, hints }) => {
+                const els = Array.from(document.querySelectorAll("div, li, label, p, span"));
+                const cands = els.filter((e) => {
+                    const t = (e as HTMLElement).innerText || "";
+                    const r = e.getBoundingClientRect();
+                    return t.includes(pin) && t.length < 400 && r.width > 50 && r.height > 20 && !/add new address/i.test(t);
+                });
+                const score = (e: Element) => {
+                    const t = ((e as HTMLElement).innerText || "").toLowerCase();
+                    return hints.filter((h) => h && t.includes(h.toLowerCase())).length;
+                };
+                cands.sort((a, b) => score(b) - score(a) || (a as HTMLElement).innerText.length - (b as HTMLElement).innerText.length);
+                const el = cands[0] as HTMLElement | undefined;
+                if (!el) return null;
+                const radio = el.querySelector('input[type="radio"]') as HTMLElement | null;
+                (radio || el).click();
+                return { text: el.innerText.replace(/\s+/g, " ").slice(0, 140), score: score(el) };
+            },
+            { pin: pincode, hints },
+        )
+        .catch(() => null);
+    log?.("address_pick", { picked });
+    if (!picked) {
+        await page.keyboard.press("Escape").catch(() => undefined);
+        return false;
+    }
+    await sleep(page, 1200);
+    const confirmBtn = page
+        .locator('button, [role="button"]')
+        .filter({ hasText: /^\s*(deliver\s*here|confirm(\s*address)?|select|done|proceed|continue|save\s*&?\s*proceed)\s*$/i })
+        .first();
+    if (await confirmBtn.isVisible().catch(() => false)) {
+        await confirmBtn.click({ timeout: 3000 }).catch(() => undefined);
+        await sleep(page, 1500);
+    }
+    return true;
+}
+
+async function clickProceed(page: Page): Promise<string | null> {
+    const cands = [
+        page.locator('button[title="Proceed" i]'),
+        page.locator("button").filter({ hasText: /^\s*proceed(\s*to\s*checkout)?\s*$/i }),
+        page.locator('[role="button"]').filter({ hasText: /^\s*proceed\s*$/i }),
+    ];
+    for (const loc of cands) {
+        const n = Math.min(await loc.count().catch(() => 0), 4);
+        for (let i = 0; i < n; i++) {
+            const el = loc.nth(i);
+            if (!(await el.isVisible().catch(() => false))) continue;
+            if (await el.isDisabled().catch(() => false)) continue;
+            const label = ((await el.innerText({ timeout: 800 }).catch(() => "")) || "Proceed").trim();
+            if (PAY_BLOCK_RE.test(label)) continue;
+            await el.click({ timeout: 4000 }).catch(() => undefined);
+            return label;
+        }
+    }
+    return null;
+}
+
+type CodState =
+    | { kind: "absent" }
+    | { kind: "disabled"; reason: string }
+    | { kind: "ready"; checked: boolean; ctaText?: string; ctaDisabled?: boolean; payable?: number };
+
+async function readCodState(page: Page): Promise<CodState> {
+    return page
+        .evaluate(() => {
+            const radio = document.getElementById("checkbox-cod") as HTMLInputElement | null;
+            let container: HTMLElement | null = null;
+            if (radio) {
+                let el: HTMLElement | null = radio;
+                while (el && !/codContainer/i.test(el.className || "")) el = el.parentElement;
+                container = el;
+            }
+            if (!container) {
+                container = Array.from(document.querySelectorAll('[class*="codContainer" i]'))[0] as HTMLElement | undefined || null;
+            }
+            if (!radio && !container) return { kind: "absent" as const };
+            const card = (container?.querySelector('[class*="codCard" i]') as HTMLElement | null) || container;
+            const disabled =
+                Boolean(radio?.disabled) || card?.getAttribute("aria-disabled") === "true";
+            const sub = (container?.querySelector('[class*="codSubtitle" i]') as HTMLElement | null)?.innerText?.trim() || "";
+            if (disabled) return { kind: "disabled" as const, reason: sub || "Cash on Delivery is disabled for this order" };
+            const btn = Array.from(container?.querySelectorAll("button") || []).find((b) =>
+                /^\s*place\s*order\s*for\b/i.test((b as HTMLElement).innerText || "") ||
+                /^pay rupees\s*\d/i.test(b.getAttribute("aria-label") || ""),
+            ) as HTMLButtonElement | undefined;
+            const ctaText = btn?.innerText?.replace(/\s+/g, " ").trim();
+            const aria = btn?.getAttribute("aria-label") || "";
+            const m =
+                aria.replace(/,/g, "").match(/pay rupees\s*(\d+(?:\.\d{1,2})?)/i) ||
+                ctaText?.replace(/,/g, "").match(/(\d+(?:\.\d{1,2})?)\s*$/);
+            return {
+                kind: "ready" as const,
+                checked: Boolean(radio?.checked),
+                ctaText,
+                ctaDisabled: btn ? btn.disabled || /disabled/i.test(btn.className || "") : undefined,
+                payable: m ? Number(m[1]) : undefined,
+            };
+        })
+        .catch(() => ({ kind: "absent" as const }));
+}
+
+async function selectCod(page: Page): Promise<boolean> {
+    // Click the COD card header (role=button), fall back to the radio itself.
+    const clicked = await page
+        .evaluate(() => {
+            const radio = document.getElementById("checkbox-cod") as HTMLInputElement | null;
+            let el: HTMLElement | null = radio;
+            while (el && !/codCard/i.test(el.className || "")) el = el.parentElement;
+            const header = el?.querySelector('[role="button"]') as HTMLElement | null;
+            if (header) {
+                header.scrollIntoView({ block: "center" });
+                header.click();
+                return "header";
+            }
+            if (radio) {
+                radio.scrollIntoView({ block: "center" });
+                radio.click();
+                return "radio";
+            }
+            return null;
+        })
+        .catch(() => null);
+    if (!clicked) {
+        const loc = page.locator("#checkbox-cod");
+        if (await loc.count().catch(() => 0)) {
+            await loc.first().check({ timeout: 3000, force: true }).catch(() => undefined);
+        }
+    }
+    await sleep(page, 1000);
+    const st = await readCodState(page);
+    return st.kind === "ready" && st.checked;
+}
+
+async function readCheckoutSession(page: Page): Promise<{
+    orderIds?: string;
+    grandTotal?: number;
+    netAmountPaid?: number;
+    transactionId?: string;
+    isCodEligible?: string | null;
+    codMessage?: string | null;
+}> {
+    return page
+        .evaluate(() => {
+            let v: Record<string, unknown> = {};
+            try {
+                v = JSON.parse(sessionStorage.getItem("pharmacyCheckoutValues") || "{}") || {};
+            } catch {
+                v = {};
+            }
+            return {
+                orderIds: typeof v.orderIds === "string" ? v.orderIds : undefined,
+                grandTotal: typeof v.grandTotal === "number" ? v.grandTotal : undefined,
+                netAmountPaid: typeof v.netAmountPaid === "number" ? v.netAmountPaid : undefined,
+                transactionId: v.transactionId != null ? String(v.transactionId) : undefined,
+                isCodEligible: sessionStorage.getItem("isCodEligible"),
+                codMessage: sessionStorage.getItem("codMessage"),
+            };
+        })
+        .catch(() => ({}));
+}
+
+export function parseOrderSuccess(text: string, url: string): { orderIds?: string; totalLabel?: string; transactionId?: string } {
+    const ids = text.match(/order\s*id\(?s?\)?\s*[:#-]?\s*([0-9A-Z][0-9A-Z,\s-]{3,60})/i)?.[1];
+    const orderIds = ids
+        ?.split(/[\s,]+/)
+        .filter((t) => /\d{4,}/.test(t))
+        .join(", ");
+    const total =
+        text.match(/(amount\s*(?:to\s*be\s*)?(?:paid|payable|to\s*pay)|total\s*(?:amount|bill|payable)?|cash\s*to\s*collect)[^₹\d]{0,30}₹?\s*([\d,]+(?:\.\d{1,2})?)/i)?.[2];
+    const txn = url.match(/\/order-status\/([^/?#]+)/i)?.[1];
+    return {
+        orderIds: orderIds || undefined,
+        totalLabel: total ? `₹${total}` : undefined,
+        transactionId: txn,
+    };
+}
+
+/**
+ * Bounded Gemini navigation step: may only move through cart/address/delivery screens.
+ * Every click is resolved to its on-page text and blocked if it looks like payment /
+ * place order / destructive. Typing is never allowed.
+ */
+async function geminiNavigateStep(
+    page: Page,
+    opts: { stage: CheckoutStage; pincode?: string; hints: string[]; step: number; maxSteps: number; log?: ApolloCheckoutOptions["log"] },
+): Promise<number> {
+    if (opts.stage === "payment" || opts.stage === "success" || opts.stage === "login") return 0;
+    let executed = 0;
+    try {
+        const screenshot = await page.screenshot({ type: "png", fullPage: false, timeout: 8_000 });
+        const accessibilityHint = await page
+            .evaluate(() =>
+                Array.from(document.querySelectorAll("h1,h2,button,a,[role=button]"))
+                    .slice(0, 40)
+                    .map((n) => (n.textContent || "").trim().slice(0, 60))
+                    .filter(Boolean)
+                    .join(" | ")
+                    .slice(0, 800),
+            )
+            .catch(() => "");
+        const planned = await Promise.race([
+            planBrowserActions({
+                screenshotBase64: screenshot.toString("base64"),
+                mimeType: "image/png",
+                url: safeUrl(page),
+                title: await page.title().catch(() => ""),
+                accessibilityHint,
+                goal:
+                    `Apollo checkout navigation ONLY: get from the cart to the payment options page. ` +
+                    `If asked for a delivery address, pick the saved one with pincode ${opts.pincode || "(given)"}` +
+                    `${opts.hints.length ? ` / ${opts.hints.join(" / ")}` : ""}. Click Proceed / Deliver here / Continue.`,
+                playbookHint:
+                    "NEVER choose a payment method, NEVER click Pay / Place order / UPI / Card / Wallet / Cash on Delivery, " +
+                    "NEVER type, NEVER log out, NEVER remove items or add a new address. Already signed in.",
+                step: opts.step,
+                maxSteps: opts.maxSteps,
+                otpProvided: true,
+                userConfirmed: false,
+            } as Parameters<typeof planBrowserActions>[0]),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 20_000)),
+        ]);
+        if (!planned) {
+            opts.log?.("gemini_timeout", {});
+            return 0;
+        }
+        for (const action of planned.actions.slice(0, 3)) {
+            if (action.type === "scroll") {
+                await page.mouse.wheel(0, action.direction === "up" ? -600 : 600).catch(() => undefined);
+                executed++;
+                continue;
+            }
+            if (action.type === "wait") {
+                await sleep(page, Math.min(action.ms ?? 800, 3000));
+                continue;
+            }
+            if (action.type !== "click") continue; // no typing / goto / press / done / confirm
+            let targetText = `${action.text || ""} ${action.message || ""}`;
+            if (action.selector) {
+                targetText += " " + ((await page.locator(action.selector).first().innerText({ timeout: 1000 }).catch(() => "")) || "");
+            } else if (typeof action.x === "number" && typeof action.y === "number") {
+                const vp = page.viewportSize() || { width: 1280, height: 720 };
+                const cx = Math.round((action.x / 1000) * vp.width);
+                const cy = Math.round((action.y / 1000) * vp.height);
+                targetText += " " + (await page
+                    .evaluate(({ x, y }) => {
+                        let el = document.elementFromPoint(x, y) as HTMLElement | null;
+                        const parts: string[] = [];
+                        for (let i = 0; el && i < 4; i++, el = el.parentElement) {
+                            parts.push((el.innerText || el.getAttribute("aria-label") || "").slice(0, 120));
+                            if (el.id === "checkbox-cod" || /cod|payment|pay/i.test(el.className || "")) parts.push("pay");
+                        }
+                        return parts.join(" ");
+                    }, { x: cx, y: cy })
+                    .catch(() => "pay"));
+                if (PAY_BLOCK_RE.test(targetText)) {
+                    opts.log?.("gemini_click_blocked", { text: targetText.slice(0, 120) });
+                    continue;
+                }
+                await page.mouse.click(cx, cy).catch(() => undefined);
+                executed++;
+                await sleep(page, 1500);
+                continue;
+            }
+            if (!action.selector || PAY_BLOCK_RE.test(targetText)) {
+                opts.log?.("gemini_click_blocked", { text: targetText.slice(0, 120) });
+                continue;
+            }
+            await page.locator(action.selector).first().click({ timeout: 5000 }).catch(() => undefined);
+            executed++;
+            await sleep(page, 1500);
+        }
+    } catch (err) {
+        opts.log?.("gemini_error", { msg: err instanceof Error ? err.message.slice(0, 120) : String(err) });
+    }
+    return executed;
+}
+
+/**
+ * Drive checkout from wherever the parked page currently is (cart / delivery options /
+ * payment) to a placed COD order. Resumable: an "amount_changed" stop leaves the page
+ * on /pay so the next confirm continues from there.
+ */
+export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptions): Promise<ApolloCheckoutOutcome> {
+    const log = opts.log ?? (() => undefined);
+    const hints = opts.addressHints ?? [];
+    const progress = async (d: string) => {
+        try {
+            await opts.progress?.(d);
+        } catch {
+            /* ignore */
+        }
+    };
+    const said = new Set<string>();
+    const sayOnce = async (key: string, d: string) => {
+        if (said.has(key)) return;
+        said.add(key);
+        await progress(d);
+    };
+
+    let addressVerified: "full" | "pincode" | "none" = opts.priorAddressVerified ?? "none";
+    let addressAttempts = 0;
+    let proceedClicks = 0;
+    let geminiSteps = 0;
+    const geminiMax = opts.geminiMaxSteps ?? 3;
+    let lastStage: CheckoutStage | null = null;
+    let stageSince = Date.now();
+    let codSelectTries = 0;
+
+    let stage = await detectCheckoutStage(page);
+    if (stage === "unknown" || stage === "address") {
+        if (stage === "unknown") {
+            await page
+                .goto(`${BASE}/medicines-cart`, { waitUntil: "domcontentloaded", timeout: Math.max(1_000, Math.min(25_000, remaining(opts.deadlineAt) - 5_000)) })
+                .catch(() => undefined);
+            await sleep(page, 2500);
+        }
+    } else if (stage === "cart") {
+        // Reload so the cart reflects server state after the idle wait.
+        await page
+            .goto(`${BASE}/medicines-cart`, { waitUntil: "domcontentloaded", timeout: Math.max(1_000, Math.min(25_000, remaining(opts.deadlineAt) - 5_000)) })
+            .catch(() => undefined);
+        await sleep(page, 2500);
+    }
+    await sayOnce("cart", "placing order… opening your Apollo cart");
+
+    while (remaining(opts.deadlineAt) > 4_000) {
+        if (opts.isCancelled?.()) return { status: "cancelled", url: safeUrl(page), detail: "cancelled" };
+        stage = await detectCheckoutStage(page);
+        if (stage !== lastStage) {
+            log("stage", { stage, url: safeUrl(page), msLeft: remaining(opts.deadlineAt) });
+            lastStage = stage;
+            stageSince = Date.now();
+        }
+        const stuckMs = Date.now() - stageSince;
+
+        switch (stage) {
+            case "login":
+                return {
+                    status: "session_expired",
+                    url: safeUrl(page),
+                    detail: "Apollo asked to log in again (session expired)",
+                };
+            case "rx_review":
+                return {
+                    status: "rx_required",
+                    url: safeUrl(page),
+                    detail: "Apollo wants a prescription review for this cart",
+                };
+            case "success": {
+                const text = await bodyText(page, 6000);
+                const parsed = parseOrderSuccess(text, safeUrl(page));
+                const ss = await readCheckoutSession(page);
+                const totalLabel =
+                    parsed.totalLabel ||
+                    (typeof ss.netAmountPaid === "number" && ss.netAmountPaid > 0
+                        ? `₹${ss.netAmountPaid}`
+                        : typeof ss.grandTotal === "number"
+                          ? `₹${ss.grandTotal}`
+                          : undefined);
+                return {
+                    status: "placed",
+                    orderIds: parsed.orderIds || ss.orderIds || undefined,
+                    totalLabel,
+                    transactionId: ss.transactionId || parsed.transactionId,
+                    addressVerified,
+                    url: safeUrl(page),
+                    detail: text.replace(/\s+/g, " ").slice(0, 300),
+                };
+            }
+            case "order_failed": {
+                const text = await bodyText(page, 3000);
+                return { status: "order_failed", url: safeUrl(page), detail: text.replace(/\s+/g, " ").slice(0, 200) };
+            }
+            case "address": {
+                if (opts.pincode && addressAttempts < 2) {
+                    addressAttempts++;
+                    await sayOnce("addr", `selecting delivery address ${opts.pincode}…`);
+                    await selectAddress(page, opts.pincode, hints, opts.deadlineAt, log);
+                    await sleep(page, 1200);
+                    continue;
+                }
+                break;
+            }
+            case "cart": {
+                if (addressVerified === "none" && opts.pincode) {
+                    addressVerified = await addressEvidence(page, opts.pincode, hints);
+                    if (addressVerified !== "full" && addressAttempts < 1) {
+                        addressAttempts++;
+                        const picked = await selectAddress(page, opts.pincode, hints, opts.deadlineAt, log);
+                        if (picked) {
+                            await sleep(page, 1500);
+                            addressVerified = await addressEvidence(page, opts.pincode, hints);
+                        }
+                    }
+                    log("address_evidence", { at: "cart", addressVerified });
+                }
+                if (proceedClicks < 3 && (proceedClicks === 0 || stuckMs > 6_000)) {
+                    const clicked = await clickProceed(page);
+                    if (clicked) {
+                        proceedClicks++;
+                        stageSince = Date.now();
+                        await sayOnce("proceed", "proceeding to checkout…");
+                        await sleep(page, 2500);
+                        continue;
+                    }
+                }
+                break;
+            }
+            case "delivery_options": {
+                const ev = await addressEvidence(page, opts.pincode, hints);
+                if (ev === "full" || (ev === "pincode" && addressVerified !== "full")) addressVerified = ev;
+                if (opts.pincode && ev === "none" && addressAttempts < 2) {
+                    addressAttempts++;
+                    await sayOnce("addr", `selecting delivery address ${opts.pincode}…`);
+                    await selectAddress(page, opts.pincode, hints, opts.deadlineAt, log);
+                    await sleep(page, 1500);
+                    continue;
+                }
+                if (opts.pincode && addressVerified === "none") {
+                    return {
+                        status: "address_unverified",
+                        url: safeUrl(page),
+                        detail: `Apollo's checkout didn't show delivery pincode ${opts.pincode}`,
+                    };
+                }
+                log("address_evidence", { at: "delivery_options", addressVerified });
+                if (proceedClicks < 5 && stuckMs > 1_500) {
+                    const clicked = await clickProceed(page);
+                    if (clicked) {
+                        proceedClicks++;
+                        stageSince = Date.now();
+                        await sayOnce("to_pay", `address ${opts.pincode || ""} ✓ — opening payment options…`.replace("  ", " "));
+                        await sleep(page, 3000);
+                        continue;
+                    }
+                }
+                break;
+            }
+            case "payment": {
+                if (opts.pincode && addressVerified === "none") {
+                    // Resumed on /pay (e.g. after an amount re-confirm): the address was checked
+                    // before /pay was reached; re-read only for the report.
+                    addressVerified = await addressEvidence(page, opts.pincode, hints);
+                    if (addressVerified === "none") {
+                        return {
+                            status: "address_unverified",
+                            url: safeUrl(page),
+                            detail: `couldn't confirm delivery pincode ${opts.pincode} before payment`,
+                        };
+                    }
+                }
+                await sayOnce("cod", "selecting Cash on Delivery…");
+                const ss = await readCheckoutSession(page);
+                if (ss.isCodEligible === "false") {
+                    return {
+                        status: "cod_unavailable",
+                        url: safeUrl(page),
+                        detail: (ss.codMessage && ss.codMessage !== "undefined" && ss.codMessage !== "null" ? ss.codMessage : "") ||
+                            "Apollo says this order isn't eligible for Cash on Delivery",
+                    };
+                }
+                let cod = await readCodState(page);
+                if (cod.kind === "absent") {
+                    await page.mouse.wheel(0, 900).catch(() => undefined);
+                    await sleep(page, 900);
+                    cod = await readCodState(page);
+                }
+                if (cod.kind === "absent") {
+                    if (stuckMs > 20_000) {
+                        return {
+                            status: "cod_unavailable",
+                            url: safeUrl(page),
+                            detail: "Apollo's payment page didn't offer Pay on Delivery",
+                        };
+                    }
+                    await sleep(page, 1000);
+                    continue;
+                }
+                if (cod.kind === "disabled") {
+                    return { status: "cod_unavailable", url: safeUrl(page), detail: cod.reason };
+                }
+                if (!cod.checked) {
+                    if (codSelectTries >= 3) {
+                        return { status: "stuck", stage, url: safeUrl(page), detail: "couldn't select Cash on Delivery" };
+                    }
+                    codSelectTries++;
+                    await selectCod(page);
+                    continue;
+                }
+                // COD selected: read the COD card's own CTA ("Place order for ₹X")
+                const fresh = await readCodState(page);
+                if (fresh.kind !== "ready" || !fresh.checked || !fresh.ctaText || fresh.ctaDisabled) {
+                    if (stuckMs > 15_000) {
+                        return {
+                            status: "cod_unavailable",
+                            url: safeUrl(page),
+                            detail: "Cash on Delivery was selected but Apollo didn't enable its Place order button",
+                        };
+                    }
+                    await sleep(page, 800);
+                    continue;
+                }
+                const payable = fresh.payable;
+                const payableLabel = typeof payable === "number" ? `₹${payable.toFixed(2).replace(/\.00$/, "")}` : fresh.ctaText;
+                if (
+                    typeof opts.confirmedTotalRupees === "number" &&
+                    typeof payable === "number" &&
+                    payable > opts.confirmedTotalRupees + 1
+                ) {
+                    return {
+                        status: "amount_changed",
+                        payableLabel,
+                        addressVerified,
+                        url: safeUrl(page),
+                        detail: `Apollo's payable amount is ${payableLabel}, the card said ₹${opts.confirmedTotalRupees}`,
+                    };
+                }
+                if (opts.dryRun) {
+                    return {
+                        status: "dry_run_stop",
+                        stage,
+                        payableLabel,
+                        url: safeUrl(page),
+                        detail: `dry run: COD selected, would click "${fresh.ctaText}"`,
+                    };
+                }
+                if (opts.mayPlace && !opts.mayPlace()) {
+                    return { status: "stuck", stage, url: safeUrl(page), detail: "time budget used up before Place order" };
+                }
+                await progress(`placing the order — Cash on Delivery ${payableLabel}…`);
+                const btn = page
+                    .locator('[class*="codContainer" i] button')
+                    .filter({ hasText: /^\s*place\s*order\s*for\b[^a-z]*[\d,]+(\.\d{1,2})?\s*$/i })
+                    .first();
+                if (!(await btn.isVisible().catch(() => false))) {
+                    await sleep(page, 600);
+                    continue;
+                }
+                opts.onPlaceClicked?.();
+                log("place_click", { payable, url: safeUrl(page) });
+                await btn.click({ timeout: 5000 }).catch((e) => log("place_click_error", { msg: String(e).slice(0, 120) }));
+                // Wait for the order-status page (never click Place again).
+                const until = Math.max(Date.now() + 5_000, opts.deadlineAt - 1_000);
+                while (Date.now() < until) {
+                    await sleep(page, 1000);
+                    const st = await detectCheckoutStage(page);
+                    if (st === "success" || st === "order_failed") break;
+                }
+                const after = await detectCheckoutStage(page);
+                if (after === "success") {
+                    const text = await bodyText(page, 6000);
+                    const parsed = parseOrderSuccess(text, safeUrl(page));
+                    const ss2 = await readCheckoutSession(page);
+                    return {
+                        status: "placed",
+                        orderIds: parsed.orderIds || ss2.orderIds || undefined,
+                        totalLabel: parsed.totalLabel || payableLabel,
+                        transactionId: ss2.transactionId || parsed.transactionId,
+                        addressVerified,
+                        url: safeUrl(page),
+                        detail: text.replace(/\s+/g, " ").slice(0, 300),
+                    };
+                }
+                if (after === "order_failed") {
+                    const text = await bodyText(page, 3000);
+                    return { status: "order_failed", url: safeUrl(page), detail: text.replace(/\s+/g, " ").slice(0, 200) };
+                }
+                const ss3 = await readCheckoutSession(page);
+                return {
+                    status: "placed_unverified",
+                    totalLabel: payableLabel,
+                    url: safeUrl(page),
+                    detail: `clicked Place order (COD)${ss3.orderIds ? `; Apollo order id(s) ${ss3.orderIds}` : ""} but no confirmation page yet`,
+                };
+            }
+            default:
+                break;
+        }
+
+        // Nothing deterministic worked for a while → bounded Gemini navigation (never payment).
+        const stuckFor = Date.now() - stageSince;
+        if (
+            geminiMax > 0 &&
+            geminiSteps < geminiMax &&
+            stuckFor > 8_000 &&
+            remaining(opts.deadlineAt) > 25_000 &&
+            (stage === "cart" || stage === "delivery_options" || stage === "address" || stage === "unknown")
+        ) {
+            geminiSteps++;
+            log("gemini_fallback", { stage, step: geminiSteps });
+            await sayOnce("gemini", "still working on the checkout screen…");
+            const n = await geminiNavigateStep(page, { stage, pincode: opts.pincode, hints, step: geminiSteps, maxSteps: geminiMax, log });
+            if (n > 0) stageSince = Date.now();
+            continue;
+        }
+        if (stage === "unknown" && stuckFor > 10_000) {
+            await page.goto(`${BASE}/medicines-cart`, { waitUntil: "domcontentloaded", timeout: 20_000 }).catch(() => undefined);
+            stageSince = Date.now();
+        }
+        await sleep(page, 900);
+    }
+    return {
+        status: "stuck",
+        stage: lastStage ?? "unknown",
+        url: safeUrl(page),
+        detail: `checkout didn't finish in time (last screen: ${lastStage ?? "unknown"})`,
+    };
+}

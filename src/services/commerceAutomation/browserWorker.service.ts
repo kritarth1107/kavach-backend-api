@@ -31,7 +31,18 @@ import {
     releasePharmacyOtpSendClaim,
     clearActiveBrowserTask,
     currentBrowserGeneration,
+    parkBrowserForCheckout,
+    takeParkedCheckout,
+    closeCheckoutSession,
+    checkoutParkTtlMs,
+    type ParkedCheckoutSession,
 } from "./parkedOtpSession.service";
+import {
+    addressHintsFrom,
+    rupeesFromLabel,
+    runApolloCodCheckout,
+    type ApolloCheckoutOutcome,
+} from "./apolloCheckout";
 import {
     addExactSkuToApolloCart,
     extractPincode,
@@ -77,6 +88,8 @@ export type BrowserTaskResult = {
         items?: string[];
         totalLabel?: string;
         addressLabel?: string;
+        /** Id of the parked signed-in checkout page this card belongs to. */
+        cardId?: string;
     };
     partner?: string;
     /** Typed soft-failure for WA copy (CAPTCHA vs timeout vs no login UI). */
@@ -777,6 +790,22 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     });
                     if (det) {
                         await this.persist(context, input, playbook.partner, page.url());
+                        if (det.status === "need_user_confirm" && context && !isTaskCancelled(input)) {
+                            parkSignedInCheckout({
+                                result: det,
+                                browser,
+                                context,
+                                page,
+                                taskInput: input,
+                                partner: String(playbook.partner),
+                                goal: input.goal,
+                                generation:
+                                    input.browserGeneration ??
+                                    currentBrowserGeneration(input.familyId, input.userId),
+                            });
+                            retainBrowser = true;
+                            context = null;
+                        }
                         return det;
                     }
                 }
@@ -1722,6 +1751,30 @@ export async function submitParkedBrowserOtp(input: {
         });
         const result = await Promise.race([work(), timeout]);
         logPostOtp("result", { status: result.status, reason: result.failureReason, ms: Date.now() - startedAt });
+        // Keep the signed-in page (cart built) for the user's "confirm" — never re-login for checkout.
+        if (
+            result.status === "need_user_confirm" &&
+            result.mode === "playwright" &&
+            !state.timedOut &&
+            !cancelled() &&
+            parked.partner === "apollo"
+        ) {
+            try {
+                parkSignedInCheckout({
+                    result,
+                    browser: parked.browser,
+                    context: parked.context,
+                    page: parked.page,
+                    taskInput: parked.input,
+                    partner: parked.partner,
+                    goal: parked.goal,
+                    generation: parked.generation,
+                });
+                state.retain = true;
+            } catch (err) {
+                logPostOtp("checkout_park_failed", { msg: err instanceof Error ? err.message : String(err) });
+            }
+        }
         return result;
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1739,6 +1792,346 @@ export async function submitParkedBrowserOtp(input: {
         if (state.timedOut || (!state.retain && !hasParkedBrowserOtpSession(input.familyId, input.userId))) {
             // Closing Chromium also unblocks any still-running page op in work()
             await closeTakenPark(parked);
+        }
+    }
+}
+
+/**
+ * Park the signed-in page (cart built, confirm card about to be sent) for checkout.
+ * Stamps the card id onto the result so the WA draft can only confirm THIS card.
+ */
+function parkSignedInCheckout(args: {
+    result: BrowserTaskResult;
+    browser: import("playwright").Browser;
+    context: import("playwright").BrowserContext;
+    page: import("playwright").Page;
+    taskInput: RunBrowserTaskInput;
+    partner: string;
+    goal: string;
+    generation: number;
+}): ParkedCheckoutSession {
+    const row = parkBrowserForCheckout({
+        familyId: args.taskInput.familyId,
+        userId: args.taskInput.userId,
+        partner: args.partner,
+        goal: args.goal,
+        generation: args.generation,
+        browser: args.browser,
+        context: args.context,
+        page: args.page,
+        taskInput: args.taskInput,
+        confirm: args.result.confirm,
+    });
+    args.result.confirm = { ...(args.result.confirm || {}), cardId: row.cardId };
+    const mins = Math.max(1, Math.round(checkoutParkTtlMs() / 60_000));
+    args.result.message =
+        `${args.result.message}\n_I'm keeping Apollo signed in with this cart for ~${mins} min, so *confirm* places it without a new code._`;
+    return row;
+}
+
+/** Hard wall-clock budget for confirm → placed order (WhatsApp hears back within ~90s). */
+export const CHECKOUT_BUDGET_MS = Math.min(
+    Math.max(Number(process.env.BROWSER_CHECKOUT_BUDGET_MS) || 85_000, 45_000),
+    90_000,
+);
+
+function logCheckout(event: string, extra?: Record<string, unknown>): void {
+    try {
+        console.log(`[pharmacy-checkout] ${event} ${extra ? JSON.stringify(extra) : ""}`.trim());
+    } catch {
+        /* ignore */
+    }
+}
+
+export type ParkedCheckoutRun = {
+    /** No usable parked signed-in session (expired / other instance / card mismatch). */
+    noSession?: boolean;
+    outcome?: ApolloCheckoutOutcome;
+    /** True when the page was re-parked (user may reply confirm again on the same session). */
+    reparked?: boolean;
+    /** New card id when re-parked for a re-confirm (e.g. amount changed). */
+    cardId?: string;
+    message: string;
+    status: "placed" | "placed_unverified" | "need_user_confirm" | "failed" | "no_session";
+    orderIds?: string;
+    totalLabel?: string;
+};
+
+/**
+ * User replied "confirm" to the exact confirm card → continue checkout on the parked
+ * signed-in page and place a Cash-on-Delivery order. Never logs in again, never sends
+ * an SMS, never selects a payment method other than COD.
+ */
+export async function continueParkedCheckout(input: {
+    familyId: string;
+    userId: string;
+    cardId?: string;
+    onProgress?: (detail: string) => void | Promise<void>;
+    budgetMs?: number;
+}): Promise<ParkedCheckoutRun> {
+    const session = takeParkedCheckout(input.familyId, input.userId);
+    const expiredMsg =
+        "The Apollo login session expired, so I couldn't place the order — nothing was ordered or paid.\n" +
+        "Reply *order again* to restart — it will need a new OTP.";
+    if (!session) {
+        logCheckout("no_parked_session", { familyId: input.familyId, userId: input.userId });
+        return { noSession: true, status: "no_session", message: expiredMsg };
+    }
+    if (input.cardId && session.cardId !== input.cardId) {
+        logCheckout("card_mismatch", { parked: session.cardId, draft: input.cardId });
+        await closeCheckoutSession(session);
+        return { noSession: true, status: "no_session", message: expiredMsg };
+    }
+    if (!isBrowserGenerationCurrent(input.familyId, input.userId, session.generation)) {
+        logCheckout("stale_generation", { gen: session.generation });
+        await closeCheckoutSession(session);
+        return { noSession: true, status: "no_session", message: expiredMsg };
+    }
+    if (session.placeClicked) {
+        await closeCheckoutSession(session);
+        return {
+            status: "placed_unverified",
+            message:
+                "I already tapped *Place order (Cash on Delivery)* on this Apollo cart earlier. " +
+                "Please check Apollo → My Orders — I won't place it again, so you don't get a duplicate.",
+        };
+    }
+
+    const budgetMs = input.budgetMs ?? CHECKOUT_BUDGET_MS;
+    const startedAt = Date.now();
+    const state = { timedOut: false, placeClicked: false };
+    const cancelled = () =>
+        state.timedOut || !isBrowserGenerationCurrent(input.familyId, input.userId, session.generation);
+    const progress = async (d: string) => {
+        if (state.timedOut) return;
+        try {
+            await input.onProgress?.(d);
+        } catch {
+            /* ignore */
+        }
+    };
+    const sku = parseExactSkuFromGoal(session.goal, session.input.productUrl || session.input.startUrl);
+    const addressLabel =
+        session.confirm?.addressLabel ||
+        session.input.deliveryAddress?.trim() ||
+        session.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
+    const pincode = extractPincode(addressLabel);
+    const confirmedTotalRupees = rupeesFromLabel(session.confirm?.totalLabel);
+    logCheckout("start", {
+        card: session.cardId,
+        url: (() => {
+            try {
+                return session.page.url();
+            } catch {
+                return "";
+            }
+        })(),
+        pincode,
+        confirmedTotalRupees,
+        budgetMs,
+    });
+
+    const workPromise = runApolloCodCheckout(session.page, {
+        deadlineAt: startedAt + budgetMs - 3_000,
+        pincode,
+        addressHints: addressHintsFrom(addressLabel),
+        confirmedTotalRupees,
+        skuName: sku?.name,
+        priorAddressVerified: session.addressVerified,
+        mayPlace: () => !cancelled() && Date.now() < startedAt + budgetMs - 8_000,
+        isCancelled: cancelled,
+        progress,
+        onPlaceClicked: () => {
+            state.placeClicked = true;
+            session.placeClicked = true;
+        },
+        geminiMaxSteps: 3,
+        log: logCheckout,
+    }).catch(
+        (err): ApolloCheckoutOutcome => ({
+            status: "stuck",
+            stage: "unknown",
+            url: "",
+            detail: err instanceof Error ? err.message.slice(0, 160) : String(err),
+        }),
+    );
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), budgetMs);
+    });
+    let outcome = await Promise.race([workPromise, timeout]);
+    if (timer) clearTimeout(timer);
+    let workSettled = true;
+    if (!outcome) {
+        state.timedOut = true;
+        logCheckout("timeout", { budgetMs, placeClicked: state.placeClicked });
+        const settled = await Promise.race([
+            workPromise,
+            new Promise<null>((r) => setTimeout(() => r(null), 6_000)),
+        ]);
+        workSettled = Boolean(settled);
+        outcome = state.placeClicked
+            ? {
+                  status: "placed_unverified",
+                  url: "",
+                  detail: "Place order (COD) was tapped but the confirmation didn't load in time",
+              }
+            : {
+                  status: "stuck",
+                  stage: "unknown",
+                  url: "",
+                  detail: `checkout didn't finish within ${Math.round(budgetMs / 1000)}s`,
+              };
+    }
+    logCheckout("outcome", { status: outcome.status, detail: outcome.detail.slice(0, 160), ms: Date.now() - startedAt });
+
+    const label = partnerLabel(session.partner);
+    const item = session.confirm?.items?.[0] || sku?.name || "your item";
+    const mins = Math.max(1, Math.round(checkoutParkTtlMs() / 60_000));
+    const repark = (
+        confirm?: ParkedCheckoutSession["confirm"],
+        newCard = false,
+        addressVerified?: ParkedCheckoutSession["addressVerified"],
+    ) => {
+        const row = parkBrowserForCheckout({
+            familyId: session.familyId,
+            userId: session.userId,
+            partner: session.partner,
+            goal: session.goal,
+            generation: session.generation,
+            browser: session.browser,
+            context: session.context,
+            page: session.page,
+            taskInput: session.input,
+            cardId: newCard ? undefined : session.cardId,
+            confirm: confirm ?? session.confirm,
+            placeClicked: session.placeClicked,
+            addressVerified: addressVerified ?? session.addressVerified,
+        });
+        return row.cardId;
+    };
+    const canRepark = workSettled && !state.placeClicked && !session.page.isClosed();
+
+    switch (outcome.status) {
+        case "placed": {
+            await closeCheckoutSession(session);
+            const addr = addressLabel || "your saved Apollo address";
+            const lines = [
+                `✅ *Order placed on ${label}* — Cash on Delivery`,
+                `• ${item}`,
+                ``,
+                outcome.orderIds
+                    ? `Apollo order ID: *${outcome.orderIds}*`
+                    : `Apollo didn't show the order ID on screen — it will be in Apollo → My Orders.`,
+                outcome.totalLabel ? `Pay on delivery: *${outcome.totalLabel}* (cash)` : `Pay on delivery (cash) — amount as shown by Apollo.`,
+                `Deliver to: ${addr}${outcome.addressVerified === "full" ? "" : pincode ? ` _(Apollo checkout showed pincode ${pincode})_` : ""}`,
+                ``,
+                `Track or cancel it in Apollo → My Orders.`,
+            ];
+            return {
+                outcome,
+                status: "placed",
+                orderIds: outcome.orderIds,
+                totalLabel: outcome.totalLabel,
+                message: lines.join("\n"),
+            };
+        }
+        case "placed_unverified":
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "placed_unverified",
+                totalLabel: outcome.totalLabel,
+                message:
+                    `I tapped *Place order (Cash on Delivery)* on ${label}${outcome.totalLabel ? ` for ${outcome.totalLabel}` : ""}, ` +
+                    `but Apollo's confirmation page didn't load in time, so I can't show the order number.\n` +
+                    `Please check Apollo → My Orders before ordering again — I won't retry, so you don't get a duplicate order.`,
+            };
+        case "amount_changed": {
+            if (canRepark) {
+                const cardId = repark(
+                    { ...(session.confirm || {}), totalLabel: `${outcome.payableLabel} (Apollo payable, Cash on Delivery)` },
+                    true,
+                    outcome.addressVerified,
+                );
+                return {
+                    outcome,
+                    status: "need_user_confirm",
+                    reparked: true,
+                    cardId,
+                    message:
+                        `*Confirm before pay — ${label}:*\n• ${item}\n\n` +
+                        `Apollo now shows *${outcome.payableLabel}* to pay on delivery ` +
+                        `(the earlier card said ${session.confirm?.totalLabel?.replace(/\s*\(.*\)\s*$/, "") || "less"}). Nothing is placed yet.\n\n` +
+                        `Reply *confirm* to place it for ${outcome.payableLabel} with *Cash on Delivery*, or *cancel*.`,
+                };
+            }
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "failed",
+                message: `Apollo's payable amount changed to ${outcome.payableLabel}, so I stopped — nothing was ordered or paid. Reply *order again* to restart (new OTP), or *cancel*.`,
+            };
+        }
+        case "cod_unavailable":
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "failed",
+                message:
+                    `*${label}* isn't offering *Cash on Delivery* for this order (${outcome.detail.slice(0, 140)}).\n` +
+                    `I did *not* place it and I won't use UPI or card. Nothing was ordered or paid.\n` +
+                    `Reply *cancel*, or try another item / pharmacy.`,
+            };
+        case "session_expired":
+            await closeCheckoutSession(session);
+            return { outcome, status: "failed", noSession: true, message: expiredMsg };
+        case "rx_required":
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "failed",
+                message: `*${label}* wants a prescription review before this order, so I stopped — nothing was ordered or paid. Reply *cancel*.`,
+            };
+        case "order_failed":
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "failed",
+                message:
+                    `*${label}* showed a problem after *Place order (Cash on Delivery)*: ${outcome.detail.slice(0, 140)}\n` +
+                    `Please check Apollo → My Orders — I won't retry automatically, so you don't get a duplicate.`,
+            };
+        case "cancelled":
+            await closeCheckoutSession(session);
+            return { outcome, status: "failed", message: "Cancelled — nothing was ordered." };
+        case "address_unverified":
+        case "stuck":
+        case "dry_run_stop":
+        default: {
+            const why =
+                outcome.status === "address_unverified"
+                    ? `I couldn't confirm the delivery address${pincode ? ` (${pincode})` : ""} on Apollo's checkout`
+                    : `I couldn't finish Apollo checkout within ${Math.round(budgetMs / 1000)}s (${outcome.detail.slice(0, 100)})`;
+            if (canRepark) {
+                repark();
+                return {
+                    outcome,
+                    status: "failed",
+                    reparked: true,
+                    cardId: session.cardId,
+                    message:
+                        `${why}, so I stopped — nothing was ordered or paid.\n` +
+                        `Your cart is still open and signed in for ~${mins} min: reply *confirm* to try again (no new code), or *cancel*.`,
+                };
+            }
+            await closeCheckoutSession(session);
+            return {
+                outcome,
+                status: "failed",
+                message: `${why}, so I stopped — nothing was ordered or paid. Reply *order again* to restart (it will need a new OTP), or *cancel*.`,
+            };
         }
     }
 }
