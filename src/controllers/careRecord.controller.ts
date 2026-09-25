@@ -271,7 +271,9 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
     const reply = await handleWhatsAppInbound(req.body);
     const saheli =
         typeof req.body?.from === "string" ? await buildWhatsAppMockPeek(req.body.from).catch(() => null) : null;
-    res.json({ success: true, data: { reply, saheli } });
+    const { lastRouteFor } = await import("../services/saheliRouter.service");
+    const route = typeof req.body?.from === "string" ? lastRouteFor(req.body.from) : null;
+    res.json({ success: true, data: { reply, saheli, route } });
 }
 
 export async function getWhatsAppMetaWebhook(req: Request, res: Response) {

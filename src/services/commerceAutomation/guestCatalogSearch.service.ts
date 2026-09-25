@@ -602,6 +602,44 @@ export async function searchGuestCatalog(input: {
                 query,
             };
         }
+        if (partner === "blinkit") {
+            if (!input.address) {
+                return { hits: [], searched: false, unavailableReason: "I need your delivery address first.", partner, query };
+            }
+            const { blinkitSearch } = await import("./blinkitGuest.service");
+            const res = await blinkitSearch({ query, address: input.address });
+            if (!res.location.ok) {
+                return {
+                    hits: [],
+                    searched: true,
+                    unavailableReason:
+                        "I couldn't set Blinkit's location to your saved address, so I won't show prices from another area. Please try again in a bit.",
+                    partner,
+                    query,
+                };
+            }
+            const hits: GuestCatalogHit[] = rankGroceryItems(
+                query,
+                res.items.filter((i) => !i.sponsored),
+            ).map((i, n) => ({
+                id: `blinkit:${n}:${i.name}`.slice(0, 120),
+                name: i.pack ? `${i.name} (${i.pack})` : i.name,
+                pricePaise: i.pricePaise,
+                packLabel: i.pack,
+                source: "browser_guest" as const,
+            })) as GuestCatalogHit[];
+            return {
+                hits,
+                searched: true,
+                unavailableReason: hits.length
+                    ? undefined
+                    : res.items.length
+                      ? `Blinkit shows nothing matching "${query}" near you. Try another name.`
+                      : `Blinkit didn't show any products for your address just now. Please try again in a while.`,
+                partner,
+                query,
+            };
+        }
         if (partner === "swiggy") {
             // Restaurant food is chosen restaurant → dish (browserTaskWhatsApp food flow), not a flat item list.
             return {
@@ -612,8 +650,8 @@ export async function searchGuestCatalog(input: {
                 query,
             };
         }
-        if (partner === "zepto" || partner === "blinkit" || partner === "zomato") {
-            const label = partner === "zepto" ? "Zepto" : partner === "blinkit" ? "Blinkit" : "Zomato";
+        if (partner === "zepto" || partner === "zomato") {
+            const label = partner === "zepto" ? "Zepto" : "Zomato";
             return {
                 hits: [],
                 searched: false,
@@ -621,7 +659,7 @@ export async function searchGuestCatalog(input: {
                     `I can't browse ${label} without signing in yet, so I can't show live items or prices for your address. ` +
                     (partner === "zomato"
                         ? `I can show open restaurants near you on *Swiggy* instead.`
-                        : `Reply *confirm* to sign in to ${label} in my browser (an OTP SMS will come) and I'll search there for your address — or say *order ${query} from Instamart*.`),
+                        : `Reply *confirm* to sign in to ${label} in my browser (an OTP SMS will come) and I'll search there for your address — or say *order ${query} from Instamart* / *Blinkit*.`),
                 partner,
                 query,
             };
@@ -659,6 +697,9 @@ export function rankGroceryItems<T extends { name: string }>(query: string, item
             const n = it.name.toLowerCase();
             const hit = q.filter((t) => new RegExp(`\\b${t.replace(/s$/, "")}`).test(n)).length;
             let s = hit / q.length;
+            // "rite bite" ↔ "RiteBite": compare with spaces removed too.
+            const flat = n.replace(/[^a-z0-9]/g, "");
+            if (flat.includes(q.join("").replace(/s$/, ""))) s = Math.max(s, 1);
             const off = n.match(GROCERY_OFFTOPIC_RE)?.[0];
             if (off && !q.some((t) => off.startsWith(t.replace(/s$/, "")))) s -= 0.8;
             return { it, s, idx };

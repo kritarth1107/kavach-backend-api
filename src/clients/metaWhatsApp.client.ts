@@ -191,7 +191,21 @@ async function sendSingleMetaWhatsAppPayload(to: string, payload: MetaWhatsAppPa
     }
 }
 
+function rememberOutbound(to: string, text: string | undefined): void {
+    if (!text) return;
+    void import("../services/saheliRouter.service")
+        .then(({ rememberTurn }) => rememberTurn(to, "saheli", text))
+        .catch(() => undefined);
+}
+
 export async function sendWhatsAppPayloads(to: string, payloads: MetaWhatsAppPayload[]): Promise<void> {
+    rememberOutbound(
+        to,
+        payloads
+            .map((p) => (p.type === "text" ? p.text.body : ((p as { interactive?: { body?: { text?: string } } }).interactive?.body?.text ?? "")))
+            .filter(Boolean)
+            .join("\n"),
+    );
     for (const payload of payloads) {
         if (payload.type === "text") {
             const parts = splitWhatsAppText(payload.text.body);
@@ -272,6 +286,7 @@ export async function sendViaMetaWhatsApp(
         await sendWhatsAppPayloads(to, payloads);
         return;
     }
+    rememberOutbound(to, text);
     const parts = splitWhatsAppText(text);
     for (const part of parts) {
         await sendSingleMetaWhatsAppText(to, part);

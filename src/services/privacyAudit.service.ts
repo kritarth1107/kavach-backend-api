@@ -7,6 +7,7 @@ import SaheliMessage from "../models/saheliMessage.model";
 import OutboundMessage from "../models/outboundMessage.model";
 import ActivityLog from "../models/activityLog.model";
 import WhatsappSession from "../models/whatsappSession.model";
+import { resolveWhatsAppSender } from "./identityResolver.service";
 import ChannelIdentity from "../models/channelIdentity.model";
 import Order from "../models/order.model";
 import OrderPreview from "../models/orderPreview.model";
@@ -40,6 +41,12 @@ export async function runAddressLeakAudit(input: { ownerPhone: string; since?: s
     const ownerFamilies = new Set(ids.map((i) => i.familyId));
     const ownerSession = await WhatsappSession.findOne({ phone: { $in: [`+${digits}`, digits] } }, { familyId: 1 }).lean();
     if ((ownerSession as { familyId?: string } | null)?.familyId) ownerFamilies.add((ownerSession as { familyId: string }).familyId);
+    try {
+        const r = await resolveWhatsAppSender(`+${digits}`);
+        if (r?.familyId) ownerFamilies.add(r.familyId);
+    } catch {
+        /* not recognised */
+    }
     const since = new Date(input.since || "2026-09-24T00:00:00Z");
 
     const msgs = await SaheliMessage.find({ createdAt: { $gte: since }, content: LEAK }, { familyId: 1, createdAt: 1, role: 1 }).lean();

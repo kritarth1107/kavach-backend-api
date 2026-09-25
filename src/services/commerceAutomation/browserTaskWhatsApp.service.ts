@@ -6,6 +6,7 @@
  * Soft health tips on confirm when care context matches cart (never diagnose / never block).
  */
 import WhatsappSession from "../../models/whatsappSession.model";
+import type { SaheliRoute } from "../saheliRouter.service";
 import { FamilyRole } from "../../types/family.types";
 import { logActivity } from "../activityLog.service";
 import {
@@ -93,13 +94,21 @@ export type BrowserTaskDraft = {
         name: string;
         pricePaise?: number;
         productUrl?: string;
+        /** Price-comparison lists: which platform this option is from. */
+        partner?: string;
     }>;
     selectedSku?: {
         id: string;
         name: string;
         pricePaise?: number;
         productUrl?: string;
+        partner?: string;
     };
+    /** What the elder asked for (product words only) — for "Instamart" / "try Blinkit" follow-ups. */
+    productQuery?: string;
+    category?: "food" | "grocery" | "pharmacy" | "other";
+    /** Options came from several platforms (price comparison). */
+    compare?: boolean;
     confirm?: {
         items?: string[];
         totalLabel?: string;
@@ -175,6 +184,22 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
     // Only ever this recipient's own saved address — never a store-account / other family's address.
     const addr = draft.addressLabel ? `📍 ${draft.addressLabel}` : "";
     const where = draft.restaurantName ? `*${draft.restaurantName}* on *${label}*` : `*${label}*`;
+    if (opts.length > 1 && draft.compare) {
+        const shown = opts.slice(0, 5);
+        return [
+            `Prices for "${draft.productQuery || "your item"}" 🛒`,
+            ...shown.map((o, i) => {
+                const price = formatInr(o.pricePaise);
+                return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""} · ${partnerLabel(String(o.partner || ""))}`;
+            }),
+            ...(draft.lastMessage ? [``, draft.lastMessage] : []),
+            addr,
+            ``,
+            `${replyPickCopy(shown.length)} to pick, or *cancel*. Cash on Delivery only.`,
+        ]
+            .filter((l, i, a) => l !== "" || a[i - 1] !== "")
+            .join("\n");
+    }
     if (opts.length > 1) {
         const shown = opts.slice(0, 5);
         const lines = shown.map((o, i) => {
@@ -309,6 +334,8 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     actorUserId: string;
     recipientUserId: string;
     actorRole: FamilyRole | null;
+    /** Text already understood by the Gemini router (canonical control) — skip the rule/LLM interrupt classifiers. */
+    routed?: boolean;
 }): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
     let text = input.text.trim();
     let draft = await loadDraft(input.phone);
@@ -360,7 +387,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     // ── Interrupts while an order job is open ────────────────────────────────
     // Order-related → apply; unrelated → null so the companion answers and the job continues.
     // Picking stage + a clear order on ANOTHER partner ("order from swiggy food …") → start that fresh.
-    if (draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick")) {
+    if (!input.routed && draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick")) {
         const mentioned = partnerFromText(text);
         const foodAsk = wantsRestaurantList(text) && /\b(swiggy|zomato|restaurants?|food|khana)\b/i.test(text);
         const other =
@@ -371,7 +398,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         }
     }
 
-    if (draft && ACTIVE_ORDER_PHASES.has(draft.phase)) {
+    if (!input.routed && draft && ACTIVE_ORDER_PHASES.has(draft.phase)) {
         const label = partnerLabel(String(draft.partner || "the site"));
         // Address / delivery messages modify THIS order (never a product search or partner switch).
         const addrMention = classifyAddressMention(text, home?.full ?? draft.addressLabel);
@@ -710,6 +737,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             if (pick) {
                 draft.selectedSku = pick;
                 draft.catalogOptions = undefined;
+                adoptPickPartner(draft);
                 draft.goal = draft.restaurantName
                     ? `Order ${pick.name} from ${draft.restaurantName} on ${partnerLabel(String(draft.partner || ""))}`
                     : `Order ${pick.name} from ${partnerLabel(String(draft.partner || ""))}`;
@@ -722,6 +750,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 draft.selectedSku = draft.catalogOptions[0];
                 draft.catalogOptions = undefined;
             }
+            adoptPickPartner(draft);
             const skuName = draft.selectedSku?.name;
             const price = formatInr(draft.selectedSku?.pricePaise);
             const partner = draft.partner;
@@ -1023,6 +1052,8 @@ async function grocerySearchCore(
         siteKey: playbook.siteKey,
         startUrl: playbook.startUrl,
         addressLabel: home.full,
+        productQuery: query,
+        category: "grocery",
     };
     if (catalog.hits.length) {
         draft.catalogOptions = catalog.hits.slice(0, 5).map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
@@ -1810,4 +1841,365 @@ export function extractEtaLabel(text: string): string | undefined {
         /\b(?:deliver(?:y|ed)?|arriv(?:e|ing|al)|expected)\s*(?:by|in|on|within|:)\s*([^.\n|]{3,40})/i,
     );
     return m?.[1]?.replace(/\*/g, "").trim() || undefined;
+}
+
+
+/** A comparison pick carries its platform — the checkout runs on that platform. */
+function adoptPickPartner(draft: BrowserTaskDraft): void {
+    const p = draft.selectedSku?.partner;
+    if (!p) return;
+    const pb = resolvePlaybook(p as CommercePartnerKey, `Order ${draft.selectedSku!.name}`);
+    draft.partner = pb.partner;
+    draft.siteKey = pb.siteKey;
+    draft.startUrl = draft.selectedSku!.productUrl || pb.startUrl;
+    draft.goal = `Order ${draft.selectedSku!.name} from ${partnerLabel(String(pb.partner))}`;
+    draft.compare = false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gemini-routed commerce (saheliRouter). The router decided WHAT the message means;
+// this executes it with code guardrails (address per recipient, literal "confirm" for
+// real orders, strict numeric OTP, allowlisted sites).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Platforms whose sites block our browser (said honestly, never pretended). */
+const BLOCKED_SITES: Record<string, string> = {
+    zepto: "Zepto blocks automated browsing, so I can't see its items or prices",
+    zomato: "Zomato blocks automated browsing, so I can't see its restaurants",
+};
+const COMPARE_PARTNERS: Record<"grocery" | "pharmacy", string[]> = {
+    grocery: ["instamart", "blinkit"],
+    pharmacy: ["apollo", "pharmeasy"],
+};
+const GROCERY_SITES = new Set(["instamart", "blinkit", "zepto", "bigbasket"]);
+const PHARMACY_SITES = new Set(["apollo", "pharmeasy", "tata_1mg"]);
+
+/** Last product each phone asked for (per phone only; for a bare "Instamart" follow-up). */
+const lastAsk = new Map<string, { query?: string; category?: string; partner?: string; at: number }>();
+const ASK_TTL_MS = 30 * 60_000;
+function rememberAsk(phone: string, patch: { query?: string; category?: string; partner?: string }) {
+    const prev = lastAsk.get(phone);
+    const base = prev && Date.now() - prev.at < ASK_TTL_MS ? prev : { at: Date.now() };
+    lastAsk.set(phone, { ...base, ...Object.fromEntries(Object.entries(patch).filter(([, v]) => v)), at: Date.now() });
+    if (lastAsk.size > 5000) lastAsk.delete(lastAsk.keys().next().value as string);
+}
+export function pendingAskSummary(phone: string): string | null {
+    const a = lastAsk.get(phone);
+    if (!a || Date.now() - a.at > ASK_TTL_MS) return null;
+    return `last asked: product=${a.query || "?"}, category=${a.category || "?"}, platform=${a.partner || "none"}`;
+}
+
+export function browserDraftSummary(draft: BrowserTaskDraft | null | undefined): string | null {
+    if (!draft || !draft.phase || draft.phase === "idle" || draft.phase === "done") return null;
+    const opts = draft.restaurantOptions?.length && draft.phase === "awaiting_restaurant_pick"
+        ? ` restaurants shown: ${draft.restaurantOptions.map((o, i) => `${i + 1}.${o.name}`).join(", ")}`
+        : draft.catalogOptions?.length
+          ? ` options shown: ${draft.catalogOptions.slice(0, 5).map((o, i) => `${i + 1}.${o.name}${o.partner ? ` (${o.partner})` : ""}`).join(", ")}`
+          : "";
+    return [
+        `order draft phase=${draft.phase}`,
+        draft.partner ? `platform=${draft.partner}` : "",
+        draft.productQuery || draft.dishQuery ? `product=${draft.productQuery || draft.dishQuery}` : "",
+        draft.restaurantName ? `restaurant=${draft.restaurantName}` : "",
+        draft.selectedSku ? `selected=${draft.selectedSku.name}` : "",
+        opts,
+        draft.phase === "awaiting_otp" ? "WAITING FOR SMS OTP" : "",
+        draft.phase === "awaiting_address" ? "WAITING FOR DELIVERY ADDRESS" : "",
+    ]
+        .filter(Boolean)
+        .join(" ");
+}
+
+type RoutedInput = {
+    phone: string;
+    familyId: string;
+    actorUserId: string;
+    recipientUserId: string;
+    actorRole: FamilyRole | null;
+};
+export type RoutedCommerceResult = { text: string; draft?: BrowserTaskDraft; delegatePharmacyText?: string } | null;
+
+function categoryFor(route: SaheliRoute, partner?: string): "food" | "grocery" | "pharmacy" | "other" {
+    if (partner === "swiggy" || partner === "zomato") return "food";
+    if (partner && GROCERY_SITES.has(partner)) return "grocery";
+    if (partner && PHARMACY_SITES.has(partner)) return "pharmacy";
+    if (route.category === "food" || route.category === "grocery" || route.category === "pharmacy") return route.category;
+    return "grocery";
+}
+
+export async function handleRoutedCommerceTurn(input: RoutedInput, route: SaheliRoute, rawText: string): Promise<RoutedCommerceResult> {
+    let draft = await loadDraft(input.phone);
+    const home = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
+    const active = Boolean(draft && draft.phase !== "idle" && draft.phase !== "done");
+    const ctl = (t: string) => handleBrowserTaskWhatsAppTurn({ ...input, text: t, routed: true });
+    const busy = draft && (draft.phase === "running" || draft.phase === "awaiting_otp" || draft.phase === "awaiting_confirm");
+    const label = partnerLabel(String(draft?.partner || "order"));
+    const log = (intent: string) =>
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_interrupt",
+            title: `Saheli understood: ${intent}`,
+            detail: rawText,
+            data: { intent, phase: draft?.phase || null, source: "gemini_router", confidence: route.confidence },
+        });
+
+    // Slot filling: the address reply goes verbatim to the address step.
+    if (draft?.phase === "awaiting_address") return ctl(rawText);
+
+    if (route.productQuery) rememberAsk(input.phone, { query: route.productQuery, category: route.category || undefined, partner: route.partners[0] });
+    else if (route.partners[0]) rememberAsk(input.phone, { partner: route.partners[0] });
+
+    switch (route.intent) {
+        case "otp_code": {
+            // Guardrail: the model only flags "this is a code"; the code itself must be 4–8 digits.
+            const code = (route.otpCode || rawText).replace(/\D/g, "");
+            if (!/^\d{4,8}$/.test(code) || !active) return null;
+            log("otp_code");
+            return ctl(code);
+        }
+        case "order_control": {
+            if (!active || !draft) return null; // pharmacy / ride / MCP / dashboard handle it
+            log(`control:${route.control}`);
+            switch (route.control) {
+                case "pick":
+                    if (route.pickIndex) return ctl(String(route.pickIndex));
+                    if (route.restaurantName && draft.phase === "awaiting_restaurant_pick") return ctl(route.restaurantName);
+                    return ctl(rawText);
+                case "confirm":
+                    // Money guardrail: a REAL order (awaiting_confirm) needs the literal word
+                    // "confirm" — the handler enforces it on the raw text; the model can't map "ok".
+                    return draft.phase === "awaiting_confirm" ? ctl(rawText) : ctl("confirm");
+                case "cancel":
+                    return ctl("cancel");
+                case "status":
+                    return { text: await orderStatusReply(input, draft), draft };
+                case "retry":
+                    return ctl("retry");
+                case "order_again":
+                    return ctl("order again");
+                default:
+                    return ctl(rawText);
+            }
+        }
+        case "order_modify": {
+            if (route.addressKind) {
+                log(`address:${route.addressKind}`);
+                if (active && draft) return { text: await addressReply(input, draft, route.addressKind, route.addressText || rawText, home), draft };
+                if (route.addressKind === "other") {
+                    const parsed = parseAddressReply(route.addressText || rawText);
+                    if (parsed) {
+                        await saveRecipientDeliveryAddress({
+                            familyId: input.familyId,
+                            recipientUserId: input.recipientUserId,
+                            address: parsed.full,
+                            source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
+                            setByUserId: input.actorUserId,
+                        });
+                        return { text: `Saved your delivery address ✅\n📍 ${parsed.full}\n\nWhat would you like to order?` };
+                    }
+                }
+                return home
+                    ? { text: `Your orders are delivered to your saved address:\n📍 ${home.full}\n\nTo change it, send the full new address with the 6-digit pincode.` }
+                    : { text: "I don't have your delivery address saved yet — please send it with the 6-digit pincode." };
+            }
+            if (busy && draft) {
+                return { text: `Your *${label}* order is already in progress 🛒 — reply *cancel* first if you'd like to change it.`, draft };
+            }
+            const partner = route.partners[0];
+            if (partner && !route.productQuery) {
+                const ask = lastAsk.get(input.phone);
+                const product = draft?.productQuery || draft?.dishQuery || (ask && Date.now() - ask.at < ASK_TTL_MS ? ask.query : undefined);
+                log(`platform:${partner}`);
+                if (!product) {
+                    return { text: `Sure — what should I order on *${partnerLabel(partner)}*?` };
+                }
+                return startRoutedSearch(input, home, categoryFor(route, partner), product, partner, draft, rawText);
+            }
+            if (route.productQuery) {
+                log("change_item");
+                const cat = categoryFor(route, partner || (draft?.compare ? undefined : String(draft?.partner || "")) || undefined);
+                return startRoutedSearch(input, home, cat, route.productQuery, partner || (draft?.compare ? undefined : draft?.partner) || undefined, draft, rawText, route.restaurantName);
+            }
+            return active ? ctl(rawText) : null;
+        }
+        case "order_new":
+        case "restaurant_list": {
+            if (busy && draft) {
+                return { text: `Your *${label}* order is still in progress 🛒 — reply *cancel* first if you'd like to start a new one.`, draft };
+            }
+            const partner = route.partners.find((p) => p !== "swiggy" || !route.partners.includes("instamart")) || route.partners[0];
+            const cat = route.intent === "restaurant_list" ? "food" : categoryFor(route, partner === "swiggy" && route.partners.includes("instamart") ? "instamart" : partner);
+            log(route.intent === "restaurant_list" ? "restaurant_list" : `order_new:${cat}`);
+            if (cat !== "food" && !route.productQuery) {
+                return {
+                    text: partner
+                        ? `Sure 🙂 What should I order on *${partnerLabel(partner)}*?`
+                        : "Sure 🙂 What would you like me to order? Tell me the item (and a platform if you have one in mind — otherwise I'll compare prices for you).",
+                };
+            }
+            return startRoutedSearch(
+                input,
+                home,
+                cat,
+                route.productQuery || "",
+                partner === "swiggy" && cat !== "food" ? "instamart" : partner,
+                draft,
+                rawText,
+                route.restaurantName,
+            );
+        }
+        default:
+            return null;
+    }
+}
+
+async function clearPickingDraft(phone: string, draft: BrowserTaskDraft | null): Promise<void> {
+    if (draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick")) {
+        bumpGuestWork(phone);
+        await WhatsappSession.findOneAndUpdate({ phone }, { $unset: { browserTaskDraft: 1 } });
+    }
+}
+
+async function startRoutedSearch(
+    input: RoutedInput,
+    home: RecipientAddress | null,
+    category: "food" | "grocery" | "pharmacy" | "other",
+    query: string,
+    partner: string | undefined,
+    draft: BrowserTaskDraft | null,
+    rawText: string,
+    restaurantName?: string | null,
+): Promise<RoutedCommerceResult> {
+    const q = query.trim().slice(0, 80);
+    let note = "";
+    if (partner && BLOCKED_SITES[partner]) {
+        note = `${BLOCKED_SITES[partner]} 🙏`;
+        partner = partner === "zomato" ? "swiggy" : undefined;
+    }
+    if (partner && partner !== "generic" && !isAllowedOrderSite(partner)) {
+        return { text: refuseSiteCopy(partner) };
+    }
+    if (ELECTRONICS_REFUSE.test(q) && partner !== "amazon" && partner !== "flipkart") {
+        return { text: refuseElectronicsBrowser() };
+    }
+    if (!home) {
+        const pending = partner ? `order ${q || "food"} from ${partner}` : rawText;
+        return askForAddress(input, pending);
+    }
+
+    // Restaurant food → Swiggy (Zomato blocked).
+    if (category === "food" || partner === "swiggy") {
+        await clearPickingDraft(input.phone, draft);
+        const lead = note ? `${note} — here's Swiggy instead.\n\n` : "";
+        if (restaurantName) {
+            const base: BrowserTaskDraft = {
+                phase: "awaiting_restaurant_pick",
+                goal: `Swiggy food: ${restaurantName}`,
+                partner: "swiggy",
+                siteKey: "swiggy",
+                addressLabel: home.full,
+                dishQuery: q || undefined,
+                category: "food",
+            };
+            const r = await showRestaurantMenu(input, base, restaurantName, q || undefined);
+            return { ...r, text: lead + r.text };
+        }
+        const r = await startFoodFlow(input, q, home);
+        return { ...r, text: lead + r.text };
+    }
+
+    // Pharmacy with a named platform → the pharmacy flow (Rx checks, Apollo/PharmEasy/1mg).
+    if (category === "pharmacy" && partner) {
+        return { text: "", delegatePharmacyText: `order ${q} from ${partnerLabel(partner)}` };
+    }
+
+    await clearPickingDraft(input.phone, draft);
+    if (partner && partner !== "generic") {
+        const pb = resolvePlaybook(partner as CommercePartnerKey, `order ${q} from ${partner}`);
+        if (partner === "instamart" || partner === "blinkit") {
+            return deferGuestWork(
+                input,
+                `Searching *${partnerLabel(partner)}* for "${q}" near 📍 ${home.short} 🔎 — I'll send the options in a moment.`,
+                (token) => grocerySearchCore(input, `Order ${q} from ${partnerLabel(partner!)}`, q, pb, home, token),
+            );
+        }
+        // Other allowlisted sites: existing guest search → confirm card.
+        const r = await handleBrowserTaskWhatsAppTurn({ ...input, text: `order ${q} from ${partner}`, routed: true });
+        return r ?? { text: `I couldn't search ${partnerLabel(partner)} just now 🙏 Try Instamart or Blinkit?` };
+    }
+
+    // No platform → compare prices across the platforms I can browse.
+    const cat = category === "pharmacy" ? "pharmacy" : "grocery";
+    const partners = COMPARE_PARTNERS[cat];
+    const names = partners.map((p) => `*${partnerLabel(p)}*`).join(" and ");
+    const blockedNote = cat === "grocery" ? " (Zepto blocks automated browsing, so I can't include it.)" : "";
+    return deferGuestWork(
+        input,
+        `${note ? `${note}.\n` : ""}Comparing ${names} for "${q}" near 📍 ${home.short} 🔎 — I'll send the prices in a moment.${blockedNote}`,
+        (token) => compareSearchCore(input, cat, q, partners, home, token),
+    );
+}
+
+async function compareSearchCore(
+    input: { phone: string; familyId: string; actorUserId: string },
+    category: "grocery" | "pharmacy",
+    query: string,
+    partners: string[],
+    home: RecipientAddress,
+    token?: number,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
+    const results = await Promise.all(
+        partners.map((p) =>
+            searchGuestCatalog({ partner: p, query, familyId: input.familyId, userId: input.actorUserId, pincode: home.pincode, address: home.full }).catch(
+                (err) => ({ hits: [], searched: true, partner: p, query, unavailableReason: `${partnerLabel(p)} didn't load (${String(err?.message || err).slice(0, 60)}).` }),
+            ),
+        ),
+    );
+    const per = results.map((r, i) => {
+        const hits = r.hits.filter((h) => !(h as { requiresRx?: boolean }).requiresRx && (h as { inStock?: boolean }).inStock !== false);
+        const rx = r.hits.length - hits.length;
+        return { partner: partners[i]!, hits: hits.slice(0, 3), rx, reason: r.unavailableReason };
+    });
+    // Interleave so each platform shows its best match first.
+    const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
+    for (let k = 0; k < 3; k++) {
+        for (const p of per) {
+            const h = p.hits[k];
+            if (h) opts.push({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: (h as { productUrl?: string }).productUrl, partner: p.partner });
+        }
+    }
+    const shown = opts.slice(0, 5);
+    const misses = per
+        .filter((p) => !p.hits.length)
+        .map((p) => (p.rx ? `${partnerLabel(p.partner)}: only prescription medicines matched — send a photo of the prescription for those.` : `${partnerLabel(p.partner)}: nothing matching right now.`));
+    if (!shown.length) {
+        await saveIfCurrent(input.phone, null, token);
+        return {
+            text: `I couldn't find "${query}" near 📍 ${home.short} 🙏\n${per.map((p) => `• ${p.reason || `${partnerLabel(p.partner)}: nothing matching`}`).join("\n")}\n\nTry another name?`,
+        };
+    }
+    const draft: BrowserTaskDraft = {
+        phase: "awaiting_sku_confirm",
+        goal: `Order ${query}`,
+        addressLabel: home.full,
+        productQuery: query,
+        category,
+        compare: true,
+        catalogOptions: shown,
+        lastMessage: misses.length ? misses.join("\n") : undefined,
+    };
+    if (shown.length === 1) {
+        draft.selectedSku = shown[0];
+        adoptPickPartner(draft);
+        draft.catalogOptions = shown;
+        draft.compare = false;
+        draft.lastMessage = undefined;
+        await saveIfCurrent(input.phone, draft, token);
+        return { text: `${skuConfirmCopy(draft)}${misses.length ? `\n\n${misses.join("\n")}` : ""}`, draft };
+    }
+    await saveIfCurrent(input.phone, draft, token);
+    return { text: skuConfirmCopy(draft), draft };
 }

@@ -33,6 +33,8 @@ export async function vertexGenerateText(input: {
     prompt: string;
     system?: string;
     json?: boolean;
+    /** OpenAPI-subset schema for structured output (implies json). */
+    responseSchema?: Record<string, unknown>;
     temperature?: number;
     maxOutputTokens?: number;
     timeoutMs?: number;
@@ -61,7 +63,8 @@ export async function vertexGenerateText(input: {
                 generationConfig: {
                     temperature: input.temperature ?? 0.1,
                     maxOutputTokens: input.maxOutputTokens ?? 512,
-                    ...(input.json ? { responseMimeType: "application/json" } : {}),
+                    ...(input.json || input.responseSchema ? { responseMimeType: "application/json" } : {}),
+                    ...(input.responseSchema ? { responseSchema: input.responseSchema } : {}),
                 },
             }),
         });

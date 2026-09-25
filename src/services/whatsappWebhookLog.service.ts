@@ -13,7 +13,8 @@ export type SaheliReplySource =
     | "quickOrder"
     | "dashboardParity"
     | "pharmacyOrder"
-    | "browserOrder";
+    | "browserOrder"
+    | "saheliRouter";
 
 export type WhatsAppAiDebug = {
     at: string;

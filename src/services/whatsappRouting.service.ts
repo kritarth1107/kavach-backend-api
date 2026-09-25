@@ -27,6 +27,7 @@ import {
     isSaheliFallbackCopy,
     messageIsPresenceCheck,
 } from "./saheliElderFacts.service";
+import { routeSaheliTurn, rememberTurn, type SaheliRoute } from "./saheliRouter.service";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -180,6 +181,39 @@ async function resolveCaregiverSubject(input: {
     };
 }
 
+type FlowDoc = {
+    browserTaskDraft?: { phase?: string } & Record<string, unknown>;
+    pharmacyDraft?: { phase?: string; partner?: string; searchQuery?: string; items?: Array<{ name?: string }>; catalogOptions?: Array<{ name?: string }> };
+    rideDraft?: { phase?: string; pickup?: unknown; drop?: unknown };
+    pendingCommerceOtp?: { partner?: string };
+    orderSessionId?: string;
+} | null;
+
+function liveFlow(d: { phase?: string } | undefined | null): boolean {
+    return Boolean(d?.phase) && d!.phase !== "idle" && d!.phase !== "done";
+}
+
+/** One-line summaries of this phone's active flows for the router (never another phone's). */
+async function buildFlowState(phone: string, doc: FlowDoc): Promise<string[]> {
+    const { browserDraftSummary, pendingAskSummary } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+    const lines: string[] = [];
+    const b = browserDraftSummary(doc?.browserTaskDraft as never);
+    if (b) lines.push(b);
+    const pd = doc?.pharmacyDraft;
+    if (liveFlow(pd)) {
+        const opts = pd!.catalogOptions?.length ? ` options shown: ${pd!.catalogOptions.slice(0, 5).map((o, i) => `${i + 1}.${o.name}`).join(", ")}` : "";
+        lines.push(`pharmacy order phase=${pd!.phase}${pd!.partner ? ` platform=${pd!.partner}` : ""}${pd!.searchQuery ? ` product=${pd!.searchQuery}` : ""}${opts}`);
+    }
+    if (liveFlow(doc?.rideDraft)) lines.push(`ride booking phase=${doc!.rideDraft!.phase} (collecting pickup/drop/confirm)`);
+    if (doc?.pendingCommerceOtp?.partner) lines.push(`waiting for ${doc.pendingCommerceOtp.partner} login SMS OTP`);
+    if (doc?.orderSessionId) lines.push("app order session open");
+    const ask = pendingAskSummary(phone);
+    if (ask) lines.push(ask);
+    return lines;
+}
+
+const MEDIA_PLACEHOLDER = /^\[(image|document|video|audio|voice|sticker) (message|shared)\]$/i;
+
 async function withVoiceReply(out: OutboundMessage): Promise<OutboundMessage> {
     if (!out.content?.trim() || isSaheliFallbackCopy(out.content)) return out;
     try {
@@ -220,6 +254,7 @@ type WhatsAppInboundBody = {
  */
 export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<OutboundMessage> {
     const out = await handleWhatsAppInboundCore(body);
+    if (out?.content) rememberTurn(String(body.from ?? ""), "saheli", out.content);
     void (async () => {
         try {
             const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
@@ -360,6 +395,41 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         return outbound(phone, elderEmergencyReply(displayName));
     }
 
+    // ── Understanding: ONE Gemini structured-output call per turn (message + recent turns +
+    // this phone's active flows). Regex gates below run only when this returns null.
+    let route: SaheliRoute | null = null;
+    if (!body.interactiveId && text && !MEDIA_PLACEHOLDER.test(text)) {
+        const flowDoc = (await WhatsappSession.findOne({ phone }).lean()) as FlowDoc;
+        route = await routeSaheliTurn({
+            phone,
+            text,
+            role: isCaregiver(identity.role) ? "caregiver" : "elder",
+            state: await buildFlowState(phone, flowDoc),
+        }).catch((err) => {
+            console.warn("[saheli-router] failed:", err instanceof Error ? err.message : err);
+            return null;
+        });
+        console.log(
+            `[saheli-router] ${route ? `${route.intent}/${route.control} cat=${route.category ?? "-"} p=${route.partners.join("+") || "-"} q=${route.productQuery ? "y" : "n"} conf=${route.confidence} ${route.latencyMs}ms` : "null → regex fallback"}`,
+        );
+    }
+    rememberTurn(phone, "user", text);
+
+    // AI red-flag layer ON TOP of the keyword net (the net above always runs first).
+    if (identity.role === FamilyRole.CARE_RECIPIENT && route?.intent === "emergency" && route.confidence >= 0.75) {
+        const { triggerEmergencyEscalation, elderEmergencyReply } = await import("./saheliEmergency.service");
+        const membersPayload = await getFamilyMembersList(identity.familyId, identity.userId);
+        const displayName = membersPayload.members.find((m) => m.userId === identity!.userId)?.name?.trim() || "there";
+        await triggerEmergencyEscalation({
+            familyId: identity.familyId,
+            recipientUserId: identity.userId,
+            actorUserId: identity.userId,
+            message: text,
+            channel: "whatsapp",
+        });
+        return outbound(phone, elderEmergencyReply(displayName));
+    }
+
     const {
         touchWhatsAppInbound,
         parseLanguageChangeMessage,
@@ -369,7 +439,17 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     if (identity.role === FamilyRole.CARE_RECIPIENT) {
         await touchWhatsAppInbound(identity.familyId, identity.userId);
 
-        const langChange = parseLanguageChangeMessage(text);
+        let langChange = route ? null : parseLanguageChangeMessage(text);
+        if (route?.intent === "language_change") {
+            langChange =
+                parseLanguageChangeMessage(`speak ${route.newLanguage || ""}`) || parseLanguageChangeMessage(text);
+            if (!langChange) {
+                return outbound(
+                    phone,
+                    "I can talk in English, Hindi, Hinglish, Tamil or Kannada 🙂 Which one would you like?",
+                );
+            }
+        }
         if (langChange) {
             await updateCompanionProfile(
                 identity.familyId,
@@ -383,7 +463,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
 
     // "Sun sakte ho?" / "can you hear me" / "hello?" → warm conversational presence reply
     // (never a memory save, never an error). Voice gets a spoken reply too.
-    if (messageIsPresenceCheck(text)) {
+    if (route ? route.intent === "presence_check" : messageIsPresenceCheck(text)) {
         const presence = await stampCompanionVoice(buildPresenceReply(), {
             familyId: identity.familyId,
             recipientUserId: identity.userId,
@@ -494,10 +574,40 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         });
     }
 
+    // ── Routed dispatch (Gemini understood the turn). legacyGates = regex fallback. ──
+    let legacyGates = true;
+    let allowDashboard = true;
+    if (route) {
+        const routedOut = await dispatchRoutedTurn({
+            route,
+            text,
+            phone,
+            familyId: identity.familyId,
+            actorUserId: identity.userId,
+            recipientUserId: subjectUserId,
+            actorRole: identity.role,
+            mediaUrl: body.mediaUrl,
+            isRxPhoto: body.mediaType === "image" || body.mediaType === "document",
+        });
+        if (routedOut.reply) {
+            const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
+            recordWhatsAppAiDebug({
+                familyId: identity.familyId,
+                recipientUserId: subjectUserId,
+                actorUserId: identity.userId,
+                replySource: "saheliRouter",
+                fallbackUsed: `router:${route.intent}`,
+            });
+            return outbound(phone, routedOut.reply);
+        }
+        legacyGates = routedOut.legacyGates;
+        allowDashboard = routedOut.allowDashboard;
+    }
+
     // Pharmacy / browser-commerce mid-flow short controls BEFORE dashboard parity —
     // else bare "status" steals and claims *Latest Instamart order* while an Apollo
     // SKU list or grocery awaiting_sku_confirm / browser order is open.
-    {
+    if (legacyGates) {
         const waPharmEarly = await WhatsappSession.findOne({ phone }).lean();
         const pd = (waPharmEarly as { pharmacyDraft?: { phase?: string } } | null)?.pharmacyDraft;
         const bd = (
@@ -561,7 +671,9 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
-    const dashboardAction = await tryHandleWhatsAppDashboardAction({
+    const dashboardAction = !allowDashboard
+        ? { handled: false as const, reply: undefined, interactiveButtons: undefined }
+        : await tryHandleWhatsAppDashboardAction({
         familyId: identity.familyId,
         recipientUserId: subjectUserId,
         actorUserId: identity.userId,
@@ -603,7 +715,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     }
 
     // Ride booking (Uber web) — slot-fill, location pin, OTP, confirm-before-book.
-    {
+    if (legacyGates) {
         const {
             handleRideWhatsAppTurn,
             messageLooksLikeRideIntent,
@@ -644,7 +756,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     }
 
     // Private browser + pharmacy (Apollo / Instamart browse) — elder & caregiver.
-    {
+    if (legacyGates) {
         const {
             handleBrowserTaskWhatsAppTurn,
             messageLooksLikeBrowserTask,
@@ -747,7 +859,9 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
-    const orderFlowReply = await tryHandleWhatsAppOrderTurn({
+    const orderFlowReply = !legacyGates
+        ? null
+        : await tryHandleWhatsAppOrderTurn({
         phone,
         familyId: identity.familyId,
         recipientUserId: subjectUserId,
@@ -805,7 +919,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         });
     }
 
-    if (isCaregiver(identity.role)) {
+    if (legacyGates && isCaregiver(identity.role)) {
         const orderReply = await tryHandleCaregiverWhatsAppOrderCommand({
             familyId: identity.familyId,
             actorUserId: identity.userId,
@@ -861,4 +975,133 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     }
 
     return out;
+}
+
+const COMMERCE_INTENTS = new Set(["order_new", "order_modify", "order_control", "restaurant_list", "otp_code"]);
+/** Intents that are never a reply to an open order/ride/pharmacy step. */
+const NOT_A_FLOW_REPLY = new Set([
+    "emergency",
+    "health_concern",
+    "language_change",
+    "presence_check",
+    "caregiver_share",
+    "account_info",
+    "order_status_history",
+    "reminder_or_meds",
+]);
+/** Non-commerce intents whose slots the dashboard-parity executor fills (reminders, approvals, DND, briefs…). */
+const DASHBOARD_INTENTS = new Set(["reminder_or_meds", "caregiver_share", "account_info", "order_status_history"]);
+
+/**
+ * Executes a Gemini route. Returns a reply, or tells the caller whether the regex gates
+ * may still run (only for commerce intents the executors couldn't place).
+ */
+async function dispatchRoutedTurn(a: {
+    route: SaheliRoute;
+    text: string;
+    phone: string;
+    familyId: string;
+    actorUserId: string;
+    recipientUserId: string;
+    actorRole: FamilyRole;
+    mediaUrl?: string;
+    isRxPhoto: boolean;
+}): Promise<{ reply?: string; legacyGates: boolean; allowDashboard: boolean }> {
+    const { route, text } = a;
+    const doc = (await WhatsappSession.findOne({ phone: a.phone }).lean()) as FlowDoc;
+    const bd = doc?.browserTaskDraft;
+    const pd = doc?.pharmacyDraft;
+    const rd = doc?.rideDraft;
+    const input = {
+        phone: a.phone,
+        familyId: a.familyId,
+        actorUserId: a.actorUserId,
+        recipientUserId: a.recipientUserId,
+        actorRole: a.actorRole,
+    };
+    const commerce = COMMERCE_INTENTS.has(route.intent);
+    const flowReply = !NOT_A_FLOW_REPLY.has(route.intent);
+    const pharmacyTurn = async (t: string) => {
+        const { handlePharmacyWhatsAppTurn } = await import("./pharmacyOrderFlow.service");
+        return handlePharmacyWhatsAppTurn({ ...input, text: t, mediaUrl: a.mediaUrl, isRxPhoto: a.isRxPhoto });
+    };
+    const rideTurn = async (t: string) => {
+        const { handleRideWhatsAppTurn } = await import("./rideBooking/rideWhatsApp.service");
+        return handleRideWhatsAppTurn({ ...input, text: t });
+    };
+    /** Canonical control text for flows that parse short replies. Money guardrail: confirm stays verbatim. */
+    const canonical = (): string | null => {
+        if (route.intent === "otp_code") {
+            const code = (route.otpCode || text).replace(/\D/g, "");
+            return /^\d{4,8}$/.test(code) ? code : null; // strict numeric check after the model
+        }
+        switch (route.control) {
+            case "pick":
+                return route.pickIndex ? String(route.pickIndex) : text;
+            case "cancel":
+                return "cancel";
+            case "status":
+                return "status";
+            case "retry":
+                return "retry";
+            case "order_again":
+                return "order again";
+            default:
+                return text; // confirm + everything else verbatim
+        }
+    };
+
+    // 1) Slot-filling steps get the raw message unless it's clearly something else.
+    if (liveFlow(bd) && bd!.phase === "awaiting_address" && flowReply) {
+        const { handleBrowserTaskWhatsAppTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        const r = await handleBrowserTaskWhatsAppTurn({ ...input, text, routed: true });
+        if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
+    }
+    const newOrder = route.intent === "order_new" || route.intent === "restaurant_list";
+    if (liveFlow(rd) && (route.intent === "ride" || (flowReply && !newOrder && !liveFlow(bd) && !liveFlow(pd)))) {
+        const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : text;
+        const r = await rideTurn(t);
+        if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
+    }
+    if (route.intent === "ride") {
+        const r = await rideTurn(text);
+        if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
+        return { legacyGates: true, allowDashboard: false };
+    }
+
+    if (commerce) {
+        const browserLive = liveFlow(bd);
+        // Pharmacy draft owns controls when no browser order is open.
+        if (liveFlow(pd) && !browserLive && (route.intent === "order_control" || route.intent === "otp_code" || a.isRxPhoto)) {
+            const t = canonical();
+            if (t) {
+                const r = await pharmacyTurn(t);
+                if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
+            }
+        }
+        const { handleRoutedCommerceTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        const r = await handleRoutedCommerceTurn(input, route, text);
+        if (r?.delegatePharmacyText) {
+            const pr = await pharmacyTurn(r.delegatePharmacyText);
+            if (pr) return { reply: pr.text, legacyGates: false, allowDashboard: false };
+        } else if (r?.text) {
+            return { reply: r.text, legacyGates: false, allowDashboard: false };
+        }
+        if (liveFlow(pd) && route.intent !== "order_new") {
+            const t = canonical();
+            if (t) {
+                const pr = await pharmacyTurn(t);
+                if (pr) return { reply: pr.text, legacyGates: false, allowDashboard: false };
+            }
+        }
+        // Couldn't place it (e.g. "confirm" for an app order session / caregiver approval) → rule executors.
+        return { legacyGates: true, allowDashboard: true };
+    }
+
+    // Pharmacy step that expects free text (e.g. Rx photo) while the model saw chat.
+    if (a.isRxPhoto && liveFlow(pd)) {
+        const r = await pharmacyTurn(text);
+        if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
+    }
+    return { legacyGates: false, allowDashboard: DASHBOARD_INTENTS.has(route.intent) };
 }
