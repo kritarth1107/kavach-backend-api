@@ -1,5 +1,5 @@
-import { randomUUID } from "crypto";
-import SaheliNudgeLog, { type SaheliNudgeKind } from "../models/saheliNudgeLog.model";
+import { type SaheliNudgeKind } from "../models/saheliNudgeLog.model";
+import { claimNudgeAttempt, finalizeNudgeAttempt } from "./saheliNudgeAttempt.service";
 import {
     getScheduleDayStatuses,
     parseTimeToMinutes,
@@ -24,51 +24,6 @@ function inWindow(value: number, min: number, max: number): boolean {
     return value >= min && value <= max;
 }
 
-async function nudgeAlreadySent(input: {
-    familyId: string;
-    recipientUserId: string;
-    scheduleId: string;
-    dateKey: string;
-    nudgeKind: SaheliNudgeKind;
-}): Promise<boolean> {
-    const existing = await SaheliNudgeLog.findOne({
-        familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
-        scheduleId: input.scheduleId,
-        dateKey: input.dateKey,
-        nudgeKind: input.nudgeKind,
-        delivered: true,
-    }).lean();
-    return Boolean(existing);
-}
-
-async function recordNudge(input: {
-    familyId: string;
-    recipientUserId: string;
-    scheduleId?: string;
-    dateKey: string;
-    nudgeKind: SaheliNudgeKind;
-    delivered: boolean;
-    channel: string;
-    messagePreview: string;
-}) {
-    try {
-        await SaheliNudgeLog.create({
-            nudgeId: randomUUID(),
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            scheduleId: input.scheduleId,
-            dateKey: input.dateKey,
-            nudgeKind: input.nudgeKind,
-            delivered: input.delivered,
-            channel: input.channel,
-            messagePreview: input.messagePreview.slice(0, 200),
-        });
-    } catch {
-        // duplicate nudge for same slot
-    }
-}
-
 export async function deliverCareNudge(input: {
     familyId: string;
     recipientUserId: string;
@@ -81,18 +36,6 @@ export async function deliverCareNudge(input: {
     preferredChannel: "whatsapp" | "phone" | "dashboard";
     preferredLanguage?: string;
 }): Promise<boolean> {
-    if (
-        await nudgeAlreadySent({
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            scheduleId: input.scheduleId,
-            dateKey: input.dateKey,
-            nudgeKind: input.nudgeKind,
-        })
-    ) {
-        return false;
-    }
-
     const text = buildCareNudgeText({
         nudgeKind: input.nudgeKind,
         title: input.title,
@@ -112,6 +55,18 @@ export async function deliverCareNudge(input: {
         time: input.time,
     });
 
+    const slotKey = {
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        scheduleId: input.scheduleId,
+        dateKey: input.dateKey,
+        nudgeKind: input.nudgeKind,
+    };
+    const attemptId = await claimNudgeAttempt(slotKey, text);
+    if (!attemptId) {
+        return false;
+    }
+
     const target = await resolveRecipientChannel(
         input.familyId,
         input.recipientUserId,
@@ -119,13 +74,13 @@ export async function deliverCareNudge(input: {
     );
     if (!target || target.channel === "dashboard") {
         console.warn(
-            `Care nudge skipped — no WhatsApp channel for ${input.recipientUserId} (${input.nudgeKind})`,
+            `Care nudge skipped — no valid WhatsApp recipient for ${input.recipientUserId} (${input.nudgeKind}); terminal for this window`,
         );
-        await recordNudge({
-            ...input,
+        await finalizeNudgeAttempt(attemptId, {
             delivered: false,
             channel: "dashboard",
-            messagePreview: text,
+            terminal: true,
+            reason: "no_valid_recipient",
         });
         return false;
     }
@@ -139,11 +94,11 @@ export async function deliverCareNudge(input: {
         whatsappPayloads: payloads,
     });
 
-    await recordNudge({
-        ...input,
+    await finalizeNudgeAttempt(attemptId, {
         delivered: delivery.delivered,
         channel: target.channel,
-        messagePreview: text,
+        terminal: delivery.reason === "invalid_recipient",
+        reason: delivery.delivered ? undefined : delivery.reason ?? "send_failed",
     });
 
     if (!delivery.delivered) {

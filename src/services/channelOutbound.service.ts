@@ -12,11 +12,17 @@ import { composeWhatsAppReply } from "./whatsappMessageComposer.service";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { phoneMockAdapter } from "../channels/whatsappMock.adapter";
 import { resolveRecipientWhatsAppPhone } from "./identityResolver.service";
+import {
+    isPlaceholderWhatsAppNumber,
+    isWhatsAppPlaceholderRecipientError,
+} from "./whatsappRecipientGuard.service";
 
 export type OutboundDelivery = {
     channel: "whatsapp" | "phone" | "dashboard";
     channelIdentifier: string;
     delivered: boolean;
+    /** Set when delivery was skipped/failed; "invalid_recipient" is terminal (placeholder number). */
+    reason?: "invalid_recipient" | "send_failed";
 };
 
 export async function resolveRecipientChannel(
@@ -70,6 +76,21 @@ export async function deliverOutboundMessage(payload: {
         };
     }
 
+    if (
+        (payload.channel === "whatsapp" || payload.channel === "phone") &&
+        (await isPlaceholderWhatsAppNumber(payload.channelIdentifier))
+    ) {
+        console.warn(
+            `Outbound ${payload.channel} send skipped: placeholder recipient number for user ${payload.recipientUserId}`,
+        );
+        return {
+            channel: "dashboard",
+            channelIdentifier: "dashboard",
+            delivered: false,
+            reason: "invalid_recipient",
+        };
+    }
+
     try {
         if (payload.channel === "whatsapp" && isMetaWhatsAppEnabled()) {
             const companion = await SaheliCompanion.findOne({
@@ -111,12 +132,21 @@ export async function deliverOutboundMessage(payload: {
             delivered: true,
         };
     } catch (err) {
+        if (isWhatsAppPlaceholderRecipientError(err)) {
+            return {
+                channel: "dashboard",
+                channelIdentifier: "dashboard",
+                delivered: false,
+                reason: "invalid_recipient",
+            };
+        }
         console.warn("Outbound delivery failed, stored for dashboard:", err);
         await OutboundMessage.create({ ...record, deliveredAt: undefined });
         return {
             channel: "dashboard",
             channelIdentifier: "dashboard",
             delivered: false,
+            reason: "send_failed",
         };
     }
 }

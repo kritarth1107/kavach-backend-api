@@ -17,6 +17,12 @@ export interface ISaheliNudgeLog {
     delivered: boolean;
     channel: string;
     messagePreview?: string;
+    /** Number of send attempts made for this slot (legacy rows: treat missing as 1). */
+    attempts?: number;
+    lastAttemptAt?: Date;
+    /** No further attempts for this slot (e.g. no valid recipient / placeholder number). */
+    terminal?: boolean;
+    reason?: string;
     createdAt: Date;
 }
 
@@ -33,6 +39,10 @@ const saheliNudgeLogSchema = new Schema<ISaheliNudgeLogDocument>(
         delivered: { type: Boolean, default: false },
         channel: { type: String, default: "whatsapp" },
         messagePreview: { type: String },
+        attempts: { type: Number, default: 0 },
+        lastAttemptAt: { type: Date },
+        terminal: { type: Boolean, default: false },
+        reason: { type: String },
     },
     { timestamps: { createdAt: true, updatedAt: false } },
 );

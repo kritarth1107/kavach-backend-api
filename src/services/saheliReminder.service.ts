@@ -1,11 +1,11 @@
 import { randomUUID } from "crypto";
+import { claimNudgeAttempt, finalizeNudgeAttempt } from "./saheliNudgeAttempt.service";
 import Family from "../models/family.model";
 import SaheliReminder, {
     type ISaheliReminder,
     type SaheliReminderKind,
     type SaheliReminderStatus,
 } from "../models/saheliReminder.model";
-import SaheliNudgeLog from "../models/saheliNudgeLog.model";
 import { AppError } from "../middleware/error.middleware";
 import { FamilyRole } from "../types/family.types";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
@@ -353,51 +353,6 @@ export async function tryCompleteRemindersFromMessage(input: {
     return `Got it — stopped ${completed.length} reminders.`;
 }
 
-async function reminderSlotAlreadyFired(input: {
-    familyId: string;
-    recipientUserId: string;
-    reminderId: string;
-    dateKey: string;
-    slotKey: string;
-}): Promise<boolean> {
-    const existing = await SaheliNudgeLog.findOne({
-        familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
-        scheduleId: `reminder:${input.reminderId}:${input.slotKey}`,
-        dateKey: input.dateKey,
-        nudgeKind: "pre_reminder",
-        delivered: true,
-    }).lean();
-    return Boolean(existing);
-}
-
-async function recordReminderFire(input: {
-    familyId: string;
-    recipientUserId: string;
-    reminderId: string;
-    dateKey: string;
-    slotKey: string;
-    delivered: boolean;
-    channel: string;
-    messagePreview: string;
-}) {
-    try {
-        await SaheliNudgeLog.create({
-            nudgeId: randomUUID(),
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            scheduleId: `reminder:${input.reminderId}:${input.slotKey}`,
-            dateKey: input.dateKey,
-            nudgeKind: "pre_reminder",
-            delivered: input.delivered,
-            channel: input.channel,
-            messagePreview: input.messagePreview.slice(0, 200),
-        });
-    } catch {
-        // duplicate
-    }
-}
-
 async function fireReminderMessage(input: {
     familyId: string;
     recipientUserId: string;
@@ -405,39 +360,40 @@ async function fireReminderMessage(input: {
     slotKey: string;
     dateKey: string;
 }): Promise<boolean> {
-    if (
-        await reminderSlotAlreadyFired({
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            reminderId: input.reminder.reminderId,
-            dateKey: input.dateKey,
-            slotKey: input.slotKey,
-        })
-    ) {
-        return false;
-    }
-
     const companion = await getCompanionProfile(input.familyId, input.recipientUserId);
     if (isWithinQuietHours(companion)) {
         return false;
     }
 
     const text = `Reminder: ${input.reminder.text}`;
+    const attemptId = await claimNudgeAttempt(
+        {
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            scheduleId: `reminder:${input.reminder.reminderId}:${input.slotKey}`,
+            dateKey: input.dateKey,
+            nudgeKind: "pre_reminder",
+        },
+        text,
+    );
+    if (!attemptId) {
+        return false;
+    }
+
     const target = await resolveRecipientChannel(
         input.familyId,
         input.recipientUserId,
         companion.preferredChannel ?? "whatsapp",
     );
     if (!target || target.channel === "dashboard") {
-        await recordReminderFire({
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            reminderId: input.reminder.reminderId,
-            dateKey: input.dateKey,
-            slotKey: input.slotKey,
+        console.warn(
+            `Reminder skipped — no valid WhatsApp recipient for ${input.recipientUserId}; terminal for this slot`,
+        );
+        await finalizeNudgeAttempt(attemptId, {
             delivered: false,
             channel: "dashboard",
-            messagePreview: text,
+            terminal: true,
+            reason: "no_valid_recipient",
         });
         return false;
     }
@@ -450,15 +406,11 @@ async function fireReminderMessage(input: {
         channelIdentifier: target.channelIdentifier,
     });
 
-    await recordReminderFire({
-        familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
-        reminderId: input.reminder.reminderId,
-        dateKey: input.dateKey,
-        slotKey: input.slotKey,
+    await finalizeNudgeAttempt(attemptId, {
         delivered: delivery.delivered,
         channel: target.channel,
-        messagePreview: text,
+        terminal: delivery.reason === "invalid_recipient",
+        reason: delivery.delivered ? undefined : delivery.reason ?? "send_failed",
     });
 
     if (delivery.delivered) {

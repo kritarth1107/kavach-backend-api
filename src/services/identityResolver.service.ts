@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { isPlaceholderWhatsAppNumber } from "./whatsappRecipientGuard.service";
 import ChannelIdentity from "../models/channelIdentity.model";
 import Family from "../models/family.model";
 import FamilyInvitation from "../models/familyInvitation.model";
@@ -231,7 +232,18 @@ export async function resolveRecipientWhatsAppPhone(
         .sort({ updatedAt: -1 })
         .lean();
     if (channelRow?.channelIdentifier) {
-        return normalizeChannelIdentifier(ChannelType.WHATSAPP, channelRow.channelIdentifier);
+        const candidate = normalizeChannelIdentifier(ChannelType.WHATSAPP, channelRow.channelIdentifier);
+        const userPlaceholderKey =
+            user?.phone?.countryCode && isInternalPhone(user.phone.countryCode)
+                ? `${user.phone.countryCode}${user.phone.number ?? ""}`.replace(/\D/g, "")
+                : "";
+        if (
+            candidate.replace(/\D/g, "") !== userPlaceholderKey &&
+            !(await isPlaceholderWhatsAppNumber(candidate))
+        ) {
+            return candidate;
+        }
+        console.warn(`resolveRecipientWhatsAppPhone: skipping placeholder channel identity for user ${userId}`);
     }
 
     const invite = await FamilyInvitation.findOne({
@@ -243,13 +255,16 @@ export async function resolveRecipientWhatsAppPhone(
     })
         .sort({ updatedAt: -1 })
         .lean();
-    if (invite?.phone && invite.phoneCountryCode) {
+    if (invite?.phone && invite.phoneCountryCode && !isInternalPhone(invite.phoneCountryCode)) {
         try {
             const normalized = normalizePhoneInput(invite.phoneCountryCode, invite.phone);
-            return normalizeChannelIdentifier(
+            const candidate = normalizeChannelIdentifier(
                 ChannelType.WHATSAPP,
                 `${normalized.countryCode}${normalized.number}`,
             );
+            if (!isInternalPhone(normalized.countryCode) && !(await isPlaceholderWhatsAppNumber(candidate))) {
+                return candidate;
+            }
         } catch {
             // fall through
         }
@@ -260,12 +275,15 @@ export async function resolveRecipientWhatsAppPhone(
         try {
             const list = await getFamilyMembersList(familyId, userId);
             const member = list.members.find((m) => m.userId === userId);
-            if (member?.phone && member.phoneCountryCode) {
+            if (member?.phone && member.phoneCountryCode && !isInternalPhone(member.phoneCountryCode)) {
                 const normalized = normalizePhoneInput(member.phoneCountryCode, member.phone);
-                return normalizeChannelIdentifier(
+                const candidate = normalizeChannelIdentifier(
                     ChannelType.WHATSAPP,
                     `${normalized.countryCode}${normalized.number}`,
                 );
+                if (!isInternalPhone(normalized.countryCode) && !(await isPlaceholderWhatsAppNumber(candidate))) {
+                    return candidate;
+                }
             }
         } catch {
             // access denied or missing family

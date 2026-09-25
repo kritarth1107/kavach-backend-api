@@ -1,4 +1,5 @@
 import config from "../config/app.config";
+import { assertSendableWhatsAppRecipient } from "../services/whatsappRecipientGuard.service";
 import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
 
 export function isMetaWhatsAppEnabled(): boolean {
@@ -136,6 +137,7 @@ export function startMetaWhatsAppTypingRefresh(messageId: string): () => void {
 }
 
 async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<void> {
+    await assertSendableWhatsAppRecipient(to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
         throw new Error("Meta WhatsApp is not configured");
@@ -163,6 +165,7 @@ async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<voi
 }
 
 async function sendSingleMetaWhatsAppPayload(to: string, payload: MetaWhatsAppPayload): Promise<void> {
+    await assertSendableWhatsAppRecipient(to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
         throw new Error("Meta WhatsApp is not configured");
@@ -220,6 +223,7 @@ export async function sendMetaWhatsAppTemplate(input: {
     languageCode?: string;
     bodyParameters?: string[];
 }): Promise<void> {
+    await assertSendableWhatsAppRecipient(input.to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
         throw new Error("Meta WhatsApp is not configured");
@@ -352,6 +356,7 @@ export async function sendMetaWhatsAppVoice(input: {
     mimeType?: string;
     caption?: string;
 }): Promise<void> {
+    await assertSendableWhatsAppRecipient(input.to);
     if (input.caption?.trim()) {
         await sendSingleMetaWhatsAppText(input.to, input.caption.trim());
     }
