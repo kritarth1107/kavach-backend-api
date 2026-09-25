@@ -61,6 +61,21 @@ import {
     APOLLO_CART_URL,
     waitForOtpAccepted,
 } from "./apolloPostOtp";
+import { addressTargetFrom } from "./apolloAddress";
+import { captureCheckoutDiagnostic } from "./checkoutDiagnostics.service";
+
+/** Kavach user's display name (care recipient on a new Apollo address). Never invented. */
+async function lookupKavachUserName(userId?: string): Promise<string | undefined> {
+    if (!userId) return undefined;
+    try {
+        const User = (await import("../../models/users.model")).default;
+        const u = (await User.findOne({ userId }).lean()) as { firstName?: string; lastName?: string; displayName?: string } | null;
+        const name = [u?.firstName, u?.lastName].filter(Boolean).join(" ").trim() || u?.displayName?.trim();
+        return name && /[a-z]/i.test(name) ? name.slice(0, 40) : undefined;
+    } catch {
+        return undefined;
+    }
+}
 
 export type BrowserTaskStatus =
     | "running"
@@ -1613,11 +1628,12 @@ export async function apolloExactSkuToConfirm(args: {
     }
     if (added.status !== "added") return null;
     await args.progress?.(`added ✓ — checking the cart total & delivery address…`);
-    const cart = await readApolloCart(args.page, sku, { deadlineAt: args.deadlineAt, pincode });
+    const cart = await readApolloCart(args.page, sku, { deadlineAt: args.deadlineAt, pincode, addressLabel });
     logPostOtp("cart", {
         itemSeen: cart?.itemSeen,
         total: cart?.totalLabel,
         addrPin: cart?.addressMatchesPincode,
+        addrEvidence: cart?.addressEvidence,
         cod: cart?.codMentioned,
     });
     // 3) Hard guard: the cart must hold EXACTLY one line — this product at qty 1.
@@ -1888,6 +1904,15 @@ export async function submitParkedBrowserOtp(input: {
         });
         const result = await Promise.race([work(), timeout]);
         logPostOtp("result", { status: result.status, reason: result.failureReason, ms: Date.now() - startedAt });
+        if (result.status === "error" && parked.partner === "apollo") {
+            await captureCheckoutDiagnostic(parked.page, {
+                familyId: input.familyId,
+                userId: input.userId,
+                flow: "post_otp",
+                stage: result.failureReason || "error",
+                reason: result.message.slice(0, 200),
+            }).catch(() => null);
+        }
         // Keep the signed-in page (cart built) for the user's "confirm" — never re-login for checkout.
         if (
             result.status === "need_user_confirm" &&
@@ -1966,10 +1991,13 @@ function parkSignedInCheckout(args: {
     return row;
 }
 
-/** Hard wall-clock budget for confirm → placed order (WhatsApp hears back within ~90s). */
+/**
+ * Hard wall-clock budget for confirm → placed order. Runs async (WhatsApp gets progress lines
+ * and the result); the address step (select saved / add new on Apollo) can take ~40-60s.
+ */
 export const CHECKOUT_BUDGET_MS = Math.min(
-    Math.max(Number(process.env.BROWSER_CHECKOUT_BUDGET_MS) || 85_000, 45_000),
-    90_000,
+    Math.max(Number(process.env.BROWSER_CHECKOUT_BUDGET_MS) || 150_000, 60_000),
+    180_000,
 );
 
 function logCheckout(event: string, extra?: Record<string, unknown>): void {
@@ -2003,6 +2031,8 @@ export async function continueParkedCheckout(input: {
     familyId: string;
     userId: string;
     cardId?: string;
+    /** Care recipient (Kavach user) — their name goes on a newly added Apollo address. */
+    recipientUserId?: string;
     onProgress?: (detail: string) => void | Promise<void>;
     budgetMs?: number;
 }): Promise<ParkedCheckoutRun> {
@@ -2054,6 +2084,9 @@ export async function continueParkedCheckout(input: {
         session.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
     const pincode = extractPincode(addressLabel);
     const confirmedTotalRupees = rupeesFromLabel(session.confirm?.totalLabel);
+    const addressTarget = addressTargetFrom(addressLabel);
+    const recipientName = await lookupKavachUserName(input.recipientUserId || input.userId);
+    const accountPhone = session.input.loginPhone || session.goal.match(/login_phone=(\S+)/i)?.[1];
     logCheckout("start", {
         card: session.cardId,
         url: (() => {
@@ -2066,12 +2099,18 @@ export async function continueParkedCheckout(input: {
         pincode,
         confirmedTotalRupees,
         budgetMs,
+        addressTarget: addressTarget ? { line1: addressTarget.line1, pincode: addressTarget.pincode, queries: addressTarget.searchQueries.length } : null,
+        recipientName: recipientName ? "kavach" : null,
+        accountPhone: accountPhone ? "set" : null,
     });
 
     const workPromise = runApolloCodCheckout(session.page, {
         deadlineAt: startedAt + budgetMs - 3_000,
         pincode,
         addressHints: addressHintsFrom(addressLabel),
+        addressTarget,
+        recipientName,
+        accountPhone,
         confirmedTotalRupees,
         skuName: sku?.name || session.confirm?.items?.[0]?.replace(/\s*×\d+.*$/, "").trim() || undefined,
         priorAddressVerified: session.addressVerified,
@@ -2122,6 +2161,16 @@ export async function continueParkedCheckout(input: {
               };
     }
     logCheckout("outcome", { status: outcome.status, detail: outcome.detail.slice(0, 160), ms: Date.now() - startedAt });
+    if (outcome.status !== "placed" && outcome.status !== "cancelled" && !session.page.isClosed()) {
+        // Screenshot + trimmed text of whatever screen checkout stopped on (log + mock peek).
+        await captureCheckoutDiagnostic(session.page, {
+            familyId: session.familyId,
+            userId: session.userId,
+            flow: "checkout",
+            stage: "stage" in outcome ? String(outcome.stage) : outcome.status,
+            reason: `${outcome.status}: ${outcome.detail}`,
+        }).catch(() => null);
+    }
 
     const label = partnerLabel(session.partner);
     const item = session.confirm?.items?.[0] || sku?.name || "your item";
@@ -2261,7 +2310,7 @@ export async function continueParkedCheckout(input: {
         default: {
             const why =
                 outcome.status === "address_unverified"
-                    ? `I couldn't confirm the delivery address${pincode ? ` (${pincode})` : ""} on Apollo's checkout`
+                    ? `I couldn't set the delivery address${pincode ? ` (${pincode})` : ""} on Apollo — ${outcome.detail.replace(/\s*\[step:[^\]]*\]\s*$/, "").slice(0, 160)}`
                     : `I couldn't finish Apollo checkout within ${Math.round(budgetMs / 1000)}s (${outcome.detail.slice(0, 100)})`;
             if (canRepark) {
                 repark();

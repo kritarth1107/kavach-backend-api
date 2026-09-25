@@ -794,7 +794,7 @@ const SESSION_EXPIRED_COPY =
 /**
  * "confirm" on the confirm-before-pay card → continue checkout on the parked signed-in
  * page (cart already built). Never starts a fresh login / SMS. Replies instantly; the
- * order number (or an honest failure) follows on WhatsApp within ~90s.
+ * order number (or an honest failure) follows on WhatsApp within CHECKOUT_BUDGET_MS (~2.5 min).
  */
 async function startParkedCheckoutFromWhatsApp(
     input: {
@@ -854,6 +854,7 @@ async function startParkedCheckoutFromWhatsApp(
                 familyId: input.familyId,
                 userId: input.actorUserId,
                 cardId,
+                recipientUserId: input.recipientUserId,
                 onProgress: async (d) => {
                     if (delivered) return;
                     await push(d);
@@ -912,7 +913,7 @@ async function startParkedCheckoutFromWhatsApp(
     return {
         text:
             `Placing your order on *${label}* — *Cash on Delivery* only, on the same signed-in cart (no new code).\n` +
-            `I'll send the Apollo order number here in about a minute.`,
+            `I'll send the Apollo order number here in 1–2 minutes (setting the delivery address can take a bit).`,
         draft,
     };
 }

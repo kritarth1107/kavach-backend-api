@@ -214,13 +214,16 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
     const { buildWhatsAppMockPeek } = await import("../services/whatsappMockPeek.service");
     // {"from":"91…","peek":true} → read-only: latest Saheli outbound messages (incl. the async
     // confirm-before-pay card) + draft summary. Does NOT route any message.
-    if (req.body?.peek === true) {
+    if (req.body?.peek === true || req.body?.peek === "screenshot") {
         const from = typeof req.body?.from === "string" ? req.body.from : "";
         if (!from.replace(/\D/g, "")) {
             res.status(400).json({ success: false, message: "from is required" });
             return;
         }
-        res.json({ success: true, data: { peek: await buildWhatsAppMockPeek(from) } });
+        res.json({
+            success: true,
+            data: { peek: await buildWhatsAppMockPeek(from, { includeScreenshot: req.body?.peek === "screenshot" }) },
+        });
         return;
     }
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");

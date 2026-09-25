@@ -73,7 +73,10 @@ function summarizePharmacyDraft(d: AnyDraft) {
     };
 }
 
-export async function buildWhatsAppMockPeek(from: string): Promise<Record<string, unknown>> {
+export async function buildWhatsAppMockPeek(
+    from: string,
+    opts: { includeScreenshot?: boolean } = {},
+): Promise<Record<string, unknown>> {
     const phone = key(from);
     const out: Record<string, unknown> = {
         phone,
@@ -81,14 +84,27 @@ export async function buildWhatsAppMockPeek(from: string): Promise<Record<string
         browserTaskDraft: null,
         pharmacyDraft: null,
         parkedCheckout: null,
+        lastCheckoutFailure: null,
     };
     try {
         const WhatsappSession = (await import("../models/whatsappSession.model")).default;
         const row = (await WhatsappSession.findOne({ phone }).lean()) as Record<string, unknown> | null;
         out.browserTaskDraft = summarizeBrowserDraft(row?.browserTaskDraft as AnyDraft);
         out.pharmacyDraft = summarizePharmacyDraft(row?.pharmacyDraft as AnyDraft);
-        const familyId = typeof row?.familyId === "string" ? row.familyId : undefined;
-        const userId = typeof row?.userId === "string" ? row.userId : undefined;
+        // The WA router keys browser sessions by the RESOLVED sender identity (ChannelIdentity /
+        // invite / profile phone), not by WhatsappSession.familyId/userId (often unset) —
+        // resolve it the same way so the parked-checkout lookup matches.
+        let familyId: string | undefined;
+        let userId: string | undefined;
+        try {
+            const { resolveWhatsAppSender } = await import("./identityResolver.service");
+            const id = await resolveWhatsAppSender(phone);
+            familyId = id.familyId;
+            userId = id.userId;
+        } catch {
+            familyId = typeof row?.familyId === "string" ? row.familyId : undefined;
+            userId = typeof row?.userId === "string" ? row.userId : undefined;
+        }
         if (familyId && userId) {
             const { peekParkedCheckout, isCheckoutInFlight } = await import(
                 "./commerceAutomation/parkedOtpSession.service"
@@ -102,6 +118,22 @@ export async function buildWhatsAppMockPeek(from: string): Promise<Record<string
                 placeClicked: parked ? Boolean(parked.placeClicked) : null,
                 checkoutInFlight: isCheckoutInFlight(familyId, userId),
             };
+            const { getLastCheckoutDiagnostic } = await import("./commerceAutomation/checkoutDiagnostics.service");
+            const diag = getLastCheckoutDiagnostic(familyId, userId);
+            out.lastCheckoutFailure = diag
+                ? {
+                      at: diag.at,
+                      flow: diag.flow,
+                      stage: diag.stage,
+                      reason: diag.reason,
+                      url: diag.url,
+                      title: diag.title,
+                      text: diag.text,
+                      screenshotBytes: diag.screenshotBytes ?? 0,
+                      /** Only with {"peek":"screenshot"} (phone inputs / numbers masked). */
+                      screenshotJpegBase64: opts.includeScreenshot ? diag.screenshotJpegBase64 ?? null : undefined,
+                  }
+                : null;
         }
     } catch (err) {
         out.error = err instanceof Error ? err.message.slice(0, 120) : "peek failed";

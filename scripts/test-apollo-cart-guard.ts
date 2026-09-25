@@ -75,7 +75,10 @@ async function load(){
   const el = document.getElementById('cart');
   if (!s.cart.length) { el.innerHTML = '<h1>YOUR CART</h1><p>YOUR CART IS EMPTY</p><a>GO TO PHARMACY</a>'; return; }
   el.innerHTML = '<h1>YOUR CART</h1><p>' + s.cart.length + ' ITEM' + (s.cart.length>1?'S':'') + ' IN YOUR CART</p>' +
-    '<p>Deliver to: C504, Sunita Park, Raipur 492001</p>' +
+    '<div class="CartAddress_addressMain__V7zoa"><div class="CartAddress_addressBlock__KHt2Q"><div class="CartAddress_addressDetail__k1chb">' +
+    '<p class="CartAddress_cusName__6HeZX"><span class="CartAddress_billToTxt__3TvJN"> Bill to </span>Test User</p>' +
+    '<p class="CartAddress_address__Nt8hI">C504, Sunita Park, Labhandih, Raipur, Chhattisgarh - 492001</p></div>' +
+    '<div class="CartAddress_addActions__HESr9"><span class="CartAddress_actionBtn__HJq2T">Change</span></div></div></div>' +
     s.cart.map(l => '<div class="MedicineProductCard_root__udJYP"><div class="MedicineProductCard_titleBx__V"><h2 class="MedicineProductCard_title__MJ4MD">' + l.name +
       '</h2><div style="display:inline-block;width:20px;height:20px;background:#c00" class="dustbicIcon__ZxLJZ MedicineProductCard_deleteIcon__LWTJ9" data-sku="' + l.sku + '"><span></span></div></div>' +
       '<p class="MedicineProductCard_subTitle__C">Pack of 1</p><p class="MedicineProductCard_text__lcvKS">Qty ' + l.qty + '</p></div>').join('') +

@@ -3,7 +3,9 @@
  * (parked after the confirm-before-pay card). Runs ONLY after the user replied
  * "confirm" to that exact card.
  *
- *   /medicines-cart → Proceed → (address pick: pincode / C504 Sunita Park)
+ *   /medicines-cart → ensure delivery address (select saved C504/Sunita Park 492001 or add it
+ *   via Apollo's own Add New Address flow — see apolloAddress.ts) → Proceed → "Deliver to"
+ *   confirm popup (verify + Proceed)
  *   → /delivery-options → PROCEED → /pay/<id> → "Pay on Delivery" (COD)
  *   → "Place order for ₹X" → /order-status/<txn>/<status> ("Order ID(s) : …")
  *
@@ -25,10 +27,19 @@ import {
     waitForCartSnapshot,
     type ExactCartCheck,
 } from "./apolloPostOtp";
+import {
+    addressReviewPopupOpen,
+    deliverToSheetOpen,
+    ensureApolloDeliveryAddress,
+    handleAddressReviewPopup,
+    type AddressTarget,
+} from "./apolloAddress";
 
 export type CheckoutStage =
     | "cart"
     | "address"
+    /** Apollo's "Deliver to" confirm popup after cart Proceed (address + recipient + Proceed). */
+    | "address_review"
     | "delivery_options"
     | "payment"
     | "success"
@@ -71,6 +82,12 @@ export type ApolloCheckoutOptions = {
     pincode?: string;
     /** Distinctive address fragments, e.g. ["C504", "Sunita Park"]. */
     addressHints?: string[];
+    /** Full parsed delivery address (select a matching saved address or add this one). */
+    addressTarget?: AddressTarget | null;
+    /** Care recipient's name from Kavach (recipient on a newly added Apollo address). */
+    recipientName?: string;
+    /** Signed-in Apollo account phone (only used when Apollo's own phone field is empty). */
+    accountPhone?: string;
     /** Numeric rupees from the card the user confirmed (payable must not exceed it). */
     confirmedTotalRupees?: number;
     /** Confirmed product. When set, the cart must hold exactly this item ×1 before Proceed and before Place order. */
@@ -239,7 +256,9 @@ export async function detectCheckoutStage(page: Page): Promise<CheckoutStage> {
     if (await loginPopupVisible(page)) return "login";
     if (/\/pay\//i.test(url)) return "payment";
     if (/prescription-review/i.test(url)) return "rx_review";
-    if (await addressPickerVisible(page)) return "address";
+    if (/\/address-details/i.test(url)) return "address";
+    if (await addressReviewPopupOpen(page)) return "address_review";
+    if ((await deliverToSheetOpen(page)) || (await addressPickerVisible(page))) return "address";
     if (/\/delivery-options/i.test(url)) return "delivery_options";
     if (/\/medicines-cart/i.test(url)) return "cart";
     return "unknown";
@@ -262,64 +281,6 @@ async function addressEvidence(
     if (pinInBody && hintHit) return "full";
     if (pinInBody || new RegExp(`\\b${pincode}\\b`).test(text)) return "pincode";
     return "none";
-}
-
-/** Open the address picker (header / Change) and choose the card with the pincode (+ hints). */
-async function selectAddress(
-    page: Page,
-    pincode: string,
-    hints: string[],
-    deadlineAt: number,
-    log?: ApolloCheckoutOptions["log"],
-): Promise<boolean> {
-    if (remaining(deadlineAt) < 12_000) return false;
-    if (!(await addressPickerVisible(page))) {
-        const opener = page
-            .locator('button, [role="button"], a, label, p, span')
-            .filter({ hasText: /^\s*(select\s*address|change(\s*address)?|select\s*delivery\s*address|delivery\s*address)\s*$/i })
-            .first();
-        if (!(await opener.isVisible().catch(() => false))) return false;
-        await opener.click({ timeout: 3000 }).catch(() => undefined);
-        await sleep(page, 1800);
-    }
-    const picked = await page
-        .evaluate(
-            ({ pin, hints }) => {
-                const els = Array.from(document.querySelectorAll("div, li, label, p, span"));
-                const cands = els.filter((e) => {
-                    const t = (e as HTMLElement).innerText || "";
-                    const r = e.getBoundingClientRect();
-                    return t.includes(pin) && t.length < 400 && r.width > 50 && r.height > 20 && !/add new address/i.test(t);
-                });
-                const score = (e: Element) => {
-                    const t = ((e as HTMLElement).innerText || "").toLowerCase();
-                    return hints.filter((h) => h && t.includes(h.toLowerCase())).length;
-                };
-                cands.sort((a, b) => score(b) - score(a) || (a as HTMLElement).innerText.length - (b as HTMLElement).innerText.length);
-                const el = cands[0] as HTMLElement | undefined;
-                if (!el) return null;
-                const radio = el.querySelector('input[type="radio"]') as HTMLElement | null;
-                (radio || el).click();
-                return { text: el.innerText.replace(/\s+/g, " ").slice(0, 140), score: score(el) };
-            },
-            { pin: pincode, hints },
-        )
-        .catch(() => null);
-    log?.("address_pick", { picked });
-    if (!picked) {
-        await page.keyboard.press("Escape").catch(() => undefined);
-        return false;
-    }
-    await sleep(page, 1200);
-    const confirmBtn = page
-        .locator('button, [role="button"]')
-        .filter({ hasText: /^\s*(deliver\s*here|confirm(\s*address)?|select|done|proceed|continue|save\s*&?\s*proceed)\s*$/i })
-        .first();
-    if (await confirmBtn.isVisible().catch(() => false)) {
-        await confirmBtn.click({ timeout: 3000 }).catch(() => undefined);
-        await sleep(page, 1500);
-    }
-    return true;
 }
 
 async function clickProceed(page: Page): Promise<string | null> {
@@ -472,7 +433,15 @@ async function geminiNavigateStep(
     page: Page,
     opts: { stage: CheckoutStage; pincode?: string; hints: string[]; step: number; maxSteps: number; log?: ApolloCheckoutOptions["log"] },
 ): Promise<number> {
-    if (opts.stage === "payment" || opts.stage === "success" || opts.stage === "login") return 0;
+    if (
+        opts.stage === "payment" ||
+        opts.stage === "success" ||
+        opts.stage === "login" ||
+        opts.stage === "address" ||
+        opts.stage === "address_review"
+    ) {
+        return 0;
+    }
     let executed = 0;
     try {
         const screenshot = await page.screenshot({ type: "png", fullPage: false, timeout: 8_000 });
@@ -495,8 +464,7 @@ async function geminiNavigateStep(
                 accessibilityHint,
                 goal:
                     `Apollo checkout navigation ONLY: get from the cart to the payment options page. ` +
-                    `If asked for a delivery address, pick the saved one with pincode ${opts.pincode || "(given)"}` +
-                    `${opts.hints.length ? ` / ${opts.hints.join(" / ")}` : ""}. Click Proceed / Deliver here / Continue.`,
+                    `The delivery address is already handled by code. Click Proceed / Continue only.`,
                 playbookHint:
                     "NEVER choose a payment method, NEVER click Pay / Place order / UPI / Card / Wallet / Cash on Delivery, " +
                     "NEVER type, NEVER log out, NEVER remove items or add a new address. Already signed in.",
@@ -598,7 +566,48 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
     };
 
     let addressVerified: "full" | "pincode" | "none" = opts.priorAddressVerified ?? "none";
-    let addressAttempts = 0;
+    let addressEnsured = false;
+    let addressRuns = 0;
+    let reviewHandled = 0;
+    const target: AddressTarget | null =
+        opts.addressTarget ??
+        (opts.pincode
+            ? {
+                  label: [...hints, opts.pincode].join(", "),
+                  pincode: opts.pincode,
+                  flat: hints[0],
+                  society: hints[1],
+                  line1: hints.join(", "),
+                  hints,
+                  searchQueries: [opts.pincode],
+              }
+            : null);
+    /** Deterministic select-or-add of the delivery address (cart / drawer / address form). */
+    const ensureAddress = async (): Promise<ApolloCheckoutOutcome | null> => {
+        if (!target) return null;
+        addressRuns++;
+        await sayOnce("addr", `checking the delivery address (${target.pincode}) on Apollo…`);
+        const r = await ensureApolloDeliveryAddress(page, target, {
+            deadlineAt: opts.deadlineAt,
+            recipientName: opts.recipientName,
+            accountPhone: opts.accountPhone,
+            progress,
+            log,
+        });
+        log("address_ensure", r.ok ? { how: r.how, text: r.addressText.slice(0, 120) } : { step: r.step, reason: r.reason });
+        if (!r.ok) {
+            return {
+                status: "address_unverified",
+                url: safeUrl(page),
+                detail: `${r.reason} [step: ${r.step}]`,
+            };
+        }
+        addressEnsured = true;
+        addressVerified = "full";
+        if (r.how !== "added_new") await sayOnce("addr_ok", `delivery address ${target.line1}, ${target.pincode} ✓`);
+        stageSince = Date.now();
+        return null;
+    };
     let proceedClicks = 0;
     let geminiSteps = 0;
     const geminiMax = opts.geminiMaxSteps ?? 3;
@@ -673,27 +682,55 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                 return { status: "order_failed", url: safeUrl(page), detail: text.replace(/\s+/g, " ").slice(0, 200) };
             }
             case "address": {
-                if (opts.pincode && addressAttempts < 2) {
-                    addressAttempts++;
-                    await sayOnce("addr", `selecting delivery address ${opts.pincode}…`);
-                    await selectAddress(page, opts.pincode, hints, opts.deadlineAt, log);
-                    await sleep(page, 1200);
+                // Apollo's Deliver-to drawer or /address-details form.
+                if (target && !addressEnsured && addressRuns < 2) {
+                    const stop = await ensureAddress();
+                    if (stop) return stop;
                     continue;
                 }
-                break;
+                if (addressRuns >= 2 && !addressEnsured) {
+                    return { status: "address_unverified", url: safeUrl(page), detail: "couldn't set the delivery address on Apollo" };
+                }
+                // Address already ensured but a picker is open again → close it, back to the cart.
+                await page.keyboard.press("Escape").catch(() => undefined);
+                await sleep(page, 800);
+                if ((await detectCheckoutStage(page)) === "address") {
+                    await page
+                        .goto(`${BASE}/medicines-cart`, { waitUntil: "domcontentloaded", timeout: Math.max(1_000, Math.min(20_000, remaining(opts.deadlineAt) - 5_000)) })
+                        .catch(() => undefined);
+                    await sleep(page, 1500);
+                }
+                continue;
+            }
+            case "address_review": {
+                if (!target) {
+                    return { status: "address_unverified", url: safeUrl(page), detail: "Apollo asked to confirm a delivery address but none was given" };
+                }
+                if (reviewHandled >= 3) {
+                    return { status: "stuck", stage, url: safeUrl(page), detail: "Apollo's delivery-address popup kept coming back" };
+                }
+                reviewHandled++;
+                const r = await handleAddressReviewPopup(page, target, {
+                    recipientName: opts.recipientName,
+                    accountPhone: opts.accountPhone,
+                    log,
+                });
+                log("address_review_result", { ok: r.ok, reason: r.ok ? undefined : r.reason });
+                if (!r.ok) return { status: "address_unverified", url: safeUrl(page), detail: r.reason };
+                addressVerified = "full";
+                await sayOnce("review", `Apollo confirmed delivery to ${target.line1}, ${target.pincode} ✓ — continuing…`);
+                stageSince = Date.now();
+                await sleep(page, 2500);
+                continue;
             }
             case "cart": {
-                if (addressVerified === "none" && opts.pincode) {
-                    addressVerified = await addressEvidence(page, opts.pincode, hints);
-                    if (addressVerified !== "full" && addressAttempts < 1) {
-                        addressAttempts++;
-                        const picked = await selectAddress(page, opts.pincode, hints, opts.deadlineAt, log);
-                        if (picked) {
-                            await sleep(page, 1500);
-                            addressVerified = await addressEvidence(page, opts.pincode, hints);
-                        }
+                if (target && !addressEnsured) {
+                    if (addressRuns >= 2) {
+                        return { status: "address_unverified", url: safeUrl(page), detail: "couldn't set the delivery address on Apollo" };
                     }
-                    log("address_evidence", { at: "cart", addressVerified });
+                    const stop = await ensureAddress();
+                    if (stop) return stop;
+                    continue;
                 }
                 if (proceedClicks < 3 && (proceedClicks === 0 || stuckMs > 6_000)) {
                     if (opts.skuName) {
@@ -731,13 +768,6 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             case "delivery_options": {
                 const ev = await addressEvidence(page, opts.pincode, hints);
                 if (ev === "full" || (ev === "pincode" && addressVerified !== "full")) addressVerified = ev;
-                if (opts.pincode && ev === "none" && addressAttempts < 2) {
-                    addressAttempts++;
-                    await sayOnce("addr", `selecting delivery address ${opts.pincode}…`);
-                    await selectAddress(page, opts.pincode, hints, opts.deadlineAt, log);
-                    await sleep(page, 1500);
-                    continue;
-                }
                 if (opts.pincode && addressVerified === "none") {
                     return {
                         status: "address_unverified",
@@ -924,7 +954,7 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             geminiSteps < geminiMax &&
             stuckFor > 8_000 &&
             remaining(opts.deadlineAt) > 25_000 &&
-            (stage === "cart" || stage === "delivery_options" || stage === "address" || stage === "unknown")
+            (stage === "cart" || stage === "delivery_options" || stage === "unknown")
         ) {
             geminiSteps++;
             log("gemini_fallback", { stage, step: geminiSteps });

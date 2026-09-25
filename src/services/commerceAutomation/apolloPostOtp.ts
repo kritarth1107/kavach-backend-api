@@ -9,6 +9,7 @@
  * caller-supplied deadline so WhatsApp always gets an answer (never silent).
  */
 import type { Page } from "playwright";
+import { addressTargetFrom, cartAddressEvidence, readCartAddressBlock } from "./apolloAddress";
 
 export type ExactSku = {
     name: string;
@@ -348,6 +349,11 @@ export type CartSummary = {
     raw: string;
     /** Real cart line items read from the page (for the exactly-one-item guard). */
     cartLines?: CartSnapshot;
+    /**
+     * Delivery address actually SELECTED on Apollo's cart (CartAddress block — not the header
+     * browse location): full = pincode + flat/society, pincode = pincode only, none = not selected.
+     */
+    addressEvidence?: "full" | "pincode" | "none";
 };
 
 export function parseCartText(raw: string, sku: ExactSku, pincode?: string): CartSummary & { qty?: number } {
@@ -384,52 +390,10 @@ export function parseCartText(raw: string, sku: ExactSku, pincode?: string): Car
     };
 }
 
-/** Try to pick the saved address with this pincode on the cart / address sheet. */
-async function trySelectAddressByPincode(page: Page, pincode: string, deadlineAt: number): Promise<boolean> {
-    if (remaining(deadlineAt) < 12_000) return false;
-    const opener = page
-        .locator('button, [role="button"], a, p, span')
-        .filter({ hasText: /^\s*(select\s*address|change(\s*address)?|add\s*address|select\s*delivery\s*address)\s*$/i })
-        .first();
-    if (!(await opener.isVisible().catch(() => false))) return false;
-    await opener.click({ timeout: 3000 }).catch(() => undefined);
-    await sleep(page, 1800);
-    // Smallest visible element whose text includes the pincode (address card)
-    const picked = await page
-        .evaluate((pin) => {
-            const els = Array.from(document.querySelectorAll("div, li, label, p"));
-            const hits = els
-                .filter((e) => {
-                    const t = (e as HTMLElement).innerText || "";
-                    const r = e.getBoundingClientRect();
-                    return t.includes(pin) && t.length < 400 && r.width > 50 && r.height > 20;
-                })
-                .sort((a, b) => ((a as HTMLElement).innerText.length - (b as HTMLElement).innerText.length));
-            const el = hits[0] as HTMLElement | undefined;
-            if (!el) return false;
-            el.click();
-            return true;
-        }, pincode)
-        .catch(() => false);
-    if (!picked) {
-        await page.keyboard.press("Escape").catch(() => undefined);
-        return false;
-    }
-    await sleep(page, 1200);
-    const confirmBtn = page
-        .getByRole("button", { name: /^(deliver\s*here|confirm(\s*address)?|save|select|done|proceed)$/i })
-        .first();
-    if (await confirmBtn.isVisible().catch(() => false)) {
-        await confirmBtn.click({ timeout: 3000 }).catch(() => undefined);
-        await sleep(page, 1500);
-    }
-    return true;
-}
-
 export async function readApolloCart(
     page: Page,
     sku: ExactSku,
-    opts: { deadlineAt: number; pincode?: string },
+    opts: { deadlineAt: number; pincode?: string; addressLabel?: string },
 ): Promise<CartSummary | null> {
     if (remaining(opts.deadlineAt) < 10_000) return null;
     await page
@@ -451,9 +415,15 @@ export async function readApolloCart(
         summary.itemSeen = true;
         if (typeof line.qty === "number") summary.qty = line.qty;
     }
-    if (opts.pincode && !summary.addressMatchesPincode) {
-        const picked = await trySelectAddressByPincode(page, opts.pincode, opts.deadlineAt);
-        if (picked) summary = { ...parseCartText(await bodyText(page, 6000), sku, opts.pincode), cartLines, itemSeen: summary.itemSeen, qty: summary.qty };
+    if (opts.pincode) {
+        // Read-only: the selected delivery address from the cart's own address block. The
+        // select-or-add happens on *confirm* (apolloCheckout → ensureApolloDeliveryAddress).
+        const blk = await readCartAddressBlock(page);
+        const target = addressTargetFrom(opts.addressLabel) ?? { pincode: opts.pincode };
+        const evidence = blk.found ? cartAddressEvidence(blk, target) : "none";
+        summary.addressEvidence = evidence;
+        summary.addressMatchesPincode = evidence !== "none";
+        summary.addressText = blk.selected ? blk.text : undefined;
     }
     return summary;
 }
@@ -477,8 +447,16 @@ export function formatApolloConfirmCard(input: {
         : price
           ? `${price} (item price; Apollo adds any delivery fee at checkout)`
           : "shown by Apollo at checkout";
-    const verifiedAddr = input.cart?.addressMatchesPincode;
+    const evidence = input.cart?.addressEvidence ?? (input.cart?.addressMatchesPincode ? "pincode" : input.cart ? "none" : undefined);
     const addressLabel = input.addressLabel || input.cart?.addressText || "your saved Apollo address";
+    const pin = extractPincode(addressLabel);
+    const addrNote =
+        evidence === "full"
+            ? " ✓ _(selected on Apollo)_"
+            : evidence === undefined
+              ? ""
+              : ` _(not selected on Apollo yet — on *confirm* I'll pick this saved address or add it to your Apollo account` +
+                `${pin ? `, and stop if pincode ${pin} can't be verified` : ""})_`;
     const lines = [
         `*Confirm before pay — Apollo:*`,
         `• ${item}`,
@@ -486,7 +464,7 @@ export function formatApolloConfirmCard(input: {
         input.removedCount ? `_(Removed ${input.removedCount} other item${input.removedCount === 1 ? "" : "s"} that were already in your Apollo cart.)_` : "",
         ``,
         `Total: ${totalLabel}`,
-        `Deliver to: ${addressLabel}${verifiedAddr === false ? " _(please double-check — Apollo's cart didn't show this pincode yet)_" : ""}`,
+        `Deliver to: ${addressLabel}${addrNote}`,
         `Payment: *Cash on Delivery* preferred${input.cart && !input.cart.codMentioned ? " (I'll pick COD at checkout if Apollo offers it)" : ""}.`,
         input.cart && !input.cart.itemSeen ? `_Note: I added it, but couldn't read the cart line back — I'll re-check before placing._` : "",
         ``,
