@@ -752,6 +752,11 @@ export async function searchMcpProduct(
     query: string,
     opts?: { addressId?: string },
 ): Promise<McpSearchResult> {
+    // Food/grocery ordering is browser-only (Kavach address, code guardrails). MCP catalog
+    // search is hard-disabled so no MCP path can show store-account addresses or items.
+    if (process.env.MCP_COMMERCE_SEARCH_ENABLED !== "true" && ["swiggy", "instamart", "zepto"].includes(String(partner))) {
+        return { items: [], error: "mcp_search_disabled: food/grocery search runs in Saheli's browser (browser_order) at the saved Kavach address" };
+    }
     const config = getMcpPartner(partner);
     return withMcpClient(partner, familyId, userId, async (client) => {
         const tools = (await client.listTools()).tools;

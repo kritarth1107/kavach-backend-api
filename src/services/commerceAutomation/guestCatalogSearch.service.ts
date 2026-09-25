@@ -5,8 +5,9 @@
  * Sources:
  * - Apollo: public accessToken + search-service/v5/fullSearch
  * - PharmEasy: public /api/search/search
- * - Instamart / Swiggy / Zepto: MCP search when already connected (no new SMS)
- * - Blinkit / Zomato / Tata 1mg: no stable guest price API — honest empty (never invent prices)
+ * - Instamart: our headless browser as guest, location set to the Kavach address (never MCP)
+ * - Swiggy food: restaurant → dish flow (swiggyGuest.service), not a flat list
+ * - Zepto / Blinkit / Zomato: no guest browsing yet — honest empty (never MCP, never invent prices)
  * - Others: honest empty result (never invent prices)
  */
 import { randomUUID } from "crypto";
@@ -23,7 +24,7 @@ export type GuestCatalogHit = SearchHit & {
     mrpPaise?: number;
     /** Live stock at the delivery pincode when the partner reports it. */
     inStock?: boolean;
-    source: "apollo_public" | "pharmeasy_public" | "mcp" | "none";
+    source: "apollo_public" | "pharmeasy_public" | "mcp" | "browser_guest" | "none";
 };
 
 export type GuestCatalogSearchResult = {
@@ -560,37 +561,58 @@ export async function searchGuestCatalog(input: {
                 query,
             };
         }
-        if (partner === "instamart" || partner === "swiggy" || partner === "zepto") {
-            const hits = await searchMcpGuest({
-                partner: partner as McpPartnerKey,
-                familyId: input.familyId,
-                userId: input.userId,
-                query,
-            });
-            if (hits.length) {
-                return { hits: rankGuestHits(query, hits), searched: true, partner, query };
+        // Food / grocery: browser only (never MCP), location = the Kavach address.
+        if (partner === "instamart") {
+            const { instamartSearch } = await import("./swiggyGuest.service");
+            const res = await instamartSearch({ query });
+            if (!res.location.ok || !res.location.pincodeMatch) {
+                return {
+                    hits: [],
+                    searched: true,
+                    unavailableReason:
+                        "I couldn't set Instamart's location to your saved address (C504, Sunita Park, Raipur 492001), so I won't show prices from another area. Please try again in a bit.",
+                    partner,
+                    query,
+                };
             }
-            const label =
-                partner === "instamart" ? "Instamart" : partner === "swiggy" ? "Swiggy" : "Zepto";
+            const hits: GuestCatalogHit[] = rankGroceryItems(
+                query,
+                res.items.filter((i) => !i.sponsored),
+            ).map((i, n) => ({
+                id: `instamart:${n}:${i.name}`.slice(0, 120),
+                name: i.pack ? `${i.name} (${i.pack})` : i.name,
+                pricePaise: i.pricePaise,
+                packLabel: i.pack,
+                source: "browser_guest" as const,
+            })) as GuestCatalogHit[];
             return {
-                hits: [],
+                hits,
                 searched: true,
-                unavailableReason:
-                    `${label} live prices need a connected account (or address). ` +
-                    `Reply *confirm* to open ${label} in the private browser (OTP may be asked) — I won't invent a price. ` +
-                    `Or connect ${label} in Integrations for guest-free search.`,
+                unavailableReason: hits.length ? undefined : `Instamart (Raipur 492001) shows nothing matching "${query}". Try another name.`,
                 partner,
                 query,
             };
         }
-        if (partner === "blinkit" || partner === "zomato") {
-            const label = partner === "blinkit" ? "Blinkit" : "Zomato";
+        if (partner === "swiggy") {
+            // Restaurant food is chosen restaurant → dish (browserTaskWhatsApp food flow), not a flat item list.
             return {
                 hits: [],
-                searched: true,
+                searched: false,
+                unavailableReason: "Swiggy food is picked by restaurant first — say *show me open restaurants on Swiggy*.",
+                partner,
+                query,
+            };
+        }
+        if (partner === "zepto" || partner === "blinkit" || partner === "zomato") {
+            const label = partner === "zepto" ? "Zepto" : partner === "blinkit" ? "Blinkit" : "Zomato";
+            return {
+                hits: [],
+                searched: false,
                 unavailableReason:
-                    `${label} does not expose guest prices without login (public catalog blocked). ` +
-                    `Reply *confirm* to open ${label} in the private browser and find the exact item (OTP may be asked) — I won't invent a price.`,
+                    `I can't browse ${label} without signing in yet, so I can't show live items or prices for your address. ` +
+                    (partner === "zomato"
+                        ? `I can show open restaurants near you on *Swiggy* instead.`
+                        : `I can search *Instamart* for your address (Raipur 492001) instead.`),
                 partner,
                 query,
             };
@@ -615,6 +637,26 @@ export async function searchGuestCatalog(input: {
             query,
         };
     }
+}
+
+const GROCERY_OFFTOPIC_RE = /\b(chocolate|choco|biscuits?|bikis|cookies?|bar|chips|whitener|creamer|shampoo|soap|lotion|cream|candy|toffee|ice\s*cream|cake)\b/i;
+
+/** Relevance for grocery items: every query word must appear; snacks/sweets demoted unless asked. */
+export function rankGroceryItems<T extends { name: string }>(query: string, items: T[]): T[] {
+    const q = query.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((t) => t.length >= 2);
+    if (!q.length) return items.slice(0, 5);
+    const scored = items
+        .map((it, idx) => {
+            const n = it.name.toLowerCase();
+            const hit = q.filter((t) => new RegExp(`\\b${t.replace(/s$/, "")}`).test(n)).length;
+            let s = hit / q.length;
+            const off = n.match(GROCERY_OFFTOPIC_RE)?.[0];
+            if (off && !q.some((t) => off.startsWith(t.replace(/s$/, "")))) s -= 0.8;
+            return { it, s, idx };
+        })
+        .filter((x) => x.s >= 0.99)
+        .sort((a, b) => b.s - a.s || a.idx - b.idx);
+    return scored.map((x) => x.it).slice(0, 5);
 }
 
 /** WA copy for found SKU(s). Prefer top hit; list up to 3 numbered options. */
