@@ -13,12 +13,13 @@ import { useRemoteBrowserFor } from "./remoteBrowser";
 const API = "https://api.browser-use.com/api/v2";
 
 export type ZomatoDish = { name: string; restaurant: string; pricePaise?: number; veg?: boolean; restaurantUrl?: string };
-export type ZomatoSearchResult = { location: { ok: boolean; shown: string }; dishes: ZomatoDish[]; blocked?: boolean; costUsd?: number; note?: string };
+export type ZomatoSearchResult = { location: { ok: boolean; shown: string }; dishes: ZomatoDish[]; blocked?: boolean; loginWall?: boolean; costUsd?: number; note?: string };
 
-const SCHEMA = JSON.stringify({
+export const ZOMATO_SCHEMA = JSON.stringify({
     type: "object",
     properties: {
         blocked: { type: "boolean" },
+        login_wall: { type: "boolean" },
         location_set: { type: "boolean" },
         location_shown: { type: "string" },
         results: {
@@ -40,12 +41,12 @@ const SCHEMA = JSON.stringify({
     required: ["blocked", "location_set", "results"],
 });
 
-function cityUrl(address: string): string {
+export function cityUrl(address: string): string {
     const slug = (cityOf(address) || "").toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "");
     return slug ? `https://www.zomato.com/${slug}/delivery` : "https://www.zomato.com/";
 }
 
-function task(address: string, query: string): string {
+export function zomatoTask(address: string, query: string): string {
     const loc = locationQueryFor(address);
     return [
         `Read-only lookup on the Zomato website (food delivery). You start on the delivery page: ${cityUrl(address)}`,
@@ -54,7 +55,8 @@ function task(address: string, query: string): string {
         `2. Type "${query}" in the search box and press Enter / pick the dish or restaurant suggestion.`,
         `3. The results list restaurants. Open the top 3 OPEN restaurants one by one (same tab, then go back) and in each menu find the item(s) that best match "${query}" with their price. If the search term is a restaurant name, open that restaurant and list its matching items.`,
         `4. Report up to 6 results: dish name, restaurant name, the price in rupees exactly as shown on the menu (Zomato often hides menu prices from guests — then leave the price out, never guess it), veg or not, and the restaurant page URL. Skip closed restaurants, add-ons, sauces and extras. Don't spend more than ~25 steps.`,
-        `If an access-denied / captcha page blocks you, stop and report blocked=true. Then finish.`,
+        `If an access-denied / captcha page blocks you, stop and report blocked=true.`,
+        `LOGIN WALL: if you land on a login / sign-in / OTP page, or a login modal you cannot close blocks the next step, STOP IMMEDIATELY — do not retry or look for workarounds — and report login_wall=true with whatever results you already have. (Menu prices hidden behind "log in" are NOT a wall: just leave prices out.) Then finish.`,
     ].join("\n");
 }
 
@@ -69,6 +71,14 @@ async function bu<T>(method: string, path: string, body?: unknown): Promise<T> {
     return (text ? JSON.parse(text) : {}) as T;
 }
 
+/** Hosted-agent model (Browser Use Cloud llm id). Gemini family for prod unless approved otherwise. */
+export function browserAgentModel(): string {
+    return process.env.BROWSER_AGENT_MODEL?.trim() || process.env.BROWSER_USE_AGENT_MODEL?.trim() || "gemini-3-flash-preview";
+}
+
+/** Login / sign-in / OTP pages (URL) — hosted-agent tasks stop here (early stop caps wasted cost). */
+export const LOGIN_WALL_URL = /\/(login|signin|sign-in|signup|sign-up|auth|accounts?\/login|otp)(\b|[/?#])/i;
+
 export function zomatoSearchAvailable(): boolean {
     return useRemoteBrowserFor("zomato");
 }
@@ -76,31 +86,40 @@ export function zomatoSearchAvailable(): boolean {
 export async function zomatoSearch(input: { address: string; query: string; budgetMs?: number }): Promise<ZomatoSearchResult> {
     if (!zomatoSearchAvailable()) return { location: { ok: false, shown: "" }, dishes: [], note: "remote_off" };
     const created = await bu<{ id: string }>("POST", "/tasks", {
-        task: task(input.address, input.query.slice(0, 80)),
-        llm: process.env.BROWSER_USE_AGENT_MODEL?.trim() || "gemini-3-flash-preview",
+        task: zomatoTask(input.address, input.query.slice(0, 80)),
+        llm: browserAgentModel(),
         startUrl: cityUrl(input.address),
         maxSteps: Number(process.env.BROWSER_USE_AGENT_MAX_STEPS) || 30,
-        structuredOutput: SCHEMA,
+        structuredOutput: ZOMATO_SCHEMA,
         sessionSettings: { proxyCountryCode: "in" },
         metadata: { app: "kavach", partner: "zomato", kind: "guest_search" },
     });
     const t0 = Date.now();
     const budget = input.budgetMs ?? (Number(process.env.ZOMATO_SEARCH_BUDGET_MS) || 300_000);
-    let t: { status?: string; output?: unknown; cost?: string | number } = {};
+    let t: { status?: string; output?: unknown; cost?: string | number; steps?: Array<{ url?: string }> } = {};
     try {
         while (Date.now() - t0 < budget) {
             await new Promise((r) => setTimeout(r, 5000));
             t = await bu<typeof t>("GET", `/tasks/${created.id}`).catch(() => t);
             if (t.status === "finished" || t.status === "stopped") break;
+            // Early stop: a login/sign-in page means nothing more a guest can read — stop paying for steps.
+            const last = (t.steps || []).slice(-1)[0];
+            if (last && LOGIN_WALL_URL.test(String(last.url || ""))) {
+                console.warn("[zomato-guest] login wall reached — stopping task early:", String(last.url).slice(0, 80));
+                await bu("PATCH", `/tasks/${created.id}`, { action: "stop_task_and_session" }).catch(() => undefined);
+                t = await bu<typeof t>("GET", `/tasks/${created.id}`).catch(() => t);
+                break;
+            }
         }
     } finally {
         if (t.status !== "finished" && t.status !== "stopped") {
             await bu("PATCH", `/tasks/${created.id}`, { action: "stop_task_and_session" }).catch(() => undefined);
         }
     }
-    if (t.status !== "finished") throw new Error("zomato_guest_timeout");
+    if (t.status !== "finished" && t.status !== "stopped") throw new Error("zomato_guest_timeout");
     let out: {
         blocked?: boolean;
+        login_wall?: boolean;
         location_set?: boolean;
         location_shown?: string;
         results?: Array<{ dish?: string; restaurant?: string; price_rupees?: number; veg?: boolean; restaurant_url?: string }>;
@@ -124,5 +143,5 @@ export async function zomatoSearch(input: { address: string; query: string; budg
             veg: typeof r.veg === "boolean" ? r.veg : undefined,
             restaurantUrl: /^https:\/\/(www\.)?zomato\.com\//.test(String(r.restaurant_url || "")) ? String(r.restaurant_url) : undefined,
         }));
-    return { location, dishes: location.ok ? dishes : [], blocked: Boolean(out.blocked), costUsd: Number(t.cost) || undefined };
+    return { location, dishes: location.ok ? dishes : [], blocked: Boolean(out.blocked), loginWall: Boolean(out.login_wall), costUsd: Number(t.cost) || undefined };
 }

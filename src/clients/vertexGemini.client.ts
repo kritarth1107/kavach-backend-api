@@ -17,6 +17,10 @@ function projectId(): string {
 export function vertexLocationForModel(model: string): string {
     const m = model.toLowerCase();
     if (m.includes("-pro")) return process.env.VERTEX_LOCATION?.trim() || "global";
+    // Newer Flash releases (3.6, -lite, -latest, previews) serve from global only in our project
+    // (asia-south1 → 404, checked 2026-09-26). VERTEX_GLOBAL_MODELS adds more ids.
+    const extra = (process.env.VERTEX_GLOBAL_MODELS || "").toLowerCase().split(/[\s,]+/).filter(Boolean);
+    if (/gemini-3\.6|-lite|-latest|-preview/.test(m) || extra.includes(m)) return "global";
     return process.env.GCP_REGION?.trim() || "asia-south1";
 }
 
@@ -25,7 +29,7 @@ export function vertexFlashModel(): string {
 }
 
 export function vertexProModel(): string {
-    return process.env.VERTEX_SNAPSHOT_MODEL?.trim() || "gemini-3.5-pro";
+    return process.env.VERTEX_SNAPSHOT_MODEL?.trim() || "gemini-3.1-pro-preview";
 }
 
 /** Last Vertex failure (status + short body) for secret-gated debug. */

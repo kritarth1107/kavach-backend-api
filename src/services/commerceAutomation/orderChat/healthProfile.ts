@@ -10,6 +10,11 @@ export type HealthProfile = { notes: string[]; medicines: string[]; profileMd: s
 const cache = new Map<string, { at: number; p: HealthProfile }>();
 const TTL = 10 * 60_000;
 
+/** Tests/evals only: seed a profile without the DB / AI engine. */
+export function primeHealthProfile(familyId: string, recipientUserId: string, p: HealthProfile): void {
+    cache.set(`${familyId}:${recipientUserId}`, { at: Date.now(), p });
+}
+
 export function forgetHealthProfile(familyId: string, recipientUserId: string): void {
     cache.delete(`${familyId}:${recipientUserId}`);
 }
