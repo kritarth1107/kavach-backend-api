@@ -480,6 +480,23 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         );
     }
     rememberTurn(phone, "user", text);
+    // Unusual-activity backstop, before any order chat / search: risky medicines in bulk (sleeping
+    // pills / painkillers) → pause, ask her gently, alert caregivers (tiered + deduped).
+    if (identity.role === FamilyRole.CARE_RECIPIENT && route && (route.intent === "order_new" || route.intent === "order_modify")) {
+        const probe = `${route.productQuery || ""} ${text}`.trim();
+        const { riskyMedClass } = await import("./profile/unusualCore");
+        if (riskyMedClass(probe)) {
+            const { gateElderOrder } = await import("./profile/unusualActivity.service");
+            const g = await gateElderOrder(
+                { familyId: identity.familyId, recipientUserId: identity.userId },
+                { item: probe.slice(0, 120), qty: route.quantity ?? undefined, stage: "request" },
+            ).catch(() => null);
+            if (g?.pause && g.elderLine) {
+                rememberTurn(phone, "saheli", g.elderLine);
+                return outbound(phone, g.elderLine);
+            }
+        }
+    }
     if (!route && !body.interactiveId) {
         // Fallback only (model unavailable): spoken ordinals → the digit the rule gates understand.
         const ord = text.trim().toLowerCase().replace(/[.!]+$/, "");
