@@ -37,7 +37,7 @@ async function setBlinkitLocation(ctx: BrowserContext, page: Page, address: stri
             .click({ timeout: 4000 })
             .catch(() => undefined);
     }
-    if (!(await input.waitFor({ state: "visible", timeout: 12_000 }).then(() => true).catch(() => false))) {
+    if (!(await input.waitFor({ state: "visible", timeout: 20_000 }).then(() => true).catch(() => false))) {
         const snip = ((await page.evaluate(() => `${document.title} | ${document.body?.innerText || ""}`).catch(() => "")) as string)
             .replace(/\s+/g, " ")
             .slice(0, 160);
@@ -51,13 +51,26 @@ async function setBlinkitLocation(ctx: BrowserContext, page: Page, address: stri
     await pick.waitFor({ state: "visible", timeout: 12_000 });
     await pick.click({ timeout: 6000 });
     await page.waitForTimeout(3000);
-    const all = await ctx.cookies(BASE);
-    const lat = all.find((c) => c.name === "gr_1_lat");
-    const lon = all.find((c) => c.name === "gr_1_lon");
-    if (!lat || !lon) return { ok: false, locality: "" };
-    const keep = all.filter((c) => /^gr_1_(lat|lon|locality|landmark|city)|^city$/.test(c.name));
-    const locality = decodeURIComponent(all.find((c) => c.name === "gr_1_landmark")?.value || all.find((c) => c.name === "gr_1_locality")?.value || "");
-    const inCity = !city || new RegExp(city, "i").test(locality);
+    // The location cookies can land a moment after the click (slower on the remote Chrome), and
+    // gr_1_landmark may briefly read "undefined": re-read once before judging the city.
+    const read = async () => {
+        const all = await ctx.cookies(BASE);
+        const val = (n: string) => {
+            const v = decodeURIComponent(all.find((c) => c.name === n)?.value || "");
+            return /^(undefined|null)$/i.test(v) ? "" : v;
+        };
+        return { all, lat: val("gr_1_lat"), lon: val("gr_1_lon"), locality: [val("gr_1_landmark"), val("gr_1_locality")].filter(Boolean).join(", ") };
+    };
+    let c = await read();
+    const cityOk = (l: string) => !city || new RegExp(city, "i").test(l);
+    if (!c.lat || !c.lon || !cityOk(c.locality)) {
+        await page.waitForTimeout(3000);
+        c = await read();
+    }
+    const { all, locality } = c;
+    if (!c.lat || !c.lon) return { ok: false, locality: "" };
+    const keep = all.filter((x) => /^gr_1_(lat|lon|locality|landmark|city)|^city$/.test(x.name));
+    const inCity = cityOk(locality);
     if (!inCity) return { ok: false, locality };
     locCache.set(address, { cookies: keep.map((c) => ({ name: c.name, value: c.value })), locality, at: Date.now() });
     return { ok: true, locality };
@@ -91,13 +104,17 @@ export function parseBlinkitResults(text: string): BlinkitItem[] {
 
 export async function blinkitSearch(input: { address: string; query: string }): Promise<{ location: { ok: boolean; locality: string }; items: BlinkitItem[] }> {
     const pw = await import("playwright");
-    const browser = await pw.chromium.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"],
+    const { launchBrowserFor, remoteInfo, remoteBudgetMs } = await import("./remoteBrowser");
+    // Guest browsing: remote India-proxy Chrome when enabled (no family profile, no login state).
+    const browser = await launchBrowserFor(pw, {
+        partner: "blinkit",
+        minutes: 5,
+        launch: { headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"] },
     });
+    const remote = remoteInfo(browser).remote;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-        const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 900 }, locale: "en-IN" });
+        const ctx = await browser.newContext(remote ? { viewport: { width: 1280, height: 900 }, locale: "en-IN" } : { userAgent: UA, viewport: { width: 1280, height: 900 }, locale: "en-IN" });
         await ctx.addInitScript(() => {
             Object.defineProperty(navigator, "webdriver", { get: () => undefined });
         });
@@ -117,7 +134,7 @@ export async function blinkitSearch(input: { address: string; query: string }): 
         return await Promise.race([
             work,
             new Promise<never>((_, rej) => {
-                timer = setTimeout(() => rej(new Error("blinkit_guest_timeout")), 50_000);
+                timer = setTimeout(() => rej(new Error("blinkit_guest_timeout")), remoteBudgetMs("blinkit", 50_000));
             }),
         ]);
     } finally {

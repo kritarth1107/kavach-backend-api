@@ -45,6 +45,7 @@ import {
 import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 import { classifyOrderInterrupt, type OrderInterrupt } from "./orderInterrupt.service";
 import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
+import { useRemoteBrowserFor } from "./remoteBrowser";
 import { detectBlockedItem, blockedReply, logBlockedRequest } from "./blockedItems";
 import { classifyAddressMention, shortAddress, stripAddressPhrases } from "./kavachAddress";
 import {
@@ -1001,6 +1002,16 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
                     return showRestaurantMenu(input, draft, draft.restaurantName, q);
                 }
                 if (!home) return askForAddress(input, text);
+                if (partner === "zomato" && zomatoRemoteOn()) {
+                    const zq = q || "popular food";
+                    const pbz = resolvePlaybook("zomato" as CommercePartnerKey, `order ${zq} from zomato`);
+                    return deferGuestWork(
+                        input,
+                        `Searching *Zomato* for "${zq}" near 📍 ${home.short} 🔎 — this one takes a couple of minutes, I'll send the options.`,
+                        (token) => zomatoSearchCore(input, zq, pbz, home, token),
+                        draft,
+                    );
+                }
                 if (partner === "zomato") {
                     return {
                         text: "I can't browse Zomato without signing in yet. I can show restaurants open near you on *Swiggy* instead — say *show open restaurants on Swiggy*.",
@@ -1069,7 +1080,16 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
         const partner = partnerFromText(text);
         // Food: Swiggy/Zomato, or restaurant intent with no grocery partner named → restaurant flow.
         if (partner === "swiggy" || partner === "zomato" || (partner === "generic" && wantsRestaurantList(text))) {
-            if (partner !== "zomato" && !home) return askForAddress(input, text);
+            if (!home && (partner !== "zomato" || zomatoRemoteOn())) return askForAddress(input, text);
+            if (partner === "zomato" && zomatoRemoteOn()) {
+                const zq = extractFoodQuery(text, home!.full) || "popular food";
+                const pbz = resolvePlaybook("zomato" as CommercePartnerKey, `order ${zq} from zomato`);
+                return deferGuestWork(
+                    input,
+                    `Searching *Zomato* for "${zq}" near 📍 ${home!.short} 🔎 — this one takes a couple of minutes, I'll send the options.`,
+                    (token) => zomatoSearchCore(input, zq, pbz, home!, token),
+                );
+            }
             if (partner === "zomato") {
                 return {
                     text:
@@ -1154,6 +1174,7 @@ async function grocerySearchCore(
     playbook: { partner: CommercePartnerKey | "generic" | string; siteKey?: string; startUrl?: string },
     home: RecipientAddress,
     token?: number,
+    kind: "grocery" | "food" = "grocery",
 ): Promise<{ text: string; draft?: BrowserTaskDraft }> {
     const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
     const catalog = await searchGuestCatalog({
@@ -1172,16 +1193,16 @@ async function grocerySearchCore(
         startUrl: playbook.startUrl,
         addressLabel: home.full,
         productQuery: query,
-        category: "grocery",
+        category: kind,
     };
-    const relevant = (await relevantOnly(input.phone, query, catalog.hits.slice(0, 8), false)).slice(0, 5);
+    const relevant = (await relevantOnly(input.phone, query, catalog.hits.slice(0, 8), kind === "food")).slice(0, 5);
     if (relevant.length) {
         draft.catalogOptions = relevant.map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
         if (relevant.length === 1) draft.selectedSku = draft.catalogOptions[0];
     } else {
         if (catalog.hits.length || !catalog.unavailableReason) {
             await saveIfCurrent(input.phone, null, token);
-            const alt = await notFoundAlternatives(input, query, "grocery", String(playbook.partner));
+            const alt = await notFoundAlternatives(input, query, kind, String(playbook.partner));
             if (alt.text) return { text: alt.text };
         }
         // Nothing to confirm: don't leave an empty draft that would ask for *confirm*.
@@ -1190,6 +1211,23 @@ async function grocerySearchCore(
     }
     await saveIfCurrent(input.phone, draft, token);
     return { text: skuConfirmCopy(draft), draft };
+}
+
+/** Zomato dish search → confirm card; nothing usable → an honest "try Swiggy". */
+async function zomatoSearchCore(
+    input: { phone: string; familyId: string; actorUserId: string },
+    query: string,
+    pb: { partner: CommercePartnerKey | "generic" | string; siteKey?: string; startUrl?: string },
+    home: RecipientAddress,
+    token?: number,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const r = await grocerySearchCore(input, `Order ${query} from Zomato`, query, pb, home, token, "food").catch((err) => {
+        console.warn("[zomato-guest] failed:", err instanceof Error ? err.message : err);
+        return null;
+    });
+    if (r) return r;
+    await saveIfCurrent(input.phone, null, token);
+    return { text: `Zomato didn't load for me just now 🙏 Want me to look on *Swiggy* instead?` };
 }
 
 /** Guest browsing (15–30s) runs in the background; the result is pushed to WhatsApp. */
@@ -2174,10 +2212,20 @@ function adoptPickPartner(draft: BrowserTaskDraft): void {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Platforms whose sites block our browser (said honestly, never pretended). */
-const BLOCKED_SITES: Record<string, string> = {
+const BLOCKED_SITES_ALL: Record<string, string> = {
     zepto: "Zepto blocks automated browsing, so I can't see its items or prices",
     zomato: "Zomato blocks automated browsing, so I can't see its restaurants",
 };
+/** Zomato opens on the remote India-proxy Chrome when BROWSER_REMOTE=browseruse. */
+const BLOCKED_SITES: Record<string, string> = new Proxy(BLOCKED_SITES_ALL, {
+    get(t, k: string) {
+        if (k === "zomato" && zomatoRemoteOn()) return undefined;
+        return t[k];
+    },
+});
+function zomatoRemoteOn(): boolean {
+    return useRemoteBrowserFor("zomato");
+}
 const COMPARE_PARTNERS: Record<"grocery" | "pharmacy", string[]> = {
     grocery: ["instamart", "blinkit"],
     pharmacy: ["apollo", "pharmeasy"],
@@ -2546,12 +2594,26 @@ async function startRoutedSearchCore(
 
     // Linked store accounts (MCP) first: Swiggy Food / Instamart / Zepto, no OTP.
     let linkNote = "";
-    if (category !== "pharmacy" && partner !== "apollo") {
+    // She named Zomato (no MCP for it) → don't search her linked Swiggy instead.
+    if (category !== "pharmacy" && partner !== "apollo" && !(partner === "zomato" && zomatoRemoteOn())) {
         const m = await tryMcpRoute(input, home, category, q, partner, draft, restaurantName || null, note);
         if (m.result) return m.result;
         linkNote = m.linkNote || "";
     }
     if (linkNote) out.lead = [out.lead, linkNote].filter(Boolean).join("\n\n");
+
+    // Zomato (no MCP): guest search on the remote India-proxy Chrome → the same confirm card;
+    // login via the OTP step only after she confirms. Remote off → Swiggy as before.
+    if (partner === "zomato" && zomatoRemoteOn()) {
+        await clearPickingDraft(input.phone, draft);
+        const pb = resolvePlaybook("zomato" as CommercePartnerKey, `order ${q} from zomato`);
+        const query = [q, restaurantName].filter(Boolean).join(" ").trim() || "popular food";
+        return deferGuestWork(
+            input,
+            `Searching *Zomato* for "${query}" near 📍 ${home.short} 🔎 — this one takes a couple of minutes, I'll send the options.`,
+            (token) => zomatoSearchCore(input, query, pb, home!, token),
+        );
+    }
 
     // Restaurant food → Swiggy (Zomato blocked).
     if (category === "food" || partner === "swiggy") {

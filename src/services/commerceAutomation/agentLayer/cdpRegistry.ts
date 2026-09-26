@@ -23,6 +23,11 @@ export function debugPortArgs(port: number | null): string[] {
     return port ? [`--remote-debugging-port=${port}`, "--remote-debugging-address=127.0.0.1"] : [];
 }
 
+/** Remote (Browser Use) Chrome: Stagehand attaches to the same session via its CDP URL. */
+export function registerBrowserCdpUrl(browser: Browser, url: string): void {
+    cdpByBrowser.set(browser, url);
+}
+
 export function registerBrowserDebugPort(browser: Browser, port: number | null): void {
     if (port) portByBrowser.set(browser, port);
 }

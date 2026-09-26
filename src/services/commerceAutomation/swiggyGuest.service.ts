@@ -7,6 +7,7 @@
  * restaurant menu (open/closed + "opens at"), dish search, Instamart item search.
  * Needs login: adding to cart + checkout (handled by the browser order flow after confirm).
  */
+import { remoteBudgetMs } from "./remoteBrowser";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { cityOf, locationQueryFor, pincodeOf } from "./kavachAddress";
 
@@ -36,11 +37,15 @@ export type GuestLocation = { ok: boolean; shownAddress: string; pincodeMatch: b
 
 async function launch(): Promise<{ browser: Browser; ctx: BrowserContext }> {
     const pw = await import("playwright");
-    const browser = await pw.chromium.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"],
+    const { launchBrowserFor, remoteInfo } = await import("./remoteBrowser");
+    // Guest browsing: remote India-proxy Chrome when enabled (no family profile, no login state).
+    const browser = await launchBrowserFor(pw, {
+        partner: "swiggy",
+        minutes: 5,
+        launch: { headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--disable-blink-features=AutomationControlled"] },
     });
-    const ctx = await browser.newContext({ userAgent: UA, viewport: { width: 1280, height: 900 }, locale: "en-IN" });
+    const remote = remoteInfo(browser).remote;
+    const ctx = await browser.newContext(remote ? { viewport: { width: 1280, height: 900 }, locale: "en-IN" } : { userAgent: UA, viewport: { width: 1280, height: 900 }, locale: "en-IN" });
     await ctx.addInitScript(() => {
         Object.defineProperty(navigator, "webdriver", { get: () => undefined });
     });
@@ -56,7 +61,7 @@ async function withGuest<T>(fn: (ctx: BrowserContext, page: Page) => Promise<T>,
         return await Promise.race([
             fn(ctx, page),
             new Promise<T>((_, rej) => {
-                timer = setTimeout(() => rej(new Error("swiggy_guest_timeout")), budgetMs);
+                timer = setTimeout(() => rej(new Error("swiggy_guest_timeout")), remoteBudgetMs("swiggy", budgetMs));
             }),
         ]);
     } finally {
@@ -116,7 +121,14 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
     if (await opener.count().catch(() => 0)) await opener.click({ timeout: 4000 }).catch(() => undefined);
     else await page.getByText("Other", { exact: true }).first().click({ timeout: 4000 }).catch(() => undefined);
     const input = page.locator('input[placeholder*="area" i], input[placeholder*="location" i]').first();
-    await input.waitFor({ state: "visible", timeout: 6000 });
+    // The header opener can render late (remote Chrome over the India proxy): retry it once.
+    if (!(await input.waitFor({ state: "visible", timeout: 8000 }).then(() => true).catch(() => false))) {
+        await waitForContent(page);
+        const again = page.locator("header").getByText(/^(Other|Setup your location|Home|Work)$/).first();
+        if (await again.count().catch(() => 0)) await again.click({ timeout: 6000 }).catch(() => undefined);
+        else await page.getByText(/^(Other|Setup your location)$/).first().click({ timeout: 6000 }).catch(() => undefined);
+        await input.waitFor({ state: "visible", timeout: 12_000 });
+    }
     const query = locationQueryFor(address);
     await input.fill(query);
     await page.waitForTimeout(2200);

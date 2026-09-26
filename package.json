@@ -15,7 +15,8 @@
     "browser:install": "npx playwright install chromium",
     "test:nudge-streak": "tsx scripts/test-nudge-streak.ts",
     "test:blocked-items": "tsx scripts/test-blocked-items.ts",
-    "test:order-chat": "tsx scripts/test-order-chat.ts"
+    "test:order-chat": "tsx scripts/test-order-chat.ts",
+    "test:remote-browser": "tsx scripts/test-remote-browser.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

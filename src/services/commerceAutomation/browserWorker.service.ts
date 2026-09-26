@@ -636,23 +636,32 @@ class PlaywrightBrowserWorker implements BrowserWorker {
 
         const launchMs = Math.min(Number(process.env.BROWSER_LAUNCH_MS) || 15_000, 45_000);
         const debugPort = pickDebugPort();
+        // Sites that block our datacenter IP render on the remote India-proxy Chrome (BROWSER_REMOTE=browseruse),
+        // with this family's own profile for this store; everything else is the local headless Chromium.
+        const { launchBrowserFor, remoteInfo, useRemoteBrowserFor } = await import("./remoteBrowser");
+        const remoteWanted = useRemoteBrowserFor(String(playbook.partner));
         const browser = await raceWithDeadline(
-            pw.chromium.launch({
-                headless: true,
-                // Local-only CDP port so the Stagehand fallback can attach to this same browser.
-                args: [
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    // Swiggy renders a blank menu for navigator.webdriver browsers (same flags as swiggyGuest).
-                    "--disable-blink-features=AutomationControlled",
-                    ...debugPortArgs(debugPort),
-                ],
+            launchBrowserFor(pw, {
+                partner: String(playbook.partner),
+                familyId: input.familyId,
+                launch: {
+                    headless: true,
+                    // Local-only CDP port so the Stagehand fallback can attach to this same browser.
+                    args: [
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        // Swiggy renders a blank menu for navigator.webdriver browsers (same flags as swiggyGuest).
+                        "--disable-blink-features=AutomationControlled",
+                        ...debugPortArgs(debugPort),
+                    ],
+                },
             }),
-            launchMs,
+            remoteWanted ? launchMs + 60_000 : launchMs,
             "Playwright chromium.launch",
         );
-        registerBrowserDebugPort(browser, debugPort);
+        const remote = remoteInfo(browser).remote;
+        if (!remote) registerBrowserDebugPort(browser, debugPort);
 
         let context: import("playwright").BrowserContext | null = null;
         let modelUsed: string | undefined;
@@ -679,7 +688,13 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
             const desktopUa =
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-            context = await browser.newContext({
+            if (remote && !ride && browser.contexts()[0]) {
+                // Remote: the default context carries this family's Browser Use profile for this store
+                // (login survives between orders); our own encrypted cookies are layered on top.
+                context = browser.contexts()[0]!;
+                const saved = (storageState as { cookies?: Parameters<import("playwright").BrowserContext["addCookies"]>[0] } | undefined)?.cookies;
+                if (saved?.length) await context.addCookies(saved).catch(() => undefined);
+            } else context = await browser.newContext({
                 storageState: storageState as import("playwright").BrowserContextOptions["storageState"],
                 viewport: ride
                     ? { width: 390, height: 844 }
@@ -693,8 +708,9 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
                 })
                 .catch(() => undefined);
-            const page = await context.newPage();
-            await page.goto(playbook.startUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
+            const page = (remote && !ride && context.pages()[0]) || (await context.newPage());
+            if (remote && !ride) await page.setViewportSize({ width: 1280, height: 720 }).catch(() => undefined);
+            await page.goto(playbook.startUrl, { waitUntil: "domcontentloaded", timeout: remote ? 60000 : 45000 });
 
             // Clear CAPTCHA / bot / geo blocks before burning Gemini steps (rides + pharmacy)
             const earlyBlock = await detectCommerceSiteBlock(

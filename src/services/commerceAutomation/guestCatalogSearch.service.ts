@@ -652,6 +652,40 @@ export async function searchGuestCatalog(input: {
                 query,
             };
         }
+        if (partner === "zomato" && (await import("./zomatoGuest.service")).zomatoSearchAvailable()) {
+            // Remote India-proxy Chrome (Zomato blocks our own browser): location = this recipient's address.
+            if (!input.address) {
+                return { hits: [], searched: false, unavailableReason: "I need your delivery address first.", partner, query };
+            }
+            const { zomatoSearch } = await import("./zomatoGuest.service");
+            const res = await zomatoSearch({ query, address: input.address });
+            if (res.blocked) {
+                return { hits: [], searched: true, unavailableReason: "Zomato is blocking my browser right now 🙏 Try *Swiggy* instead?", partner, query };
+            }
+            if (!res.location.ok) {
+                return {
+                    hits: [],
+                    searched: true,
+                    unavailableReason: "I couldn't set Zomato's location to your saved address, so I won't show dishes from another area. Try *Swiggy* instead?",
+                    partner,
+                    query,
+                };
+            }
+            const hits = res.dishes.map((d, n) => ({
+                id: `zomato:${n}:${d.name}`.slice(0, 120),
+                name: `${d.name} — ${d.restaurant}`,
+                pricePaise: d.pricePaise,
+                productUrl: d.restaurantUrl,
+                source: "browser_guest" as const,
+            })) as GuestCatalogHit[];
+            return {
+                hits,
+                searched: true,
+                unavailableReason: hits.length ? undefined : `Zomato shows nothing matching "${query}" near you right now. Try another dish, or *Swiggy*?`,
+                partner,
+                query,
+            };
+        }
         if (partner === "zepto" || partner === "zomato") {
             const label = partner === "zepto" ? "Zepto" : "Zomato";
             return {
