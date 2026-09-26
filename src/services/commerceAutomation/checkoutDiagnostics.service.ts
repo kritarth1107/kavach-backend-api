@@ -9,7 +9,7 @@ import { browserSessionKey } from "./parkedOtpSession.service";
 
 export type CheckoutDiagnostic = {
     at: string;
-    flow: "checkout" | "post_otp";
+    flow: "checkout" | "post_otp" | "pre_checkout";
     stage: string;
     reason: string;
     url: string;

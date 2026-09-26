@@ -112,6 +112,10 @@ export type BrowserFailureReason =
     | "cart_mismatch"
     /** Site outside the hard allowlist (siteAllowlist.ts). */
     | "not_allowed"
+    /** Gemini page loop ran out of steps before reaching cart / login / confirm. */
+    | "step_limit"
+    /** Site showed a block / "access denied" page mid-flow. */
+    | "site_blocked"
     | "unknown";
 
 export type BrowserTaskResult = {
@@ -133,6 +137,8 @@ export type BrowserTaskResult = {
     failureReason?: BrowserFailureReason;
     /** Optional local screenshot path when a step failed (Cloud Run /tmp). */
     screenshotPath?: string;
+    /** Last page-loop actions (type + URL path only; no typed text) for failure logs. */
+    lastSteps?: string[];
 };
 
 export type BrowserProgressStage =
@@ -867,6 +873,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             }
 
             let userConfirmed = Boolean(input.userConfirmed);
+            const lastSteps: string[] = [];
+            const urlPath = (u: string) => {
+                try {
+                    return new URL(u).pathname.slice(0, 80);
+                } catch {
+                    return "";
+                }
+            };
 
             while (steps < maxSteps) {
                 steps += 1;
@@ -893,6 +907,13 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                         input.goal,
                     ).catch(() => null);
                     if (midBlock) {
+                        await captureCheckoutDiagnostic(page, {
+                            familyId: input.familyId,
+                            userId: input.userId,
+                            flow: "pre_checkout",
+                            stage: `page_loop:${urlPath(page.url())}`,
+                            reason: "site_blocked",
+                        }).catch(() => null);
                         await this.persist(context, input, playbook.partner, page.url());
                         return {
                             status: "error",
@@ -902,6 +923,8 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                             modelUsed,
                             mode: "playwright",
                             partner: String(playbook.partner),
+                            failureReason: "site_blocked",
+                            lastSteps,
                         };
                     }
                 }
@@ -922,6 +945,10 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     userConfirmed,
                 });
                 modelUsed = planned.modelUsed;
+                lastSteps.push(
+                    `${steps}:${urlPath(url)}:${planned.actions.map((a) => String((a as { type?: string }).type || "?")).join("+") || "none"}`,
+                );
+                if (lastSteps.length > 8) lastSteps.shift();
 
                 for (const action of planned.actions) {
                     const gated = await this.applyAction(page, action, {
@@ -1006,6 +1033,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 }
             }
 
+            // Pre-checkout failure: keep a masked screenshot + page text for the mock peek.
+            await captureCheckoutDiagnostic(page, {
+                familyId: input.familyId,
+                userId: input.userId,
+                flow: "pre_checkout",
+                stage: `page_loop:${urlPath(page.url())}`,
+                reason: "step_limit",
+            }).catch(() => null);
             await this.persist(context, input, playbook.partner, page.url());
             return {
                 status: "error",
@@ -1015,6 +1050,8 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 modelUsed,
                 mode: "playwright",
                 partner: String(playbook.partner),
+                failureReason: "step_limit",
+                lastSteps,
             };
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1551,6 +1588,54 @@ export async function runBrowserTask(input: RunBrowserTaskInput): Promise<Browse
             message: refuseSiteCopy(String(allowPartner)),
         };
     }
+    const result = await runBrowserTaskInner(input);
+    logBrowserTaskFailure(input, result);
+    return result;
+}
+
+/**
+ * One structured Cloud Logging line per failed browser task (jsonPayload). Store / stage /
+ * reason / URL path / last steps only — no phone, address, goal text, or OTP.
+ */
+export function logBrowserTaskFailure(
+    input: Pick<RunBrowserTaskInput, "partner">,
+    result: BrowserTaskResult,
+): void {
+    if (result.status !== "error") return;
+    try {
+        let path = "";
+        try {
+            path = result.url ? new URL(result.url).pathname.slice(0, 120) : "";
+        } catch {
+            path = "";
+        }
+        let host = "";
+        try {
+            host = result.url ? new URL(result.url).host : "";
+        } catch {
+            host = "";
+        }
+        console.log(
+            JSON.stringify({
+                severity: "WARNING",
+                message: `browser_task_failed ${String(result.partner || input.partner || "generic")} ${result.failureReason || "unknown"}`,
+                event: "browser_task_failed",
+                store: String(result.partner || input.partner || "generic"),
+                reason: result.failureReason || "unknown",
+                stage: path ? `page:${path}` : "before_page",
+                host,
+                steps: result.steps ?? 0,
+                lastSteps: (result.lastSteps || []).slice(-8),
+                mode: result.mode,
+                hasScreenshot: Boolean(result.screenshotPath),
+            }),
+        );
+    } catch {
+        /* never block */
+    }
+}
+
+async function runBrowserTaskInner(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
     const deadlineMs = browserTaskDeadlineMs(input);
     try {
         return await withBrowserGate(

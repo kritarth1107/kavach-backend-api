@@ -104,7 +104,15 @@ export function formatPharmacyBrowserFollowUp(
                   ? `${label} login is temporarily paused (OTP send disabled).`
                   : reason === "no_login_button"
                     ? `${label} loaded but Login / phone field wasn't found.`
-                    : reason === "chromium_crash"
+                    : reason === "step_limit"
+                      ? `${label} opened, but I couldn't get your item into the cart — the page kept getting in the way.`
+                      : reason === "site_blocked"
+                        ? `${label} showed a block page to the browser.`
+                        : reason === "timeout"
+                          ? `${label} took too long to respond.`
+                          : reason === "unknown"
+                            ? `${label}'s browser hit an unexpected error.`
+                            : reason === "chromium_crash"
                       ? `${label} browser crashed (Chromium).`
                       : reason === "busy"
                         ? `${label} timed out while the browser was busy.`
@@ -119,6 +127,9 @@ export function formatPharmacyBrowserFollowUp(
             reason === "captcha" ||
             reason === "chromium_crash" ||
             reason === "busy" ||
+            reason === "step_limit" ||
+            reason === "site_blocked" ||
+            reason === "unknown" ||
             /didn't send a login code|couldn't tap Continue|No SMS is expected|login paused/i.test(
                 base,
             );
