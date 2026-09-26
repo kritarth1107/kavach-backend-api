@@ -51,6 +51,9 @@ export type SaheliRoute = {
     addressKind: "same" | "other" | null;
     addressText: string | null;
     otpCode: string | null;
+    /** ride: places named in this message. */
+    ridePickup: string | null;
+    rideDrop: string | null;
     confidence: number;
     source: "gemini";
     latencyMs: number;
@@ -75,6 +78,8 @@ const SCHEMA = {
         addressKind: { type: "STRING", enum: ["same", "other"], nullable: true },
         addressText: { type: "STRING", nullable: true },
         otpCode: { type: "STRING", nullable: true },
+        ridePickup: { type: "STRING", nullable: true },
+        rideDrop: { type: "STRING", nullable: true },
         confidence: { type: "NUMBER" },
     },
     required: ["intent", "language", "partners", "partnerOnly", "control", "confidence"],
@@ -98,6 +103,7 @@ Slots:
 - addressKind/addressText: message is about WHERE to deliver ("deliver to my home", "ghar pe bhejna", "my Bhopal address") → intent=order_modify, addressKind=same for home/saved/own address, other for a clearly different address; addressText = the address words. Address words are NEVER a productQuery. Questions about where orders go ("where will it be delivered?", "what is my delivery address?") are also order_modify with addressKind=same (even with no active order).
 - control/pickIndex: "1", "2nd one", "pehla wala" while options are shown → order_control, control=pick, pickIndex. "confirm"/"yes place it" → confirm. "cancel"/"rehne do"/"nahi chahiye" → cancel. "what's happening with my order" → status.
 - otpCode: the digits, only for otp_code.
+- ridePickup/rideDrop (intent=ride, also answers inside an active ride flow): just the place words ("railway station", "Apollo hospital Jubilee Hills"). "mujhe station jaana hai" → rideDrop="station". "ghar se" → ridePickup="home". If the ride flow is waiting for pickup (phase need_pickup) a bare place is ridePickup; if waiting for drop (need_drop / pickup noted) it is rideDrop. Never put filler words in a place.
 - During an active order flow, small talk / health / reminders are NOT order intents.
 Return confidence 0..1.`;
 
@@ -191,6 +197,8 @@ export async function routeSaheliTurn(input: {
             addressKind: p.addressKind === "same" || p.addressKind === "other" ? p.addressKind : null,
             addressText: p.addressText?.trim() || null,
             otpCode: p.otpCode?.replace(/\D/g, "") || null,
+            ridePickup: p.ridePickup?.trim() || null,
+            rideDrop: p.rideDrop?.trim() || null,
             confidence: typeof p.confidence === "number" ? p.confidence : 0.5,
             source: "gemini",
             latencyMs: Date.now() - started,

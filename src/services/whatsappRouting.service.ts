@@ -1070,13 +1070,18 @@ async function dispatchRoutedTurn(a: {
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
     }
     const newOrder = route.intent === "order_new" || route.intent === "restaurant_list";
+    // Ride slots the model extracted → the "from X to Y" form the ride slot-filler parses.
+    const rideText =
+        route.ridePickup || route.rideDrop
+            ? [route.ridePickup ? `from ${route.ridePickup}` : "", route.rideDrop ? `to ${route.rideDrop}` : ""].filter(Boolean).join(" ")
+            : text;
     if (liveFlow(rd) && (route.intent === "ride" || (flowReply && !newOrder && !liveFlow(bd) && !liveFlow(pd)))) {
-        const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : text;
+        const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : rideText;
         const r = await rideTurn(t);
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
     }
     if (route.intent === "ride") {
-        const r = await rideTurn(text);
+        const r = await rideTurn(liveFlow(rd) ? rideText : route.ridePickup || route.rideDrop ? `book a cab ${rideText}` : text);
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
         return { legacyGates: true, allowDashboard: false };
     }
