@@ -209,7 +209,7 @@ function confirmCopy(draft: PharmacyDraft): string {
             `Found on *${partner}* 💊`,
             ...lines,
             ``,
-            `Reply *1*, *2* or *3* (or *confirm* for #1). Cash on Delivery only.`,
+            `${options.length >= 3 ? "Reply *1*, *2* or *3*" : "Reply *1* or *2*"} (or *confirm* for #1). Cash on Delivery only.`,
         ].join("\n");
     }
     const lines = draft.items.map((i) => {

@@ -158,6 +158,7 @@ export async function routeSaheliTurn(input: {
             timeoutMs,
             // Thinking models spend output tokens before the JSON — leave room or it truncates.
             maxOutputTokens: 2048,
+            thinkingLevel: process.env.VERTEX_ROUTER_THINKING?.trim() || "low",
             prompt: [
                 `Sender: ${input.role}`,
                 `Active flows: ${input.state.length ? input.state.join(" | ") : "none"}`,
@@ -167,7 +168,7 @@ export async function routeSaheliTurn(input: {
         });
     let raw = await call(Number(process.env.VERTEX_ROUTER_TIMEOUT_MS) || 7000);
     let attempt = 1;
-    if (!parseJsonLoose<{ intent?: string }>(raw)?.intent && Date.now() - started < 6000) {
+    if (!parseJsonLoose<{ intent?: string }>(raw)?.intent && Date.now() - started < 9000) {
         attempt = 2;
         raw = await call(5000); // one quick retry (transient Vertex error / truncated JSON)
     }

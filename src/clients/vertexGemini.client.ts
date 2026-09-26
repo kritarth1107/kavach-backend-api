@@ -30,6 +30,7 @@ export function vertexProModel(): string {
 
 /** Last Vertex failure (status + short body) for secret-gated debug. */
 export let lastVertexError = "";
+const thinkingRejected = new Set<string>();
 
 export async function vertexGenerateText(input: {
     model: string;
@@ -41,6 +42,8 @@ export async function vertexGenerateText(input: {
     temperature?: number;
     maxOutputTokens?: number;
     timeoutMs?: number;
+    /** Gemini 3 thinking level ("minimal" | "low" | …) — lower = faster; dropped automatically if the model rejects it. */
+    thinkingLevel?: string;
 }): Promise<string | null> {
     if (process.env.NODE_ENV === "test" || process.env.VERTEX_DISABLED === "1") return null;
     const ctrl = new AbortController();
@@ -68,12 +71,20 @@ export async function vertexGenerateText(input: {
                     maxOutputTokens: input.maxOutputTokens ?? 512,
                     ...(input.json || input.responseSchema ? { responseMimeType: "application/json" } : {}),
                     ...(input.responseSchema ? { responseSchema: input.responseSchema } : {}),
+                    ...(input.thinkingLevel && !thinkingRejected.has(input.model)
+                        ? { thinkingConfig: { thinkingLevel: input.thinkingLevel } }
+                        : {}),
                 },
             }),
         });
         if (!res.ok) {
             const errBody = await res.text().catch(() => "");
             lastVertexError = `HTTP ${res.status} ${errBody.replace(/\s+/g, " ").slice(0, 200)}`;
+            if (res.status === 400 && input.thinkingLevel && /thinking/i.test(errBody) && !thinkingRejected.has(input.model)) {
+                thinkingRejected.add(input.model);
+                clearTimeout(timer);
+                return vertexGenerateText({ ...input, thinkingLevel: undefined });
+            }
             console.warn(`vertex ${input.model} ${lastVertexError}`);
             return null;
         }

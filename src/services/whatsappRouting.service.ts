@@ -414,6 +414,18 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         );
     }
     rememberTurn(phone, "user", text);
+    if (!route && !body.interactiveId) {
+        // Fallback only (model unavailable): spoken ordinals → the digit the rule gates understand.
+        const ord = text.trim().toLowerCase().replace(/[.!]+$/, "");
+        const ORD: Record<string, string> = {
+            pehla: "1", pahla: "1", first: "1", "1st": "1",
+            dusra: "2", doosra: "2", second: "2", "2nd": "2",
+            teesra: "3", tisra: "3", third: "3", "3rd": "3",
+            chautha: "4", fourth: "4", "4th": "4", panchva: "5", fifth: "5", "5th": "5",
+        };
+        const m = ord.match(/^(?:the\s+)?([a-z0-9]+)(?:\s+(?:wala|wali|vala|vali|one|option))?(?:\s+please)?$/);
+        if (m && ORD[m[1]!]) text = ORD[m[1]!]!;
+    }
 
     // AI red-flag layer ON TOP of the keyword net (the net above always runs first).
     if (identity.role === FamilyRole.CARE_RECIPIENT && route?.intent === "emergency" && route.confidence >= 0.75) {
@@ -1093,6 +1105,10 @@ async function dispatchRoutedTurn(a: {
                 const pr = await pharmacyTurn(t);
                 if (pr) return { reply: pr.text, legacyGates: false, allowDashboard: false };
             }
+        }
+        // Digits with nothing waiting for a code → just chat (never an order lookup).
+        if (route.intent === "otp_code" && !doc?.pendingCommerceOtp && !liveFlow(bd) && !liveFlow(pd) && !liveFlow(rd)) {
+            return { legacyGates: false, allowDashboard: false };
         }
         // Couldn't place it (e.g. "confirm" for an app order session / caregiver approval) → rule executors.
         return { legacyGates: true, allowDashboard: true };
