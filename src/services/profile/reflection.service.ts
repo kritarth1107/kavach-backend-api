@@ -217,10 +217,16 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         const { logActivity } = await import("../activityLog.service");
         void logActivity({ familyId: w.familyId, recipientUserId: w.recipientUserId, kind: "mood", severity: "warn", title: `Watch: ${d.text}`, data: { source: "baseline", metric: d.metric, watchOnly: true } });
     }
+    doc.markModified("facts");
+    doc.markModified("careActions");
+    doc.markModified("deviations");
+    doc.lastReflectedDay = dayKey;
+    doc.lastReflection = { at: new Date(), model, added: merged.added, reinforced: merged.reinforced, faded: merged.faded, actions: actions.length };
+    await doc.save();
+    // (after the save: raiseUnusual writes the same document)
     // Unusual activity: baseline deviations (WhatsApp only when high-confidence AND >= 7 baseline days)
     // + Gemini's judgement against the profile. Tiered + 24h-deduped in raiseUnusual.
     const raised: Array<{ category: string; tier: string; text: string }> = [];
-    if (doc.isNew) await doc.save(); // raiseUnusual reads/writes the same document
     const { raiseUnusual } = await import("./unusualActivity.service");
     const { deviationToFinding } = await import("./unusualCore");
     const CATS = ["repeat_order", "bulk_quantity", "large_spend", "risky_meds", "odd_hours", "order_change", "confusion", "mood_drop", "meds_missed", "scam", "other"];
@@ -229,7 +235,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         ...(unusual || [])
             .filter((u) => u.text && CATS.includes(String(u.category)) && !isUnsafeFact(String(u.text)))
             .map((u) => ({
-                f: { category: u.category as never, key: `${u.category}:${dayKey}`, confidence: Math.max(0, Math.min(1, Number(u.confidence) || 0.5)), text: String(u.text).slice(0, 300), evidence: u.evidence ? String(u.evidence) : undefined },
+                f: { category: u.category as never, key: String(u.category), confidence: Math.max(0, Math.min(1, Number(u.confidence) || 0.5)), text: String(u.text).slice(0, 300), evidence: u.evidence ? String(u.evidence) : undefined },
                 src: "gemini" as const,
             })),
     ];
@@ -238,12 +244,6 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         const a = await raiseUnusual(w, f, src).catch(() => null);
         if (a) raised.push({ category: a.category, tier: a.tier, text: a.text });
     }
-    doc.markModified("facts");
-    doc.markModified("careActions");
-    doc.markModified("deviations");
-    doc.lastReflectedDay = dayKey;
-    doc.lastReflection = { at: new Date(), model, added: merged.added, reinforced: merged.reinforced, faded: merged.faded, actions: actions.length };
-    await doc.save();
     forgetProfileCache(w);
     await applyRetention(w).catch(() => undefined);
     return { dayKey, model, rows: rows.length, ...merged, facts: undefined, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
