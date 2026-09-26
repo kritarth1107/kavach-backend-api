@@ -2,12 +2,14 @@
  * Live Playwright park while WA waits for pharmacy/commerce OTP + per-user
  * generation so cancel aborts late stage pings / OTP asks.
  */
+import { browserRunawayMs } from "./agentLayer/stallDetector";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { RunBrowserTaskInput } from "./browserWorker.service";
 
+// How long an opened login-code screen waits for the elder to paste the SMS code.
 const PARK_TTL_MS = Math.min(
-    Math.max(Number(process.env.BROWSER_OTP_PARK_TTL_MS) || 240_000, 60_000),
-    600_000,
+    Math.max(Number(process.env.BROWSER_OTP_PARK_TTL_MS) || 480_000, 60_000),
+    900_000,
 );
 const PENDING_OTP_TTL_MS = 90_000;
 
@@ -575,18 +577,23 @@ export async function closeCheckoutSession(row: ParkedCheckoutSession): Promise<
     await closeBrowserQuiet(row);
 }
 
+/** In-flight lock lives as long as a checkout may run (runaway ceiling + margin), never shorter. */
+function checkoutInFlightMs(): number {
+    return browserRunawayMs() + 60_000;
+}
+
 /** One checkout per user at a time (Meta retries / double "confirm"). */
 export function claimCheckoutInFlight(familyId: string, userId: string): boolean {
     const key = browserSessionKey(familyId, userId);
     const at = checkoutInFlight.get(key);
-    if (at && Date.now() - at < 150_000) return false;
+    if (at && Date.now() - at < checkoutInFlightMs()) return false;
     checkoutInFlight.set(key, Date.now());
     return true;
 }
 
 export function isCheckoutInFlight(familyId: string, userId: string): boolean {
     const at = checkoutInFlight.get(browserSessionKey(familyId, userId));
-    return Boolean(at && Date.now() - at < 150_000);
+    return Boolean(at && Date.now() - at < checkoutInFlightMs());
 }
 
 export function releaseCheckoutInFlight(familyId: string, userId: string): void {

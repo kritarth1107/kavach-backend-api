@@ -161,7 +161,6 @@ function browserAdapter(partner: CommercePartnerKey): CommerceAutomationAdapter 
                 goal: `Place ${partner} order after user confirm`,
                 partner,
                 userConfirmed: true,
-                maxSteps: 10,
             });
             if (result.status === "done") {
                 return {

@@ -4,11 +4,12 @@ async function main() {
     const { formatPharmacyBrowserFollowUp } = await import("../src/services/commerceAutomation/browserProgressNotify.service");
     const { logBrowserTaskFailure } = await import("../src/services/commerceAutomation/browserWorker.service");
     const base = { status: "error" as const, mode: "playwright" as const, partner: "swiggy", steps: 20, message: "I hit the step limit before finishing" };
-    const f = formatPharmacyBrowserFollowUp({ ...base, failureReason: "step_limit" });
-    assert.match(f.text, /Swiggy opened, but I couldn't get your item into the cart/);
+    const f = formatPharmacyBrowserFollowUp({ ...base, failureReason: "stalled" });
+    assert.match(f.text, /Swiggy opened, but I got stuck/);
+    assert.match(formatPharmacyBrowserFollowUp({ ...base, failureReason: "step_limit" }).text, /far longer than it should/);
     assert.match(f.text, /Nothing was ordered or paid/);
     assert.equal(f.phase, "running", "no OTP was requested → digits must not count as OTP");
-    for (const r of ["site_blocked", "unknown", "timeout"] as const) {
+    for (const r of ["site_blocked", "unknown", "timeout", "step_limit", "stalled"] as const) {
         const t = formatPharmacyBrowserFollowUp({ ...base, failureReason: r }).text;
         assert.doesNotMatch(t, /didn't finish opening the order/, r);
     }

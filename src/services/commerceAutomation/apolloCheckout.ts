@@ -18,6 +18,7 @@
  *   - dryRun stops right before the Place order click.
  */
 import { SITE_CONFIGS } from "./agentLayer/siteConfigs";
+import { stallConfigFromEnv } from "./agentLayer/stallDetector";
 import { stagehandStep } from "./agentLayer/stagehandFallback.service";
 import type { Page } from "playwright";
 import { planBrowserActions } from "./geminiComputerUse.service";
@@ -843,6 +844,7 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
     let proceedClicks = 0;
     let geminiSteps = 0;
     const geminiMax = opts.geminiMaxSteps ?? 3;
+    const noProgressMs = stallConfigFromEnv().noProgressMs;
     let lastStage: CheckoutStage | null = null;
     let stageSince = Date.now();
     let codSelectTries = 0;
@@ -875,6 +877,15 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
             stageSince = Date.now();
         }
         const stuckMs = Date.now() - stageSince;
+        // Progress-based stop (no short wall clock): same checkout screen for several minutes.
+        if (stuckMs > noProgressMs) {
+            return {
+                status: "stuck",
+                stage,
+                url: safeUrl(page),
+                detail: `no progress on the ${stage} screen for ${Math.round(stuckMs / 1000)}s`,
+            };
+        }
 
         switch (stage) {
             case "login":

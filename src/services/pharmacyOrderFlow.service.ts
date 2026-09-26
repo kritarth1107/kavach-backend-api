@@ -144,11 +144,9 @@ function toLoginPhoneE164(phone: string): string {
     return phone.startsWith("+") ? phone : `+${phone}`;
 }
 
-function pharmacyBrowserDeadlineMs(): number {
-    const envN = Number(process.env.BROWSER_TASK_DEADLINE_MS);
-    // Cold Chromium + Login + OTP UI: prefer ~75s (hard-capped at 90s in worker).
-    const base = Number.isFinite(envN) && envN > 0 ? envN : 75_000;
-    return Math.min(Math.max(base, 60_000), 90_000);
+function pharmacyBrowserDeadlineMs(): number | undefined {
+    // No short deadline any more — the worker stops on stall detection (runaway ceiling only).
+    return undefined;
 }
 
 function partnerLabel(p: CommercePartnerKey): string {

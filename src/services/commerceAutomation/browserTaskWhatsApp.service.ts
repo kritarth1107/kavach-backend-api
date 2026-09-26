@@ -559,11 +559,8 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                   : input.phone.startsWith("+")
                     ? input.phone
                     : `+${input.phone}`;
-        const envN = Number(process.env.BROWSER_TASK_DEADLINE_MS);
-        const retryDeadline = Math.min(
-            Math.max(Number.isFinite(envN) && envN > 0 ? envN : 75_000, 60_000),
-            90_000,
-        );
+        // No short deadline: the worker stops on stall detection (runaway ceiling only).
+        const retryDeadline = undefined;
 
         const browserGeneration = beginBrowserGeneration(input.familyId, input.actorUserId);
         void (async () => {
@@ -846,11 +843,8 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 draft.partner && draft.partner !== "generic"
                     ? (draft.partner as CommercePartnerKey)
                     : "generic";
-            const deadlineEnv = Number(process.env.BROWSER_TASK_DEADLINE_MS);
-            const deadlineMs = Math.min(
-                Math.max(Number.isFinite(deadlineEnv) && deadlineEnv > 0 ? deadlineEnv : 75_000, 60_000),
-                90_000,
-            );
+            // No short deadline: the worker stops on stall detection (runaway ceiling only).
+            const deadlineMs = undefined;
             void (async () => {
                 const { notifyPharmacyBrowserBackgroundResult, routeBrowserProgress } =
                     await import("./browserProgressNotify.service");
@@ -1593,15 +1587,15 @@ async function startParkedCheckoutFromWhatsApp(
                 userId: input.actorUserId,
                 cardId,
                 recipientUserId: input.recipientUserId,
-                onProgress: async (d) => {
+                onProgress: async (d, stage) => {
                     if (delivered) return;
-                    // Checkout steps → activity log only (never WhatsApp).
+                    // Checkout steps → activity log only; the single "still working" line may reach WhatsApp.
                     await routeBrowserProgress({
                         phone: input.phone,
                         familyId: input.familyId,
                         recipientUserId: input.recipientUserId,
                         actorUserId: input.actorUserId,
-                        stage: "checkout",
+                        stage: stage || "checkout",
                         partner: String(draft.partner || "apollo"),
                         text: d,
                     });
@@ -1814,15 +1808,15 @@ async function runParkedOtpContinuation(args: {
             familyId: args.familyId,
             userId: args.actorUserId,
             otp: args.otp,
-            onProgress: async (detail) => {
+            onProgress: async (detail, stage) => {
                 if (!isBrowserGenerationCurrent(args.familyId, args.actorUserId, gen)) return;
-                // Post-OTP steps (signed in, adding to cart…) → activity log only.
+                // Post-OTP steps → activity log only; the single "still working" line may reach WhatsApp.
                 await routeBrowserProgress({
                     phone: args.phone,
                     familyId: args.familyId,
                     recipientUserId: args.recipientUserId,
                     actorUserId: args.actorUserId,
-                    stage: "post_otp",
+                    stage: stage || "post_otp",
                     partner: String(partner),
                     text: detail,
                 });

@@ -11,6 +11,7 @@ import type { BrowserTaskResult } from "./browserWorker.service";
 import { partnerLabel } from "./playbooks";
 import type { CommercePartnerKey } from "./types";
 import {
+    currentBrowserGeneration,
     isBrowserGenerationCurrent,
     shouldSuppressDuplicateOtpAsk,
 } from "./parkedOtpSession.service";
@@ -105,7 +106,9 @@ export function formatPharmacyBrowserFollowUp(
                   : reason === "no_login_button"
                     ? `${label} loaded but Login / phone field wasn't found.`
                     : reason === "step_limit"
-                      ? `${label} opened, but I couldn't get your item into the cart — the page kept getting in the way.`
+                      ? `${label} took far longer than it should, so I stopped to be safe.`
+                      : reason === "stalled"
+                      ? `${label} opened, but I got stuck — the page stopped changing no matter what I tried.`
                       : reason === "site_blocked"
                         ? `${label} showed a block page to the browser.`
                         : reason === "timeout"
@@ -128,6 +131,7 @@ export function formatPharmacyBrowserFollowUp(
             reason === "chromium_crash" ||
             reason === "busy" ||
             reason === "step_limit" ||
+            reason === "stalled" ||
             reason === "site_blocked" ||
             reason === "unknown" ||
             /didn't send a login code|couldn't tap Continue|No SMS is expected|login paused/i.test(
@@ -278,6 +282,7 @@ export async function routeBrowserProgress(input: {
         data: { stage: input.stage || null, partner: input.partner || null },
     });
     if (!shouldForwardProgressToWhatsApp(input.stage)) return;
+    if (input.stage === "still_working" && !claimStillWorkingNotice(input.familyId, input.actorUserId)) return;
     if (shouldSuppressDuplicateOtpAsk(input.familyId, input.actorUserId, text)) return;
     await pushWhatsAppBrowserFollowUp({
         phone: input.phone,
@@ -287,9 +292,55 @@ export async function routeBrowserProgress(input: {
     }).catch(() => undefined);
 }
 
-/** Pure — which progress stages the elder sees on WhatsApp (OTP ask only). */
+/** Pure — which progress stages the elder sees on WhatsApp: the OTP ask + ONE "still working". */
 export function shouldForwardProgressToWhatsApp(stage?: string | null): boolean {
-    return stage === "otp_ready";
+    return stage === "otp_ready" || stage === "still_working";
+}
+
+/** The one WhatsApp line a long run may send (everything else → activity log). */
+export const STILL_WORKING_TEXT =
+    "Still working on it — this site is taking a little longer. I'll message you as soon as it's ready. Reply *cancel* to stop.";
+
+/** After this long a run sends its single "still working" WhatsApp line (BROWSER_STILL_WORKING_MS). */
+export function stillWorkingDelayMs(env: NodeJS.ProcessEnv = process.env): number {
+    const n = Number(env.BROWSER_STILL_WORKING_MS);
+    return Number.isFinite(n) && n >= 30_000 ? Math.min(n, 900_000) : 120_000;
+}
+
+const stillWorkingSent = new Map<string, number>();
+
+/**
+ * At most ONE "still working" WhatsApp per order run (per family/user/browser generation —
+ * the generation changes on a new order or cancel). Returns true if the caller may send it.
+ */
+export function claimStillWorkingNotice(familyId: string, userId: string, generation?: number): boolean {
+    const gen = generation ?? currentBrowserGeneration(familyId, userId);
+    const key = `${familyId}:${userId}:${gen}`;
+    const now = Date.now();
+    for (const [k, t] of stillWorkingSent) if (now - t > 6 * 3_600_000) stillWorkingSent.delete(k);
+    if (stillWorkingSent.has(key)) return false;
+    stillWorkingSent.set(key, now);
+    return true;
+}
+
+/**
+ * Start the one-shot "still working" timer for a long run. `fire` is called once after
+ * stillWorkingDelayMs() unless the returned stop() ran first (run finished / parked / cancelled).
+ */
+export function startStillWorkingTimer(fire: () => void | Promise<void>, delayMs = stillWorkingDelayMs()): () => void {
+    let done = false;
+    const t = setTimeout(() => {
+        if (done) return;
+        done = true;
+        Promise.resolve()
+            .then(fire)
+            .catch(() => undefined);
+    }, delayMs);
+    t.unref?.();
+    return () => {
+        done = true;
+        clearTimeout(t);
+    };
 }
 
 function activityKindForResult(result: BrowserTaskResult): {

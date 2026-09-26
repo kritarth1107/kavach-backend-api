@@ -79,7 +79,7 @@ export async function startRideBrowserLogin(input: {
         goal: rideGoal(input.draft),
         partner: input.draft.provider === "uber" ? "uber" : "generic",
         startUrl: rideStartUrl(input.draft.provider),
-        deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
+        // No short deadline — the worker stops on stall detection / runaway ceiling.
     });
 }
 
@@ -96,7 +96,7 @@ export async function submitRideOtp(input: {
         partner: input.draft.provider === "uber" ? "uber" : "generic",
         startUrl: rideStartUrl(input.draft.provider),
         otp: input.otp,
-        deadlineMs: Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000,
+        // No short deadline — the worker stops on stall detection / runaway ceiling.
     });
 }
 
@@ -105,9 +105,6 @@ export async function confirmRideBook(input: {
     userId: string;
     draft: RideDraft;
 }): Promise<BrowserTaskResult> {
-    const base = Number(process.env.BROWSER_TASK_DEADLINE_MS) || 28_000;
-    // Live book needs a bit longer to request + scrape driver; still hard-capped by worker.
-    const deadlineMs = Math.min(Math.max(base, 40_000), 60_000);
     return runBrowserTask({
         familyId: input.familyId,
         userId: input.userId,
@@ -115,8 +112,7 @@ export async function confirmRideBook(input: {
         partner: input.draft.provider === "uber" ? "uber" : "generic",
         startUrl: rideStartUrl(input.draft.provider),
         userConfirmed: true,
-        deadlineMs,
-        maxSteps: 24,
+        // No fixed step cap / deadline: stall detection + runaway ceiling in the worker.
     });
 }
 

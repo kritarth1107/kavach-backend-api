@@ -11,6 +11,8 @@ import { debugPortArgs, pickDebugPort, registerBrowserDebugPort } from "./agentL
 import { guardComputerUseClick } from "./agentLayer/guardrails";
 import type { BrowserAction } from "./geminiComputerUse.service";
 import { planBrowserActions } from "./geminiComputerUse.service";
+import { StallDetector, actionSignature, browserRunawayMs, hashOf } from "./agentLayer/stallDetector";
+import { dishFromGoal, isSwiggyRestaurantUrl, swiggyScriptedAddToCart } from "./swiggyRestaurantAdd";
 import {
     getOrCreateBrowserProfile,
     saveBrowserProfileState,
@@ -112,8 +114,10 @@ export type BrowserFailureReason =
     | "cart_mismatch"
     /** Site outside the hard allowlist (siteAllowlist.ts). */
     | "not_allowed"
-    /** Gemini page loop ran out of steps before reaching cart / login / confirm. */
+    /** Hit the runaway safety ceiling (default 200 steps / 20 min) — should almost never happen. */
     | "step_limit"
+    /** Truly stuck: same action on an unchanged page ~6× in a row, or no page change for minutes. */
+    | "stalled"
     /** Site showed a block / "access denied" page mid-flow. */
     | "site_blocked"
     | "unknown";
@@ -150,7 +154,9 @@ export type BrowserProgressStage =
     | "phone_entered"
     | "otp_ready"
     | "searching"
-    | "busy";
+    | "busy"
+    /** One-shot "still working on it" (the only step line that reaches WhatsApp besides the OTP ask). */
+    | "still_working";
 
 export type RunBrowserTaskInput = {
     familyId: string;
@@ -309,16 +315,13 @@ function browserTaskDeadlineMs(input?: {
     partner?: string;
     goal?: string;
 }): number {
-    const envN = Number(process.env.BROWSER_TASK_DEADLINE_MS);
-    const pharmacy =
-        isPharmacyPartnerKey(String(input?.partner || "")) ||
-        /\b(apollo|pharmeasy|1\s*mg|medicine|vitamin)\b/i.test(input?.goal || "");
-    const fallback = pharmacy ? 75_000 : 28_000;
-    const raw = input?.deadlineMs ?? (Number.isFinite(envN) ? envN : fallback);
-    const n = Number(raw);
-    if (!Number.isFinite(n)) return fallback;
-    // Pharmacy cold Chromium + login needs more headroom than rides' WA SLA.
-    return Math.min(Math.max(n, 5_000), 90_000);
+    // No fixed short deadline any more: runs stop on stall detection (agentLayer/stallDetector).
+    // The only wall clock is the generous runaway ceiling (BROWSER_RUNAWAY_MS, default 20 min);
+    // legacy BROWSER_TASK_DEADLINE_MS / caller deadlineMs can only raise it, never shorten it.
+    void input?.partner;
+    const runaway = browserRunawayMs();
+    const asked = Number(input?.deadlineMs);
+    return Number.isFinite(asked) && asked > runaway ? Math.min(asked, 3_600_000) : runaway;
 }
 
 async function canLaunchChromium(): Promise<boolean> {
@@ -615,7 +618,9 @@ class PlaywrightBrowserWorker implements BrowserWorker {
 
     async runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
         const taskStartedAt = Date.now();
-        const maxSteps = Math.min(input.maxSteps ?? 20, 30);
+        // No fixed step cap: stop only when stuck (StallDetector) or at the runaway ceiling.
+        const stall = new StallDetector();
+        const maxSteps = stall.cfg.runawaySteps;
         const playbook = resolvePlaybook(input.partner, input.goal, input.startUrl);
         const profile = await getOrCreateBrowserProfile(input.familyId, input.userId);
 
@@ -633,7 +638,14 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             pw.chromium.launch({
                 headless: true,
                 // Local-only CDP port so the Stagehand fallback can attach to this same browser.
-                args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", ...debugPortArgs(debugPort)],
+                args: [
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    // Swiggy renders a blank menu for navigator.webdriver browsers (same flags as swiggyGuest).
+                    "--disable-blink-features=AutomationControlled",
+                    ...debugPortArgs(debugPort),
+                ],
             }),
             launchMs,
             "Playwright chromium.launch",
@@ -674,6 +686,11 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 isMobile: ride,
                 hasTouch: ride,
             });
+            await context
+                .addInitScript(() => {
+                    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+                })
+                .catch(() => undefined);
             const page = await context.newPage();
             await page.goto(playbook.startUrl, { waitUntil: "domcontentloaded", timeout: 45000 });
 
@@ -863,6 +880,39 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 );
             }
 
+            // Fixed scripted Swiggy restaurant step: search the confirmed dish on the restaurant
+            // page → ADD → default customisation → cart. Gemini only takes over if this fails.
+            let scriptedHint = "";
+            if (
+                String(playbook.partner) === "swiggy" &&
+                !input.otp &&
+                !input.userConfirmed &&
+                isSwiggyRestaurantUrl(page.url()) &&
+                dishFromGoal(input.goal)
+            ) {
+                const dish = dishFromGoal(input.goal)!;
+                await notifyProgress(input, "searching", `adding *${dish.slice(0, 60)}* to the Swiggy cart…`);
+                const added = await swiggyScriptedAddToCart(page, {
+                    dish,
+                    isCancelled: () => isTaskCancelled(input),
+                    log: (event, extra) => console.log(`[swiggy-scripted] ${event} ${extra ? JSON.stringify(extra) : ""}`.trim()),
+                }).catch((err): { ok: false; reason: string; steps: string[] } => ({
+                    ok: false,
+                    reason: `error:${err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80)}`,
+                    steps: [],
+                }));
+                if (isTaskCancelled(input)) {
+                    return { status: "cancelled", message: "Cancelled.", steps: 0, mode: "playwright", partner: String(playbook.partner) };
+                }
+                if (added.ok) {
+                    stall.markProgress();
+                    scriptedHint = ` The dish "${dish}" is ALREADY in the Swiggy cart (quantity 1) and the cart/checkout page is open — do NOT add it again. Next: log in if asked, pick the delivery address, then emit need_user_confirm with the real item, total and address.`;
+                    await notifyProgress(input, "searching", `*${dish.slice(0, 60)}* is in the cart ✓ — opening checkout…`);
+                } else {
+                    console.warn(`[swiggy-scripted] fallback to Gemini: ${added.reason}`);
+                }
+            }
+
             // If OTP provided, try typing into focused/OTP field first
             if (input.otp) {
                 try {
@@ -874,6 +924,7 @@ class PlaywrightBrowserWorker implements BrowserWorker {
 
             let userConfirmed = Boolean(input.userConfirmed);
             const lastSteps: string[] = [];
+            let stopVerdict: { reason: string; detail: string } | null = null;
             const urlPath = (u: string) => {
                 try {
                     return new URL(u).pathname.slice(0, 80);
@@ -882,7 +933,15 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 }
             };
 
-            while (steps < maxSteps) {
+            for (;;) {
+                if (isTaskCancelled(input)) {
+                    return { status: "cancelled", message: "Cancelled.", steps, mode: "playwright", partner: String(playbook.partner) };
+                }
+                const timeVerdict = stall.checkTime();
+                if (timeVerdict.stop) {
+                    stopVerdict = timeVerdict;
+                    break;
+                }
                 steps += 1;
                 const screenshot = await page.screenshot({ type: "png", fullPage: false });
                 const url = page.url();
@@ -938,13 +997,30 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     goal: input.goal,
                     playbookHint: `${playbook.searchHint} ${playbook.otpHint} ${playbook.confirmHint}${
                         input.loginPhone ? ` login_phone=${input.loginPhone}` : ""
-                    }`,
+                    }${scriptedHint}`,
                     step: steps,
                     maxSteps,
                     otpProvided: Boolean(input.otp),
                     userConfirmed,
                 });
                 modelUsed = planned.modelUsed;
+                if (isTaskCancelled(input)) {
+                    return { status: "cancelled", message: "Cancelled.", steps, mode: "playwright", partner: String(playbook.partner) };
+                }
+                {
+                    const verdict = stall.observe({
+                        url,
+                        // Digits collapsed so countdowns / timers don't look like page changes.
+                        domHash: hashOf(`${title}|${accessibilityHint.replace(/\d+/g, "#")}`),
+                        shotHash: hashOf(screenshot),
+                        actionSig: actionSignature(planned.actions as unknown[]),
+                    });
+                    if (verdict.stop) {
+                        stopVerdict = verdict;
+                        lastSteps.push(`${steps}:${urlPath(url)}:stop:${verdict.reason}`);
+                        break;
+                    }
+                }
                 lastSteps.push(
                     `${steps}:${urlPath(url)}:${planned.actions.map((a) => String((a as { type?: string }).type || "?")).join("+") || "none"}`,
                 );
@@ -1033,24 +1109,40 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 }
             }
 
-            // Pre-checkout failure: keep a masked screenshot + page text for the mock peek.
+            // Stopped because truly stuck (or the runaway ceiling): masked screenshot + page text for the peek.
+            const runaway = stopVerdict?.reason === "runaway_steps" || stopVerdict?.reason === "runaway_time";
+            const why = runaway ? "step_limit" : "stalled";
+            console.log(
+                JSON.stringify({
+                    severity: "WARNING",
+                    event: "browser_task_stopped",
+                    message: `browser_task_stopped ${String(playbook.partner)} ${stopVerdict?.reason || "unknown"}`,
+                    store: String(playbook.partner),
+                    rule: stopVerdict?.reason || "unknown",
+                    detail: stopVerdict?.detail || "",
+                    steps,
+                    elapsedMs: Date.now() - taskStartedAt,
+                }),
+            );
             await captureCheckoutDiagnostic(page, {
                 familyId: input.familyId,
                 userId: input.userId,
                 flow: "pre_checkout",
                 stage: `page_loop:${urlPath(page.url())}`,
-                reason: "step_limit",
+                reason: why,
             }).catch(() => null);
             await this.persist(context, input, playbook.partner, page.url());
             return {
                 status: "error",
-                message: "I hit the step limit before finishing — reply with the goal again or *cancel*.",
+                message: runaway
+                    ? "This is taking far longer than it should, so I stopped to be safe — reply *retry* or *cancel*."
+                    : `I got stuck on the page (${stopVerdict?.detail || "nothing changed"}) — reply *retry* or *cancel*.`,
                 steps,
                 url: page.url(),
                 modelUsed,
                 mode: "playwright",
                 partner: String(playbook.partner),
-                failureReason: "step_limit",
+                failureReason: why,
                 lastSteps,
             };
         } catch (err) {
@@ -1094,21 +1186,41 @@ class PlaywrightBrowserWorker implements BrowserWorker {
         extraHint?: string;
     }): Promise<{ result: BrowserTaskResult; retainBrowser: boolean }> {
         const { page, context, browser, input } = args;
-        const deadlineAt = args.deadlineAt ?? Date.now() + 80_000;
+        const stall = new StallDetector();
+        const deadlineAt = args.deadlineAt ?? stall.runawayDeadlineAt;
         const playbook = resolvePlaybook(
             input.partner || (args.partner as CommercePartnerKey),
             args.goal,
             input.startUrl,
         );
-        const maxSteps = Math.min(input.maxSteps ?? 18, 24);
+        const maxSteps = stall.cfg.runawaySteps;
         let steps = 0;
+        let stopVerdict: { reason: string; detail: string } | null = null;
         let modelUsed: string | undefined;
         let userConfirmed = Boolean(input.userConfirmed);
         let retainBrowser = false;
 
         await page.waitForTimeout(800).catch(() => undefined);
 
-        while (steps < maxSteps) {
+        // Swiggy: still on the restaurant page after login → scripted dish add first.
+        let scriptedHint = "";
+        const dish = dishFromGoal(args.goal);
+        if (String(playbook.partner) === "swiggy" && dish && isSwiggyRestaurantUrl(page.url())) {
+            const added = await swiggyScriptedAddToCart(page, {
+                dish,
+                isCancelled: () =>
+                    args.generation != null && !isBrowserGenerationCurrent(input.familyId, input.userId, args.generation),
+                log: (event, extra) => console.log(`[swiggy-scripted] ${event} ${extra ? JSON.stringify(extra) : ""}`.trim()),
+            }).catch(() => ({ ok: false as const, reason: "error", steps: [] as string[] }));
+            if (added.ok) {
+                stall.markProgress();
+                scriptedHint = ` The dish "${dish}" is ALREADY in the cart (qty 1) and checkout is open — do NOT add it again.`;
+            } else {
+                console.warn(`[swiggy-scripted] post-OTP fallback to Gemini: ${added.reason}`);
+            }
+        }
+
+        for (;;) {
             if (
                 args.generation != null &&
                 !isBrowserGenerationCurrent(input.familyId, input.userId, args.generation)
@@ -1125,7 +1237,15 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                 };
             }
             if (Date.now() > deadlineAt - 8_000) {
+                stopVerdict = { reason: "runaway_time", detail: "safety ceiling reached" };
                 break;
+            }
+            {
+                const tv = stall.checkTime();
+                if (tv.stop) {
+                    stopVerdict = tv;
+                    break;
+                }
             }
             steps += 1;
             const screenshot = await page.screenshot({ type: "png", fullPage: false, timeout: 10_000 });
@@ -1179,13 +1299,31 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     input.loginPhone ? ` login_phone=${input.loginPhone}` : ""
                 }. Already signed in — search SKU, add to cart, stop at confirm-before-pay. NEVER click Send OTP/Resend.${
                     args.extraHint ? ` ${args.extraHint}` : ""
-                }`,
+                }${scriptedHint}`,
                 step: steps,
                 maxSteps,
                 otpProvided: true,
                 userConfirmed,
             });
             modelUsed = planned.modelUsed;
+            if (args.generation != null && !isBrowserGenerationCurrent(input.familyId, input.userId, args.generation)) {
+                return {
+                    retainBrowser: false,
+                    result: { status: "cancelled", mode: "playwright", partner: args.partner, steps, message: "Cancelled." },
+                };
+            }
+            {
+                const verdict = stall.observe({
+                    url,
+                    domHash: hashOf(`${title}|${accessibilityHint.replace(/\d+/g, "#")}`),
+                    shotHash: hashOf(screenshot),
+                    actionSig: actionSignature(planned.actions as unknown[]),
+                });
+                if (verdict.stop) {
+                    stopVerdict = verdict;
+                    break;
+                }
+            }
 
             // Signed in: only guard Continue/Send-OTP clicks while an OTP box is actually on screen
             // (post-login "Continue"/"Proceed" buttons on cart/checkout are legitimate).
@@ -1243,13 +1381,25 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             }
         }
 
+        console.log(
+            JSON.stringify({
+                severity: "WARNING",
+                event: "browser_task_stopped",
+                message: `browser_task_stopped ${args.partner} post_otp ${stopVerdict?.reason || "unknown"}`,
+                store: args.partner,
+                phase: "post_otp",
+                rule: stopVerdict?.reason || "unknown",
+                detail: stopVerdict?.detail || "",
+                steps,
+            }),
+        );
         await this.persist(context, input, playbook.partner, page.url());
         return {
             retainBrowser: false,
             result: {
                 status: "error",
                 message:
-                    `Signed in to *${partnerLabel(args.partner)}* ✓ but couldn't finish the cart/confirm step in time. ` +
+                    `Signed in to *${partnerLabel(args.partner)}* ✓ but got stuck on the cart/confirm step (${stopVerdict?.detail || "no progress"}). ` +
                     `Reply *retry* (no new code needed if Apollo keeps you signed in) or *cancel* — nothing was ordered.`,
                 steps,
                 url: page.url(),
@@ -1637,6 +1787,9 @@ export function logBrowserTaskFailure(
 
 async function runBrowserTaskInner(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
     const deadlineMs = browserTaskDeadlineMs(input);
+    const { startStillWorkingTimer, STILL_WORKING_TEXT } = await import("./browserProgressNotify.service");
+    // Long run → ONE "still working" WhatsApp after ~2 min (notifyProgress drops it after cancel).
+    const stopNotice = startStillWorkingTimer(() => notifyProgress(input, "still_working", STILL_WORKING_TEXT));
     try {
         return await withBrowserGate(
             async () => {
@@ -1662,6 +1815,17 @@ async function runBrowserTaskInner(input: RunBrowserTaskInput): Promise<BrowserT
         );
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (/^runBrowserTask timed out/i.test(msg)) {
+            // Only the runaway ceiling (default 20 min) can get here now.
+            return {
+                status: "error",
+                mode: "playwright",
+                partner: String(input.partner || "generic"),
+                steps: 0,
+                failureReason: "step_limit",
+                message: "This is taking far longer than it should, so I stopped to be safe — reply *retry* or *cancel*.",
+            };
+        }
         if (/timed out/i.test(msg)) {
             return progressNeedOtpResult(input, msg);
         }
@@ -1675,16 +1839,16 @@ async function runBrowserTaskInner(input: RunBrowserTaskInput): Promise<BrowserT
             failureReason: crash ? "chromium_crash" : "unknown",
             message: `Browser task failed: ${msg.slice(0, 180)}. You can retry, paste an OTP if you have one, or *cancel*.`,
         };
+    } finally {
+        stopNotice();
     }
 }
 
 
 
-/** Hard budget for everything after the OTP paste (WA must hear back within ~90s). */
-export const POST_OTP_BUDGET_MS = Math.min(
-    Math.max(Number(process.env.BROWSER_POST_OTP_BUDGET_MS) || 85_000, 45_000),
-    110_000,
-);
+/** Budget for everything after the OTP paste — the runaway ceiling (stall detection stops real stalls). */
+/** Runaway ceiling only (default 20 min) — real stops come from stall detection. */
+export const POST_OTP_BUDGET_MS = browserRunawayMs();
 
 function logPostOtp(event: string, extra?: Record<string, unknown>): void {
     try {
@@ -1871,8 +2035,8 @@ export async function submitParkedBrowserOtp(input: {
     familyId: string;
     userId: string;
     otp: string;
-    /** WA progress lines (e.g. "signed in ✓ — adding … to cart…"). */
-    onProgress?: (detail: string) => void | Promise<void>;
+    /** Progress lines (activity log); stage "still_working" is the one WhatsApp-worthy line. */
+    onProgress?: (detail: string, stage?: string) => void | Promise<void>;
     budgetMs?: number;
 }): Promise<BrowserTaskResult | null> {
     const parked = takeParkedBrowserOtpSession(input.familyId, input.userId);
@@ -2036,6 +2200,11 @@ export async function submitParkedBrowserOtp(input: {
     };
 
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const { startStillWorkingTimer, STILL_WORKING_TEXT } = await import("./browserProgressNotify.service");
+    const stopNotice = startStillWorkingTimer(async () => {
+        if (state.timedOut || cancelled()) return;
+        await input.onProgress?.(STILL_WORKING_TEXT, "still_working");
+    });
     try {
         const timeout = new Promise<BrowserTaskResult>((resolve) => {
             timer = setTimeout(() => {
@@ -2053,7 +2222,19 @@ export async function submitParkedBrowserOtp(input: {
                 });
             }, budgetMs);
         });
-        const result = await Promise.race([work(), timeout]);
+        // Cancel stops the run immediately (closing Chromium in finally aborts any page op).
+        let cancelPoll: ReturnType<typeof setInterval> | undefined;
+        const cancelledP = new Promise<BrowserTaskResult>((resolve) => {
+            cancelPoll = setInterval(() => {
+                if (!cancelled()) return;
+                state.timedOut = true;
+                logPostOtp("cancelled_mid_run");
+                resolve({ status: "cancelled", mode: "playwright", partner: parked.partner, steps: 0, message: "Cancelled." });
+            }, 1000);
+        });
+        const result = await Promise.race([work(), timeout, cancelledP]).finally(() => {
+            if (cancelPoll) clearInterval(cancelPoll);
+        });
         logPostOtp("result", { status: result.status, reason: result.failureReason, ms: Date.now() - startedAt });
         if (result.status === "error" && parked.partner === "apollo") {
             await captureCheckoutDiagnostic(parked.page, {
@@ -2123,6 +2304,7 @@ export async function submitParkedBrowserOtp(input: {
         };
     } finally {
         if (timer) clearTimeout(timer);
+        stopNotice();
         if (state.timedOut || (!state.retain && !hasParkedBrowserOtpSession(input.familyId, input.userId))) {
             // Closing Chromium also unblocks any still-running page op in work()
             await closeTakenPark(parked);
@@ -2227,10 +2409,8 @@ async function parkGenericConfirm(args: {
  * Hard wall-clock budget for confirm → placed order. Runs async (WhatsApp gets progress lines
  * and the result); the address step (select saved / add new on Apollo) can take ~40-60s.
  */
-export const CHECKOUT_BUDGET_MS = Math.min(
-    Math.max(Number(process.env.BROWSER_CHECKOUT_BUDGET_MS) || 150_000, 60_000),
-    180_000,
-);
+/** Runaway ceiling only (default 20 min) — checkout stops on no-progress / guardrails, not a short timer. */
+export const CHECKOUT_BUDGET_MS = browserRunawayMs();
 
 function logCheckout(event: string, extra?: Record<string, unknown>): void {
     try {
@@ -2276,7 +2456,8 @@ async function continueParkedCheckoutInner(input: {
     cardId?: string;
     /** Care recipient (Kavach user) — their name goes on a newly added Apollo address. */
     recipientUserId?: string;
-    onProgress?: (detail: string) => void | Promise<void>;
+    /** Progress lines (activity log); stage "still_working" is the one WhatsApp-worthy line. */
+    onProgress?: (detail: string, stage?: string) => void | Promise<void>;
     budgetMs?: number;
 }): Promise<ParkedCheckoutRun> {
     const session = takeParkedCheckout(input.familyId, input.userId);
@@ -2369,7 +2550,7 @@ async function continueParkedCheckoutInner(input: {
             state.placeClicked = true;
             session.placeClicked = true;
         },
-        geminiMaxSteps: 3,
+        geminiMaxSteps: 12,
         log: logCheckout,
     }).catch(
         (err): ApolloCheckoutOutcome => ({
@@ -2384,9 +2565,31 @@ async function continueParkedCheckoutInner(input: {
     const timeout = new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), budgetMs);
     });
-    let outcome = await Promise.race([workPromise, timeout]);
+    const { startStillWorkingTimer, STILL_WORKING_TEXT } = await import("./browserProgressNotify.service");
+    const stopNotice = startStillWorkingTimer(async () => {
+        if (cancelled()) return;
+        await input.onProgress?.(STILL_WORKING_TEXT, "still_working");
+    });
+    // Cancel before Place order stops immediately; after the Place tap we never claim "cancelled".
+    let cancelPoll: ReturnType<typeof setInterval> | undefined;
+    const cancelledP = new Promise<"cancelled">((resolve) => {
+        cancelPoll = setInterval(() => {
+            if (!state.timedOut && !state.placeClicked && !isBrowserGenerationCurrent(input.familyId, input.userId, session.generation)) {
+                resolve("cancelled");
+            }
+        }, 1000);
+    });
+    const raced = await Promise.race([workPromise, timeout, cancelledP]);
+    if (cancelPoll) clearInterval(cancelPoll);
+    stopNotice();
+    let outcome: ApolloCheckoutOutcome | null =
+        raced === "cancelled" ? { status: "cancelled", url: "", detail: "cancelled by user" } : raced;
     if (timer) clearTimeout(timer);
-    let workSettled = true;
+    let workSettled = raced !== "cancelled";
+    if (raced === "cancelled") {
+        state.timedOut = true; // stops progress + makes the runner's isCancelled() true
+        logCheckout("cancelled_mid_run", {});
+    }
     if (!outcome) {
         state.timedOut = true;
         logCheckout("timeout", { budgetMs, placeClicked: state.placeClicked });
@@ -2559,7 +2762,7 @@ async function continueParkedCheckoutInner(input: {
             const why =
                 outcome.status === "address_unverified"
                     ? `I couldn't set the delivery address${pincode ? ` (${pincode})` : ""} on Apollo — ${outcome.detail.replace(/\s*\[step:[^\]]*\]\s*$/, "").slice(0, 160)}`
-                    : `I couldn't finish Apollo checkout within ${Math.round(budgetMs / 1000)}s (${outcome.detail.slice(0, 100)})`;
+                    : `I couldn't finish Apollo checkout (${outcome.detail.slice(0, 100)})`;
             if (canRepark) {
                 repark();
                 return {

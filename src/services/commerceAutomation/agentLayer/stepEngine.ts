@@ -17,6 +17,7 @@ import {
     validateCartLines,
 } from "./guardrails";
 import { siteConfig, type CheckoutStepKey } from "./siteConfigs";
+import { StallDetector } from "./stallDetector";
 import { pincodeOf } from "../kavachAddress";
 import { stagehandExtract, stagehandLocate, stagehandStep, type AgentStepResult } from "./stagehandFallback.service";
 
@@ -135,8 +136,10 @@ export async function runGenericCodCheckout(
         return { status: "cart_mismatch", url: safeUrl(page), detail: "cart looks empty" };
     }
 
-    // Walk to the payment screen (bounded).
-    for (let i = 0; i < 8 && screen && screen.screen !== "payment"; i++) {
+    // Walk to the payment screen — no fixed step count; stop only when stuck (same screen +
+    // URL + step repeated, or no new screen for minutes) or at the runaway ceiling.
+    const stall = new StallDetector();
+    while (screen && screen.screen !== "payment") {
         if (opts.isCancelled?.()) return { status: "cancelled", url: safeUrl(page), detail: "cancelled by user" };
         if (remaining(opts.deadlineAt) < 30_000) break;
         const step: CheckoutStepKey =
@@ -147,6 +150,15 @@ export async function runGenericCodCheckout(
                   : screen.screen === "address"
                     ? "select_address"
                     : "reach_payment";
+        const verdict = stall.observe({
+            url: safeUrl(page),
+            domHash: `${screen.screen}|${(screen.cartItems || []).map((c) => `${c.name}x${c.quantity}`).join(",")}|${pincodeOf(screen.deliveryAddress) || ""}`,
+            actionSig: step,
+        });
+        if (verdict.stop) {
+            log("generic_stall", { reason: verdict.reason, detail: verdict.detail });
+            break;
+        }
         const r = await runStep(page, { partner: opts.partner, step, log, pincode: opts.pincode });
         log("generic_step", { step, by: r.by, agent: r.agent?.status });
         await nap(page, 1800);
