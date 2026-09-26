@@ -67,7 +67,7 @@ export async function captureStatedPreference(w: Who, text: string): Promise<str
         forgetProfileCache(w);
         if (pref.brand) {
             const { noteBrandPreference } = await import("../commerceAutomation/usuals/usuals.service");
-            await noteBrandPreference(w, { brand: pref.brand, item: pref.item || text, text: pref.text });
+            await noteBrandPreference(w, { brand: pref.brand, item: pref.item || "", text: pref.text });
         }
         return pref.text;
     } catch (err) {

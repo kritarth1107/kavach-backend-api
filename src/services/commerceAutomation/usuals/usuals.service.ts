@@ -187,7 +187,8 @@ export async function removeDecline(w: Who, item: string, at: string): Promise<b
 
 /** Stated brand preference ("main sirf Amul leti hoon") → preferred in her options for that item. */
 export async function noteBrandPreference(w: Who, p: { brand: string; item: string; text: string }): Promise<void> {
-    const key = conceptKey(p.item) || conceptKey(p.text);
+    // No item named ("main sirf Amul leti hoon") → a general brand preference ("*").
+    const key = (p.item && conceptKey(p.item)) || "*";
     const entry = { key, brand: p.brand.slice(0, 40), text: p.text.slice(0, 160), at: new Date() };
     await ElderUsuals.updateOne(
         { familyId: w.familyId, recipientUserId: w.recipientUserId },
@@ -203,6 +204,7 @@ export async function noteBrandPreference(w: Who, p: { brand: string; item: stri
 export async function brandPreferenceFor(w: Who, query: string): Promise<string | null> {
     const doc = (await loadUsuals(w)) as unknown as { brandPrefs?: Array<{ key: string; brand: string }> } | null;
     const key = conceptKey(query);
-    const hit = (doc?.brandPrefs || []).filter((b) => b.key === key || (key && b.key.includes(key))).pop();
+    const prefs = doc?.brandPrefs || [];
+    const hit = prefs.filter((b) => b.key === key || (key && b.key !== "*" && b.key.includes(key))).pop() || prefs.filter((b) => b.key === "*").pop();
     return hit?.brand || null;
 }
