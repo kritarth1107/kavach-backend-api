@@ -489,7 +489,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             const { gateElderOrder } = await import("./profile/unusualActivity.service");
             const g = await gateElderOrder(
                 { familyId: identity.familyId, recipientUserId: identity.userId },
-                { item: probe.slice(0, 120), qty: route.quantity ?? undefined, stage: "request" },
+                { item: (riskyMedClass(text) ? text : probe).slice(0, 120), qty: route.quantity ?? undefined, stage: "request" },
             ).catch(() => null);
             if (g?.pause && g.elderLine) {
                 rememberTurn(phone, "saheli", g.elderLine);

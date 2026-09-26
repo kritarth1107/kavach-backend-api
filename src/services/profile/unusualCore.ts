@@ -66,7 +66,7 @@ export function checkOrderRisk(input: {
             category: "risky_meds",
             key: `risky_meds:${med}`,
             confidence: med === "sleep" ? 0.95 : 0.85,
-            text: `She asked Saheli to order ${med === "sleep" ? "sleeping pills" : "painkillers"} in bulk (${item}${input.qty && input.qty > 1 ? ` × ${input.qty}` : ""}). Saheli paused the order and asked her gently. You may want to call her.`,
+            text: `She asked Saheli to order ${med === "sleep" ? "sleeping pills" : "painkillers"} in bulk ("${item}"${input.qty && input.qty > 1 && !/\d/.test(item) ? ` × ${input.qty}` : ""}). Saheli paused the order and asked her gently. You may want to call her.`,
             evidence: item,
             pauseOrder: true,
             elderLine:

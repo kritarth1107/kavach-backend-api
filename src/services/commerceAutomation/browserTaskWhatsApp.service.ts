@@ -2401,7 +2401,7 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
         const probe = `${route.productQuery || ""} ${rawText}`;
         if (riskyMedClass(probe)) {
             const { gateElderOrder } = await import("../profile/unusualActivity.service");
-            const g = await gateElderOrder(input, { item: probe.trim().slice(0, 120), qty: route.quantity ?? undefined, stage: "request" }).catch(() => null);
+            const g = await gateElderOrder(input, { item: (riskyMedClass(rawText) ? rawText : probe).trim().slice(0, 120), qty: route.quantity ?? undefined, stage: "request" }).catch(() => null);
             if (g?.pause && g.elderLine) {
                 if (draft && draft.phase !== "running") await saveDraft(input.phone, null);
                 log("paused:risky_meds_bulk");
