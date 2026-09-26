@@ -133,3 +133,38 @@ export async function getSaheliMemoryContextHandler(
         next(err);
     }
 }
+
+/**
+ * Nightly reflection (Cloud Scheduler ~02:30 IST). Auth: X-Kavach-Job-Secret or X-Kavach-Secret.
+ * Body: { dayKey?: "YYYY-MM-DD" } for all elders, or { familyId, recipientUserId, dayKey? } / { phone }
+ * (phone limited to smoke fixtures) for one elder on demand.
+ */
+export async function postReflectionJob(req: Request, res: Response, next: NextFunction) {
+    try {
+        const alt = req.header("X-Kavach-Secret");
+        if (!(alt && alt === config.aiEngine.apiSecret)) assertJobAuth(req);
+        const { reflectAll, reflectElderDay } = await import("../services/profile/reflection.service");
+        const dayKey = req.body?.dayKey ? String(req.body.dayKey) : undefined;
+        if (dayKey && !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) throw new AppError("dayKey must be YYYY-MM-DD", 400);
+        let who: { familyId: string; recipientUserId: string } | null = null;
+        if (req.body?.phone) {
+            const phone = String(req.body.phone);
+            const { isSmokeFixturePhone } = await import("../services/smokeFixtures.service");
+            if (!isSmokeFixturePhone(phone)) throw new AppError("phone is limited to smoke fixture phones", 403);
+            const { resolveWhatsAppSender } = await import("../services/identityResolver.service");
+            const r = await resolveWhatsAppSender(phone);
+            who = { familyId: r.familyId, recipientUserId: r.userId };
+        } else if (req.body?.familyId && req.body?.recipientUserId) {
+            who = { familyId: String(req.body.familyId), recipientUserId: String(req.body.recipientUserId) };
+        }
+        if (who) {
+            res.json({ success: true, job: "reflection", result: await reflectElderDay(who, dayKey, { model: req.body?.model ? String(req.body.model) : undefined }) });
+            return;
+        }
+        // Long run: answer now, keep working (Cloud Run keeps CPU for in-flight work only with always-on CPU; the
+        // per-elder loop is short, so we await it but cap the scheduler's wait via its own deadline).
+        res.json({ success: true, job: "reflection", ...(await reflectAll(dayKey)) });
+    } catch (err) {
+        next(err);
+    }
+}

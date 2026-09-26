@@ -29,6 +29,7 @@ export interface IElderUsuals {
     orderHours: number[]; // 24 buckets (IST)
     rides: UsualRide[];
     rejections: UsualRejection[];
+    brandPrefs?: Array<{ key: string; brand: string; text: string; at: Date }>;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -43,6 +44,7 @@ const schema = new Schema<IElderUsualsDocument>(
         orderHours: { type: [Number], default: () => Array(24).fill(0) },
         rides: { type: Schema.Types.Mixed as never, default: [] },
         rejections: { type: Schema.Types.Mixed as never, default: [] },
+        brandPrefs: { type: Schema.Types.Mixed as never, default: [] },
     },
     { timestamps: true },
 );

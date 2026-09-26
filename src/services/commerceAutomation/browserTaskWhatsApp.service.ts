@@ -1311,6 +1311,19 @@ async function shapeFor<T extends { name: string; pricePaise?: number; partner?:
         const doc = ctx ? null : await U.loadUsuals({ familyId: input.familyId, recipientUserId: input.recipientUserId || input.actorUserId });
         const rejections = ctx?.rejections || doc?.rejections || [];
         const r = U.shapeChoices(query, opts, { usual, rejections });
+        // Learned profile: brand she said she prefers first; fewer options if choices confuse her.
+        const w = { familyId: input.familyId, recipientUserId: input.recipientUserId || input.actorUserId };
+        const [brand, tuning] = await Promise.all([
+            U.brandPreferenceFor(w, query).catch(() => null),
+            import("../profile/elderProfile.service").then((P) => P.profileTuning(w)).catch(() => undefined),
+        ]);
+        if (brand && !r.usualHit) {
+            const b = brand.toLowerCase();
+            const hit = opts.filter((o) => o.name.toLowerCase().includes(b));
+            if (hit.length) r.shown = [...hit.slice(0, 1), ...r.shown.filter((o) => o !== hit[0])];
+        }
+        const max = tuning?.maxOptions && tuning.maxOptions >= 1 && tuning.maxOptions <= 3 ? tuning.maxOptions : 3;
+        r.shown = r.shown.slice(0, max);
         let header = "";
         if (usual && r.usualHit) {
             const now = r.shown[0]!.pricePaise;
@@ -1318,6 +1331,7 @@ async function shapeFor<T extends { name: string; pricePaise?: number; partner?:
             const moved = now && was && Math.abs(now - was) / was > 0.15 ? ` (was ${formatInr(was)} last time)` : "";
             header = `Your usual ${usual.key} from *${partnerLabel(usual.partner)}* ${U.usualEmoji(usual.key, usual.category)}${moved}`;
         }
+        if (!header && brand && r.shown[0]?.name.toLowerCase().includes(brand.toLowerCase())) header = `Aapka pasandida *${brand}* sabse upar rakha hai 🙂`;
         return { shown: r.shown, header };
     } catch {
         return { shown: opts.slice(0, 3), header: "" };
@@ -2380,6 +2394,22 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
             data: { intent, phase: draft?.phase || null, source: "gemini_router", confidence: route.confidence },
         });
 
+    // Unusual-activity backstop: risky medicines in bulk (sleeping pills / painkillers) → pause and ask
+    // her gently + alert caregivers, instead of searching / placing.
+    if (input.actorRole === FamilyRole.CARE_RECIPIENT && (route.intent === "order_new" || route.intent === "order_modify") && (route.productQuery || rawText)) {
+        const { riskyMedClass } = await import("../profile/unusualCore");
+        const probe = `${route.productQuery || ""} ${rawText}`;
+        if (riskyMedClass(probe)) {
+            const { gateElderOrder } = await import("../profile/unusualActivity.service");
+            const g = await gateElderOrder(input, { item: probe.trim().slice(0, 120), qty: route.quantity ?? undefined, stage: "request" }).catch(() => null);
+            if (g?.pause && g.elderLine) {
+                if (draft && draft.phase !== "running") await saveDraft(input.phone, null);
+                log("paused:risky_meds_bulk");
+                return { text: g.elderLine };
+            }
+        }
+    }
+
     // Answer to "what should I call this place?".
     if (route.placeName) {
         const named = await applyPlaceName(input, route.placeName);
@@ -3125,7 +3155,22 @@ async function handleMcpPickTurn(
             lastMessage: undefined,
             confirm: { items: [card.itemLine], totalLabel: formatInr(card.totalPaise), addressLabel: place.full, cardId: card.cardId },
         };
+        let gateNote = "";
+        if (input.actorRole === FamilyRole.CARE_RECIPIENT) {
+            const { gateElderOrder } = await import("../profile/unusualActivity.service");
+            const g = await gateElderOrder(input, { item: card.itemLine || pick.name, qty: card.qty, totalRupees: card.totalPaise ? card.totalPaise / 100 : null, stage: "card" }).catch(() => null);
+            if (g?.pause && g.elderLine) {
+                await saveDraft(input.phone, null);
+                return { text: g.elderLine };
+            }
+            gateNote = g?.note || "";
+        }
         await saveDraft(input.phone, next);
+        if (gateNote) {
+            const copy = mcpCardCopy(card);
+            void logActivity({ familyId: input.familyId, recipientUserId: input.recipientUserId, actorUserId: input.actorUserId, kind: "order_confirm_card", title: `${storeLabel}: confirm card ${formatInr(card.totalPaise)} (repeat check)`, detail: `${card.itemLine} → ${place.nickname}`, data: { source: "mcp", cardId: card.cardId, totalPaise: card.totalPaise, payment: "COD", unusual: "repeat_order" } });
+            return { text: `${gateNote}\n\n${copy}`, draft: next };
+        }
         void logActivity({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,

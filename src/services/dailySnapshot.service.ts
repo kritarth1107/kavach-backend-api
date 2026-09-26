@@ -77,6 +77,16 @@ export async function generateDailySnapshot(input: {
         prompt: `Day: ${dayKey} (IST)\nActivity log:\n${lines.join("\n")}`,
     });
     const parsed = parseJsonLoose<{ summary?: string; highlights?: string[]; concerns?: string[]; mood?: string | null }>(raw);
+    // Evolving profile: weekly "what Saheli learned" line + lower-tier unusual activity (dashboard only).
+    if (parsed?.summary) {
+        const w = { familyId: input.familyId, recipientUserId: input.recipientUserId };
+        const P = await import("./profile/elderProfile.service");
+        const U = await import("./profile/unusualActivity.service");
+        const weekly = await P.learnedThisWeek(w).catch(() => "");
+        const unusual = await U.unusualForSnapshot(w, new Date(new Date(`${dayKey}T00:00:00+05:30`).getTime())).catch(() => [] as string[]);
+        parsed.highlights = [...(parsed.highlights ?? []).slice(0, 6), ...(weekly ? [weekly] : [])];
+        parsed.concerns = [...(parsed.concerns ?? []), ...unusual];
+    }
     const set = parsed?.summary
         ? {
               ...base,

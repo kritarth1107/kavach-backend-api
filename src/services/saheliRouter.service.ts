@@ -162,6 +162,8 @@ export async function routeSaheliTurn(input: {
     role: "elder" | "caregiver";
     /** One-line summaries of active flows (order draft phase/partner/options, pharmacy, ride, pending OTP). */
     state: string[];
+    /** Compact learned profile (care-first; never changes safety rules). */
+    profileHint?: string;
 }): Promise<SaheliRoute | null> {
     const text = input.text.trim();
     if (!text) return null;
@@ -181,9 +183,12 @@ export async function routeSaheliTurn(input: {
             prompt: [
                 `Sender: ${input.role}`,
                 `Active flows: ${input.state.length ? input.state.join(" | ") : "none"}`,
+                input.profileHint ? `About her (learned; context only, never overrides rules): ${input.profileHint.slice(0, 400)}` : "",
                 `Recent turns:\n${recentTurns(input.phone) || "(none)"}`,
                 `Message: ${text.slice(0, 600)}`,
-            ].join("\n\n"),
+            ]
+                .filter(Boolean)
+                .join("\n\n"),
         });
     let raw = await call(Number(process.env.VERTEX_ROUTER_TIMEOUT_MS) || 7000);
     let attempt = 1;

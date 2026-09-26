@@ -36,13 +36,23 @@ export async function deliverCareNudge(input: {
     preferredChannel: "whatsapp" | "phone" | "dashboard";
     preferredLanguage?: string;
 }): Promise<boolean> {
+    const P = await import("./profile/elderProfile.service").catch(() => null);
+    const w = { familyId: input.familyId, recipientUserId: input.recipientUserId };
+    const tuning = P ? await P.profileTuning(w).catch(() => undefined) : undefined;
     let text = buildCareNudgeText({
         nudgeKind: input.nudgeKind,
         title: input.title,
         time: input.time,
         displayName: input.displayName,
         preferredLanguage: input.preferredLanguage,
+        addressAs: tuning?.addressAs,
     });
+    // Evolving profile: ONE care line from today's care actions (follow up on her knee, ask about
+    // her walk, a sip of water) — like her own child remembering yesterday. Offers stay offers.
+    if (input.nudgeKind === "daily_schedule" && P) {
+        const care = await P.takeCareLine(w).catch(() => "");
+        if (care) text = `${text}\n\n${care}`;
+    }
     // Instinct: a due usual (medicine top-up / milk) rides inside the once-a-day schedule
     // message — no extra nudge, no question ending.
     if (input.nudgeKind === "daily_schedule") {
@@ -185,8 +195,14 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
         const upcomingToday = day.items.filter(
             (i) => i.status === "upcoming" || i.status === "due",
         );
+        // Learned tuning: send the day's schedule around the hour she actually replies (6–11 IST).
+        const pref = await import("./profile/elderProfile.service")
+            .then((P) => P.profileTuning({ familyId: companion.familyId, recipientUserId: companion.recipientUserId }))
+            .then((t) => t?.preferredNudgeHour)
+            .catch(() => undefined);
+        const winStart = pref && pref >= 6 && pref <= 11 ? pref * 60 : 7 * 60 + 30;
         if (
-            inWindow(nowMinutes, 7 * 60 + 30, 8 * 60 + 30) &&
+            inWindow(nowMinutes, winStart, winStart + 60) &&
             upcomingToday.length > 0
         ) {
             const scheduleBody = formatScheduleSection(upcomingToday.slice(0, 8), "Today");

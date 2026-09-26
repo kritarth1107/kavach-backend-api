@@ -19,6 +19,8 @@ async function runTick() {
                 `Saheli reminder tick: sent=${reminders.sent} scanned=${reminders.scanned}`,
             );
         }
+        const { flushQueuedUnusualAlerts } = await import("../services/profile/unusualActivity.service");
+        void flushQueuedUnusualAlerts().catch((e) => console.warn("unusual alert flush failed:", e));
         const { runDailySnapshotTick } = await import("../services/dailySnapshot.service");
         void runDailySnapshotTick().catch((e) => console.warn("daily snapshot tick failed:", e));
     } catch (err) {

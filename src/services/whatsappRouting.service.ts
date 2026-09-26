@@ -417,6 +417,46 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         return outbound(phone, elderEmergencyReply(displayName));
     }
 
+    // ── Evolving profile + unusual-activity backstops (elder only). Scam cue with high confidence
+    // answers her immediately (never share OTP) and alerts caregivers; other cues are background.
+    let profileHint = "";
+    if (identity.role === FamilyRole.CARE_RECIPIENT && text && !MEDIA_PLACEHOLDER.test(text)) {
+        const w = { familyId: identity.familyId, recipientUserId: identity.userId };
+        const { detectScamCue } = await import("./profile/unusualCore");
+        const scam = detectScamCue(text);
+        if (scam) {
+            const { raiseUnusual } = await import("./profile/unusualActivity.service");
+            await raiseUnusual(w, scam).catch(() => null);
+            if (scam.confidence >= 0.75 && scam.elderLine) return outbound(phone, scam.elderLine);
+        }
+        void (async () => {
+            const { captureStatedPreference } = await import("./profile/elderProfile.service");
+            await captureStatedPreference(w, text);
+            const ActivityLogM = (await import("../models/activityLog.model")).default;
+            const { istDayKey } = await import("./activityLog.service");
+            const since = new Date(Date.now() - 2 * 3600_000);
+            const prev = await ActivityLogM.find({ familyId: w.familyId, recipientUserId: w.recipientUserId, kind: "message_in", createdAt: { $gte: since } })
+                .sort({ createdAt: -1 })
+                .limit(30)
+                .lean();
+            // Drop this very message (logged just above).
+            const earlier = prev.slice(prev[0] && String(prev[0].detail || prev[0].title || "").includes(text.slice(0, 30)) ? 1 : 0);
+            const ordersToday = await ActivityLogM.find({ familyId: w.familyId, recipientUserId: w.recipientUserId, kind: "order_placed", dayKey: istDayKey() }).limit(5).lean();
+            const { detectConfusionCue } = await import("./profile/unusualCore");
+            const cue = detectConfusionCue({
+                text,
+                recentInbound: earlier.map((m) => ({ text: String(m.detail || m.title || ""), at: m.createdAt as Date })),
+                ordersToday: ordersToday.map((o) => String(o.detail || o.title || "").slice(0, 60)),
+            });
+            if (cue) {
+                const { raiseUnusual } = await import("./profile/unusualActivity.service");
+                await raiseUnusual(w, cue);
+            }
+        })().catch((err) => console.warn("[profile] inbound hooks failed:", err instanceof Error ? err.message : err));
+        const { profileSummary } = await import("./profile/elderProfile.service");
+        profileHint = await profileSummary(w, true).catch(() => "");
+    }
+
     // ── Understanding: ONE Gemini structured-output call per turn (message + recent turns +
     // this phone's active flows). Regex gates below run only when this returns null.
     let route: SaheliRoute | null = null;
@@ -430,6 +470,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 familyId: identity.familyId,
                 memberUserId: isCaregiver(identity.role) ? undefined : identity.userId,
             }),
+            profileHint: profileHint || undefined,
         }).catch((err) => {
             console.warn("[saheli-router] failed:", err instanceof Error ? err.message : err);
             return null;

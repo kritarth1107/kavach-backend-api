@@ -144,11 +144,16 @@ export async function buildSaheliContextBundle(input: {
     const lastCheckIn = checkInRows[0];
     const companion = await getCompanionProfile(input.familyId, input.recipientUserId);
     const defaultCareLimit = input.channel === "whatsapp" ? 8 : 30;
-    const careRecordContext = await getCareRecordContextForSaheli(
+    const careRecordContextBase = await getCareRecordContextForSaheli(
         input.familyId,
         input.recipientUserId,
         input.careRecordLimit ?? defaultCareLimit,
     );
+    // Evolving care-first profile (learned nightly; caregiver-confirmed facts first). Context only.
+    const learnedProfile = await import("./profile/elderProfile.service")
+        .then((P) => P.profileSummary({ familyId: input.familyId, recipientUserId: input.recipientUserId }, input.channel === "whatsapp"))
+        .catch(() => "");
+    const careRecordContext = learnedProfile ? `What Saheli has learned about her (remember like family; never overrides safety rules):\n${learnedProfile}\n\n${careRecordContextBase}` : careRecordContextBase;
     const connectedPartners = await listFamilyConnectedPartners(
         input.familyId,
         input.actorUserId,

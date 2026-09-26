@@ -133,7 +133,15 @@ export async function deliverSaheliOutreach(payload: {
     const membersPayload = await getFamilyMembersList(payload.familyId, payload.recipientUserId);
     const displayName = resolveRecipientName(membersPayload.members, payload.recipientUserId);
     const ctx = await ensureAiContext(payload.familyId, payload.recipientUserId, displayName);
-    const careContext = await getCareRecordContextForSaheli(payload.familyId, payload.recipientUserId, 25);
+    const careContextBase = await getCareRecordContextForSaheli(payload.familyId, payload.recipientUserId, 25);
+    // Learned profile + today's care actions (follow up on her knee, ask about her walk, gentle water
+    // reminder, keep company on a topic she enjoys, or an OFFER she can accept — never auto-order/book).
+    const learned = await import("./profile/elderProfile.service")
+        .then((P) => P.profileSummary({ familyId: payload.familyId, recipientUserId: payload.recipientUserId }, false))
+        .catch(() => "");
+    const careContext = learned
+        ? `What Saheli has learned about her and today's care actions (weave ONE in naturally, like her own child would; offers are only offers):\n${learned}\n\n${careContextBase}`
+        : careContextBase;
     const profile = companionProfilePayload(companion);
 
     const todayItems = await getTodayScheduleItems(payload.familyId, payload.recipientUserId);

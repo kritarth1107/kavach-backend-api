@@ -11,6 +11,8 @@ const CAREGIVER_ROLES = new Set([FamilyRole.PRIMARY_CAREGIVER, FamilyRole.CO_CAR
  * Caregiver WhatsApp policy. WhatsApp is ONLY for:
  *   1. order placed by the care recipient (item, total, COD, ETA, order id)
  *   2. health red flags / emergencies (never missed; deduped for a short window)
+ *   3. 3-silence alert (nudge_silence)
+ *   4. high-confidence unusual activity (unusual_activity; lower confidence → dashboard only)
  *   (+ elder_share: the elder explicitly asked Saheli to tell the family something)
  * Everything else (progress, prescriptions drafts, rides, routine) → dashboard activity
  * feed + in-app notification + daily snapshot. Never images.
@@ -25,6 +27,9 @@ const WHATSAPP_KINDS = new Set([
     "elder_share",
     // Elder silent through N consecutive Saheli check-ins (once per silence streak).
     "nudge_silence",
+    // 4th category: high-confidence unusual activity (repeat/bulk/risky orders, confusion, scam cues,
+    // marked mood drop / meds missed after >= 7 baseline days). Tiered + 24h-deduped upstream.
+    "unusual_activity",
 ]);
 
 export function caregiverWhatsAppAllowed(kind?: string, urgency?: "low" | "medium" | "high"): boolean {
@@ -119,7 +124,8 @@ export async function notifyCaregivers(input: {
                     input.kind === "symptom" ||
                     input.kind === "lab_alert" ||
                     input.kind === "elder_share" ||
-                    input.kind === "nudge_silence"
+                    input.kind === "nudge_silence" ||
+                    input.kind === "unusual_activity"
                         ? "plain"
                         : "order_pending_approval",
             });

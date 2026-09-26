@@ -1,4 +1,14 @@
 import { Router } from "express";
+import {
+    careActionHandler,
+    confirmFactHandler,
+    dismissAlertHandler,
+    dismissDeviationHandler,
+    editFactHandler,
+    getProfileHandler,
+    rejectFactHandler,
+    retentionHandler,
+} from "../controllers/elderProfile.controller";
 import { deleteUsualDeclineHandler, deleteUsualItemHandler, getUsualsHandler } from "../controllers/usuals.controller";
 import {
     acceptInvitation,
@@ -206,6 +216,14 @@ router.get(
 router.get("/:familyId/recipients/:recipientUserId/saheli/usuals", protect, getUsualsHandler);
 router.delete("/:familyId/recipients/:recipientUserId/saheli/usuals/items", protect, deleteUsualItemHandler);
 router.delete("/:familyId/recipients/:recipientUserId/saheli/usuals/declines", protect, deleteUsualDeclineHandler);
+router.get("/:familyId/recipients/:recipientUserId/saheli/profile", protect, getProfileHandler);
+router.post("/:familyId/recipients/:recipientUserId/saheli/profile/facts/:factId/confirm", protect, confirmFactHandler);
+router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/facts/:factId", protect, editFactHandler);
+router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/facts/:factId", protect, rejectFactHandler);
+router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/care-actions/:actionId", protect, careActionHandler);
+router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/deviations/:id", protect, dismissDeviationHandler);
+router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/alerts/:id", protect, dismissAlertHandler);
+router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/retention", protect, retentionHandler);
 router.get("/:familyId/saheli/order-sessions/:sessionId", protect, getOrderSessionHandler);
 router.patch(
     "/:familyId/saheli/order-sessions/:sessionId/address",

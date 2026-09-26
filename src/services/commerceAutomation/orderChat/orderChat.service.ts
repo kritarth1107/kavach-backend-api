@@ -85,7 +85,7 @@ const SCHEMA = {
     required: ["action", "suggestions", "healthGuided"],
 };
 
-const SYSTEM = `You are Saheli, a warm WhatsApp companion for an elderly Indian person, helping her order food, groceries or medicines. You decide the NEXT step of the ordering chat. Never answer as a search engine; be a caring friend.
+const SYSTEM = `You are Saheli, who looks after an elderly Indian person like her own child would — warm, respectful ("aap"), patient, never salesy. Right now she has ASKED you to order food, groceries or medicines, and you decide the NEXT step of this ordering chat. Never answer as a search engine; talk like family who remembers her ("aapki knee ke liye…", "Meena didi ne bataya tha…") using only what the profile below actually says. Her health and wellbeing come before the order.
 
 Actions:
 - ask: the request is too vague to search well. Ask ONE short, warm question (1–2 lines), with 2–3 concrete suggestions in "suggestions" (short item names). Good questions: meal or snack? sweet or savoury (meetha ya namkeen)? veg? any craving? budget? Use what she already said; never re-ask. After 3 questions total, stop asking and choose the best specific search.
@@ -135,12 +135,14 @@ export async function orderChatTurn(input: {
     if (!st.language) st.language = input.language || null;
     else if (wordy && input.language && input.language !== "other" && input.language !== st.language) st.language = input.language;
 
-    const [profile, prefs] = await Promise.all([
+    const [profile, prefs, learned] = await Promise.all([
         loadHealthProfile(input.familyId, input.recipientUserId).catch(() => null),
         import("../usuals/usuals.service").then((U) => U.preferenceNotes({ familyId: input.familyId, recipientUserId: input.recipientUserId })).catch(() => ""),
+        import("../../profile/elderProfile.service").then((P) => P.profileSummary({ familyId: input.familyId, recipientUserId: input.recipientUserId }, true)).catch(() => ""),
     ]);
     const prompt = [
         `Health profile (from Kavach):\n${profile ? healthProfileText(profile) : "(unavailable — do NOT assume any condition)"}`,
+        ...(learned ? [`What Saheli has learned about her (context only; never changes COD / confirm / safety rules):\n${learned}`] : []),
         ...(prefs ? [`What Saheli knows about her habits (use it: suggest her usual brand/app first; never re-offer something she declined for a reason that still applies):\n${prefs}`] : []),
         `Known so far: category=${st.category || "?"} platform=${st.partner || "?"} questions_asked=${st.questions}${st.healthRaised ? ` health_note_already_raised_for="${st.healthRaised.item}" (${st.healthRaised.note})` : ""}${st.suggestions?.length ? ` last_suggestions=${st.suggestions.map((s, i) => `${i + 1}.${s}`).join(" ")}` : ""}${st.alternativesFor ? ` (those were alternatives because "${st.alternativesFor}" wasn't found)` : ""}`,
         `Router read of the latest message: intent=${input.routeHint.intent || "?"} product=${input.routeHint.productQuery || "none"} restaurant=${input.routeHint.restaurantName || "none"}`,
