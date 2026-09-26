@@ -12,7 +12,7 @@ import { guardComputerUseClick } from "./agentLayer/guardrails";
 import type { BrowserAction } from "./geminiComputerUse.service";
 import { planBrowserActions } from "./geminiComputerUse.service";
 import { StallDetector, actionSignature, browserRunawayMs, hashOf } from "./agentLayer/stallDetector";
-import { dishFromGoal, isSwiggyRestaurantUrl, swiggyScriptedAddToCart } from "./swiggyRestaurantAdd";
+import { dishFromGoal, isSwiggyRestaurantUrl, swiggyNeedsLogin, swiggyScriptedAddToCart, swiggyScriptedLogin } from "./swiggyRestaurantAdd";
 import {
     getOrCreateBrowserProfile,
     saveBrowserProfileState,
@@ -120,6 +120,8 @@ export type BrowserFailureReason =
     | "stalled"
     /** Site showed a block / "access denied" page mid-flow. */
     | "site_blocked"
+    /** Scripted login tapped Login but the site refused / showed no code screen (message says why). */
+    | "login_failed"
     | "unknown";
 
 export type BrowserTaskResult = {
@@ -908,6 +910,78 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     stall.markProgress();
                     scriptedHint = ` The dish "${dish}" is ALREADY in the Swiggy cart (quantity 1) and the cart/checkout page is open — do NOT add it again. Next: log in if asked, pick the delivery address, then emit need_user_confirm with the real item, total and address.`;
                     await notifyProgress(input, "searching", `*${dish.slice(0, 60)}* is in the cart ✓ — opening checkout…`);
+                    // Fixed login on Swiggy checkout: LOG IN → phone → Login (Swiggy texts the OTP once).
+                    if (input.loginPhone && (await swiggyNeedsLogin(page))) {
+                        const gen = input.browserGeneration ?? currentBrowserGeneration(input.familyId, input.userId);
+                        const login = await swiggyScriptedLogin(page, {
+                            loginPhone: input.loginPhone,
+                            claimOtpSend: () => claimPharmacyOtpSend(input.familyId, input.userId, gen),
+                            isCancelled: () => isTaskCancelled(input),
+                            log: (event, extra) => console.log(`[swiggy-scripted] ${event} ${extra ? JSON.stringify(extra) : ""}`.trim()),
+                        }).catch((err): { status: "failed"; reason: string; steps: string[] } => ({
+                            status: "failed",
+                            reason: `error:${err instanceof Error ? err.message.slice(0, 60) : "x"}`,
+                            steps: [],
+                        }));
+                        if (isTaskCancelled(input)) {
+                            return { status: "cancelled", message: "Cancelled.", steps: 0, mode: "playwright", partner: String(playbook.partner) };
+                        }
+                        if (login.status === "otp_sent" && context) {
+                            await this.persist(context, input, playbook.partner, page.url());
+                            parkBrowserForOtp({
+                                familyId: input.familyId,
+                                userId: input.userId,
+                                partner: String(playbook.partner),
+                                goal: input.goal,
+                                generation: gen,
+                                browser,
+                                context,
+                                page,
+                                taskInput: input,
+                            });
+                            retainBrowser = true;
+                            context = null;
+                            return {
+                                status: "need_otp",
+                                message: `🔐 *Swiggy* has sent a login code to your phone — please *paste the SMS OTP here*. Your ${dish.slice(0, 60)} is already in the cart.`,
+                                steps: 2,
+                                url: page.url(),
+                                mode: "playwright",
+                                partner: String(playbook.partner),
+                            };
+                        }
+                        if (login.status === "failed") {
+                            console.warn(`[swiggy-scripted] login: ${login.reason}`);
+                            const sent = /otp_screen_not_shown|rate_limited|phone_rejected|no_swiggy_account/.test(login.reason);
+                            if (sent) {
+                                // Login was tapped but no OTP box: never let later digits count as an OTP.
+                                releasePharmacyOtpSendClaim(input.familyId, input.userId, gen);
+                                await captureCheckoutDiagnostic(page, {
+                                    familyId: input.familyId,
+                                    userId: input.userId,
+                                    flow: "pre_checkout",
+                                    stage: "swiggy_login",
+                                    reason: login.reason,
+                                }).catch(() => null);
+                                await this.persist(context, input, playbook.partner, page.url());
+                                return {
+                                    status: "error",
+                                    message:
+                                        login.reason === "no_swiggy_account"
+                                            ? "Swiggy says this phone number has no Swiggy account yet, so I can't log in. Nothing was ordered."
+                                            : login.reason === "rate_limited"
+                                              ? "Swiggy says too many login attempts — please try again in a while. Nothing was ordered."
+                                              : "I tapped Login on Swiggy but it didn't show the code screen. Nothing was ordered.",
+                                    steps: 2,
+                                    url: page.url(),
+                                    mode: "playwright",
+                                    partner: String(playbook.partner),
+                                    failureReason: "login_failed",
+                                };
+                            }
+                            // Never got to the phone field → Gemini fallback below.
+                        }
+                    }
                 } else {
                     console.warn(`[swiggy-scripted] fallback to Gemini: ${added.reason}`);
                 }
@@ -1218,6 +1292,10 @@ class PlaywrightBrowserWorker implements BrowserWorker {
             } else {
                 console.warn(`[swiggy-scripted] post-OTP fallback to Gemini: ${added.reason}`);
             }
+        }
+
+        if (!scriptedHint && String(playbook.partner) === "swiggy" && dish && /swiggy\.com\/checkout/i.test(page.url())) {
+            scriptedHint = ` Signed in on Swiggy checkout; "${dish}" is ALREADY in the cart (qty 1) — do NOT add or remove items. Pick the delivery address that matches the recipient's address/pincode, then emit need_user_confirm with the real item, total and address.`;
         }
 
         for (;;) {
@@ -1598,7 +1676,36 @@ class PlaywrightBrowserWorker implements BrowserWorker {
                     break;
                 case "click": {
                     if (action.selector) {
-                        await page.locator(action.selector).first().click({ timeout: 8000 });
+                        try {
+                            await page.locator(action.selector).first().click({ timeout: 5000 });
+                        } catch (err) {
+                            // Model guessed the tag (e.g. button:has-text("LOG IN") when it's a <div>):
+                            // retry the same visible text on any element, then the model's x/y.
+                            const txt =
+                                action.selector.match(/has-text\(\s*["'](.+?)["']\s*\)/i)?.[1] ||
+                                action.selector.match(/^text\s*=\s*["']?(.+?)["']?$/i)?.[1] ||
+                                action.text;
+                            let clicked = false;
+                            if (txt && txt.trim().length >= 2) {
+                                const exact = page.getByText(txt.trim(), { exact: true });
+                                const loose = page.getByText(txt.trim());
+                                for (const loc of [exact, loose]) {
+                                    const n = Math.min(await loc.count().catch(() => 0), 6);
+                                    for (let i = 0; i < n && !clicked; i++) {
+                                        if (await loc.nth(i).isVisible().catch(() => false)) {
+                                            clicked = await loc.nth(i).click({ timeout: 4000 }).then(() => true).catch(() => false);
+                                        }
+                                    }
+                                    if (clicked) break;
+                                }
+                            }
+                            if (!clicked && typeof action.x === "number" && typeof action.y === "number") {
+                                const vp = page.viewportSize() || { width: 1280, height: 720 };
+                                await page.mouse.click(Math.round((action.x / 1000) * vp.width), Math.round((action.y / 1000) * vp.height));
+                                clicked = true;
+                            }
+                            if (!clicked) throw err;
+                        }
                     } else if (typeof action.x === "number" && typeof action.y === "number") {
                         const vp = page.viewportSize() || { width: 1280, height: 720 };
                         const cx = Math.round((action.x / 1000) * vp.width);

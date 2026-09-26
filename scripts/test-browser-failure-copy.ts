@@ -9,6 +9,9 @@ async function main() {
     assert.match(formatPharmacyBrowserFollowUp({ ...base, failureReason: "step_limit" }).text, /far longer than it should/);
     assert.match(f.text, /Nothing was ordered or paid/);
     assert.equal(f.phase, "running", "no OTP was requested → digits must not count as OTP");
+    const lf = formatPharmacyBrowserFollowUp({ ...base, failureReason: "login_failed", message: "Swiggy says this phone number has no Swiggy account yet, so I can't log in. Nothing was ordered." });
+    assert.match(lf.text, /no Swiggy account yet/);
+    assert.equal(lf.phase, "running", "login failed → digits must not count as OTP");
     for (const r of ["site_blocked", "unknown", "timeout", "step_limit", "stalled"] as const) {
         const t = formatPharmacyBrowserFollowUp({ ...base, failureReason: r }).text;
         assert.doesNotMatch(t, /didn't finish opening the order/, r);

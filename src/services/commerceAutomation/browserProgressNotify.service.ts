@@ -99,7 +99,9 @@ export function formatPharmacyBrowserFollowUp(
             };
         }
         const tip =
-            reason === "captcha" || blocked
+            reason === "login_failed"
+                ? base.replace(/\s*Nothing was ordered\.?\s*$/i, "").slice(0, 300)
+                : reason === "captcha" || blocked
                 ? `${label} looks blocked (CAPTCHA / bot wall).`
                 : reason === "disabled"
                   ? `${label} login is temporarily paused (OTP send disabled).`
@@ -132,6 +134,7 @@ export function formatPharmacyBrowserFollowUp(
             reason === "busy" ||
             reason === "step_limit" ||
             reason === "stalled" ||
+            reason === "login_failed" ||
             reason === "site_blocked" ||
             reason === "unknown" ||
             /didn't send a login code|couldn't tap Continue|No SMS is expected|login paused/i.test(

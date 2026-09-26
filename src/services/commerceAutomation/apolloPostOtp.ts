@@ -50,8 +50,9 @@ async function bodyText(page: Page, max = 4000): Promise<string> {
 
 /** Click a visible Verify / Login / Submit style button (never Resend / Send OTP). */
 export async function clickOtpVerifyButton(page: Page): Promise<string | null> {
-    const candidates = page.locator('button, [role="button"], input[type="submit"]');
-    const n = Math.min(await candidates.count().catch(() => 0), 60);
+    // Swiggy's "VERIFY OTP" / "Login" are <a> tags, not buttons.
+    const candidates = page.locator('button, [role="button"], input[type="submit"], a');
+    const n = Math.min(await candidates.count().catch(() => 0), 150);
     for (let i = 0; i < n; i++) {
         const el = candidates.nth(i);
         if (!(await el.isVisible().catch(() => false))) continue;
@@ -65,6 +66,9 @@ export async function clickOtpVerifyButton(page: Page): Promise<string | null> {
         if (!raw || raw.length > 40) continue;
         if (NEVER_CLICK_RE.test(raw)) continue;
         if (!VERIFY_BUTTON_RE.test(raw)) continue;
+        // Links only when they say "Verify…" (never a header "Sign In" / "Login" link).
+        const tag = await el.evaluate((n) => n.tagName).catch(() => "");
+        if (tag === "A" && !/^\s*verify/i.test(raw)) continue;
         if (await el.isDisabled().catch(() => false)) continue;
         await el.click({ timeout: 3000 }).catch(() => undefined);
         return raw;

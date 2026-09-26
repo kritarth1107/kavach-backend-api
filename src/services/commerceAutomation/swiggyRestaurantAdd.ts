@@ -240,3 +240,92 @@ export async function swiggyScriptedAddToCart(
     }
     return { ok: true, matchedName: match, popupTotalRupees, steps };
 }
+
+export type SwiggyLoginResult =
+    | { status: "otp_sent"; steps: string[] }
+    | { status: "already_signed_in"; steps: string[] }
+    | { status: "failed"; reason: string; steps: string[] };
+
+/** True when Swiggy's checkout shows the guest "Account — LOG IN / SIGN UP" block. */
+export async function swiggyNeedsLogin(page: Page): Promise<boolean> {
+    const t = ((await page.evaluate(() => document.body?.innerText || "").catch(() => "")) as string).slice(0, 3000);
+    return /To place your order now, log in/i.test(t) || /Have an account\?\s*LOG IN/i.test(t);
+}
+
+/**
+ * Fixed Swiggy checkout login (verified as guest 2026-09-26 up to the phone field only):
+ * "Have an account? LOG IN" (a <div>) → input#mobile (10 digits) → "Login" (an <a>) →
+ * Swiggy texts the OTP → OTP box visible. `claimOtpSend` must return true exactly once per
+ * order so the SMS is requested only once; nothing here ever pays or places.
+ */
+export async function swiggyScriptedLogin(
+    page: Page,
+    opts: {
+        loginPhone: string;
+        claimOtpSend: () => boolean;
+        isCancelled?: () => boolean;
+        log?: (event: string, extra?: Record<string, unknown>) => void;
+    },
+): Promise<SwiggyLoginResult> {
+    const steps: string[] = [];
+    const log = opts.log ?? (() => undefined);
+    const step = (s: string, extra?: Record<string, unknown>) => {
+        steps.push(s);
+        log(`swiggy_login_${s}`, extra);
+    };
+    const fail = (reason: string): SwiggyLoginResult => {
+        step(`fail:${reason}`);
+        return { status: "failed", reason, steps };
+    };
+    const phone10 = opts.loginPhone.replace(/\D/g, "").slice(-10);
+    if (phone10.length !== 10) return fail("no_login_phone");
+    if (!/swiggy\.com\/checkout/i.test(page.url())) {
+        await page.goto("https://www.swiggy.com/checkout", { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+        await nap(page, 2500);
+    }
+    if (!(await swiggyNeedsLogin(page))) {
+        step("already_signed_in");
+        return { status: "already_signed_in", steps };
+    }
+    const mobile = page.locator('input#mobile, input[name="mobile"]').first();
+    if (!(await mobile.isVisible().catch(() => false))) {
+        await page.getByText("LOG IN", { exact: true }).first().click({ timeout: 8000 }).catch(() => undefined);
+        step("login_opened");
+    }
+    if (!(await mobile.isVisible({ timeout: 8000 }).catch(() => false))) {
+        await mobile.waitFor({ state: "visible", timeout: 8000 }).catch(() => undefined);
+    }
+    if (!(await mobile.isVisible().catch(() => false))) return fail("no_phone_field");
+    if (opts.isCancelled?.()) return fail("cancelled");
+    await mobile.fill(phone10);
+    step("phone_entered");
+    if (!opts.claimOtpSend()) return fail("otp_already_requested");
+    const submit = page.locator("a, button").filter({ hasText: /^\s*(login|log in|continue)\s*$/i });
+    let clicked = false;
+    const n = Math.min(await submit.count().catch(() => 0), 6);
+    for (let i = 0; i < n && !clicked; i++) {
+        if (await submit.nth(i).isVisible().catch(() => false)) {
+            clicked = await submit.nth(i).click({ timeout: 5000 }).then(() => true).catch(() => false);
+        }
+    }
+    if (!clicked) await mobile.press("Enter").catch(() => undefined);
+    step("login_clicked", { via: clicked ? "link" : "enter" });
+    // OTP box = Swiggy sent the SMS. Sign-up form (name/email) = no Swiggy account on this number.
+    const until = Date.now() + 20_000;
+    while (Date.now() < until) {
+        if (opts.isCancelled?.()) return fail("cancelled");
+        const otpBox = page.locator('input#otp, input[name="otp"], input[autocomplete="one-time-code"]').first();
+        if (await otpBox.isVisible().catch(() => false)) {
+            step("otp_sent");
+            return { status: "otp_sent", steps };
+        }
+        const t = ((await page.evaluate(() => document.body?.innerText || "").catch(() => "")) as string).slice(0, 3000);
+        if (/enter (your )?name|email address/i.test(t) && /sign\s*up/i.test(t) && !/one time password|otp/i.test(t)) {
+            return fail("no_swiggy_account");
+        }
+        if (/enter a valid (phone|mobile)|invalid (phone|mobile)/i.test(t)) return fail("phone_rejected");
+        if (/too many (attempts|requests)|try again later/i.test(t)) return fail("rate_limited");
+        await nap(page, 800);
+    }
+    return fail("otp_screen_not_shown");
+}
