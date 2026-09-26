@@ -4,6 +4,7 @@
  * OTP paste → fare confirm-before-book → driver/car/plate. Cancel clears session.
  * Never block WA on Chromium — kick browser async + immediate OTP ask.
  */
+import { isLiteralConfirm, isSoftYes } from "../commerceAutomation/literalConfirm";
 import WhatsappSession from "../../models/whatsappSession.model";
 import User from "../../models/users.model";
 import { FamilyRole } from "../../types/family.types";
@@ -400,7 +401,7 @@ export async function handleRideWhatsAppTurn(input: {
             const msg =
                 `Is your ${providerLabel(draft.provider)} account on this number (${masked})? ` +
                 `If yes, ${providerLabel(draft.provider)} will send a 4-digit code — *forward it here*.\n` +
-                `Reply *yes* to continue, or *cancel*.`;
+                `Reply *confirm* to continue (I'll open ${providerLabel(draft.provider)} and it sends the code), or *cancel*.`;
             draft.lastMessage = msg;
             await saveDraft(input.phone, draft);
             return { text: msg, draft };
@@ -414,8 +415,12 @@ export async function handleRideWhatsAppTurn(input: {
             return { text: updated.reply || routeConfirmMessage(draft), draft };
         }
 
-        // Uber phone yes → kick browser async + await OTP
-        if (draft.phase === "ask_uber_phone" && RIDE_CONFIRM_RE.test(text)) {
+        // Sign-in guardrail: the cab-app login (OTP) starts only on the literal word "confirm".
+        if (draft.phase === "ask_uber_phone" && !isLiteralConfirm(text) && (RIDE_CONFIRM_RE.test(text) || isSoftYes(text))) {
+            return { text: `To go ahead, reply *confirm* — I'll then open *${providerLabel(draft.provider)}* and it will send you a login code. Or *cancel*.`, draft };
+        }
+        // Uber phone confirm → kick browser async + await OTP
+        if (draft.phase === "ask_uber_phone" && isLiteralConfirm(text)) {
             const challenge = `ride-${draft.provider}-${Date.now()}`;
             draft.otpChallengeId = challenge;
             draft.phase = "awaiting_otp";
@@ -454,7 +459,7 @@ export async function handleRideWhatsAppTurn(input: {
             return {
                 text:
                     draft.lastMessage ||
-                    `Is your ${providerLabel(draft.provider)} account on this WhatsApp number? Reply *yes* or *cancel*.`,
+                    `Is your ${providerLabel(draft.provider)} account on this WhatsApp number? Reply *confirm* or *cancel*.`,
                 draft,
             };
         }

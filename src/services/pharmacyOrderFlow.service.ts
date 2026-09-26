@@ -6,6 +6,7 @@
  * never diagnose; OTC can proceed; Rx-required asks for prescription photo;
  * never invent prices; never open Apollo login until SKU confirmed.
  */
+import { isLiteralConfirm, isSoftYes, signInConfirmNudge } from "./commerceAutomation/literalConfirm";
 import WhatsappSession from "../models/whatsappSession.model";
 import { FamilyRole } from "../types/family.types";
 import { PHARMACY_PARTNERS, type CommercePartnerKey } from "./commerceAutomation";
@@ -657,7 +658,7 @@ export async function handlePharmacyWhatsAppTurn(input: {
     // New product name while confirming — re-search without login
     if (
         draft.phase === "confirm_basket" &&
-        !/^(confirm|place|yes|haan|ok|okay|cancel|stop|status|order\s*status)$/i.test(text) &&
+        !/^(confirm|confirm\s*order|place|yes|haan|ok|okay|cancel|stop|status|order\s*status)$/i.test(text) &&
         !/^[123]$/.test(text) &&
         text.length >= 3 &&
         !/^\d{4,8}$/.test(text)
@@ -683,11 +684,11 @@ export async function handlePharmacyWhatsAppTurn(input: {
         }
     }
 
-    if (
-        draft.phase === "confirm_basket" &&
-        (/^(confirm|place|yes|haan)$/i.test(text) ||
-            (/^(ok|okay)$/i.test(text) && !(draft.catalogOptions && draft.catalogOptions.length > 1)))
-    ) {
+    // Sign-in guardrail: the pharmacy website login/OTP starts only on the literal word "confirm".
+    if (draft.phase === "confirm_basket" && !isLiteralConfirm(text) && isSoftYes(text)) {
+        return { text: `${signInConfirmNudge(String(draft.partner ?? "apollo").replace(/^\w/, (c) => c.toUpperCase()))}\n\n${confirmCopy(draft)}`, draft };
+    }
+    if (draft.phase === "confirm_basket" && isLiteralConfirm(text)) {
         // If multiple options still listed, default to #1 (explicit confirm/yes only)
         if (draft.catalogOptions && draft.catalogOptions.length > 1) {
             applyCatalogPick(draft, 0);

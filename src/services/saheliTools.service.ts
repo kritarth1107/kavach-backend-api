@@ -943,8 +943,18 @@ case "notify_caregivers": {
                     ? ("generic" as const)
                     : (resolved.siteKey as import("./commerceAutomation/types").CommercePartnerKey);
             const playbook = resolvePlaybook(partner, message, resolved.startUrl);
-            const userConfirmed = Boolean(input.args.userConfirmed);
             const otp = input.args.otp ? String(input.args.otp) : undefined;
+            // Sign-in guardrail: the model's userConfirmed flag alone never opens a store login —
+            // the elder's own words must be the literal "confirm" (passed as confirmText).
+            const { isLiteralConfirm } = await import("./commerceAutomation/literalConfirm");
+            if (Boolean(input.args.userConfirmed) && !otp && !isLiteralConfirm(String(input.args.confirmText ?? ""))) {
+                return {
+                    ok: false,
+                    status: "need_literal_confirm",
+                    message: "Ask the elder to reply exactly *confirm* before I open the store login (OTP). Then call browser_order again with userConfirmed=true and confirmText set to her exact reply.",
+                };
+            }
+            const userConfirmed = Boolean(input.args.userConfirmed);
 
             // Search-before-login: guest/MCP catalog first unless already confirming or pasting OTP.
             if (!userConfirmed && !otp) {
@@ -987,7 +997,7 @@ case "notify_caregivers": {
                             productUrl: h.productUrl,
                         })),
                         supportedSites: listSupportedBrowserSites(),
-                        note: "Search-before-login: show exact SKU+₹, wait for confirm, then call browser_order with userConfirmed=true (and exact product name in message).",
+                        note: "Search-before-login: show exact SKU+₹, wait for confirm, then call browser_order with userConfirmed=true, confirmText=<her exact reply, must be 'confirm'> (and exact product name in message).",
                     };
                 }
                 // Honest: no guest price — still do not open login until explicit confirm.

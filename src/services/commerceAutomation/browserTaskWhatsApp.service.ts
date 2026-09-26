@@ -5,6 +5,7 @@
  * OTP: user pastes SMS OTP in WhatsApp. Confirm before pay. No silent pay.
  * Soft health tips on confirm when care context matches cart (never diagnose / never block).
  */
+import { isLiteralConfirm, isSoftYes, signInConfirmNudge } from "./literalConfirm";
 import WhatsappSession from "../../models/whatsappSession.model";
 import type { SaheliRoute } from "../saheliRouter.service";
 import { FamilyRole } from "../../types/family.types";
@@ -868,7 +869,11 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
                 return { text: skuConfirmCopy(draft), draft };
             }
         }
-        if (/^(confirm|place|yes|haan|ok)$/i.test(text)) {
+        // Sign-in guardrail: only the literal word starts a store login (browser paths).
+        if (!isLiteralConfirm(text) && isSoftYes(text)) {
+            return { text: `${signInConfirmNudge(partnerLabel(String(draft.partner || "the site")))}\n\n${skuConfirmCopy(draft)}`, draft };
+        }
+        if (isLiteralConfirm(text)) {
             if (draft.catalogOptions && draft.catalogOptions.length > 1 && !draft.selectedSku) {
                 draft.selectedSku = draft.catalogOptions[0];
                 draft.catalogOptions = undefined;
@@ -2429,7 +2434,15 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
                 case "confirm":
                     // Money guardrail: a REAL order (awaiting_confirm) needs the literal word
                     // "confirm" — the handler enforces it on the raw text; the model can't map "ok".
-                    return draft.phase === "awaiting_confirm" || draft.phase === "awaiting_mcp_confirm" ? ctl(rawText) : ctl("confirm");
+                    if (draft.phase === "awaiting_confirm" || draft.phase === "awaiting_mcp_confirm") return ctl(rawText);
+                    // Sign-in guardrail: on a website product card the router's "confirm" never
+                    // starts a login — only her literal "confirm". Anything else re-shows the card.
+                    if (draft.phase === "awaiting_sku_confirm" && !draft.catalogOptions?.some((o) => o.mcp)) {
+                        if (isLiteralConfirm(rawText)) return ctl("confirm");
+                        log("confirm:not_literal");
+                        return { text: `${signInConfirmNudge(partnerLabel(String(draft.partner || "the site")))}\n\n${skuConfirmCopy(draft)}`, draft };
+                    }
+                    return ctl("confirm"); // linked-store cart / restaurant pick: no sign-in here
                 case "cancel":
                     return ctl("cancel");
                 case "status":
