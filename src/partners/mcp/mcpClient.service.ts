@@ -2,6 +2,9 @@ import { randomUUID } from "crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import Family from "../../models/family.model";
+import McpStoreAddress from "../../models/mcpStoreAddress.model";
+import User from "../../models/users.model";
 import McpConnection from "../../models/mcpConnection.model";
 import McpOAuthSession from "../../models/mcpOAuthSession.model";
 import ZeptoConnection from "../../models/zeptoConnection.model";
@@ -258,28 +261,22 @@ function hitsFromInstamartProducts(products: Array<Record<string, unknown>>): Mc
     return hits;
 }
 
+/**
+ * Legacy MCP paths: an explicit store address id is REQUIRED. Account defaults / get_addresses()[0]
+ * are never used (they deliver to whatever the store account last used — possibly another city).
+ * MCP ordering resolves the family address-book place → store address in
+ * services/commerceAutomation/mcpCommerce (ensureStoreAddress).
+ */
 async function resolveMcpAddressId(
-    client: Client,
-    tools: McpTool[],
-    familyId: string,
+    _client: Client,
+    _tools: McpTool[],
+    _familyId: string,
     partner: McpPartnerKey,
-    userId: string,
+    _userId: string,
     overrideAddressId?: string,
 ): Promise<string | undefined> {
     if (overrideAddressId) return overrideAddressId;
-
-    const { getDefaultPartnerAddressId } = await import("../../services/partnerAddress.service");
-    const cached = await getDefaultPartnerAddressId(familyId, partner, userId);
-    if (cached) return cached;
-
-    const addressTool = tools.find((t) =>
-        /get_addresses|list_addresses|saved_addresses/i.test(t.name),
-    )?.name;
-    if (!addressTool) return undefined;
-
-    const result = await client.callTool({ name: addressTool, arguments: {} });
-    const addresses = parsePartnerAddresses(result);
-    return addresses[0]?.partnerAddressId;
+    throw new Error(`${partner}: no family delivery address mapped — pick the family address first (account defaults are never used).`);
 }
 
 function normalizeCatalogQuery(query: string): string {
@@ -552,20 +549,47 @@ async function buildProviderFromConnection(
             tokens,
             clientInformation,
             onAuthorizationUrl: handlers?.onAuthorizationUrl,
+            // Refreshed tokens MUST be written back (refresh tokens may rotate — losing the
+            // new one would silently disconnect the family's store account).
+            onTokens: (fresh) => {
+                const merged: OAuthTokens = { ...fresh, refresh_token: fresh.refresh_token || tokens.refresh_token };
+                void McpConnection.updateOne(
+                    { partner: row.partner, familyId: row.familyId, userId: row.userId },
+                    { $set: { tokensEnc: encryptJson(merged) } },
+                )
+                    .exec()
+                    .catch((err) => console.warn(`[mcp] token persist failed ${partner}:`, err instanceof Error ? err.message : err));
+            },
         }),
         hasTokens: true,
     };
 }
 
+/**
+ * Family-level link status: the caller's own row, else a row linked by another JOINED member of
+ * THIS family (a store linked once serves the family; never another family).
+ */
 export async function getMcpConnectionStatus(
     partner: McpPartnerKey,
     familyId: string,
     userId: string,
 ) {
-    const row = await readConnection(partner, familyId, userId);
+    const own = await readConnection(partner, familyId, userId);
+    if (own) {
+        return { connected: true, connectedAt: own.connectedAt?.toISOString?.() ?? own.connectedAt ?? null, connectedByMe: true, connectedByName: null as string | null };
+    }
+    const [rows, family] = await Promise.all([
+        McpConnection.find({ partner, familyId }, { userId: 1, connectedAt: 1 }).sort({ connectedAt: -1 }).lean(),
+        Family.findOne({ familyId, status: "ACTIVE" }),
+    ]);
+    const row = family ? rows.find((r) => family.hasJoinedMember(r.userId)) : undefined;
+    if (!row) return { connected: false, connectedAt: null, connectedByMe: false, connectedByName: null as string | null };
+    const u = await User.findOne({ userId: row.userId }, { firstName: 1, lastName: 1 }).lean().catch(() => null);
     return {
-        connected: Boolean(row),
-        connectedAt: row?.connectedAt?.toISOString?.() ?? row?.connectedAt ?? null,
+        connected: true,
+        connectedAt: row.connectedAt ? new Date(row.connectedAt).toISOString() : null,
+        connectedByMe: false,
+        connectedByName: u ? [u.firstName, u.lastName].filter(Boolean).join(" ") || null : null,
     };
 }
 
@@ -704,15 +728,17 @@ export async function completeMcpConnect(code: string, state: string) {
     return result;
 }
 
-export async function disconnectMcp(partner: McpPartnerKey, familyId: string, userId: string) {
-    await McpConnection.deleteOne({ partner, familyId, userId });
+/** Disconnect is family-level: every member's token row for this store in THIS family + its address mappings. */
+export async function disconnectMcp(partner: McpPartnerKey, familyId: string, _userId: string) {
+    await McpConnection.deleteMany({ partner, familyId });
+    await McpStoreAddress.deleteMany({ partner, familyId });
     if (partner === "zepto") {
-        await ZeptoConnection.deleteOne({ familyId, userId });
+        await ZeptoConnection.deleteMany({ familyId });
     }
     return { disconnected: true };
 }
 
-async function withMcpClient<T>(
+export async function withMcpClient<T>(
     partner: McpPartnerKey,
     familyId: string,
     userId: string,
@@ -736,6 +762,11 @@ async function withMcpClient<T>(
     } finally {
         await client.close();
     }
+}
+
+/** Full tool schemas (ops/debug only). */
+export async function listMcpToolSchemas(partner: McpPartnerKey, familyId: string, userId: string) {
+    return withMcpClient(partner, familyId, userId, async (client) => (await client.listTools()).tools);
 }
 
 export async function listMcpTools(partner: McpPartnerKey, familyId: string, userId: string) {

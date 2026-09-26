@@ -16,11 +16,11 @@ export const MCP_PARTNERS: Record<McpPartnerKey, McpPartnerConfig> = {
         partnerTrack: "https://github.com/zeptonow/mcp/issues",
         deepLink: "https://www.zeptonow.com/",
         paymentNote:
-            "Payment via Zepto MCP (COD, UPI link, wallet). Razorpay not required for Zepto orders.",
+            "Cash on Delivery only. Saheli refuses an order if Zepto doesn't offer COD for it.",
         connectedDescription:
-            "Your Zepto account is linked via official MCP. Approved orders are placed through Zepto.",
+            "Linked for your whole family. Your family member asks Saheli on WhatsApp, picks an option and replies \"confirm\" — no OTP. Delivery always goes to a family address-book place.",
         disconnectedDescription:
-            "Connect your Zepto account to place real orders. Until then, mock fulfillment + deep link.",
+            "Not linked. Link Zepto once and Saheli can order on WhatsApp without an OTP (Cash on Delivery, family address book only).",
         searchToolNeedles: [["search"], ["product"]],
         addCartNeedles: [["add", "cart"], ["cart"]],
         checkoutToolNeedles: [["place", "order"], ["checkout"]],
@@ -34,11 +34,11 @@ export const MCP_PARTNERS: Record<McpPartnerKey, McpPartnerConfig> = {
         partnerTrack: "https://mcp.swiggy.com/builders/docs/start/what-is-swiggy-mcp.md",
         deepLink: "https://www.swiggy.com/",
         paymentNote:
-            "Payment via Swiggy MCP (COD, UPI, Swiggy Pay). User completes payment in Swiggy app when prompted.",
+            "Cash on Delivery only. Saheli refuses an order if Swiggy doesn't offer COD for it.",
         connectedDescription:
-            "Your Swiggy account is linked via official MCP. Food orders can be placed through Swiggy Food tools.",
+            "Linked for your whole family. Your family member asks Saheli on WhatsApp, picks a dish and replies \"confirm\" — no OTP. Delivery always goes to a family address-book place.",
         disconnectedDescription:
-            "Connect your Swiggy account for live food ordering via MCP. Until then, orders stay in mock mode.",
+            "Not linked. Link Swiggy Food once and Saheli can order meals on WhatsApp without an OTP (Cash on Delivery, family address book only). Without it Saheli uses the Swiggy website, which asks for an OTP.",
         searchToolNeedles: [["search", "restaurant"], ["search", "menu"]],
         addCartNeedles: [["update", "food", "cart"], ["food", "cart"]],
         checkoutToolNeedles: [["place", "food", "order"], ["place", "order"]],
@@ -52,11 +52,11 @@ export const MCP_PARTNERS: Record<McpPartnerKey, McpPartnerConfig> = {
         partnerTrack: "https://mcp.swiggy.com/builders/docs/build/recipes/order-groceries.md",
         deepLink: "https://www.swiggy.com/instamart",
         paymentNote:
-            "Payment via Instamart MCP (COD or UPI). Groceries are placed on the caregiver's Swiggy Instamart account.",
+            "Cash on Delivery only, placed on the linked Swiggy account. Saheli refuses an order if Instamart doesn't offer COD for it.",
         connectedDescription:
-            "Your Instamart account is linked via official MCP. Grocery baskets can be checked out through Instamart.",
+            "Linked for your whole family. Saheli compares Instamart (and Zepto, if linked) on WhatsApp; your family member picks and replies \"confirm\" — no OTP.",
         disconnectedDescription:
-            "Connect Instamart for live grocery ordering via MCP. Until then, mock fulfillment applies.",
+            "Not linked. Link Instamart once (Swiggy login) and Saheli can order groceries on WhatsApp without an OTP. Without it Saheli uses the website, which asks for an OTP.",
         searchToolNeedles: [["search", "product"], ["search"]],
         addCartNeedles: [["add", "cart"], ["cart"]],
         checkoutToolNeedles: [["checkout"]],

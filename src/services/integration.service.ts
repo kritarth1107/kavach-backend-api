@@ -25,6 +25,8 @@ async function enrichMcpBlock(
             : config.disconnectedDescription,
         connected: status.connected,
         connectedAt: status.connectedAt,
+        connectedByMe: status.connectedByMe,
+        connectedByName: status.connectedByName,
         addressCount,
         redirectUri: config.getRedirectUri(),
         mcpUrl: config.mcpUrl,

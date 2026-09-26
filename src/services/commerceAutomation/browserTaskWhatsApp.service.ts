@@ -33,6 +33,7 @@ import {
     releaseCheckoutInFlight,
 } from "./parkedOtpSession.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
+import type { McpCard, McpPick, McpStore } from "./mcpCommerce/mcpCommerce.service";
 import type { CommercePartnerKey } from "./types";
 import { beginOtpLogin } from "./sessionStore.service";
 import {
@@ -81,6 +82,8 @@ export type BrowserTaskPhase =
     | "running"
     | "awaiting_otp"
     | "awaiting_confirm"
+    /** MCP (linked store account) confirm card shown — only the literal word "confirm" places it. */
+    | "awaiting_mcp_confirm"
     | "done";
 
 export type BrowserTaskDraft = {
@@ -108,6 +111,8 @@ export type BrowserTaskDraft = {
         productUrl?: string;
         /** Price-comparison lists: which platform this option is from. */
         partner?: string;
+        /** Came from the family's linked store account (MCP) — ids to add exactly this item. */
+        mcp?: McpPick;
     }>;
     selectedSku?: {
         id: string;
@@ -115,7 +120,12 @@ export type BrowserTaskDraft = {
         pricePaise?: number;
         productUrl?: string;
         partner?: string;
+        mcp?: McpPick;
     };
+    /** awaiting_mcp_confirm: the confirm card (real cart total, family address, COD). */
+    mcpCard?: McpCard;
+    /** MCP options: the family address-book place they were searched for. */
+    mcpPlaceId?: string;
     /** What the elder asked for (product words only) — for "Instamart" / "try Blinkit" follow-ups. */
     productQuery?: string;
     category?: "food" | "grocery" | "pharmacy" | "other";
@@ -426,6 +436,17 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
     // Saved places offered → yes / number / place name / new address (router-down fallback).
     if (draft && draft.phase === "awaiting_address_confirm") {
         return handleAddressConfirm(input, draft, text, null);
+    }
+
+    // Linked-store (MCP) confirm card: literal "confirm" places it; cancel drops it.
+    if (draft && draft.phase === "awaiting_mcp_confirm") {
+        const r = await handleMcpConfirmTurn(input, draft, text);
+        if (r) return r;
+    }
+    // Linked-store (MCP) options: a number / "confirm" builds the real cart → confirm card.
+    if (draft && draft.phase === "awaiting_sku_confirm" && draft.catalogOptions?.some((o) => o.mcp)) {
+        const r = await handleMcpPickTurn(input, draft, text);
+        if (r) return r;
     }
 
     // ── Interrupts while an order job is open ────────────────────────────────
@@ -1949,6 +1970,7 @@ const ACTIVE_ORDER_PHASES = new Set<BrowserTaskPhase>([
     "running",
     "awaiting_otp",
     "awaiting_confirm",
+    "awaiting_mcp_confirm",
 ]);
 
 /** The one short "working on it" ack the elder gets while the browser runs. */
@@ -2224,7 +2246,7 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
                 case "confirm":
                     // Money guardrail: a REAL order (awaiting_confirm) needs the literal word
                     // "confirm" — the handler enforces it on the raw text; the model can't map "ok".
-                    return draft.phase === "awaiting_confirm" ? ctl(rawText) : ctl("confirm");
+                    return draft.phase === "awaiting_confirm" || draft.phase === "awaiting_mcp_confirm" ? ctl(rawText) : ctl("confirm");
                 case "cancel":
                     return ctl("cancel");
                 case "status":
@@ -2347,7 +2369,7 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
 }
 
 async function clearPickingDraft(phone: string, draft: BrowserTaskDraft | null): Promise<void> {
-    if (draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick")) {
+    if (draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick" || draft.phase === "awaiting_mcp_confirm")) {
         bumpGuestWork(phone);
         await WhatsappSession.findOneAndUpdate({ phone }, { $unset: { browserTaskDraft: 1 } });
     }
@@ -2441,6 +2463,15 @@ async function startRoutedSearchCore(
         }
     }
     if (!home) return { text: "Where should I deliver? 📍 Please send the full address with the 6-digit pincode." };
+
+    // Linked store accounts (MCP) first: Swiggy Food / Instamart / Zepto, no OTP.
+    let linkNote = "";
+    if (category !== "pharmacy" && partner !== "apollo") {
+        const m = await tryMcpRoute(input, home, category, q, partner, draft, restaurantName || null, note);
+        if (m.result) return m.result;
+        linkNote = m.linkNote || "";
+    }
+    if (linkNote) out.lead = [out.lead, linkNote].filter(Boolean).join("\n\n");
 
     // Restaurant food → Swiggy (Zomato blocked).
     if (category === "food" || partner === "swiggy") {
@@ -2580,4 +2611,390 @@ async function compareSearchCore(
     }
     await saveIfCurrent(input.phone, draft, token);
     return { text: skuConfirmCopy(draft), draft };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Linked store accounts (MCP): Swiggy Food, Instamart, Zepto — no OTP.
+// Search → numbered picks → real cart → confirm card → literal "confirm" → one COD place call.
+// Browser stays the fallback (no link / MCP failure). Progress → dashboard logs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MCP_TO_PARTNER: Record<McpStore, CommercePartnerKey> = { swiggy: "swiggy", instamart: "instamart", zepto: "zepto" };
+
+/** Honest note for the elder + a dashboard entry for the caregiver (no caregiver WhatsApp). */
+async function noLinkNote(input: RoutedInput, missing: McpStore[]): Promise<string> {
+    const { MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
+    const accounts = [...new Set(missing.map((s) => (s === "zepto" ? "Zepto" : "Swiggy")))];
+    void logActivity({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        kind: "order_step",
+        severity: "warn",
+        title: `${accounts.join(" / ")} not linked — using the website (OTP needed)`,
+        detail: `Link ${accounts.join(" and ")} in the Kavach dashboard → Integrations so orders go through without an OTP.`,
+        data: { needsLink: missing, stores: missing.map((s) => MCP_STORE_LABEL[s]) },
+    });
+    return `💡 Ask your caregiver to link ${accounts.join(" and ")} in the Kavach app — then I can order without an OTP.`;
+}
+
+async function tryMcpRoute(
+    input: RoutedInput,
+    home: RecipientAddress,
+    category: "food" | "grocery" | "pharmacy" | "other",
+    q: string,
+    partner: string | undefined,
+    draft: BrowserTaskDraft | null,
+    restaurantName: string | null,
+    note: string,
+): Promise<{ result?: RoutedCommerceResult; linkNote?: string }> {
+    const { familyStoreConnections, mcpOrderStores, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
+    const enabled = mcpOrderStores();
+    if (!enabled.length) return {};
+    const isFood = category === "food" || partner === "swiggy";
+    let wanted: McpStore[] = [];
+    if (isFood) wanted = ["swiggy"];
+    else if (partner === "instamart" || partner === "zepto") wanted = [partner];
+    else if (!partner || partner === "generic") wanted = ["instamart", "zepto"];
+    wanted = wanted.filter((s) => enabled.includes(s));
+    if (!wanted.length) return {};
+    const conns = await familyStoreConnections(input.familyId).catch(() => new Map());
+    const linked = wanted.filter((s) => conns.has(s));
+    const missing = wanted.filter((s) => !conns.has(s));
+    const linkNote = missing.length && !linked.length ? await noLinkNote(input, missing) : "";
+    if (!linked.length) return { linkNote };
+    if (isFood && !q) return { linkNote }; // "show open restaurants" → today's restaurant list
+    const { getPlace } = await import("../familyAddressBook.service");
+    const place = home.addressId ? await getPlace(input.familyId, home.addressId).catch(() => null) : null;
+    if (!place) return { linkNote };
+    await clearPickingDraft(input.phone, draft);
+    const names = linked.map((s) => `*${MCP_STORE_LABEL[s]}*`).join(" and ");
+    const what = `"${q}"${restaurantName ? ` from ${restaurantName}` : ""}`;
+    const ack = `${note ? `${note}\n` : ""}Checking ${names} for ${what} near 📍 ${home.short} 🔎 — I'll send the options in a moment.`;
+    return { result: deferGuestWork(input, ack, (token) => mcpSearchCore(input, linked, q, place, home, isFood, restaurantName, token)) };
+}
+
+function mcpOptionsCopy(draft: BrowserTaskDraft): string {
+    const opts = (draft.catalogOptions || []).slice(0, 5);
+    const stores = new Set(opts.map((o) => o.mcp?.store));
+    const head = draft.compare && stores.size > 1 ? `Prices for "${draft.productQuery || "your item"}" 🛒` : `Found on *${partnerLabel(String(opts[0]?.partner || draft.partner || ""))}* 🛒`;
+    return [
+        head,
+        ...opts.map((o, i) => {
+            const price = formatInr(o.pricePaise);
+            const tail = o.mcp?.restaurantName ? ` · ${o.mcp.restaurantName}` : stores.size > 1 ? ` · ${partnerLabel(String(o.partner || ""))}` : "";
+            return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}${tail}`;
+        }),
+        ...(draft.lastMessage ? [``, draft.lastMessage] : []),
+        draft.addressLabel ? `📍 ${draft.addressLabel}` : "",
+        ``,
+        `${replyPickCopy(opts.length)} to pick, or *cancel*. Cash on Delivery only.`,
+    ]
+        .filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== ""))
+        .join("\n");
+}
+
+function mcpCardCopy(card: McpCard): string {
+    const label = partnerLabel(card.store === "swiggy" ? "swiggy" : card.store);
+    return [
+        `🧾 *Confirm your ${label} order*`,
+        `• ${card.itemLine}`,
+        `• Total: *${formatInr(card.totalPaise)}*${card.feesLabel ? ` (incl. ${card.feesLabel})` : ""}`,
+        `• 💵 Cash on Delivery`,
+        `• 📍 ${card.addressNickname} — ${card.addressFull}`,
+        ``,
+        `Reply *confirm* to place it, or *cancel*.`,
+    ].join("\n");
+}
+
+async function mcpSearchCore(
+    input: RoutedInput,
+    stores: McpStore[],
+    q: string,
+    place: Place,
+    home: RecipientAddress,
+    isFood: boolean,
+    restaurantName: string | null,
+    token: number,
+): Promise<{ text: string }> {
+    const { searchStore, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
+    const ctx = { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place };
+    const t0 = Date.now();
+    const results = await Promise.all(stores.map((s) => searchStore(ctx, s, q, { restaurantName })));
+    void logActivity({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        kind: "order_step",
+        title: `Linked-account search: ${stores.map((s) => MCP_STORE_LABEL[s]).join(" + ")} — "${q}"`,
+        data: {
+            source: "mcp",
+            ms: Date.now() - t0,
+            results: results.map((r) => ({ store: r.store, hits: r.hits.length, error: r.error || null, addressVia: r.addressVia || null, message: r.message || null })),
+        },
+    });
+    const hits = results.flatMap((r) => r.hits);
+    if (!hits.length) {
+        const broken = results.filter((r) => r.error && r.error !== "unserviceable");
+        if (broken.length === results.length) {
+            // MCP down for every linked store → the website (browser) as today.
+            console.warn(`[mcp-order] search failed, browser fallback:`, results.map((r) => `${r.store}:${r.error}:${r.message}`).join(" | "));
+            if (isFood) return startFoodFlow(input, q, home);
+            if (stores.includes("instamart")) {
+                const pb = resolvePlaybook("instamart", `order ${q} from instamart`);
+                return grocerySearchCore(input, `Order ${q} from Instamart`, q, pb, home, token);
+            }
+            return { text: `Zepto isn't answering just now 🙏 Want me to try *Instamart* instead?` };
+        }
+        await saveIfCurrent(input.phone, null, token);
+        const why = results.map((r) =>
+            r.error === "unserviceable"
+                ? `• ${MCP_STORE_LABEL[r.store]} doesn't deliver to 📍 ${place.nickname} right now.`
+                : r.error === "no_address_coords"
+                  ? `• ${MCP_STORE_LABEL[r.store]}: I couldn't pin 📍 ${place.nickname} on the map for it.`
+                  : `• ${MCP_STORE_LABEL[r.store]}: nothing matching "${q}".`,
+        );
+        return { text: `I couldn't find "${q}" near 📍 ${place.short} 🙏\n${why.join("\n")}\n\nTry another name?` };
+    }
+    const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
+    for (let k = 0; k < 5; k++) {
+        for (const r of results) {
+            const h = r.hits[k];
+            if (h) opts.push({ id: `${h.store}:${h.spinId || h.pvid || h.menuItemId}`, name: h.name, pricePaise: h.pricePaise, partner: h.store, mcp: h });
+        }
+    }
+    const misses = results
+        .filter((r) => !r.hits.length)
+        .map((r) => (r.error === "unserviceable" ? `${MCP_STORE_LABEL[r.store]} doesn't deliver to 📍 ${place.nickname} right now.` : `${MCP_STORE_LABEL[r.store]}: nothing matching right now.`));
+    const shown = opts.slice(0, 5);
+    const draft: BrowserTaskDraft = {
+        phase: "awaiting_sku_confirm",
+        goal: `Order ${q}`,
+        addressLabel: place.full,
+        productQuery: q,
+        dishQuery: isFood ? q : undefined,
+        restaurantName: restaurantName || undefined,
+        category: isFood ? "food" : "grocery",
+        compare: stores.length > 1,
+        partner: MCP_TO_PARTNER[shown[0]!.mcp!.store],
+        catalogOptions: shown,
+        mcpPlaceId: place.addressId,
+        lastMessage: misses.length ? misses.join("\n") : undefined,
+    };
+    await saveIfCurrent(input.phone, draft, token);
+    return { text: mcpOptionsCopy(draft) };
+}
+
+async function mcpPlaceFor(input: { familyId: string }, draft: BrowserTaskDraft): Promise<Place | null> {
+    const id = draft.mcpCard?.placeAddressId || draft.mcpPlaceId;
+    if (!id) return null;
+    const { getPlace } = await import("../familyAddressBook.service");
+    return getPlace(input.familyId, id).catch(() => null);
+}
+
+async function handleMcpPickTurn(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string; actorRole: FamilyRole | null },
+    draft: BrowserTaskDraft,
+    text: string,
+): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
+    const opts = draft.catalogOptions || [];
+    const max = Math.min(5, opts.length);
+    const n = /^\d{1,2}$/.test(text) ? Number(text) : NaN;
+    let pick: (typeof opts)[number] | undefined;
+    if (Number.isFinite(n)) {
+        if (n < 1 || n > max) return { text: `Please pick ${replyPickCopy(max).replace(/^Reply /, "")}, or *cancel*.`, draft };
+        pick = opts[n - 1];
+    } else if (/^(confirm|place|yes|haan|ha|ok|okay)$/i.test(text) && opts.length === 1) {
+        pick = opts[0];
+    } else if (/^(confirm|place|yes|haan|ha|ok|okay)$/i.test(text)) {
+        return { text: `Which one? ${replyPickCopy(max)}, or *cancel*.`, draft };
+    } else return null;
+    if (!pick?.mcp) return null;
+    const place = await mcpPlaceFor(input, draft);
+    if (!place) return { text: "I lost track of the delivery address 🙏 Please ask again.", draft };
+    const { prepareMcpOrder, McpStoreError, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
+    const storeLabel = MCP_STORE_LABEL[pick.mcp.store];
+    try {
+        const card = await prepareMcpOrder({ familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place }, pick.mcp, 1);
+        const next: BrowserTaskDraft = {
+            ...draft,
+            phase: "awaiting_mcp_confirm",
+            partner: MCP_TO_PARTNER[pick.mcp.store],
+            selectedSku: { id: pick.id, name: pick.name, pricePaise: pick.pricePaise, partner: pick.partner, mcp: pick.mcp },
+            catalogOptions: undefined,
+            compare: false,
+            mcpCard: card,
+            lastMessage: undefined,
+            confirm: { items: [card.itemLine], totalLabel: formatInr(card.totalPaise), addressLabel: place.full, cardId: card.cardId },
+        };
+        await saveDraft(input.phone, next);
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_confirm_card",
+            title: `${storeLabel}: confirm card ${formatInr(card.totalPaise)} (linked account)`,
+            detail: `${card.itemLine} → ${place.nickname}`,
+            data: { source: "mcp", store: card.store, cardId: card.cardId, totalPaise: card.totalPaise, payment: "COD", placeAddressId: place.addressId },
+        });
+        return { text: mcpCardCopy(card), draft: next };
+    } catch (err) {
+        const code = err instanceof McpStoreError ? err.code : "cart_failed";
+        const msg = err instanceof Error ? err.message : String(err);
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_step",
+            severity: "warn",
+            title: `${storeLabel}: couldn't build the cart (${code})`,
+            detail: msg.slice(0, 400),
+            data: { source: "mcp", store: pick.mcp.store, code },
+        });
+        const others = opts.filter((o) => o.mcp?.store !== pick!.mcp!.store);
+        if (code === "cod_unavailable" || code === "unserviceable" || code === "restaurant_closed") {
+            const why =
+                code === "cod_unavailable"
+                    ? `${storeLabel} isn't offering Cash on Delivery for this order, and I only order with cash on delivery.`
+                    : code === "restaurant_closed"
+                      ? `${pick.mcp.restaurantName || "That restaurant"} isn't taking orders right now.`
+                      : `${storeLabel} doesn't deliver to 📍 ${place.nickname} right now.`;
+            if (others.length && code !== "restaurant_closed") {
+                const next = { ...draft, catalogOptions: others.slice(0, 5), lastMessage: undefined };
+                await saveDraft(input.phone, next);
+                return { text: `${why}\n\n${mcpOptionsCopy(next)}`, draft: next };
+            }
+            const rest = opts.filter((o) => o !== pick);
+            if (rest.length) {
+                const next = { ...draft, catalogOptions: rest.slice(0, 5), lastMessage: undefined };
+                await saveDraft(input.phone, next);
+                return { text: `${why}\n\n${mcpOptionsCopy(next)}`, draft: next };
+            }
+            await saveDraft(input.phone, null);
+            return { text: `${why} Nothing was ordered.` };
+        }
+        if (pick.mcp.store === "zepto") {
+            return { text: `Zepto didn't answer just now 🙏 Pick another option, or *cancel*.`, draft };
+        }
+        // MCP failed → the website (browser) as today; that path needs a one-time OTP.
+        const next: BrowserTaskDraft = {
+            ...draft,
+            selectedSku: { id: pick.id, name: pick.name, pricePaise: pick.pricePaise, partner: pick.mcp.store === "swiggy" ? "swiggy" : "instamart" },
+            restaurantName: pick.mcp.restaurantName || draft.restaurantName,
+            catalogOptions: [{ id: pick.id, name: pick.name, pricePaise: pick.pricePaise, partner: pick.mcp.store === "swiggy" ? "swiggy" : "instamart" }],
+            compare: false,
+            mcpPlaceId: undefined,
+        };
+        adoptPickPartner(next);
+        next.catalogOptions = undefined;
+        await saveDraft(input.phone, next);
+        return {
+            text: `I couldn't use the linked ${storeLabel} account just now 🙏 I can order *${pick.name}* through the ${storeLabel} website instead — that needs a one-time OTP.\nReply *confirm* to continue, or *cancel*.`,
+            draft: next,
+        };
+    }
+}
+
+async function handleMcpConfirmTurn(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string; actorRole: FamilyRole | null },
+    draft: BrowserTaskDraft,
+    text: string,
+): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
+    const card = draft.mcpCard;
+    if (!card) return null;
+    const t = text.trim();
+    if (/^(cancel|stop|never ?mind|no|nahi|mat karo)$/i.test(t)) {
+        await saveDraft(input.phone, null);
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_cancelled",
+            title: `${partnerLabel(card.store)}: cancelled at the confirm card`,
+            data: { source: "mcp", cardId: card.cardId },
+        });
+        return { text: "Okay, cancelled ✅ Nothing was ordered." };
+    }
+    // Money guardrail: only the literal word places the order.
+    if (!/^confirm[.!]*$/i.test(t)) {
+        if (t.split(/\s+/).length > 4) return null;
+        return { text: `To place it, reply exactly *confirm* — or *cancel*.\n\n${mcpCardCopy(card)}`, draft };
+    }
+    const place = await mcpPlaceFor(input, draft);
+    if (!place) {
+        await saveDraft(input.phone, null);
+        return { text: "That delivery address isn't in the family address book any more, so I didn't order 🙏 Please ask again." };
+    }
+    const { placeMcpOrder, prepareMcpOrder } = await import("./mcpCommerce/mcpCommerce.service");
+    const ctx = { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place };
+    const label = partnerLabel(card.store);
+    void logActivity({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        kind: "order_step",
+        title: `${label}: confirmed — placing COD order (linked account)`,
+        data: { source: "mcp", cardId: card.cardId, totalPaise: card.totalPaise },
+    });
+    const res = await placeMcpOrder(ctx, card, "confirm");
+    const logResult = (kind: "order_placed" | "order_failed", title: string, detail: string, severity: "info" | "warn" = "info") =>
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind,
+            severity,
+            title,
+            detail: detail.slice(0, 400),
+            data: { source: "mcp", store: card.store, cardId: card.cardId, status: res.status, payment: "COD", ...(res.status === "placed" ? { orderIds: res.orderId || null, totalLabel: formatInr(res.totalPaise) } : {}) },
+        });
+    if (res.status === "placed") {
+        await saveDraft(input.phone, null);
+        logResult("order_placed", `${label}: order placed ${formatInr(res.totalPaise)} COD`, `${card.itemLine} → ${place.nickname}`);
+        if (input.actorRole === FamilyRole.CARE_RECIPIENT) {
+            const { notifyCaregiversOrderPlaced } = await import("../saheliCaregiverAlert.service");
+            const { getFamilyMembersList } = await import("../familyMember.service");
+            const elderName = await getFamilyMembersList(input.familyId, input.actorUserId)
+                .then((p) => p.members.find((m) => m.userId === input.recipientUserId)?.name)
+                .catch(() => undefined);
+            void notifyCaregiversOrderPlaced({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                elderName: elderName || undefined,
+                partnerLabel: label,
+                item: card.itemLine,
+                totalLabel: formatInr(res.totalPaise),
+                orderId: res.orderId,
+            });
+        }
+        return {
+            text: `✅ Order placed on *${label}*!\n• ${card.itemLine}\n• ${formatInr(res.totalPaise)} · 💵 Cash on Delivery\n• 📍 ${place.nickname}${res.orderId ? `\n• Order ID: ${res.orderId}` : ""}\n\nPlease keep cash ready 🙏`,
+        };
+    }
+    if (res.status === "duplicate") return { text: `That order is already being placed ✋ I'll let you know here.`, draft };
+    if (res.status === "expired") {
+        try {
+            const fresh = await prepareMcpOrder(ctx, card.pick, card.qty);
+            const next = { ...draft, mcpCard: fresh, confirm: { ...(draft.confirm || {}), totalLabel: formatInr(fresh.totalPaise), cardId: fresh.cardId } };
+            await saveDraft(input.phone, next);
+            return { text: `That card was a bit old, so I rebuilt it with today's price 👇\n\n${mcpCardCopy(fresh)}`, draft: next };
+        } catch {
+            await saveDraft(input.phone, null);
+            return { text: `That card expired and I couldn't rebuild it 🙏 Nothing was ordered — please ask again.` };
+        }
+    }
+    if (res.status === "refused" && res.newCard) {
+        const next = { ...draft, mcpCard: res.newCard, confirm: { ...(draft.confirm || {}), totalLabel: formatInr(res.newCard.totalPaise), cardId: res.newCard.cardId } };
+        await saveDraft(input.phone, next);
+        logResult("order_failed", `${label}: total changed — new card`, `${formatInr(card.totalPaise)} → ${formatInr(res.newCard.totalPaise)}`, "warn");
+        return { text: `The total changed to *${formatInr(res.newCard.totalPaise)}* (it was ${formatInr(card.totalPaise)}), so I didn't order yet.\n\n${mcpCardCopy(res.newCard)}`, draft: next };
+    }
+    await saveDraft(input.phone, null);
+    if (res.status === "unknown") {
+        logResult("order_failed", `${label}: order status unknown after the place call`, res.detail, "warn");
+        return { text: `I sent the order to ${label} but didn't get an answer back 🙏 Please check the ${label} app before ordering again — I won't retry it on my own.` };
+    }
+    logResult("order_failed", `${label}: order not placed (${res.status})`, res.detail, "warn");
+    return { text: `I couldn't place the ${label} order 🙏 ${res.status === "refused" ? res.detail : "The store said no."} Nothing was charged — cash on delivery only.` };
 }

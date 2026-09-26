@@ -60,6 +60,8 @@ export async function getPartnerIntegrationDetail(
         label: partnerConfig.label,
         connected: status.connected,
         connectedAt: status.connectedAt,
+        connectedByMe: status.connectedByMe,
+        connectedByName: status.connectedByName,
         addressCount: addresses.length,
         addresses: addresses.map((a) => ({
             address_id: a.address_id,
