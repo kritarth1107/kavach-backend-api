@@ -29,6 +29,15 @@ import {
     postDailySnapshotHandler,
 } from "../controllers/activity.controller";
 
+import {
+    createFamilyAddressHandler,
+    deleteFamilyAddressHandler,
+    getFamilyAddressHandler,
+    listFamilyAddressesHandler,
+    setDefaultFamilyAddressHandler,
+    updateFamilyAddressHandler,
+} from "../controllers/familyAddress.controller";
+
 const router = Router();
 
 // Express 4: forward async errors (AppError 403/404/429) to the error middleware.
@@ -36,6 +45,14 @@ const wrap =
     (fn: (req: import("express").Request, res: import("express").Response) => Promise<void>) =>
     (req: import("express").Request, res: import("express").Response, next: import("express").NextFunction) =>
         fn(req, res).catch(next);
+
+// Family address book (docs/address-book-api.md)
+router.get("/:familyId/addresses", protect, wrap(listFamilyAddressesHandler));
+router.post("/:familyId/addresses", protect, wrap(createFamilyAddressHandler));
+router.get("/:familyId/addresses/:addressId", protect, wrap(getFamilyAddressHandler));
+router.patch("/:familyId/addresses/:addressId", protect, wrap(updateFamilyAddressHandler));
+router.delete("/:familyId/addresses/:addressId", protect, wrap(deleteFamilyAddressHandler));
+router.put("/:familyId/addresses/:addressId/default", protect, wrap(setDefaultFamilyAddressHandler));
 
 // Caregiver activity feed + daily snapshot (docs/activity-api-contract.md)
 router.get("/:familyId/subjects/:subjectUserId/activity", protect, wrap(getActivityHandler));

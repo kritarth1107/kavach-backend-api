@@ -11,6 +11,7 @@
     "seed:vish": "tsx scripts/seed-vish-demo.ts",
     "eval:elder-facts": "tsx eval/run-elder-facts.ts",
     "test:whatsapp-guard": "tsx scripts/test-whatsapp-recipient-guard.ts",
+    "test:address-book": "tsx scripts/test-family-address-book.ts",
     "browser:install": "npx playwright install chromium"
   },
   "dependencies": {

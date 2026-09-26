@@ -18,6 +18,7 @@ import {
 import { resolvePlaybook, partnerLabel } from "./playbooks";
 import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
 import { addressMatches } from "./kavachAddress";
+import { splitAddress, storeAddressMatchesPlace } from "../familyAddressBook.service";
 import type { CommercePartnerKey } from "./types";
 import {
     bootstrapPharmacyLogin,
@@ -2113,13 +2114,21 @@ async function parkGenericConfirm(args: {
     }
     const shownAddr = args.result.confirm?.addressLabel;
     const savedAddr = args.taskInput.deliveryAddress?.trim() || args.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
-    if (!savedAddr || (shownAddr && !addressMatches(shownAddr, savedAddr))) {
+    // The store must show the family-book place (pincode + flat/street line) — never a
+    // store-account default like an old Gurugram address.
+    const target = savedAddr ? splitAddress(savedAddr) : null;
+    const matches = Boolean(
+        savedAddr && shownAddr && addressMatches(shownAddr, savedAddr) && (!target || storeAddressMatchesPlace(shownAddr, target)),
+    );
+    if (!matches) {
         return {
             ...args.result,
             status: "error",
             failureReason: "cart_mismatch",
             confirm: undefined,
-            message: `I stopped on *${label}* — it had a different delivery address selected, not your saved address. Nothing was ordered or paid.`,
+            message: shownAddr
+                ? `I stopped on *${label}* — it had a different delivery address selected, not the one from your address book. Nothing was ordered or paid.`
+                : `I stopped on *${label}* — I couldn't see which delivery address it selected, so I didn't continue. Nothing was ordered or paid.`,
         };
     }
     if (v.payableTotal && !args.result.confirm?.totalLabel) {

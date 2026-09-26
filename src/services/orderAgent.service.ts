@@ -108,9 +108,14 @@ export async function previewOrder(input: {
 
     await ensurePartnerAddressesSynced(input.partner, input.familyId, commerceUserId);
     const addresses = await listPartnerAddresses(input.familyId, input.partner, commerceUserId);
-    const address = addresses.find((a) => a.partner_address_id === input.addressId);
+    const { filterStoreAddressesToBook } = await import("./familyAddressBook.service");
+    const bookAddresses = await filterStoreAddressesToBook(input.familyId, addresses);
+    const address = bookAddresses.find((a) => a.partner_address_id === input.addressId);
     if (!address) {
-        throw new AppError(`Address not found for ${input.partner}. Sync addresses in Integrations.`, 400);
+        throw new AppError(
+            `That ${input.partner} address isn't in your family's address book. Use an address that matches a saved place (pincode + street).`,
+            400,
+        );
     }
 
     const pricedItems = [];

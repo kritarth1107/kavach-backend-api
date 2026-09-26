@@ -76,6 +76,13 @@ app.listen(PORT, () => {
   startOutreachScheduler();
   startCareNudgeScheduler();
   startMemoryConsolidationScheduler();
+  // Legacy per-person delivery addresses → family address book (idempotent, once per row).
+  setTimeout(() => {
+    void import("./services/familyAddressBook.service")
+      .then(({ migrateAllLegacyAddresses }) => migrateAllLegacyAddresses())
+      .then((n) => console.log(`[address-book] migrated ${n} legacy address row(s)`))
+      .catch((err) => console.warn("[address-book] migration failed:", err instanceof Error ? err.message : err));
+  }, 8000);
 
   if (config.whatsapp.provider === "meta") {
     void import("./clients/metaWhatsApp.client")

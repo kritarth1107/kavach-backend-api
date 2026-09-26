@@ -1,7 +1,7 @@
 /**
- * Delivery address for Saheli commerce = the current care recipient's OWN saved address
- * (recipient_delivery_addresses, scoped by familyId + recipientUserId). No global / smoke /
- * store-account fallback: null means "ask the elder for their address".
+ * Delivery address for Saheli commerce = the family address book resolver (named place →
+ * place confirmed for this order → member's default). No global / smoke / store-account
+ * fallback: null means "ask the elder for their address".
  */
 import { getRecipientDeliveryAddress } from "./recipientAddress.service";
 
@@ -10,9 +10,10 @@ export async function resolveDeliveryAddressLabel(input: {
     /** Care recipient (NOT the acting caregiver). */
     recipientUserId?: string;
     partner?: string;
-}): Promise<{ label: string; source: "recipient" } | null> {
-    const a = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
-    return a ? { label: a.full, source: "recipient" } : null;
+    nickname?: string | null;
+}): Promise<{ label: string; source: "recipient"; nickname: string; addressId: string } | null> {
+    const a = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId, { nickname: input.nickname });
+    return a ? { label: a.full, source: "recipient", nickname: a.nickname, addressId: a.addressId } : null;
 }
 
 /** Embed into browser goal so Gemini/playbook can fill address fields. */

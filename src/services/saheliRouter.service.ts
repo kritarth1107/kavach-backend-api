@@ -50,6 +50,10 @@ export type SaheliRoute = {
     /** Delivery-address talk: same = their saved/home address; other = a different one. */
     addressKind: "same" | "other" | null;
     addressText: string | null;
+    /** A saved place of this family named in the message, EXACTLY as listed in "saved places" (null if none). */
+    addressNickname: string | null;
+    /** Answer to "what should I call this place?" — the name they gave (null = skip / not that). */
+    placeName: string | null;
     otpCode: string | null;
     /** ride: places named in this message. */
     ridePickup: string | null;
@@ -77,6 +81,8 @@ const SCHEMA = {
         pickIndex: { type: "INTEGER", nullable: true },
         addressKind: { type: "STRING", enum: ["same", "other"], nullable: true },
         addressText: { type: "STRING", nullable: true },
+        addressNickname: { type: "STRING", nullable: true },
+        placeName: { type: "STRING", nullable: true },
         otpCode: { type: "STRING", nullable: true },
         ridePickup: { type: "STRING", nullable: true },
         rideDrop: { type: "STRING", nullable: true },
@@ -101,6 +107,9 @@ Slots:
 - productQuery: ONLY the product words ("rite bite protein bar", "amul milk 1 litre", "paneer butter masala"). Never include platform names, delivery/address words, filler ("can u order me"). null if no product in this message.
 - partners: platforms explicitly named in THIS message. A bare platform name reply ("Instamart", "on zepto", "apollo se") → partnerOnly=true, productQuery=null, intent=order_modify (it fills the platform for the pending product).
 - addressKind/addressText: message is about WHERE to deliver ("deliver to my home", "ghar pe bhejna", "my Bhopal address") → intent=order_modify, addressKind=same for home/saved/own address, other for a clearly different address; addressText = the address words. Address words are NEVER a productQuery. Questions about where orders go ("where will it be delivered?", "what is my delivery address?") are also order_modify with addressKind=same (even with no active order).
+- addressNickname: the family keeps nicknamed places (listed in Active flows as "saved places"). If the message names one — "beta ke ghar bhejo" → "Beta's flat", "ghar"/"home"/"mera ghar" → the one called Home (or the default), "clinic se ghar" (ride) → ridePickup="Clinic", rideDrop="Home" — return the nickname EXACTLY as listed. Only listed nicknames; null otherwise. In an order message ("atta bhejo beta ke ghar") keep intent=order_new with productQuery AND addressNickname.
+- WAITING FOR DELIVERY ADDRESS CONFIRM (options listed): "yes"/"haan"/"ok"/"theek hai" → intent=order_control, control=confirm; a number → control=pick, pickIndex; a place name → order_modify + addressNickname; a new full address → order_modify, addressKind=other, addressText; "no"/"cancel" → control=cancel.
+- placeName: when Saheli just asked what to call a newly saved place (Active flows say "ASKED FOR PLACE NAME"), a short name reply ("Home", "beti ka ghar", "call it clinic") → intent=order_modify, placeName = the name tidied ("Beti ka ghar", "Clinic"). "skip"/"no"/"keep it" → placeName=null, control=none. Anything unrelated → the normal intent.
 - control/pickIndex: "1", "2nd one", "pehla wala" while options are shown → order_control, control=pick, pickIndex. "confirm"/"yes place it" → confirm. "cancel"/"rehne do"/"nahi chahiye" → cancel. "what's happening with my order" → status.
 - otpCode: the digits, only for otp_code.
 - ridePickup/rideDrop (intent=ride, also answers inside an active ride flow): just the place words ("railway station", "Apollo hospital Jubilee Hills"). "mujhe station jaana hai" → rideDrop="station". "ghar se" → ridePickup="home". If the ride flow is waiting for pickup (phase need_pickup) a bare place is ridePickup; if waiting for drop (need_drop / pickup noted) it is rideDrop. Never put filler words in a place.
@@ -196,6 +205,8 @@ export async function routeSaheliTurn(input: {
             pickIndex: typeof p.pickIndex === "number" && p.pickIndex > 0 ? Math.floor(p.pickIndex) : null,
             addressKind: p.addressKind === "same" || p.addressKind === "other" ? p.addressKind : null,
             addressText: p.addressText?.trim() || null,
+            addressNickname: p.addressNickname?.trim() || null,
+            placeName: p.placeName?.trim().slice(0, 40) || null,
             otpCode: p.otpCode?.replace(/\D/g, "") || null,
             ridePickup: p.ridePickup?.trim() || null,
             rideDrop: p.rideDrop?.trim() || null,

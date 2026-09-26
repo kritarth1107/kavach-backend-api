@@ -175,21 +175,23 @@ export async function executeSaheliTool(input: {
         case "list_partner_addresses": {
             // Only THIS care recipient's own saved address is ever used for orders.
             if (process.env.MCP_COMMERCE_SEARCH_ENABLED !== "true") {
-                const { getRecipientDeliveryAddress } = await import("./commerceAutomation/recipientAddress.service");
-                const a = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
-                return a
+                const { listPlaces, pickDefault } = await import("./familyAddressBook.service");
+                const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId });
+                const d = pickDefault(places, input.recipientUserId);
+                return places.length
                     ? {
-                          addresses: [{ id: "recipient", label: "Saved delivery address", line1: a.full, pincode: a.pincode, isDefault: true }],
-                          note: "Orders go only to this saved address; store-account addresses are not used.",
+                          addresses: places.map((p) => ({ id: p.addressId, label: p.nickname, line1: p.full, pincode: p.pincode, isDefault: p.addressId === d?.addressId })),
+                          note: "These are the family's saved places (address book). Orders go only to one of these, confirmed with the elder; store-account addresses are not used.",
                       }
-                    : { addresses: [], note: "No delivery address saved yet — ask the elder for their full address with pincode." };
+                    : { addresses: [], note: "No saved place in the family address book yet — ask the elder for their full address with pincode." };
             }
             const partner = String(input.args.partner ?? "swiggy") as McpPartnerKey;
             const commerceUserId =
                 (await resolveFamilyMcpUserId(input.familyId, partner, input.actorUserId)) ??
                 input.actorUserId;
             await ensurePartnerAddressesSynced(partner, input.familyId, commerceUserId);
-            const rows = await listPartnerAddresses(input.familyId, partner, commerceUserId);
+            const { filterStoreAddressesToBook } = await import("./familyAddressBook.service");
+            const rows = await filterStoreAddressesToBook(input.familyId, await listPartnerAddresses(input.familyId, partner, commerceUserId));
             return {
                 addresses: rows
                     .filter((r) => r.partner === partner)

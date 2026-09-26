@@ -11,6 +11,7 @@ import { resolveWhatsAppSender } from "./identityResolver.service";
 import ChannelIdentity from "../models/channelIdentity.model";
 import Order from "../models/order.model";
 import OrderPreview from "../models/orderPreview.model";
+import FamilyAddress from "../models/familyAddress.model";
 
 const LEAK = /sunita\s*park|labhandih|\b492001\b/i;
 const mask = (s?: string | null) => (s ? `${String(s).slice(0, 4)}…${String(s).slice(-3)}` : null);
@@ -57,6 +58,7 @@ export async function runAddressLeakAudit(input: { ownerPhone: string; since?: s
     ).lean();
     const orders = await Order.find({ deliveryAddress: LEAK }, { familyId: 1, createdAt: 1 }).lean();
     const previews = await OrderPreview.find({ deliveryAddress: LEAK }, { familyId: 1, createdAt: 1 }).lean();
+    const book = await FamilyAddress.find({ $or: [{ line1: LEAK }, { pincode: "492001" }] }, { familyId: 1, createdAt: 1 }).lean();
     const sessions = (await WhatsappSession.find({}, { phone: 1, familyId: 1, browserTaskDraft: 1, pharmacyDraft: 1, updatedAt: 1 }).lean()) as Array<{
         _id: unknown;
         phone: string;
@@ -84,5 +86,6 @@ export async function runAddressLeakAudit(input: { ownerPhone: string; since?: s
         orderPreviews: group(previews.map((o) => ({ familyId: o.familyId, createdAt: (o as { createdAt?: Date }).createdAt })), ownerFamilies),
         openDrafts: group(leakedDrafts.map((s) => ({ familyId: s.familyId, createdAt: s.updatedAt, phone: s.phone })), ownerFamilies),
         cleanedOtherFamilyDrafts: cleaned,
+        addressBook: group(book.map((b) => ({ familyId: b.familyId, createdAt: (b as { createdAt?: Date }).createdAt })), ownerFamilies),
     };
 }

@@ -4,7 +4,17 @@
  * send to them — nothing reaches a real person. Fixed phones only; no user input.
  */
 const FIXTURES = [
-    { phone: "+999100000001", name: "Smoke Elder A", family: "Smoke Test Family A", address: "Flat 12, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462002" },
+    {
+        phone: "+999100000001",
+        name: "Smoke Elder A",
+        family: "Smoke Test Family A",
+        address: "Flat 12, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462002",
+        // Extra family-book places (created directly; the legacy row above tests migration).
+        places: [
+            { nickname: "Beta's flat", address: "B-7, Silver Oak Residency, Vijay Nagar, Indore, Madhya Pradesh 452010" },
+            { nickname: "Clinic", address: "Shop 3, Arera Medical Plaza, Arera Colony, Bhopal, Madhya Pradesh 462016" },
+        ],
+    },
     { phone: "+999100000002", name: "Smoke Elder B", family: "Smoke Test Family B", address: "H-5, Connaught Place, New Delhi, Delhi 110001" },
     { phone: "+999100000003", name: "Smoke Elder C", family: "Smoke Test Family C", address: null },
 ];
@@ -16,6 +26,8 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
     const ChannelIdentity = (await import("../models/channelIdentity.model")).default;
     const WhatsappSession = (await import("../models/whatsappSession.model")).default;
     const RecipientDeliveryAddress = (await import("../models/recipientDeliveryAddress.model")).default;
+    const { default: FamilyAddress, FamilyAddressChoice } = await import("../models/familyAddress.model");
+    const { createPlace } = await import("./familyAddressBook.service");
     const { FamilyRole, FamilyMemberStatus } = await import("../types/family.types");
     const { ChannelType } = await import("../types/careRecord.types");
     const { randomUUID } = await import("crypto");
@@ -28,6 +40,8 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
                 const fam = await Family.findOne({ familyId: id.familyId }).lean();
                 const userIds = (fam?.members || []).map((m: { userId: string }) => m.userId);
                 await RecipientDeliveryAddress.deleteMany({ familyId: id.familyId });
+                await FamilyAddress.deleteMany({ familyId: id.familyId });
+                await FamilyAddressChoice.deleteMany({ familyId: id.familyId });
                 await Family.deleteOne({ familyId: id.familyId });
                 await User.deleteMany({ userId: { $in: userIds }, email: /@smoke\.kavach\.test$/ });
             }
@@ -81,7 +95,10 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
                 setByUserId: cg.userId,
             });
         }
-        out.push(`${f.phone} → family …${fam.familyId.slice(-4)}${f.address ? " (address set)" : " (no address)"}`);
+        for (const pl of (f as { places?: Array<{ nickname: string; address: string }> }).places || []) {
+            await createPlace(fam.familyId, { nickname: pl.nickname, address: pl.address }, { actorUserId: cg.userId, source: "dashboard" });
+        }
+        out.push(`${f.phone} → family …${fam.familyId.slice(-4)}${f.address ? " (legacy address set)" : " (no address)"}`);
     }
     return out;
 }

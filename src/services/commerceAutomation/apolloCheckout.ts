@@ -1148,6 +1148,20 @@ export async function runApolloCodCheckout(page: Page, opts: ApolloCheckoutOptio
                     }
                     preplaceVerifiedAt = Date.now();
                 }
+                // Hard gate: the delivery address must be the family-book place — pincode AND the
+                // flat / society line — before Place order (pincode alone isn't enough).
+                if (opts.pincode && hints.length && addressVerified !== "full") {
+                    const ev = await addressEvidence(page, opts.pincode, hints);
+                    log("address_evidence", { at: "pre_place", ev });
+                    if (ev !== "full") {
+                        return {
+                            status: "address_unverified",
+                            url: safeUrl(page),
+                            detail: `couldn't confirm the address line (${hints.join(", ")}) with pincode ${opts.pincode} before Place order`,
+                        };
+                    }
+                    addressVerified = "full";
+                }
                 {
                     // Hard gate: no Circle / membership / plan anywhere in the payment summary.
                     const payText = await paymentSummaryText(page);

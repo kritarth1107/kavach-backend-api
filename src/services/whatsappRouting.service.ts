@@ -187,6 +187,7 @@ type FlowDoc = {
     rideDraft?: { phase?: string; pickup?: unknown; drop?: unknown };
     pendingCommerceOtp?: { partner?: string };
     orderSessionId?: string;
+    pendingPlaceName?: { addressId: string; familyId: string; at: Date };
 } | null;
 
 function liveFlow(d: { phase?: string } | undefined | null): boolean {
@@ -194,7 +195,7 @@ function liveFlow(d: { phase?: string } | undefined | null): boolean {
 }
 
 /** One-line summaries of this phone's active flows for the router (never another phone's). */
-async function buildFlowState(phone: string, doc: FlowDoc): Promise<string[]> {
+async function buildFlowState(phone: string, doc: FlowDoc, who?: { familyId: string; memberUserId?: string }): Promise<string[]> {
     const { browserDraftSummary, pendingAskSummary } = await import("./commerceAutomation/browserTaskWhatsApp.service");
     const lines: string[] = [];
     const b = browserDraftSummary(doc?.browserTaskDraft as never);
@@ -209,6 +210,15 @@ async function buildFlowState(phone: string, doc: FlowDoc): Promise<string[]> {
     if (doc?.orderSessionId) lines.push("app order session open");
     const ask = pendingAskSummary(phone);
     if (ask) lines.push(ask);
+    if (who?.familyId) {
+        const { placesSummary } = await import("./familyAddressBook.service");
+        const places = await placesSummary(who.familyId, who.memberUserId).catch(() => null);
+        if (places) lines.push(places);
+        const pn = doc?.pendingPlaceName;
+        if (pn && pn.familyId === who.familyId && Date.now() - new Date(pn.at).getTime() < 30 * 60_000) {
+            lines.push("ASKED FOR PLACE NAME (what to call the newly saved place)");
+        }
+    }
     return lines;
 }
 
@@ -404,7 +414,10 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             phone,
             text,
             role: isCaregiver(identity.role) ? "caregiver" : "elder",
-            state: await buildFlowState(phone, flowDoc),
+            state: await buildFlowState(phone, flowDoc, {
+                familyId: identity.familyId,
+                memberUserId: isCaregiver(identity.role) ? undefined : identity.userId,
+            }),
         }).catch((err) => {
             console.warn("[saheli-router] failed:", err instanceof Error ? err.message : err);
             return null;
@@ -784,6 +797,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             browserDraft &&
             (browserDraft.phase === "awaiting_otp" ||
                 browserDraft.phase === "awaiting_address" ||
+                browserDraft.phase === "awaiting_address_confirm" ||
                 browserDraft.phase === "awaiting_confirm" ||
                 browserDraft.phase === "awaiting_sku_confirm" ||
                 browserDraft.phase === "awaiting_restaurant_pick" ||
@@ -1059,6 +1073,30 @@ async function dispatchRoutedTurn(a: {
         }
     };
 
+    // "What should I call this place?" is asked once — any other reply moves on.
+    if (doc?.pendingPlaceName && !route.placeName) {
+        await WhatsappSession.updateOne({ phone: a.phone }, { $unset: { pendingPlaceName: 1 } }).catch(() => undefined);
+    }
+    // Saved places offered for an order: answers go to the address step; unrelated chat doesn't.
+    if (
+        liveFlow(bd) &&
+        bd!.phase === "awaiting_address_confirm" &&
+        flowReply &&
+        (commerce || route.control !== "none" || route.addressNickname || route.addressText)
+    ) {
+        const { handleRoutedCommerceTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        const r = await handleRoutedCommerceTurn(input, route, text);
+        if (r?.delegatePharmacyText) {
+            const pr = await pharmacyTurn(r.delegatePharmacyText);
+            if (pr) return { reply: pr.text, legacyGates: false, allowDashboard: false };
+        } else if (r?.text) return { reply: r.text, legacyGates: false, allowDashboard: false };
+    }
+    // Name for a newly saved place.
+    if (route.placeName && doc?.pendingPlaceName) {
+        const { handleRoutedCommerceTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        const r = await handleRoutedCommerceTurn(input, route, text);
+        if (r?.text) return { reply: r.text, legacyGates: false, allowDashboard: false };
+    }
     // 1) Slot-filling steps get the raw message unless it's clearly something else.
     if (liveFlow(bd) && bd!.phase === "awaiting_address" && flowReply) {
         const { handleBrowserTaskWhatsAppTurn, handleRoutedCommerceTurn } = await import(
@@ -1075,12 +1113,15 @@ async function dispatchRoutedTurn(a: {
     // "home"/"ghar" → their saved address) — otherwise the geocoder picks another country.
     let rideText = text;
     if (route.ridePickup || route.rideDrop) {
-        const { getRecipientDeliveryAddress } = await import("./commerceAutomation/recipientAddress.service");
+        // Saved family places first ("clinic se ghar" → Clinic → Home), then "near my city".
+        const { listPlaces, matchPlace, pickDefault } = await import("./familyAddressBook.service");
         const { cityOf } = await import("./commerceAutomation/kavachAddress");
-        const home = await getRecipientDeliveryAddress(a.familyId, a.recipientUserId).catch(() => null);
-        const city = home ? cityOf(home.full) : "";
+        const places = await listPlaces(a.familyId, { memberUserId: a.recipientUserId }).catch(() => []);
+        const home = pickDefault(places, a.recipientUserId);
+        const city = home ? home.city || cityOf(home.full) || "" : "";
         const place = (p: string) => {
-            if (/^(home|my home|ghar|mera ghar|apna ghar|house|my house)$/i.test(p.trim())) return home?.full || p;
+            const saved = matchPlace(places, p, a.recipientUserId);
+            if (saved) return saved.full;
             return city && !new RegExp(`\\b${city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(p) ? `${p}, ${city}` : p;
         };
         rideText = [route.ridePickup ? `from ${place(route.ridePickup)}` : "", route.rideDrop ? `to ${place(route.rideDrop)}` : ""]

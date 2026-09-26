@@ -537,12 +537,14 @@ async function loadPartnerAddresses(
     commerceUserId: string,
 ) {
     await ensurePartnerAddressesSynced(mcpPartner, familyId, commerceUserId);
-    const rows = await listPartnerAddresses(familyId, mcpPartner, commerceUserId);
+    const all = await listPartnerAddresses(familyId, mcpPartner, commerceUserId);
+    // Store-account addresses are used ONLY when they match a place in this family's address book.
+    const { filterStoreAddressesToBook } = await import("./familyAddressBook.service");
+    const rows = await filterStoreAddressesToBook(familyId, all.filter((row) => row.partner === mcpPartner));
     return rows
-        .filter((row) => row.partner === mcpPartner)
         .map((row) => ({
             id: row.partner_address_id,
-            label: row.label || "Saved address",
+            label: row.place.nickname || row.label || "Saved address",
             line1: row.line1,
             city: row.city || undefined,
             pincode: row.pincode || undefined,
@@ -581,7 +583,7 @@ async function maybeAddressStatusFromChat(input: {
             kind: "prompt",
             partner,
             partnerLabel: label,
-            message: `I checked your linked ${label} account — no saved delivery addresses yet. Add one in the Swiggy app (same phone login), then tell me what to order — e.g. "pizza to Home".`,
+            message: `None of the addresses on your linked ${label} account match your family's address book. Add your address-book place in the ${label} app (same phone login), then tell me what to order.`,
         };
     }
 
@@ -689,7 +691,7 @@ export async function maybeSuggestOrderFromChat(input: {
                 kind: "prompt",
                 partner,
                 partnerLabel: label,
-                message: `Your ${label} account is connected but I couldn't find any saved delivery addresses. Add one in the Swiggy app, then try again — e.g. "pizza" or "biryani from Meghana".`,
+                message: `None of the addresses on your ${label} account match your family's address book. Add your address-book place in the ${label} app, then try again.`,
             };
         }
 

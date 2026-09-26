@@ -236,6 +236,41 @@ export async function postPrivacyAudit(req: Request, res: Response) {
     res.json({ success: true, data });
 }
 
+/** Secret-gated: this phone's family address book, PII-light (nickname, city, pincode, flags). */
+export async function postMockAddressBook(req: Request, res: Response) {
+    if (!isMockAuthorized(req)) {
+        res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
+    const from = String(req.body?.from || "").replace(/[^\d+]/g, "");
+    const { resolveWhatsAppSender } = await import("../services/identityResolver.service");
+    const who = await resolveWhatsAppSender(from.startsWith("+") ? from : `+${from}`).catch(() => null);
+    if (!who?.familyId) {
+        res.status(404).json({ success: false, message: "unknown sender" });
+        return;
+    }
+    const { listPlaces, pickDefault, currentChoice } = await import("../services/familyAddressBook.service");
+    const member = who.userId;
+    const places = await listPlaces(who.familyId, { memberUserId: member });
+    const d = pickDefault(places, member);
+    const c = member ? await currentChoice(who.familyId, member) : null;
+    res.json({
+        success: true,
+        data: {
+            family: `…${who.familyId.slice(-4)}`,
+            places: places.map((p) => ({
+                nickname: p.nickname,
+                line1: `${p.line1.slice(0, 3)}…`,
+                city: p.city ?? null,
+                pincode: p.pincode,
+                source: p.source,
+                default: p.addressId === d?.addressId,
+                chosen: p.addressId === c?.addressId,
+            })),
+        },
+    });
+}
+
 export async function postSmokeFixtures(req: Request, res: Response) {
     if (!isMockAuthorized(req)) {
         res.status(404).json({ success: false, message: "Not found" });

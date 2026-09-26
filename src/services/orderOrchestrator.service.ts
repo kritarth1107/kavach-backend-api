@@ -140,10 +140,13 @@ async function loadAddresses(
     commerceUserId: string,
 ): Promise<OrderSessionAddress[]> {
     await ensurePartnerAddressesSynced(partner, familyId, commerceUserId);
-    const rows = await listPartnerAddresses(familyId, partner, commerceUserId);
+    const all = await listPartnerAddresses(familyId, partner, commerceUserId);
+    // Store-account addresses are used ONLY when they match a place in this family's address book.
+    const { filterStoreAddressesToBook } = await import("./familyAddressBook.service");
+    const rows = await filterStoreAddressesToBook(familyId, all);
     return rows.map((row) => ({
         id: row.partner_address_id,
-        label: row.label || "Saved address",
+        label: row.place.nickname || row.label || "Saved address",
         line1: row.line1,
         city: row.city || undefined,
         pincode: row.pincode || undefined,
@@ -494,11 +497,11 @@ export async function startOrderFlow(input: {
         return {
             sessionId: "",
             phase: "select_address",
+            message: `None of the addresses on your ${label} account match your family's address book. Add the address from your Kavach address book in the ${label} app (same phone login), then try again.`,
             partner: mcpPartner,
             partnerLabel: label,
             query,
             addresses: [],
-            message: `Your ${label} account is connected but I couldn't find saved delivery addresses. Add one in the Swiggy app, then try again.`,
         };
     }
 

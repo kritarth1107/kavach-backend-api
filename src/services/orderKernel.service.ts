@@ -560,7 +560,14 @@ export async function quickOrder(input: {
         };
     }
 
-    const lastAddress = await getLastSuccessfulAddress(input.familyId, input.recipientUserId, mcpPartner);
+    let lastAddress = await getLastSuccessfulAddress(input.familyId, input.recipientUserId, mcpPartner);
+    if (lastAddress) {
+        // A remembered store address is reused only if it is still a place in the family book.
+        const { listPlaces, storeAddressMatchesPlace } = await import("./familyAddressBook.service");
+        const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId }).catch(() => []);
+        const shown = [lastAddress.label, lastAddress.line1].filter(Boolean).join(", ");
+        if (!places.some((p) => storeAddressMatchesPlace(shown, p))) lastAddress = null;
+    }
     const commerceUserId =
         (await resolveFamilyMcpUserId(input.familyId, mcpPartner, input.actorUserId)) ??
         input.actorUserId;

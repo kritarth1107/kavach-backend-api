@@ -1,8 +1,8 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
 
 /**
- * The delivery address of ONE care recipient in ONE family. Saheli orders go only here.
- * There is no global / env / code default — if a recipient has no row, Saheli asks them.
+ * LEGACY (read-only): per-recipient delivery address. Superseded by the family address book
+ * (familyAddress.model) — rows are migrated once (migratedAt) and never read for orders.
  */
 export interface IRecipientDeliveryAddress {
     familyId: string;
@@ -12,6 +12,8 @@ export interface IRecipientDeliveryAddress {
     /** Who set it: the elder on WhatsApp, or a caregiver. */
     source: "elder_whatsapp" | "caregiver";
     setByUserId?: string;
+    /** Copied into the family address book (family_addresses) — legacy row is no longer read. */
+    migratedAt?: Date;
 }
 
 export interface IRecipientDeliveryAddressDocument extends IRecipientDeliveryAddress, Document {}
@@ -24,6 +26,7 @@ const schema = new Schema<IRecipientDeliveryAddressDocument>(
         pincode: { type: String, required: true, match: /^[1-9]\d{5}$/ },
         source: { type: String, required: true, enum: ["elder_whatsapp", "caregiver"] },
         setByUserId: { type: String },
+        migratedAt: { type: Date },
     },
     { timestamps: true, collection: "recipient_delivery_addresses" },
 );

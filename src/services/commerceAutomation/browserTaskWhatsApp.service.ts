@@ -52,6 +52,17 @@ import {
     type RecipientAddress,
 } from "./recipientAddress.service";
 import {
+    currentChoice,
+    findPlaceByWords,
+    listPlaces,
+    matchPlace,
+    pickDefault,
+    setChoice,
+    toResolved,
+    updatePlace,
+    type Place,
+} from "../familyAddressBook.service";
+import {
     dishListCopy,
     extractFoodQuery,
     isAddressOnlyMessage,
@@ -64,6 +75,7 @@ import {
 export type BrowserTaskPhase =
     | "idle"
     | "awaiting_address"
+    | "awaiting_address_confirm"
     | "awaiting_restaurant_pick"
     | "awaiting_sku_confirm"
     | "running"
@@ -111,6 +123,8 @@ export type BrowserTaskDraft = {
     compare?: boolean;
     /** awaiting_address (router path): what to search once the address is saved. */
     pendingRoute?: { category: "food" | "grocery" | "pharmacy" | "other"; query: string; partner?: string; restaurantName?: string };
+    /** awaiting_address_confirm: saved family places offered (1 = the member's default). */
+    addressOptions?: Array<{ addressId: string; nickname: string; short: string }>;
     confirm?: {
         items?: string[];
         totalLabel?: string;
@@ -359,13 +373,17 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 draft,
             };
         }
-        await saveRecipientDeliveryAddress({
+        const savedPlace = await saveRecipientDeliveryAddress({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
             address: parsed.full,
             source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
             setByUserId: input.actorUserId,
         });
+        if (savedPlace?.addressId) {
+            await setChoice(input.familyId, input.recipientUserId, savedPlace.addressId).catch(() => undefined);
+            if (savedPlace.created) await askPlaceName(input.phone, input.familyId, savedPlace.addressId);
+        }
         void logActivity({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
@@ -379,7 +397,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         const pendingRoute = draft.pendingRoute;
         // Keep any pharmacy draft (address asked at its confirm step); clear only this draft.
         await WhatsappSession.findOneAndUpdate({ phone: input.phone }, { $unset: { browserTaskDraft: 1 } });
-        const saved = `Saved your delivery address ✅\n📍 ${parsed.full}`;
+        const saved = savedPlace ? savedPlaceCopy(savedPlace) : `Saved your delivery address ✅\n📍 ${parsed.full}`;
         if (pendingRoute) {
             const newHome = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
             const resumed = await startRoutedSearch(
@@ -403,6 +421,11 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             if (resumed) return { text: `${saved}\n\n${resumed.text}`, draft: resumed.draft };
         }
         return { text: `${saved}\n\n${resumeHint || "What would you like to order?"}` };
+    }
+
+    // Saved places offered → yes / number / place name / new address (router-down fallback).
+    if (draft && draft.phase === "awaiting_address_confirm") {
+        return handleAddressConfirm(input, draft, text, null);
     }
 
     // ── Interrupts while an order job is open ────────────────────────────────
@@ -1147,11 +1170,174 @@ export async function askForAddress(
     await saveDraft(input.phone, draft);
     return {
         text:
-            "Where should I deliver? 📍 I don't have your delivery address saved yet.\n" +
-            "Please send your full address with the 6-digit pincode (flat/house, street/society, area, city, pincode). " +
-            "I'll save it for your future orders — or reply *cancel*.",
+            "Where should I deliver? 📍 There's no saved address in your family's address book yet.\n" +
+            "Please send the full address with the 6-digit pincode (flat/house, street/society, area, city, pincode). " +
+            "I'll save it so you never have to type it again — or reply *cancel*.",
         draft,
     };
+}
+
+// ── Family address book on WhatsApp ────────────────────────────────────────
+
+export function placeEmoji(nickname: string): string {
+    const k = nickname.toLowerCase();
+    if (/\b(home|ghar|house)\b/.test(k)) return "🏠";
+    if (/\b(clinic|hospital|doctor|dr)\b/.test(k)) return "🏥";
+    if (/\b(office|work|shop|dukaan)\b/.test(k)) return "🏢";
+    return "📍";
+}
+
+function pincodeOfLabel(label?: string): string | undefined {
+    return String(label || "").match(/\b([1-9]\d{5})\b/)?.[1];
+}
+
+/** "Saved ✅ as *Home* 🏠 … What should I call it?" (name question only for a NEW place). */
+export function savedPlaceCopy(p: { nickname?: string; full: string; short?: string; created?: boolean }): string {
+    const nick = p.nickname || "Home";
+    if (p.created === false) return `${placeEmoji(nick)} That's *${nick}* — already in your address book (${p.short || p.full}).`;
+    return (
+        `Saved to your family's address book ✅\n${placeEmoji(nick)} *${nick}* — ${p.full}\n` +
+        `What should I call this place? (e.g. *Home*, *Beta's flat*, *Clinic*) — or I'll keep *${nick}*.`
+    );
+}
+
+export function placesListCopy(places: Place[], memberUserId?: string): string {
+    const d = pickDefault(places, memberUserId);
+    const lines = places.slice(0, 8).map((p) => `${placeEmoji(p.nickname)} *${p.nickname}*${p.addressId === d?.addressId ? " (default)" : ""} — ${p.short}`);
+    return `Your saved places 📒\n${lines.join("\n")}\n\nOrders go to *${d?.nickname || places[0]!.nickname}* unless you name another place (e.g. "send it to ${places[1]?.nickname || "Home"}"). To add one, just send the full address with the pincode.`;
+}
+
+/** Remember that Saheli asked for a name for this new place (next turn only). */
+async function askPlaceName(phone: string, familyId: string, addressId: string): Promise<void> {
+    await WhatsappSession.findOneAndUpdate({ phone }, { $set: { pendingPlaceName: { addressId, familyId, at: new Date() } } }).catch(() => undefined);
+}
+
+/** "Beti ka ghar" after "What should I call this place?" → rename it. null = nothing pending. */
+async function applyPlaceName(
+    input: { phone: string; familyId: string },
+    name: string,
+): Promise<{ text: string } | null> {
+    const doc = (await WhatsappSession.findOne({ phone: input.phone }).lean()) as { pendingPlaceName?: { addressId: string; familyId: string; at: Date } } | null;
+    const pn = doc?.pendingPlaceName;
+    if (!pn || pn.familyId !== input.familyId || Date.now() - new Date(pn.at).getTime() > 30 * 60_000) return null;
+    await WhatsappSession.findOneAndUpdate({ phone: input.phone }, { $unset: { pendingPlaceName: 1 } });
+    try {
+        const p = await updatePlace(input.familyId, pn.addressId, { nickname: name });
+        return { text: `Done ✅ saved as *${p.nickname}* ${placeEmoji(p.nickname)}` };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : "";
+        if (/already exists/i.test(msg)) return { text: `You already have a place called *${name}* 🙂 Tell me another name for this one?` };
+        return null;
+    }
+}
+
+/** "Deliver to *Home* 🏠 (…)? Reply yes, or pick another saved place." */
+async function askAddressConfirm(
+    input: { phone: string; recipientUserId: string },
+    places: Place[],
+    pendingRoute: NonNullable<BrowserTaskDraft["pendingRoute"]>,
+    lead = "",
+): Promise<{ text: string; draft: BrowserTaskDraft }> {
+    const d = pickDefault(places, input.recipientUserId)!;
+    const opts = [d, ...places.filter((p) => p.addressId !== d.addressId)].slice(0, 5);
+    const draft: BrowserTaskDraft = {
+        phase: "awaiting_address_confirm",
+        goal: `Order ${pendingRoute.query || "food"}`.slice(0, 240),
+        pendingRoute,
+        productQuery: pendingRoute.query || undefined,
+        category: pendingRoute.category,
+        addressOptions: opts.map((p) => ({ addressId: p.addressId, nickname: p.nickname, short: p.short })),
+    };
+    await saveDraft(input.phone, draft);
+    return { text: lead + addressConfirmCopy(draft), draft };
+}
+
+function addressConfirmCopy(draft: BrowserTaskDraft): string {
+    const [first, ...rest] = draft.addressOptions || [];
+    if (!first) return "Where should I deliver? 📍 Send the full address with the 6-digit pincode.";
+    const head = `Deliver to *${first.nickname}* ${placeEmoji(first.nickname)} (${first.short})?`;
+    if (!rest.length) return `${head}\nReply *yes*, or send another address.`;
+    return `${head}\nReply *yes*, or pick another saved place:\n${rest.map((o, i) => `${i + 2}. ${o.nickname} — ${o.short}`).join("\n")}`;
+}
+
+/** Reply while saved places are offered. route=null → router down (plain-text fallback). */
+async function handleAddressConfirm(
+    input: RoutedInput,
+    draft: BrowserTaskDraft,
+    text: string,
+    route: SaheliRoute | null,
+): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    const opts = draft.addressOptions || [];
+    const raw = text.trim();
+    const low = raw.toLowerCase().replace(/[.!🙏]+$/u, "").trim();
+    // Fallback-only word lists (model unavailable).
+    const cancel = route ? route.control === "cancel" : /^(cancel|no|nahi|stop|rehne do|never ?mind)$/i.test(low);
+    if (cancel) {
+        await saveDraft(input.phone, null);
+        return { text: "Okay, cancelled ✅ Nothing was ordered." };
+    }
+    let chosenId: string | undefined;
+    if (route) {
+        if (route.control === "confirm" || (route.addressKind === "same" && !route.addressNickname && !route.addressText)) chosenId = opts[0]?.addressId;
+        else if (route.control === "pick" && route.pickIndex && route.pickIndex <= opts.length) chosenId = opts[route.pickIndex - 1]!.addressId;
+    } else if (/^(y|yes|haan|han|ha|ok|okay|theek hai|thik hai|sahi|ji|ji haan|correct)$/i.test(low)) chosenId = opts[0]?.addressId;
+    else if (/^\d$/.test(low) && Number(low) >= 1 && Number(low) <= opts.length) chosenId = opts[Number(low) - 1]!.addressId;
+    let lead = "";
+    if (!chosenId) {
+        const words = route ? route.addressNickname : raw;
+        const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId });
+        const named = words ? matchPlace(places, words, input.recipientUserId) : null;
+        if (named) chosenId = named.addressId;
+    }
+    if (!chosenId) {
+        const typed = parseAddressReply(route?.addressText || raw) || parseAddressReply(raw);
+        if (typed) {
+            const sp = await saveRecipientDeliveryAddress({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                address: typed.full,
+                source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
+                setByUserId: input.actorUserId,
+            });
+            if (sp?.addressId) {
+                chosenId = sp.addressId;
+                if (sp.created) {
+                    await askPlaceName(input.phone, input.familyId, sp.addressId);
+                    lead = `${savedPlaceCopy(sp)}\n\n`;
+                }
+            }
+        }
+    }
+    if (!chosenId && route && (route.productQuery || route.partners[0]) && draft.pendingRoute && (route.intent === "order_modify" || route.intent === "order_new")) {
+        const partner = route.partners[0];
+        draft.pendingRoute = {
+            ...draft.pendingRoute,
+            ...(route.productQuery ? { query: route.productQuery } : {}),
+            ...(partner ? { partner, category: categoryFor(route, partner) } : {}),
+        };
+        draft.productQuery = draft.pendingRoute.query;
+        await saveDraft(input.phone, draft);
+        return { text: `Got it 👍 ${addressConfirmCopy(draft)}`, draft };
+    }
+    if (!chosenId) {
+        return {
+            text: `${addressConfirmCopy(draft)}\n\n(Reply *yes*, a number, a place name, a new address with pincode — or *cancel*.)`,
+            draft,
+        };
+    }
+    await setChoice(input.familyId, input.recipientUserId, chosenId);
+    const place = (await listPlaces(input.familyId, { memberUserId: input.recipientUserId })).find((p) => p.addressId === chosenId);
+    await WhatsappSession.findOneAndUpdate({ phone: input.phone }, { $unset: { browserTaskDraft: 1 } });
+    const pr = draft.pendingRoute;
+    const okLine = lead || (place ? `${placeEmoji(place.nickname)} *${place.nickname}* it is.\n\n` : "");
+    if (!pr || !place) return { text: `${okLine}What would you like to order?` };
+    const resumed = await startRoutedSearch(input, toResolved(place), pr.category, pr.query, pr.partner, null, pr.query, pr.restaurantName);
+    if (resumed?.delegatePharmacyText) {
+        const { handlePharmacyWhatsAppTurn } = await import("../pharmacyOrderFlow.service");
+        const r = await handlePharmacyWhatsAppTurn({ ...input, text: resumed.delegatePharmacyText });
+        return { text: `${okLine}${r?.text || "Looking that up now 🔎"}` };
+    }
+    return { text: `${okLine}${resumed?.text || "What would you like to order?"}`, draft: resumed?.draft };
 }
 
 /** "deliver it to my home" during an order → this recipient's saved address (or update it when they give a full new one). */
@@ -1161,9 +1347,15 @@ async function addressReply(
     match: "same" | "other",
     text: string,
     home: RecipientAddress | null,
+    nickname?: string | null,
 ): Promise<string> {
     let head: string;
-    if (match === "other") {
+    const named = nickname ? await findPlaceByWords(input.familyId, input.recipientUserId, nickname) : null;
+    if (named) {
+        await setChoice(input.familyId, input.recipientUserId, named.addressId);
+        draft.addressLabel = named.full;
+        head = `${placeEmoji(named.nickname)} Okay — delivering to *${named.nickname}* (${named.short})`;
+    } else if (match === "other") {
         const parsed = parseAddressReply(text.replace(/^.*?\b(?:to|at|address\s+is)\s+/i, ""));
         if (!parsed) {
             head = `Please send the full new address with the 6-digit pincode and I'll use it for this order 🙏${
@@ -1171,18 +1363,25 @@ async function addressReply(
             }`;
             return `${head}\n\n${nextStepCopy(draft)}`;
         }
-        await saveRecipientDeliveryAddress({
+        const sp = await saveRecipientDeliveryAddress({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
             address: parsed.full,
             source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
             setByUserId: input.actorUserId,
         });
-        draft.addressLabel = parsed.full;
-        head = `Updated your delivery address ✅\n📍 ${parsed.full}`;
+        if (sp?.addressId) {
+            await setChoice(input.familyId, input.recipientUserId, sp.addressId).catch(() => undefined);
+            if (sp.created) await askPlaceName(input.phone, input.familyId, sp.addressId);
+        }
+        draft.addressLabel = sp?.full || parsed.full;
+        head = sp ? savedPlaceCopy(sp) : `Updated your delivery address ✅\n📍 ${parsed.full}`;
     } else if (home) {
         draft.addressLabel = home.full;
-        head = `Yes 🙂 it will be delivered to your saved address:\n📍 ${home.full}`;
+        const nick = (home as { nickname?: string }).nickname;
+        head = nick
+            ? `Yes 🙂 it goes to *${nick}* ${placeEmoji(nick)}\n📍 ${home.full}`
+            : `Yes 🙂 it will be delivered to your saved address:\n📍 ${home.full}`;
     } else {
         return "I don't have your delivery address saved yet — please send it with the 6-digit pincode.";
     }
@@ -1926,6 +2125,9 @@ export function browserDraftSummary(draft: BrowserTaskDraft | null | undefined):
         opts,
         draft.phase === "awaiting_otp" ? "WAITING FOR SMS OTP" : "",
         draft.phase === "awaiting_address" ? "WAITING FOR DELIVERY ADDRESS" : "",
+        draft.phase === "awaiting_address_confirm" && draft.addressOptions?.length
+            ? `WAITING FOR DELIVERY ADDRESS CONFIRM: ${draft.addressOptions.map((o, i) => `${i + 1}.${o.nickname}`).join(", ")}${draft.pendingRoute ? ` (then search "${draft.pendingRoute.query}")` : ""}`
+            : "",
     ]
         .filter(Boolean)
         .join(" ");
@@ -1965,6 +2167,17 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
             detail: rawText,
             data: { intent, phase: draft?.phase || null, source: "gemini_router", confidence: route.confidence },
         });
+
+    // Answer to "what should I call this place?".
+    if (route.placeName) {
+        const named = await applyPlaceName(input, route.placeName);
+        if (named) return named;
+    }
+    // Saved places offered for this order → yes / number / place name / new address.
+    if (draft?.phase === "awaiting_address_confirm") {
+        log(`address_confirm:${route.control}`);
+        return handleAddressConfirm(input, draft, rawText, route);
+    }
 
     // Slot filling: the address reply goes verbatim to the address step — unless they're
     // only adjusting the pending order (platform / item) before giving the address.
@@ -2023,31 +2236,61 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
             }
         }
         case "order_modify": {
+            if (route.addressNickname && !parseAddressReply(route.addressText || "")) {
+                const place = await findPlaceByWords(input.familyId, input.recipientUserId, route.addressNickname);
+                if (place) {
+                    log(`address:place`);
+                    await setChoice(input.familyId, input.recipientUserId, place.addressId);
+                    const picking = draft && (draft.phase === "awaiting_sku_confirm" || draft.phase === "awaiting_restaurant_pick");
+                    if (active && draft && picking && place.pincode !== pincodeOfLabel(draft.addressLabel) && (draft.productQuery || draft.dishQuery)) {
+                        // Different area → prices / availability change: search again for the new place.
+                        const r = await startRoutedSearch(
+                            input,
+                            toResolved(place),
+                            draft.category || categoryFor(route, draft.compare ? undefined : String(draft.partner || "")),
+                            String(draft.productQuery || draft.dishQuery),
+                            draft.compare ? undefined : (draft.partner as string | undefined),
+                            draft,
+                            rawText,
+                            draft.restaurantName,
+                        );
+                        if (r?.text) return { ...r, text: `${placeEmoji(place.nickname)} Delivering to *${place.nickname}* now.\n\n${r.text}` };
+                        return r;
+                    }
+                    if (busy && draft) {
+                        return { text: `Your *${label}* order is already being placed for 📍 ${draft.addressLabel ? shortAddress(draft.addressLabel) : "the chosen address"} — reply *cancel* first to send it to *${place.nickname}* instead.`, draft };
+                    }
+                    if (active && draft) return { text: await addressReply(input, draft, "same", rawText, home, place.nickname), draft };
+                    return { text: `${placeEmoji(place.nickname)} Okay — your next order goes to *${place.nickname}* (${place.short}). What would you like?` };
+                }
+            }
             if (route.addressKind) {
                 // A full address with a pincode is always a set/update ("my address is …" reads as "same").
                 const kind = parseAddressReply((route.addressText || rawText).replace(/^.*?\b(?:address\s+is|deliver\s+to|send\s+to)\s+/i, "")) || parseAddressReply(rawText)
                     ? "other"
                     : route.addressKind;
                 log(`address:${kind}`);
-                if (active && draft) return { text: await addressReply(input, draft, kind, route.addressText || rawText, home), draft };
+                if (active && draft) return { text: await addressReply(input, draft, kind, route.addressText || rawText, home, route.addressNickname), draft };
                 if (kind === "other") {
                     const parsed =
                         parseAddressReply((route.addressText || rawText).replace(/^.*?\b(?:address\s+is|deliver\s+to|send\s+to)\s+/i, "")) ||
                         parseAddressReply(rawText);
                     if (parsed) {
-                        await saveRecipientDeliveryAddress({
+                        const sp = await saveRecipientDeliveryAddress({
                             familyId: input.familyId,
                             recipientUserId: input.recipientUserId,
                             address: parsed.full,
                             source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
                             setByUserId: input.actorUserId,
                         });
-                        return { text: `Saved your delivery address ✅\n📍 ${parsed.full}\n\nWhat would you like to order?` };
+                        if (sp?.addressId && sp.created) await askPlaceName(input.phone, input.familyId, sp.addressId);
+                        return { text: sp ? savedPlaceCopy(sp) : `Saved your delivery address ✅\n📍 ${parsed.full}` };
                     }
                 }
-                return home
-                    ? { text: `Your orders are delivered to your saved address:\n📍 ${home.full}\n\nTo change it, send the full new address with the 6-digit pincode.` }
-                    : { text: "I don't have your delivery address saved yet — please send it with the 6-digit pincode." };
+                const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId });
+                return places.length
+                    ? { text: placesListCopy(places, input.recipientUserId) }
+                    : { text: "There's no saved address in your family's address book yet 📍 Send the full address with the 6-digit pincode and I'll save it." };
             }
             if (busy && draft) {
                 return { text: `Your *${label}* order is already in progress 🛒 — reply *cancel* first if you'd like to change it.`, draft };
@@ -2060,12 +2303,12 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
                 if (!product) {
                     return { text: `Sure — what should I order on *${partnerLabel(partner)}*?` };
                 }
-                return startRoutedSearch(input, home, categoryFor(route, partner), product, partner, draft, rawText);
+                return startRoutedSearch(input, home, categoryFor(route, partner), product, partner, draft, rawText, undefined, route);
             }
             if (route.productQuery) {
                 log("change_item");
                 const cat = categoryFor(route, partner || (draft?.compare ? undefined : String(draft?.partner || "")) || undefined);
-                return startRoutedSearch(input, home, cat, route.productQuery, partner || (draft?.compare ? undefined : draft?.partner) || undefined, draft, rawText, route.restaurantName);
+                return startRoutedSearch(input, home, cat, route.productQuery, partner || (draft?.compare ? undefined : draft?.partner) || undefined, draft, rawText, route.restaurantName, route);
             }
             return active ? ctl(rawText) : null;
         }
@@ -2093,6 +2336,7 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
                 draft,
                 rawText,
                 route.restaurantName,
+                route,
             );
         }
         default:
@@ -2116,6 +2360,7 @@ async function startRoutedSearch(
     draft: BrowserTaskDraft | null,
     rawText: string,
     restaurantName?: string | null,
+    route?: Pick<SaheliRoute, "addressNickname" | "addressKind" | "addressText"> | null,
 ): Promise<RoutedCommerceResult> {
     const q = query.trim().slice(0, 80);
     let note = "";
@@ -2129,14 +2374,46 @@ async function startRoutedSearch(
     if (ELECTRONICS_REFUSE.test(q) && partner !== "amazon" && partner !== "flipkart") {
         return { text: refuseElectronicsBrowser() };
     }
-    if (!home) {
-        const pending = partner ? `order ${q || "food"} from ${partner}` : rawText;
-        const asked = await askForAddress(input, pending);
-        asked.draft.pendingRoute = { category, query: q, partner, restaurantName: restaurantName || undefined };
-        asked.draft.pendingText = undefined;
-        await saveDraft(input.phone, asked.draft);
-        return asked;
+    // Address: family address book. Named place → use it; place confirmed for this order →
+    // use it; otherwise confirm the default ("Deliver to Home …? yes / 2 / 3"); none → ask once.
+    {
+        const pendingRoute = { category, query: q, partner, restaurantName: restaurantName || undefined };
+        const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId });
+        let lead = "";
+        const typed = route?.addressKind === "other" ? parseAddressReply(route.addressText || "") : null;
+        if (typed) {
+            const sp = await saveRecipientDeliveryAddress({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                address: typed.full,
+                source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
+                setByUserId: input.actorUserId,
+            });
+            if (sp?.addressId) {
+                await setChoice(input.familyId, input.recipientUserId, sp.addressId);
+                if (sp.created) await askPlaceName(input.phone, input.familyId, sp.addressId);
+                home = { full: sp.full, short: sp.short, pincode: sp.pincode, nickname: sp.nickname, addressId: sp.addressId };
+                note = `${savedPlaceCopy(sp)}${note ? `\n${note}` : ""}`;
+            }
+        } else if (!places.length) {
+            const pending = partner ? `order ${q || "food"} from ${partner}` : rawText;
+            const asked = await askForAddress(input, pending);
+            asked.draft.pendingRoute = pendingRoute;
+            asked.draft.pendingText = undefined;
+            await saveDraft(input.phone, asked.draft);
+            return asked;
+        } else {
+            const named = route?.addressNickname ? matchPlace(places, route.addressNickname, input.recipientUserId) : null;
+            const chosen = named || (await currentChoice(input.familyId, input.recipientUserId));
+            if (named) await setChoice(input.familyId, input.recipientUserId, named.addressId);
+            if (!chosen) {
+                if (route?.addressNickname) lead = `I don't have a place called "${route.addressNickname}" saved.\n`;
+                return askAddressConfirm(input, places, pendingRoute, lead + (note ? `${note}\n` : ""));
+            }
+            home = toResolved(chosen);
+        }
     }
+    if (!home) return { text: "Where should I deliver? 📍 Please send the full address with the 6-digit pincode." };
 
     // Restaurant food → Swiggy (Zomato blocked).
     if (category === "food" || partner === "swiggy") {
