@@ -36,14 +36,35 @@ export function toolIsError(result: unknown): boolean {
     return Boolean((result as { isError?: boolean } | null)?.isError);
 }
 
-/** First JSON object/array in the text that parses (the servers put prose before it). */
+/** Balanced {...} / [...] starting at i (string-aware), or null. */
+function balancedAt(text: string, i: number): string | null {
+    const open = text[i]!, close = open === "{" ? "}" : "]";
+    let depth = 0, inStr = false, esc = false;
+    for (let k = i; k < text.length; k++) {
+        const c = text[k]!;
+        if (inStr) {
+            if (esc) esc = false;
+            else if (c === "\\") esc = true;
+            else if (c === '"') inStr = false;
+            continue;
+        }
+        if (c === '"') inStr = true;
+        else if (c === open) depth++;
+        else if (c === close && --depth === 0) return text.slice(i, k + 1);
+    }
+    return null;
+}
+
+/** First JSON object/array in the text that parses (servers put prose before and after it). */
 export function jsonTail(text: string): unknown {
     for (let i = 0; i < text.length; i++) {
         const ch = text[i];
         if (ch !== "{" && ch !== "[") continue;
-        if (i > 0 && text[i - 1] !== "\n" && text[i - 1] !== " " && i !== 0) continue;
+        if (i > 0 && text[i - 1] !== "\n" && text[i - 1] !== " ") continue;
+        const chunk = balancedAt(text, i);
+        if (!chunk) continue;
         try {
-            return JSON.parse(text.slice(i));
+            return JSON.parse(chunk);
         } catch {
             /* keep scanning */
         }
@@ -273,4 +294,36 @@ export function extractOrderId(text: string): string | undefined {
         return undefined;
     };
     return dig(j) || text.match(/order\s*(?:id|#|number)\s*[:#]?\s*([A-Za-z0-9-]{5,})/i)?.[1];
+}
+
+export type McpRestaurant = { id: string; name: string; cuisines?: string; rating?: string; eta?: string; open: boolean };
+
+/** Swiggy search_restaurants JSON → restaurants (availabilityStatus OPEN = taking orders). */
+export function parseRestaurants(text: string): McpRestaurant[] {
+    const j = jsonTail(text) as { restaurants?: Array<Record<string, unknown>> } | null;
+    return (j?.restaurants || [])
+        .filter((r) => r.id != null && r.name)
+        .map((r) => ({
+            id: String(r.id),
+            name: String(r.name).replace(/\s*\(Ad\)\s*$/i, "").trim(),
+            cuisines: Array.isArray(r.cuisines) ? (r.cuisines as unknown[]).slice(0, 3).join(", ") : undefined,
+            rating: r.avgRating != null ? String(r.avgRating) : undefined,
+            eta: typeof r.deliveryTimeRange === "string" ? r.deliveryTimeRange.toLowerCase() : undefined,
+            open: String(r.availabilityStatus || "").toUpperCase() === "OPEN",
+        }));
+}
+
+/** Swiggy get_restaurant_menu text: "- Dish — ₹219 | Veg, Bestseller, has variants [image: …] (ID: 1)". */
+export function parseRestaurantMenu(text: string, restaurantId: string, restaurantName: string, max = 40): McpPick[] {
+    const out: McpPick[] = [];
+    const seen = new Set<string>();
+    for (const line of text.split("\n")) {
+        const m = line.match(/^\s*-\s*(.+?)\s+—\s+₹\s*([\d,.]+)\s*(?:\|([^[(]*))?.*\(ID:\s*(\d+)\)\s*$/);
+        if (!m || seen.has(m[4]!)) continue;
+        seen.add(m[4]!);
+        if (/variant/i.test(m[3] || "") || /out of stock|unavailable/i.test(m[3] || "")) continue;
+        out.push({ store: "swiggy", name: m[1]!.trim(), pricePaise: rupeesToPaise(m[2]), menuItemId: m[4]!, restaurantId, restaurantName });
+        if (out.length >= max) break;
+    }
+    return out;
 }

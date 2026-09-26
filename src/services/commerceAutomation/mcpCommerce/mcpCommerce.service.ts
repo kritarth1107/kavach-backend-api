@@ -26,6 +26,9 @@ import {
     parseFoodCart,
     parseFoodMenu,
     parseInstamartCart,
+    parseRestaurantMenu,
+    parseRestaurants,
+    type McpRestaurant,
     parseInstamartSearch,
     parseSwiggyAddresses,
     parseZeptoAddresses,
@@ -43,7 +46,7 @@ import {
     type StoreAddressRow,
 } from "./mcpParse";
 
-export type { McpPick, McpStore } from "./mcpParse";
+export type { McpPick, McpStore, McpRestaurant } from "./mcpParse";
 
 /** Stores allowed to order through MCP (env MCP_ORDER_STORES narrows it; "none" turns MCP ordering off). */
 export function mcpOrderStores(): McpStore[] {
@@ -546,4 +549,32 @@ export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: str
 /** Test/ops helper: empty the family's cart on a store. */
 export async function clearFamilyCart(familyId: string, store: McpStore, pick?: McpPick): Promise<void> {
     await withFamilyStore(familyId, store, (client) => clearCart(client, store, pick, familyId));
+}
+
+/** Swiggy Food: restaurants taking orders now at the family place (linked account, family address). */
+export async function listRestaurantsMcp(ctx: McpCtx, query: string): Promise<McpRestaurant[]> {
+    return withFamilyStore(ctx.familyId, "swiggy", async (client, userId) => {
+        const contact = await contactFor(ctx, userId);
+        const addr = await ensureStoreAddress(client, { familyId: ctx.familyId, store: "swiggy", place: ctx.place, contact, connectionUserId: userId });
+        const r = await call(client, "search_restaurants", { query: query.trim() || "restaurants", addressId: addr.storeAddressId });
+        if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
+        return parseRestaurants(r.text);
+    });
+}
+
+/** Swiggy Food: one restaurant's dishes (skips items that need a size/variant choice). */
+export async function restaurantMenuMcp(ctx: McpCtx, restaurant: { id: string; name: string }, dishQuery?: string): Promise<McpPick[]> {
+    return withFamilyStore(ctx.familyId, "swiggy", async (client, userId) => {
+        const contact = await contactFor(ctx, userId);
+        const addr = await ensureStoreAddress(client, { familyId: ctx.familyId, store: "swiggy", place: ctx.place, contact, connectionUserId: userId });
+        const r = await call(client, "get_restaurant_menu", { restaurantId: restaurant.id, addressId: addr.storeAddressId, pageSize: 8 });
+        if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
+        const all = parseRestaurantMenu(r.text, restaurant.id, restaurant.name);
+        if (dishQuery) {
+            const words = dishQuery.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+            const hit = all.filter((h) => words.some((w) => h.name.toLowerCase().includes(w)));
+            if (hit.length) return hit.slice(0, 5);
+        }
+        return all.slice(0, 5);
+    });
 }

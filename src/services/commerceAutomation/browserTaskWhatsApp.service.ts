@@ -99,7 +99,7 @@ export type BrowserTaskDraft = {
     /** awaiting_address: the order message to resume once the elder sends their address. */
     pendingText?: string;
     /** Swiggy food flow: open restaurants shown for the elder to pick. */
-    restaurantOptions?: Array<{ name: string; cuisines?: string; rating?: string; eta?: string }>;
+    restaurantOptions?: Array<{ name: string; cuisines?: string; rating?: string; eta?: string; id?: string }>;
     /** Swiggy food flow: picked restaurant + dish query. */
     restaurantName?: string;
     dishQuery?: string;
@@ -205,6 +205,8 @@ function extractOrderQuery(text: string, partner: string): string {
 }
 
 function skuConfirmCopy(draft: BrowserTaskDraft): string {
+    // Linked-account (MCP) options never go through a login — no OTP wording.
+    if (draft.catalogOptions?.some((o) => o.mcp) || draft.selectedSku?.mcp) return mcpOptionsCopy(draft);
     const label = partnerLabel(String(draft.partner || "the site"));
     const opts = draft.catalogOptions ?? [];
     // Only ever this recipient's own saved address — never a store-account / other family's address.
@@ -1440,6 +1442,9 @@ async function startFoodFlowCore(
     home: RecipientAddress,
     token?: number,
 ): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    // Linked Swiggy account (MCP) first; the guest browser only without a link or when MCP fails.
+    const viaMcp = await mcpRestaurantList(input, dishQuery, home, token);
+    if (viaMcp) return viaMcp;
     const { listSwiggyRestaurants } = await import("./swiggyGuest.service");
     let res: Awaited<ReturnType<typeof listSwiggyRestaurants>>;
     try {
@@ -1493,6 +1498,10 @@ async function showRestaurantMenuCore(
     dishQueryOverride?: string,
     token?: number,
 ): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+    {
+        const viaMcp = await mcpRestaurantMenu(input, draft, restaurant, dishQueryOverride, token);
+        if (viaMcp) return viaMcp;
+    }
     const { swiggyRestaurantMenu } = await import("./swiggyGuest.service");
     const dishQuery = dishQueryOverride ?? draft.dishQuery;
     const address = draft.addressLabel;
@@ -2997,4 +3006,108 @@ async function handleMcpConfirmTurn(
     }
     logResult("order_failed", `${label}: order not placed (${res.status})`, res.detail, "warn");
     return { text: `I couldn't place the ${label} order 🙏 ${res.status === "refused" ? res.detail : "The store said no."} Nothing was charged — cash on delivery only.` };
+}
+
+/** Place + ctx for a linked Swiggy Food account, or null (not linked / no family place). */
+async function swiggyMcpCtx(input: { phone: string; familyId: string; recipientUserId: string }, addressId?: string) {
+    if (!addressId) return null;
+    const { familyStoreConnections } = await import("./mcpCommerce/mcpCommerce.service");
+    const conns = await familyStoreConnections(input.familyId).catch(() => new Map());
+    if (!conns.has("swiggy")) return null;
+    const { getPlace } = await import("../familyAddressBook.service");
+    const place = await getPlace(input.familyId, addressId).catch(() => null);
+    return place ? { ctx: { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place }, place } : null;
+}
+
+async function mcpRestaurantList(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    dishQuery: string,
+    home: RecipientAddress,
+    token?: number,
+): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
+    const m = await swiggyMcpCtx(input, home.addressId);
+    if (!m) return null;
+    const { listRestaurantsMcp } = await import("./mcpCommerce/mcpCommerce.service");
+    try {
+        const all = await listRestaurantsMcp(m.ctx, dishQuery);
+        const open = all.filter((r) => r.open).slice(0, 5);
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_step",
+            title: `Linked-account Swiggy restaurants${dishQuery ? ` for "${dishQuery}"` : ""}: ${open.length} open`,
+            data: { source: "mcp", store: "swiggy", open: open.length, total: all.length },
+        });
+        if (!open.length) {
+            await saveIfCurrent(input.phone, null, token);
+            return { text: noOpenRestaurantsCopy(all.map((r) => ({ ...r, open: false })), home.short, dishQuery || undefined) };
+        }
+        const draft: BrowserTaskDraft = {
+            phase: "awaiting_restaurant_pick",
+            goal: `Swiggy food${dishQuery ? `: ${dishQuery}` : ""}`,
+            partner: "swiggy",
+            siteKey: "swiggy",
+            addressLabel: m.place.full,
+            dishQuery: dishQuery || undefined,
+            mcpPlaceId: m.place.addressId,
+            restaurantOptions: open.map((r) => ({ id: r.id, name: r.name, cuisines: r.cuisines, rating: r.rating, eta: r.eta })),
+        };
+        await saveIfCurrent(input.phone, draft, token);
+        return { text: restaurantListCopy(open, home.short, dishQuery || undefined), draft };
+    } catch (err) {
+        console.warn("[mcp-order] restaurant list failed, browser fallback:", err instanceof Error ? err.message : err);
+        return null;
+    }
+}
+
+async function mcpRestaurantMenu(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string },
+    draft: BrowserTaskDraft,
+    restaurant: string,
+    dishQueryOverride: string | undefined,
+    token?: number,
+): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
+    const addressId = draft.mcpPlaceId || (await getRecipientDeliveryAddress(input.familyId, input.recipientUserId))?.addressId;
+    const m = await swiggyMcpCtx(input, addressId);
+    if (!m) return null;
+    const { listRestaurantsMcp, restaurantMenuMcp } = await import("./mcpCommerce/mcpCommerce.service");
+    try {
+        const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+        let target = (draft.restaurantOptions || []).find((o) => o.id && norm(o.name) === norm(restaurant));
+        if (!target) {
+            const found = (await listRestaurantsMcp(m.ctx, restaurant)).filter((r) => r.open);
+            const want = norm(restaurant);
+            const r = found.find((x) => norm(x.name).includes(want) || want.includes(norm(x.name))) || null;
+            if (!r) {
+                await saveIfCurrent(input.phone, null, token);
+                return { text: `*${restaurant}* isn't taking orders near 📍 ${m.place.short} right now 🙏 Want me to show restaurants that are open?` };
+            }
+            target = { id: r.id, name: r.name };
+        }
+        const dish = dishQueryOverride || draft.dishQuery;
+        const picks = await restaurantMenuMcp(m.ctx, { id: target.id!, name: target.name }, dish);
+        if (!picks.length) {
+            await saveIfCurrent(input.phone, null, token);
+            return { text: `I couldn't read *${target.name}*'s menu just now 🙏 Try another restaurant?` };
+        }
+        const next: BrowserTaskDraft = {
+            phase: "awaiting_sku_confirm",
+            goal: `Order from ${target.name} on Swiggy`,
+            partner: "swiggy",
+            siteKey: "swiggy",
+            category: "food",
+            addressLabel: m.place.full,
+            restaurantName: target.name,
+            dishQuery: dish || undefined,
+            productQuery: dish || target.name,
+            mcpPlaceId: m.place.addressId,
+            catalogOptions: picks.map((h) => ({ id: `swiggy:${h.menuItemId}`, name: h.name, pricePaise: h.pricePaise, partner: "swiggy", mcp: h })),
+        };
+        await saveIfCurrent(input.phone, next, token);
+        return { text: mcpOptionsCopy(next), draft: next };
+    } catch (err) {
+        console.warn("[mcp-order] restaurant menu failed, browser fallback:", err instanceof Error ? err.message : err);
+        return null;
+    }
 }

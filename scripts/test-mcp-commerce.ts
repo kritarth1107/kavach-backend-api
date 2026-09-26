@@ -5,6 +5,8 @@ import {
     parseFoodMenu,
     parseInstamartCart,
     parseInstamartSearch,
+    parseRestaurantMenu,
+    parseRestaurants,
     parseSwiggyAddresses,
     parseZeptoAddresses,
     parseZeptoCart,
@@ -95,6 +97,19 @@ ok("total equal ok", totalMatchesCard(10100, 10100));
 ok("total +₹1 ok", totalMatchesCard(10100, 10200));
 ok("total +₹2 refused", !totalMatchesCard(10100, 10300));
 ok("missing total refused", !totalMatchesCard(10100, undefined));
+
+const rs = parseRestaurants(`{"restaurants":[{"id":"556159","name":"Haldiram's Restaurant (Ad)","cuisines":["North Indian","Chaat"],"avgRating":4.3,"deliveryTimeRange":"20-25 MINS","availabilityStatus":"OPEN"},{"id":"1","name":"Closed Place","availabilityStatus":"CLOSED"}]}`);
+ok("JSON followed by prose still parses", parseRestaurants(`{"restaurants":[{"id":"1","name":"A \\"B\\" }","availabilityStatus":"OPEN"}]}\n\nIMPORTANT: only recommend OPEN {restaurants}.`).length === 1);
+ok("restaurants parsed, (Ad) stripped, open flag", rs.length === 2 && rs[0]!.name === "Haldiram's Restaurant" && rs[0]!.open && !rs[1]!.open);
+const rm = parseRestaurantMenu(`Menu for Haldiram's Restaurant (ID: 556159)
+## Recommended
+  - Chole Bhature — ₹219 | Veg, Bestseller, has variants, has addons [image: https://x/y] (ID: 94218008)
+  - Paneer Butter Masala Rice — ₹159 | Veg, Bestseller [image: https://x/z] (ID: 94218165)
+## Meals
+  ### Rice Bowl
+    - Paneer Butter Masala Rice — ₹159 | Veg, Bestseller [image: https://x/z] (ID: 94218165)
+    - Rajma Rice — ₹159 | Veg (ID: 156865309)`, "556159", "Haldiram's Restaurant");
+ok("restaurant menu: variants skipped, deduped", rm.length === 2 && rm[0]!.menuItemId === "94218165" && rm[0]!.pricePaise === 15900 && rm[1]!.menuItemId === "156865309" && rm[0]!.restaurantId === "556159");
 
 console.log(`${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);
