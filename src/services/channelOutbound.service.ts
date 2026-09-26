@@ -16,6 +16,7 @@ import {
     isPlaceholderWhatsAppNumber,
     isWhatsAppPlaceholderRecipientError,
 } from "./whatsappRecipientGuard.service";
+import { isSmokeFixturePhone } from "./smokeFixtures.service";
 
 export type OutboundDelivery = {
     channel: "whatsapp" | "phone" | "dashboard";
@@ -23,6 +24,8 @@ export type OutboundDelivery = {
     delivered: boolean;
     /** Set when delivery was skipped/failed; "invalid_recipient" is terminal (placeholder number). */
     reason?: "invalid_recipient" | "send_failed";
+    /** WhatsApp message ids (wamid…) of what was sent, when the provider returned them. */
+    messageIds?: string[];
 };
 
 export async function resolveRecipientChannel(
@@ -55,6 +58,8 @@ export async function deliverOutboundMessage(payload: {
     channel: "whatsapp" | "phone" | "dashboard";
     channelIdentifier: string;
     whatsappPayloads?: MetaWhatsAppPayload[];
+    /** Send as a WhatsApp reply quoting this earlier message (Cloud API `context.message_id`). */
+    replyToMessageId?: string;
 }): Promise<OutboundDelivery> {
     const record = {
         messageId: randomUUID(),
@@ -76,6 +81,20 @@ export async function deliverOutboundMessage(payload: {
         };
     }
 
+    // Synthetic smoke-test families (+999 fixtures): simulate the send (never reaches Meta)
+    // so proactive flows (nudges, follow-ups) can be exercised end to end via the mock peek.
+    if (payload.channel === "whatsapp" && isSmokeFixturePhone(payload.channelIdentifier)) {
+        const simulatedId = `mock.wamid.${randomUUID()}`;
+        const { recordSaheliOutbound } = await import("./whatsappMockPeek.service");
+        recordSaheliOutbound(
+            payload.channelIdentifier,
+            payload.replyToMessageId ? `↩︎ [reply to ${payload.replyToMessageId}] ${payload.content}` : payload.content,
+            `simulated:${simulatedId}`,
+        );
+        await OutboundMessage.create(record);
+        return { channel: "whatsapp", channelIdentifier: payload.channelIdentifier, delivered: true, messageIds: [simulatedId] };
+    }
+
     if (
         (payload.channel === "whatsapp" || payload.channel === "phone") &&
         (await isPlaceholderWhatsAppNumber(payload.channelIdentifier))
@@ -91,6 +110,7 @@ export async function deliverOutboundMessage(payload: {
         };
     }
 
+    const messageIds: string[] = [];
     try {
         if (payload.channel === "whatsapp" && isMetaWhatsAppEnabled()) {
             const companion = await SaheliCompanion.findOne({
@@ -103,16 +123,21 @@ export async function deliverOutboundMessage(payload: {
                     24 * 60 * 60 * 1000;
 
             if (outsideWindow && process.env.WHATSAPP_TEMPLATE_MORNING_CARE) {
-                await sendMetaWhatsAppTemplate({
+                const id = await sendMetaWhatsAppTemplate({
                     to: payload.channelIdentifier,
                     templateName: process.env.WHATSAPP_TEMPLATE_MORNING_CARE,
                     bodyParameters: [payload.content.slice(0, 120)],
                 });
+                if (id) messageIds.push(id);
             } else {
                 // Proactive sends (nudges, outreach, reminders) go out as ONLY the message —
                 // no trailing "Anything else I can help with?" quick-action bubble.
                 const rich = payload.whatsappPayloads ?? composeWhatsAppReply(payload.content, { kind: "plain" });
-                await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content, rich);
+                messageIds.push(
+                    ...(await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content, rich, {
+                        contextMessageId: payload.replyToMessageId,
+                    })),
+                );
             }
         } else {
             const adapter =
@@ -130,6 +155,7 @@ export async function deliverOutboundMessage(payload: {
             channel: payload.channel,
             channelIdentifier: payload.channelIdentifier,
             delivered: true,
+            messageIds,
         };
     } catch (err) {
         if (isWhatsAppPlaceholderRecipientError(err)) {

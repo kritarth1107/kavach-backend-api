@@ -80,7 +80,9 @@ export async function deliverSaheliOutreach(payload: {
     topicBucket?: string;
     topicHint?: string;
     force?: boolean;
-}): Promise<{ reply: string; delivered: boolean; topicBucket?: string } | null> {
+    /** Test hook only: skip follow-up spacing (streak logic still applies). */
+    ignoreSpacing?: boolean;
+}): Promise<{ reply: string; delivered: boolean; topicBucket?: string; followUp?: boolean; replyTo?: string } | null> {
     const companion = await getCompanionProfile(payload.familyId, payload.recipientUserId);
     if (!companion.enabled && !payload.force) return null;
     if (isWithinQuietHours(companion) && !payload.force) return null;
@@ -120,6 +122,14 @@ export async function deliverSaheliOutreach(payload: {
             return null;
         }
     }
+    // Silence streak: is the previous nudge still unanswered? → gentle follow-up quoting it.
+    const { loadStreak, planNextNudge, formatWhenIST } = await import("./saheliNudgeStreak.service");
+    const streakState = await loadStreak(payload.familyId, payload.recipientUserId);
+    const plan = planNextNudge(streakState.streak, new Date(), { ignoreSpacing: payload.ignoreSpacing });
+    if (plan.mode === "skip") {
+        console.log(`Saheli outreach skipped (${plan.reason}) for ${payload.recipientUserId}`);
+        return null;
+    }
     const membersPayload = await getFamilyMembersList(payload.familyId, payload.recipientUserId);
     const displayName = resolveRecipientName(membersPayload.members, payload.recipientUserId);
     const ctx = await ensureAiContext(payload.familyId, payload.recipientUserId, displayName);
@@ -138,6 +148,8 @@ export async function deliverSaheliOutreach(payload: {
     if (!payload.outreachKind && slot === "morning" && hasCareToday) {
         outreachKind = "mixed";
     }
+    const followUp = plan.mode === "followup" ? plan : null;
+    if (followUp && outreachKind === "memory") outreachKind = "casual";
     let reply = "";
     let topicBucket =
         payload.topicBucket ??
@@ -157,8 +169,15 @@ export async function deliverSaheliOutreach(payload: {
             ? companion.outreachTopics[Math.floor(Math.random() * companion.outreachTopics.length)]
             : undefined;
 
+    // A follow-up continues the thread of the first unanswered nudge (not a new random topic).
+    if (followUp) {
+        const first = followUp.previous[0];
+        topicBucket = first?.topicBucket || topicBucket;
+        topicHint = first?.topicHint || topicHint || "continue the previous check-in";
+    }
+
     let memoryHint: string | undefined;
-    if (outreachKind === "memory" || topicBucket === "memory_recall" || topicHint === "memories") {
+    if (!followUp && (outreachKind === "memory" || topicBucket === "memory_recall" || topicHint === "memories")) {
         try {
             const { aiGrepMemory } = await import("../clients/aiEngine.client");
             const grep = await aiGrepMemory({
@@ -190,6 +209,16 @@ export async function deliverSaheliOutreach(payload: {
             careRecordContext: careContext,
             companionProfile: profile,
             outreachTopics: companion.outreachTopics ?? [],
+            followup: followUp
+                ? {
+                      unanswered_count: followUp.unansweredCount,
+                      last_reply: formatWhenIST(streakState.lastElderAt, new Date()),
+                      previous_nudges: followUp.previous.map((n) => ({
+                          text: n.text,
+                          sent: formatWhenIST(new Date(n.sentAt), new Date()),
+                      })),
+                  }
+                : undefined,
             scheduleItems:
                 outreachKind !== "casual" && outreachKind !== "memory"
                     ? todayItems.map((s) => ({
@@ -210,7 +239,7 @@ export async function deliverSaheliOutreach(payload: {
         }
         reply = result.reply.trim();
         topicBucket = result.topic_bucket ?? topicBucket;
-        topicHint = result.topic_hint;
+        topicHint = followUp ? topicHint : result.topic_hint;
     } catch (err) {
         if (!isAiEngineOfflineError(err) && slot !== "morning") throw err;
         const missed = dayStatus.items.filter((i) => i.status === "missed");
@@ -295,15 +324,30 @@ export async function deliverSaheliOutreach(payload: {
             content: reply,
             channel: channelTarget.channel,
             channelIdentifier: channelTarget.channelIdentifier,
+            replyToMessageId: followUp?.replyTo,
         });
         delivered = delivery.delivered;
+        if (delivered && channelTarget.channel === "whatsapp") {
+            const { recordProactiveNudge } = await import("./saheliNudgeStreak.service");
+            await recordProactiveNudge({
+                familyId: payload.familyId,
+                recipientUserId: payload.recipientUserId,
+                text: reply,
+                wamid: delivery.messageIds?.[0],
+                followUpOf: followUp?.previous[followUp.previous.length - 1]?.nudgeId,
+                streakIndex: (followUp?.unansweredCount ?? 0) + 1,
+                topicBucket,
+                topicHint,
+                channel: "whatsapp",
+            }).catch((err) => console.warn("record proactive nudge failed:", err instanceof Error ? err.message : err));
+        }
         if (delivered) {
             const { logActivity } = await import("./activityLog.service");
             void logActivity({
                 familyId: payload.familyId,
                 recipientUserId: payload.recipientUserId,
                 kind: "nudge",
-                title: "Saheli check-in",
+                title: followUp ? `Saheli follow-up (${followUp.unansweredCount} unanswered)` : "Saheli check-in",
                 detail: reply,
                 data: {
                     source: "outreach",
@@ -311,6 +355,9 @@ export async function deliverSaheliOutreach(payload: {
                     slot: slot ?? null,
                     topicBucket: topicBucket ?? null,
                     channel: channelTarget.channel,
+                    followUp: Boolean(followUp),
+                    unansweredBefore: followUp?.unansweredCount ?? 0,
+                    quotedPrevious: Boolean(followUp?.replyTo),
                 },
             });
         }
@@ -332,7 +379,7 @@ export async function deliverSaheliOutreach(payload: {
     }
 
     await markCompanionOutreach(payload.familyId, payload.recipientUserId);
-    return { reply, delivered, topicBucket };
+    return { reply, delivered, topicBucket, followUp: Boolean(followUp), replyTo: followUp?.replyTo };
 }
 
 export async function shareElderUpdateWithFamily(payload: {

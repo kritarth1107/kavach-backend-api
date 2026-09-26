@@ -136,7 +136,17 @@ export function startMetaWhatsAppTypingRefresh(messageId: string): () => void {
     return () => clearInterval(timer);
 }
 
-async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<void> {
+/** Meta returns `{ messages: [{ id: "wamid…" }] }`; keep the wamid so later sends can quote it. */
+async function readWamid(res: Response): Promise<string | undefined> {
+    const parsed = (await res.json().catch(() => ({}))) as { messages?: Array<{ id?: string }> };
+    return parsed.messages?.[0]?.id;
+}
+
+async function sendSingleMetaWhatsAppText(
+    to: string,
+    text: string,
+    contextMessageId?: string,
+): Promise<string | undefined> {
     await assertSendableWhatsAppRecipient(to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
@@ -155,6 +165,7 @@ async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<voi
             to: toMetaRecipient(to),
             type: "text",
             text: { preview_url: false, body: text.slice(0, WHATSAPP_TEXT_LIMIT) },
+            ...(contextMessageId ? { context: { message_id: contextMessageId } } : {}),
         }),
     });
 
@@ -162,9 +173,14 @@ async function sendSingleMetaWhatsAppText(to: string, text: string): Promise<voi
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
     }
+    return readWamid(res);
 }
 
-async function sendSingleMetaWhatsAppPayload(to: string, payload: MetaWhatsAppPayload): Promise<void> {
+async function sendSingleMetaWhatsAppPayload(
+    to: string,
+    payload: MetaWhatsAppPayload,
+    contextMessageId?: string,
+): Promise<string | undefined> {
     await assertSendableWhatsAppRecipient(to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
@@ -182,6 +198,7 @@ async function sendSingleMetaWhatsAppPayload(to: string, payload: MetaWhatsAppPa
             recipient_type: "individual",
             to: toMetaRecipient(to),
             ...payload,
+            ...(contextMessageId ? { context: { message_id: contextMessageId } } : {}),
         }),
     });
 
@@ -189,6 +206,7 @@ async function sendSingleMetaWhatsAppPayload(to: string, payload: MetaWhatsAppPa
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
     }
+    return readWamid(res);
 }
 
 function rememberOutbound(to: string, text: string | undefined): void {
@@ -198,7 +216,21 @@ function rememberOutbound(to: string, text: string | undefined): void {
         .catch(() => undefined);
 }
 
-export async function sendWhatsAppPayloads(to: string, payloads: MetaWhatsAppPayload[]): Promise<void> {
+/**
+ * Returns the wamids Meta assigned (in send order). `contextMessageId` makes the FIRST message a
+ * WhatsApp reply quoting that earlier message (used for nudge follow-ups).
+ */
+export async function sendWhatsAppPayloads(
+    to: string,
+    payloads: MetaWhatsAppPayload[],
+    opts: { contextMessageId?: string } = {},
+): Promise<string[]> {
+    const ids: string[] = [];
+    let ctx = opts.contextMessageId;
+    const take = (id: string | undefined) => {
+        ctx = undefined;
+        if (id) ids.push(id);
+    };
     rememberOutbound(
         to,
         payloads
@@ -210,12 +242,12 @@ export async function sendWhatsAppPayloads(to: string, payloads: MetaWhatsAppPay
         if (payload.type === "text") {
             const parts = splitWhatsAppText(payload.text.body);
             for (const part of parts) {
-                await sendSingleMetaWhatsAppText(to, part);
+                take(await sendSingleMetaWhatsAppText(to, part, ctx));
             }
             continue;
         }
         try {
-            await sendSingleMetaWhatsAppPayload(to, payload);
+            take(await sendSingleMetaWhatsAppPayload(to, payload, ctx));
         } catch (err) {
             if (payload.type === "image" || payload.type === "document") {
                 console.warn("WhatsApp media send failed, falling back to text:", err);
@@ -223,12 +255,13 @@ export async function sendWhatsAppPayloads(to: string, payloads: MetaWhatsAppPay
                     payload.type === "image"
                         ? payload.image.caption
                         : payload.document.caption;
-                if (caption) await sendSingleMetaWhatsAppText(to, caption);
+                if (caption) take(await sendSingleMetaWhatsAppText(to, caption, ctx));
                 continue;
             }
             throw err;
         }
     }
+    return ids;
 }
 
 export async function sendMetaWhatsAppTemplate(input: {
@@ -236,7 +269,7 @@ export async function sendMetaWhatsAppTemplate(input: {
     templateName: string;
     languageCode?: string;
     bodyParameters?: string[];
-}): Promise<void> {
+}): Promise<string | undefined> {
     await assertSendableWhatsAppRecipient(input.to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
@@ -275,22 +308,28 @@ export async function sendMetaWhatsAppTemplate(input: {
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
     }
+    return readWamid(res);
 }
 
 export async function sendViaMetaWhatsApp(
     to: string,
     text: string,
     payloads?: MetaWhatsAppPayload[],
-): Promise<void> {
+    opts: { contextMessageId?: string } = {},
+): Promise<string[]> {
     if (payloads?.length) {
-        await sendWhatsAppPayloads(to, payloads);
-        return;
+        return sendWhatsAppPayloads(to, payloads, opts);
     }
     rememberOutbound(to, text);
     const parts = splitWhatsAppText(text);
+    const ids: string[] = [];
+    let ctx = opts.contextMessageId;
     for (const part of parts) {
-        await sendSingleMetaWhatsAppText(to, part);
+        const id = await sendSingleMetaWhatsAppText(to, part, ctx);
+        ctx = undefined;
+        if (id) ids.push(id);
     }
+    return ids;
 }
 
 /** Download inbound media bytes from Meta Graph (media id -> CDN URL -> bytes). */

@@ -31,6 +31,53 @@ export async function postCareNudgeJob(req: Request, res: Response, next: NextFu
     }
 }
 
+/**
+ * Test hook (job secret + smoke-fixture families only): fire one companion nudge now and/or run
+ * the silence-alert check with a shortened grace, to exercise follow-ups without waiting hours.
+ * Body: { phone: "+9991000000xx", action: "fire" | "check" | "status", graceMinutes?: number }
+ */
+export async function postNudgeSimJob(req: Request, res: Response, next: NextFunction) {
+    try {
+        assertJobAuth(req);
+        const phone = String(req.body?.phone ?? "");
+        const { isSmokeFixturePhone } = await import("../services/smokeFixtures.service");
+        if (!isSmokeFixturePhone(phone)) throw new AppError("nudge-sim is limited to smoke fixture phones", 403);
+        const { resolveWhatsAppSender } = await import("../services/identityResolver.service");
+        const who = await resolveWhatsAppSender(phone);
+        const { familyId, userId: recipientUserId } = who;
+        const action = String(req.body?.action ?? "status");
+        const streakSvc = await import("../services/saheliNudgeStreak.service");
+        let result: unknown = null;
+        if (action === "fire") {
+            const { deliverSaheliOutreach } = await import("../services/saheliOutreach.service");
+            result = await deliverSaheliOutreach({
+                familyId,
+                recipientUserId,
+                outreachKind: "casual",
+                force: true,
+                ignoreSpacing: true,
+            });
+        } else if (action === "check") {
+            const graceMinutes = Number(req.body?.graceMinutes);
+            result = await streakSvc.checkSilenceAndAlert(familyId, recipientUserId, {
+                graceMs: Number.isFinite(graceMinutes) ? Math.max(0, graceMinutes) * 60_000 : undefined,
+                respectQuietHours: false,
+            });
+        }
+        const { streak, companion } = await streakSvc.loadStreak(familyId, recipientUserId);
+        res.json({
+            success: true,
+            job: "nudge-sim",
+            action,
+            result,
+            streak: streak.map((n) => ({ text: n.text, wamid: n.wamid, sentAt: n.sentAt })),
+            silenceAlertAt: companion?.silenceAlertAt ?? null,
+        });
+    } catch (err) {
+        next(err);
+    }
+}
+
 export async function postMemoryConsolidationJob(
     req: Request,
     res: Response,

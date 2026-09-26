@@ -12,7 +12,8 @@
     "eval:elder-facts": "tsx eval/run-elder-facts.ts",
     "test:whatsapp-guard": "tsx scripts/test-whatsapp-recipient-guard.ts",
     "test:address-book": "tsx scripts/test-family-address-book.ts",
-    "browser:install": "npx playwright install chromium"
+    "browser:install": "npx playwright install chromium",
+    "test:nudge-streak": "tsx scripts/test-nudge-streak.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

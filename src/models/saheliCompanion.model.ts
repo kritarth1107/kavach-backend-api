@@ -24,6 +24,9 @@ export interface ISaheliCompanion {
     importantDates?: Array<{ label: string; date: string }>;
     lastOutreachAt?: Date;
     lastWhatsAppInboundAt?: Date;
+    /** Silence streak (first unanswered nudgeId) that already triggered a caregiver alert. */
+    silenceAlertStreakKey?: string;
+    silenceAlertAt?: Date;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -83,6 +86,8 @@ const saheliCompanionSchema = new Schema<ISaheliCompanionDocument>(
         ],
         lastOutreachAt: { type: Date },
         lastWhatsAppInboundAt: { type: Date },
+        silenceAlertStreakKey: { type: String },
+        silenceAlertAt: { type: Date },
     },
     { timestamps: true },
 );

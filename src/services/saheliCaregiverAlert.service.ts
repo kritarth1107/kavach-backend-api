@@ -23,6 +23,8 @@ const WHATSAPP_KINDS = new Set([
     "missed_tasks",
     "order_placed",
     "elder_share",
+    // Elder silent through N consecutive Saheli check-ins (once per silence streak).
+    "nudge_silence",
 ]);
 
 export function caregiverWhatsAppAllowed(kind?: string, urgency?: "low" | "medium" | "high"): boolean {
@@ -57,7 +59,12 @@ export async function notifyCaregivers(input: {
             recipientUserId: input.recipientUserId,
             actorUserId: input.actorUserId,
             kind: "caregiver_alert",
-            severity: input.kind === "emergency" || input.kind === "health_red_flag" || input.urgency === "high" ? "error" : "info",
+            severity:
+                input.kind === "emergency" || input.kind === "health_red_flag" || input.urgency === "high"
+                    ? "error"
+                    : input.kind === "nudge_silence"
+                      ? "warn"
+                      : "info",
             title: `Caregiver ${allowWhatsApp ? "WhatsApp alert" : "dashboard note"}: ${input.kind || "care_alert"}`,
             detail: input.message,
             data: { kind: input.kind || null, urgency: input.urgency || null, whatsapp: allowWhatsApp },
@@ -111,7 +118,8 @@ export async function notifyCaregivers(input: {
                     input.kind === "missed_tasks" ||
                     input.kind === "symptom" ||
                     input.kind === "lab_alert" ||
-                    input.kind === "elder_share"
+                    input.kind === "elder_share" ||
+                    input.kind === "nudge_silence"
                         ? "plain"
                         : "order_pending_approval",
             });

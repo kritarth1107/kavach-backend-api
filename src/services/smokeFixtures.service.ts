@@ -19,6 +19,12 @@ const FIXTURES = [
     { phone: "+999100000003", name: "Smoke Elder C", family: "Smoke Test Family C", address: null },
 ];
 
+/** Exactly one of the fixed fixture phones above (never a real or random placeholder number). */
+export function isSmokeFixturePhone(raw: string | undefined | null): boolean {
+    const digits = String(raw ?? "").replace(/\D/g, "");
+    return FIXTURES.some((f) => f.phone.replace(/\D/g, "") === digits);
+}
+
 export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<string[]> {
     const out: string[] = [];
     const User = (await import("../models/users.model")).default;
@@ -42,6 +48,12 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
                 await RecipientDeliveryAddress.deleteMany({ familyId: id.familyId });
                 await FamilyAddress.deleteMany({ familyId: id.familyId });
                 await FamilyAddressChoice.deleteMany({ familyId: id.familyId });
+                const SaheliProactiveNudge = (await import("../models/saheliProactiveNudge.model")).default;
+                const SaheliCompanion = (await import("../models/saheliCompanion.model")).default;
+                const ActivityLog = (await import("../models/activityLog.model")).default;
+                await SaheliProactiveNudge.deleteMany({ familyId: id.familyId });
+                await SaheliCompanion.deleteMany({ familyId: id.familyId });
+                await ActivityLog.deleteMany({ familyId: id.familyId });
                 await Family.deleteOne({ familyId: id.familyId });
                 await User.deleteMany({ userId: { $in: userIds }, email: /@smoke\.kavach\.test$/ });
             }

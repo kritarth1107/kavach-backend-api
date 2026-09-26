@@ -360,6 +360,10 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     if (identity.role === FamilyRole.CARE_RECIPIENT) {
         const recipientId = identity.userId;
         const familyId = identity.familyId;
+        // Any elder message (even one we can't parse) ends the nudge silence streak right away.
+        await import("./saheliCompanion.service")
+            .then(({ touchWhatsAppInbound }) => touchWhatsAppInbound(familyId, recipientId))
+            .catch(() => undefined);
         void import("./activityLog.service").then(({ logActivity }) =>
             logActivity({
                 familyId,

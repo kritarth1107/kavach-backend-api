@@ -773,6 +773,12 @@ export async function aiPostOutreach(payload: {
         type?: string;
     }>;
     outreachTopics?: string[];
+    /** Previous nudge(s) went unanswered → write a gentle continuation, not a new topic. */
+    followup?: {
+        unanswered_count: number;
+        last_reply: string;
+        previous_nudges: Array<{ text: string; sent: string }>;
+    };
 }): Promise<AiOutreachResponse> {
     const res = await aiFetch(
         "/v1/chat/outreach",
@@ -790,6 +796,7 @@ export async function aiPostOutreach(payload: {
                 companion_profile: payload.companionProfile ?? null,
                 schedule_items: payload.scheduleItems ?? [],
                 outreach_topics: payload.outreachTopics ?? [],
+                followup: payload.followup ?? null,
             }),
         },
         config.aiEngine.writeTimeoutMs,

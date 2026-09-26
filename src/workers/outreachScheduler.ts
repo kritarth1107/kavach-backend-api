@@ -126,6 +126,17 @@ export async function runOutreachTick() {
             const timezone = companion.timezone || "Asia/Kolkata";
             const dateKey = localDateParts(timezone).date;
 
+            // Elder silent through N consecutive check-ins → one caregiver WhatsApp alert per streak.
+            try {
+                const { checkSilenceAndAlert } = await import("../services/saheliNudgeStreak.service");
+                await checkSilenceAndAlert(companion.familyId, companion.recipientUserId, { now });
+            } catch (err) {
+                console.warn(
+                    `Silence check failed for ${companion.familyId}/${companion.recipientUserId}:`,
+                    err instanceof Error ? err.message : err,
+                );
+            }
+
             try {
                 if (!isWithinQuietHours(companion, now)) {
                     const symptomFollowed = await maybeSymptomEveningFollowup(companion);
