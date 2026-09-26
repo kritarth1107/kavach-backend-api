@@ -29,6 +29,8 @@ export interface IWhatsappSession {
     browserTaskDraft?: Record<string, unknown>;
     /** Ride booking draft (Uber web / OTP / confirm-before-book) */
     rideDraft?: Record<string, unknown>;
+    /** Conversational ordering chat (vague ask → questions → specific search). */
+    orderChat?: Record<string, unknown>;
     /** Saheli asked "what should I call this place?" for a newly saved family place. */
     pendingPlaceName?: { addressId: string; familyId: string; at: Date };
     expiresAt: Date;
@@ -59,6 +61,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         pendingCommerceOtp: { type: Schema.Types.Mixed },
         browserTaskDraft: { type: Schema.Types.Mixed },
         rideDraft: { type: Schema.Types.Mixed },
+        orderChat: { type: Schema.Types.Mixed },
         pendingPlaceName: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },

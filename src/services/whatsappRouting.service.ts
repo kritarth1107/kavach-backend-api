@@ -188,6 +188,7 @@ type FlowDoc = {
     pendingCommerceOtp?: { partner?: string };
     orderSessionId?: string;
     pendingPlaceName?: { addressId: string; familyId: string; at: Date };
+    orderChat?: { updatedAt?: number; turns?: Array<{ who: string; text: string }> } & Record<string, unknown>;
 } | null;
 
 function liveFlow(d: { phase?: string } | undefined | null): boolean {
@@ -210,6 +211,13 @@ async function buildFlowState(phone: string, doc: FlowDoc, who?: { familyId: str
     if (doc?.orderSessionId) lines.push("app order session open");
     const ask = pendingAskSummary(phone);
     if (ask) lines.push(ask);
+    const oc = doc?.orderChat;
+    if (oc?.updatedAt && Date.now() - oc.updatedAt < 25 * 60_000) {
+        const lastQ = [...(oc.turns || [])].reverse().find((t) => t.who === "saheli")?.text || "";
+        lines.push(
+            `ORDER CHAT OPEN (Saheli is helping choose what to order; she last asked: "${lastQ.slice(0, 200)}") — short answers like "snack", "meetha", "veg", "under 200", a number or an item name are intent=order_modify replies to it`,
+        );
+    }
     if (who?.familyId) {
         const { placesSummary } = await import("./familyAddressBook.service");
         const places = await placesSummary(who.familyId, who.memberUserId).catch(() => null);
@@ -1065,6 +1073,74 @@ async function dispatchRoutedTurn(a: {
                 source: route.blockedItem ? "gemini_router" : "keywords",
             });
             return { reply: blockedReply(cat, text, route.language), legacyGates: false, allowDashboard: false };
+        }
+    }
+    // Conversational ordering (product rule): a vague ask never jumps to a store search — Gemini
+    // chats (one question, 2–3 suggestions) until it's specific, and checks the item against her
+    // health profile first. A clear specific ask goes straight to the search below.
+    {
+        const { orderChatActive, orderChatTurn } = await import("./commerceAutomation/orderChat/orderChat.service");
+        const oc = orderChatActive(doc?.orderChat) ? (doc!.orderChat as never) : null;
+        const media = Boolean(a.mediaUrl || a.isRxPhoto);
+        const newAsk = (route.intent === "order_new" || route.intent === "restaurant_list") && !media;
+        const chatReply = Boolean(oc) && !media && !NOT_A_FLOW_REPLY.has(route.intent) && route.intent !== "ride" && route.intent !== "otp_code";
+        if (newAsk || chatReply) {
+            const d = await orderChatTurn({
+                phone: a.phone,
+                familyId: a.familyId,
+                recipientUserId: a.recipientUserId,
+                actorUserId: a.actorUserId,
+                text,
+                language: route.language,
+                routeHint: {
+                    category: route.category,
+                    productQuery: route.productQuery,
+                    partners: route.partners,
+                    restaurantName: route.restaurantName,
+                    addressNickname: route.addressNickname,
+                    intent: route.intent,
+                },
+                state: oc,
+            });
+            if (d.action === "reply") return { reply: d.text, legacyGates: false, allowDashboard: false };
+            if (d.action === "search" || d.action === "restaurants") {
+                const r2: SaheliRoute =
+                    d.action === "search"
+                        ? {
+                              ...route,
+                              intent: "order_new",
+                              control: "none",
+                              pickIndex: null,
+                              partnerOnly: false,
+                              productQuery: d.query,
+                              category: d.category,
+                              partners: d.partner ? [d.partner] : [],
+                              restaurantName: d.restaurantName,
+                              addressNickname: d.addressNickname ?? route.addressNickname,
+                              blockedItem: null,
+                          }
+                        : {
+                              ...route,
+                              intent: "restaurant_list",
+                              control: "none",
+                              pickIndex: null,
+                              partnerOnly: false,
+                              productQuery: null,
+                              category: "food",
+                              partners: ["swiggy"],
+                              restaurantName: null,
+                              addressNickname: d.addressNickname ?? route.addressNickname,
+                              blockedItem: null,
+                          };
+                const { handleRoutedCommerceTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+                const r = await handleRoutedCommerceTurn(input, r2, text);
+                if (r?.delegatePharmacyText) {
+                    const { handlePharmacyWhatsAppTurn } = await import("./pharmacyOrderFlow.service");
+                    const pr = await handlePharmacyWhatsAppTurn({ ...input, text: r.delegatePharmacyText });
+                    if (pr) return { reply: r.lead ? `${r.lead}\n\n${pr.text}` : pr.text, legacyGates: false, allowDashboard: false };
+                } else if (r?.text) return { reply: r.text, legacyGates: false, allowDashboard: false };
+            }
+            // "pass" (not about the order) → normal handling below.
         }
     }
     const pharmacyTurn = async (t: string) => {

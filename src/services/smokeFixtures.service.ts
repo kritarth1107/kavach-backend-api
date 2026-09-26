@@ -17,6 +17,17 @@ const FIXTURES = [
     },
     { phone: "+999100000002", name: "Smoke Elder B", family: "Smoke Test Family B", address: "H-5, Connaught Place, New Delhi, Delhi 110001" },
     { phone: "+999100000003", name: "Smoke Elder C", family: "Smoke Test Family C", address: null },
+    {
+        phone: "+999100000004",
+        name: "Smoke Elder D",
+        family: "Smoke Test Family D",
+        address: "Flat 4, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462002",
+        // Health profile (AI engine memory) for the conversational / health-aware ordering tests.
+        health: [
+            "Smoke Elder D has lactose intolerance — milk and dairy upset her stomach.",
+            "Smoke Elder D has type 2 diabetes and is advised to avoid sugary sweets.",
+        ],
+    },
 ];
 
 /** Exactly one of the fixed fixture phones above (never a real or random placeholder number). */
@@ -54,6 +65,17 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
                 await SaheliProactiveNudge.deleteMany({ familyId: id.familyId });
                 await SaheliCompanion.deleteMany({ familyId: id.familyId });
                 await ActivityLog.deleteMany({ familyId: id.familyId });
+                // Seeded health memories (AI engine) + the tenant link.
+                const AiTenant = (await import("../models/aiTenant.model")).default;
+                const link = await AiTenant.findOne({ familyId: id.familyId }).lean();
+                if (link) {
+                    const { aiListFamilyMemories, aiForgetMemory } = await import("../clients/aiEngine.client");
+                    for (const el of link.elders || []) {
+                        const mem = await aiListFamilyMemories({ aiFamilyId: link.aiFamilyId, aiElderId: el.aiElderId, limit: 100 }).catch(() => ({ memories: [] }));
+                        for (const m of mem.memories) await aiForgetMemory({ factId: m.id, forgottenBy: "smoke-fixtures" }).catch(() => undefined);
+                    }
+                    await AiTenant.deleteOne({ familyId: id.familyId });
+                }
                 await Family.deleteOne({ familyId: id.familyId });
                 await User.deleteMany({ userId: { $in: userIds }, email: /@smoke\.kavach\.test$/ });
             }
@@ -110,7 +132,22 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
         for (const pl of (f as { places?: Array<{ nickname: string; address: string }> }).places || []) {
             await createPlace(fam.familyId, { nickname: pl.nickname, address: pl.address }, { actorUserId: cg.userId, source: "dashboard" });
         }
-        out.push(`${f.phone} → family …${fam.familyId.slice(-4)}${f.address ? " (legacy address set)" : " (no address)"}`);
+        const health = (f as { health?: string[] }).health || [];
+        let seeded = 0;
+        if (health.length) {
+            try {
+                const { ensureAiContext } = await import("./aiTenant.service");
+                const { aiInboxMemory } = await import("../clients/aiEngine.client");
+                const ctx = await ensureAiContext(fam.familyId, elder.userId, f.name);
+                for (const content of health) {
+                    const r = await aiInboxMemory({ aiFamilyId: ctx.aiFamilyId, aiElderId: ctx.aiElderId, content, category: "health", topic: "health", sourceRole: "caregiver" });
+                    if (r.saved) seeded++;
+                }
+            } catch (err) {
+                out.push(`health seed failed: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
+            }
+        }
+        out.push(`${f.phone} → family …${fam.familyId.slice(-4)}${f.address ? " (legacy address set)" : " (no address)"}${health.length ? ` (health facts: ${seeded}/${health.length})` : ""}`);
     }
     return out;
 }

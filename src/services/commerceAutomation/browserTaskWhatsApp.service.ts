@@ -1174,10 +1174,16 @@ async function grocerySearchCore(
         productQuery: query,
         category: "grocery",
     };
-    if (catalog.hits.length) {
-        draft.catalogOptions = catalog.hits.slice(0, 5).map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
-        if (catalog.hits.length === 1) draft.selectedSku = draft.catalogOptions[0];
+    const relevant = (await relevantOnly(input.phone, query, catalog.hits.slice(0, 8), false)).slice(0, 5);
+    if (relevant.length) {
+        draft.catalogOptions = relevant.map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
+        if (relevant.length === 1) draft.selectedSku = draft.catalogOptions[0];
     } else {
+        if (catalog.hits.length || !catalog.unavailableReason) {
+            await saveIfCurrent(input.phone, null, token);
+            const alt = await notFoundAlternatives(input, query, "grocery", String(playbook.partner));
+            if (alt.text) return { text: alt.text };
+        }
         // Nothing to confirm: don't leave an empty draft that would ask for *confirm*.
         await saveIfCurrent(input.phone, null, token);
         return { text: catalog.unavailableReason || `I couldn't find "${query}" near you. Try another name.` };
@@ -2644,8 +2650,14 @@ async function compareSearchCore(
             : /Catalog search failed|timeout|locator\./i.test(r.unavailableReason || "")
             ? `${partnerLabel(partners[i]!)} didn't load for me just now.`
             : r.unavailableReason?.replace(/\s*Reply \*confirm\*[^.]*\.?/i, "").trim();
-        return { partner: partners[i]!, hits: hits.slice(0, 3), rx, reason };
+        return { partner: partners[i]!, hits: hits.slice(0, 6), rx, reason };
     });
+    const rawAny = per.some((p) => p.hits.length);
+    await Promise.all(
+        per.map(async (p) => {
+            p.hits = (await relevantOnly(input.phone, query, p.hits, false)).slice(0, 3);
+        }),
+    );
     // Interleave so each platform shows its best match first.
     const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
     for (let k = 0; k < 3; k++) {
@@ -2660,6 +2672,12 @@ async function compareSearchCore(
         .map((p) => (p.rx ? `${partnerLabel(p.partner)}: only prescription medicines matched — send a photo of the prescription for those.` : `${partnerLabel(p.partner)}: nothing matching right now.`));
     if (!shown.length) {
         await saveIfCurrent(input.phone, null, token);
+        const allBlocked = per.every((p) => p.reason && /blocking|didn't load/i.test(p.reason));
+        if (rawAny || !allBlocked) {
+            const alt = await notFoundAlternatives(input, query, category, null);
+            if (alt.text) return { text: alt.text };
+            if (alt.searchQuery) return compareSearchCore(input, category, alt.searchQuery, partners, home, token);
+        }
         return {
             text: `I couldn't find "${query}" near 📍 ${home.short} 🙏\n${per.map((p) => `• ${p.reason || `${partnerLabel(p.partner)}: nothing matching`}`).join("\n")}\n\nTry another name?`,
         };
@@ -2781,6 +2799,41 @@ function mcpCardCopy(card: McpCard): string {
     ].join("\n");
 }
 
+/** Keep only results that match the elder's intent (condiments / add-ons / junk dropped). */
+async function relevantOnly<T extends { name: string; pricePaise?: number; restaurantName?: string }>(phone: string, q: string, items: T[], food: boolean): Promise<T[]> {
+    if (!items.length) return items;
+    const { filterRelevant } = await import("./orderChat/relevance");
+    const { orderIntentFor } = await import("./orderChat/orderChat.service");
+    return filterRelevant(orderIntentFor(phone) || q, q, items, { food }).catch(() => items);
+}
+
+/** Nothing relevant found: 2–3 close alternatives (health-aware), or one obvious close match to search. */
+async function notFoundAlternatives(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId?: string },
+    q: string,
+    category: "food" | "grocery" | "pharmacy",
+    partner: string | null,
+): Promise<{ text: string; searchQuery?: string }> {
+    try {
+        const { orderChatTurn, loadOrderChat } = await import("./orderChat/orderChat.service");
+        const d = await orderChatTurn({
+            phone: input.phone,
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId || input.actorUserId,
+            actorUserId: input.actorUserId,
+            text: q,
+            routeHint: { category },
+            state: await loadOrderChat(input.phone),
+            notFound: { query: q, category, partner },
+        });
+        if (d.action === "reply") return { text: d.text };
+        if (d.action === "search" && d.query.toLowerCase() !== q.toLowerCase()) return { text: "", searchQuery: d.query };
+    } catch (err) {
+        console.warn("[order-chat] alternatives failed:", err instanceof Error ? err.message : err);
+    }
+    return { text: "" };
+}
+
 async function mcpSearchCore(
     input: RoutedInput,
     stores: McpStore[],
@@ -2790,6 +2843,8 @@ async function mcpSearchCore(
     isFood: boolean,
     restaurantName: string | null,
     token: number,
+    hop = 0,
+    lead = "",
 ): Promise<{ text: string }> {
     const { searchStore, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
     const ctx = { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place };
@@ -2807,10 +2862,18 @@ async function mcpSearchCore(
             results: results.map((r) => ({ store: r.store, hits: r.hits.length, error: r.error || null, addressVia: r.addressVia || null, message: r.message || null })),
         },
     });
-    const hits = results.flatMap((r) => r.hits);
+    let hits = results.flatMap((r) => r.hits);
+    const rawCount = hits.length;
+    if (hits.length) {
+        // Relevance: drop ketchup sachets / add-ons / mismatches before anything is listed.
+        const kept = await relevantOnly(input.phone, q, hits, isFood);
+        for (const r of results) r.hits = kept.filter((h) => h.store === r.store);
+        hits = kept;
+        if (rawCount !== kept.length) console.log(`[order-chat] relevance "${q}": ${rawCount} → ${kept.length}`);
+    }
     if (!hits.length) {
         const broken = results.filter((r) => r.error && r.error !== "unserviceable");
-        if (broken.length === results.length) {
+        if (!rawCount && broken.length === results.length) {
             // MCP down for every linked store → the website (browser) as today.
             console.warn(`[mcp-order] search failed, browser fallback:`, results.map((r) => `${r.store}:${r.error}:${r.message}`).join(" | "));
             if (isFood) return startFoodFlow(input, q, home);
@@ -2821,6 +2884,14 @@ async function mcpSearchCore(
             return { text: `Zepto isn't answering just now 🙏 Want me to try *Instamart* instead?` };
         }
         await saveIfCurrent(input.phone, null, token);
+        const reachable = results.some((r) => r.error !== "unserviceable" && r.error !== "no_address_coords");
+        if (reachable) {
+            const alt = await notFoundAlternatives(input, q, isFood ? "food" : "grocery", stores.length === 1 ? stores[0]! : null);
+            if (alt.searchQuery && hop === 0) {
+                return mcpSearchCore(input, stores, alt.searchQuery, place, home, isFood, null, token, 1, `"${q}" nahi mila — "${alt.searchQuery}" dikha rahi hoon 🙂`);
+            }
+            if (alt.text) return { text: lead ? `${lead}\n\n${alt.text}` : alt.text };
+        }
         const why = results.map((r) =>
             r.error === "unserviceable"
                 ? `• ${MCP_STORE_LABEL[r.store]} doesn't deliver to 📍 ${place.nickname} right now.`
@@ -2856,7 +2927,7 @@ async function mcpSearchCore(
         lastMessage: misses.length ? misses.join("\n") : undefined,
     };
     await saveIfCurrent(input.phone, draft, token);
-    return { text: mcpOptionsCopy(draft) };
+    return { text: lead ? `${lead}\n\n${mcpOptionsCopy(draft)}` : mcpOptionsCopy(draft) };
 }
 
 async function mcpPlaceFor(input: { familyId: string }, draft: BrowserTaskDraft): Promise<Place | null> {
@@ -3151,7 +3222,14 @@ async function mcpRestaurantMenu(
             target = { id: r.id, name: r.name };
         }
         const dish = dishQueryOverride || draft.dishQuery;
-        const picks = await restaurantMenuMcp(m.ctx, { id: target.id!, name: target.name }, dish);
+        const menu = await restaurantMenuMcp(m.ctx, { id: target.id!, name: target.name }, dish);
+        const { prefilter } = await import("./orderChat/relevance");
+        const picks = dish ? await relevantOnly(input.phone, dish, menu, true) : prefilter(target.name, menu, { food: true });
+        if (menu.length && !picks.length && dish) {
+            await saveIfCurrent(input.phone, null, token);
+            const alt = await notFoundAlternatives(input, `${dish} from ${target.name}`, "food", "swiggy");
+            if (alt.text) return { text: alt.text };
+        }
         if (!picks.length) {
             await saveIfCurrent(input.phone, null, token);
             return { text: `I couldn't read *${target.name}*'s menu just now 🙏 Try another restaurant?` };
