@@ -26,6 +26,8 @@ export type OrderChatState = {
     questions: number;
     /** Not-found alternatives offered after a search. */
     alternativesFor?: string | null;
+    /** Language of her first message in this chat (kept unless she clearly switches). */
+    language?: string | null;
 };
 
 export type OrderChatDecision =
@@ -128,12 +130,17 @@ export async function orderChatTurn(input: {
     if (input.routeHint.partners?.length) st.partner = input.routeHint.partners[0];
     if (input.routeHint.addressNickname) st.addressNickname = input.routeHint.addressNickname;
     if (!input.notFound) st.turns.push({ who: "elder", text: input.text.slice(0, 300) });
+    // Short replies ("2", "yes") carry no language — keep the chat's language from her first message.
+    const wordy = /[a-z\u0900-\u097F]{3,}.*\s+[a-z\u0900-\u097F]{2,}/i.test(input.text);
+    if (!st.language) st.language = input.language || null;
+    else if (wordy && input.language && input.language !== "other" && input.language !== st.language) st.language = input.language;
 
     const profile = await loadHealthProfile(input.familyId, input.recipientUserId).catch(() => null);
     const prompt = [
         `Health profile (from Kavach):\n${profile ? healthProfileText(profile) : "(unavailable — do NOT assume any condition)"}`,
         `Known so far: category=${st.category || "?"} platform=${st.partner || "?"} questions_asked=${st.questions}${st.healthRaised ? ` health_note_already_raised_for="${st.healthRaised.item}" (${st.healthRaised.note})` : ""}${st.suggestions?.length ? ` last_suggestions=${st.suggestions.map((s, i) => `${i + 1}.${s}`).join(" ")}` : ""}${st.alternativesFor ? ` (those were alternatives because "${st.alternativesFor}" wasn't found)` : ""}`,
-        `Router read of the latest message: intent=${input.routeHint.intent || "?"} product=${input.routeHint.productQuery || "none"} restaurant=${input.routeHint.restaurantName || "none"} language=${input.language || "?"}`,
+        `Router read of the latest message: intent=${input.routeHint.intent || "?"} product=${input.routeHint.productQuery || "none"} restaurant=${input.routeHint.restaurantName || "none"}`,
+        `Reply language: ${st.language === "en" ? "English" : st.language === "hi" ? "Hindi (Devanagari only if she writes Devanagari, else Hinglish)" : st.language === "hinglish" ? "Hinglish" : "match her messages"} — keep it for the whole chat.`,
         `Wider recent WhatsApp turns:\n${recentTurns(input.phone) || "(none)"}`,
         `This ordering chat:\n${st.turns.map((t) => `${t.who}: ${t.text}`).join("\n") || "(just started)"}`,
         input.notFound
@@ -228,7 +235,7 @@ export async function orderChatTurn(input: {
             return { action: "restaurants", addressNickname: st.addressNickname || null };
         case "cancel":
             await saveOrderChat(input.phone, null);
-            return { action: "reply", text: input.language === "en" ? "Okay, no problem 🙂 Tell me whenever you'd like something." : "Theek hai, koi baat nahi 🙂 Jab mann ho bata dijiye." };
+            return { action: "reply", text: (st.language || input.language) === "en" ? "Okay, no problem 🙂 Tell me whenever you'd like something." : "Theek hai, koi baat nahi 🙂 Jab mann ho bata dijiye." };
         default:
             // Unrelated message: keep the ordering chat for when she comes back to it.
             return { action: "pass" };
