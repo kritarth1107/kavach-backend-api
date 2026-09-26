@@ -1088,7 +1088,7 @@ async function dispatchRoutedTurn(a: {
         const r = await handleRoutedCommerceTurn(input, route, text);
         if (r?.delegatePharmacyText) {
             const pr = await pharmacyTurn(r.delegatePharmacyText);
-            if (pr) return { reply: pr.text, legacyGates: false, allowDashboard: false };
+            if (pr) return { reply: r.lead ? `${r.lead}\n\n${pr.text}` : pr.text, legacyGates: false, allowDashboard: false };
         } else if (r?.text) return { reply: r.text, legacyGates: false, allowDashboard: false };
     }
     // Name for a newly saved place.
@@ -1153,7 +1153,7 @@ async function dispatchRoutedTurn(a: {
         const r = await handleRoutedCommerceTurn(input, route, text);
         if (r?.delegatePharmacyText) {
             const pr = await pharmacyTurn(r.delegatePharmacyText);
-            if (pr) return { reply: pr.text, legacyGates: false, allowDashboard: false };
+            if (pr) return { reply: r.lead ? `${r.lead}\n\n${pr.text}` : pr.text, legacyGates: false, allowDashboard: false };
         } else if (r?.text) {
             return { reply: r.text, legacyGates: false, allowDashboard: false };
         }

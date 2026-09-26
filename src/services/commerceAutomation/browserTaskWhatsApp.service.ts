@@ -413,7 +413,7 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
             if (resumed?.delegatePharmacyText) {
                 const { handlePharmacyWhatsAppTurn } = await import("../pharmacyOrderFlow.service");
                 const pr = await handlePharmacyWhatsAppTurn({ ...input, text: resumed.delegatePharmacyText });
-                if (pr?.text) return { text: `${saved}\n\n${pr.text}` };
+                if (pr?.text) return { text: `${saved}\n\n${resumed.lead ? `${resumed.lead}\n\n` : ""}${pr.text}` };
             } else if (resumed?.text) return { text: `${saved}\n\n${resumed.text}`, draft: resumed.draft };
         }
         if (pending) {
@@ -1223,7 +1223,9 @@ async function applyPlaceName(
     await WhatsappSession.findOneAndUpdate({ phone: input.phone }, { $unset: { pendingPlaceName: 1 } });
     try {
         const p = await updatePlace(input.familyId, pn.addressId, { nickname: name });
-        return { text: `Done ✅ saved as *${p.nickname}* ${placeEmoji(p.nickname)}` };
+        const d = await loadDraft(input.phone);
+        const next = d && (d.phase === "awaiting_sku_confirm" || d.phase === "awaiting_restaurant_pick") ? `\n\n${nextStepCopy(d)}` : "";
+        return { text: `Done ✅ saved as *${p.nickname}* ${placeEmoji(p.nickname)}${next}` };
     } catch (err) {
         const msg = err instanceof Error ? err.message : "";
         if (/already exists/i.test(msg)) return { text: `You already have a place called *${name}* 🙂 Tell me another name for this one?` };
@@ -1335,7 +1337,7 @@ async function handleAddressConfirm(
     if (resumed?.delegatePharmacyText) {
         const { handlePharmacyWhatsAppTurn } = await import("../pharmacyOrderFlow.service");
         const r = await handlePharmacyWhatsAppTurn({ ...input, text: resumed.delegatePharmacyText });
-        return { text: `${okLine}${r?.text || "Looking that up now 🔎"}` };
+        return { text: `${okLine}${resumed.lead ? `${resumed.lead}\n\n` : ""}${r?.text || "Looking that up now 🔎"}` };
     }
     return { text: `${okLine}${resumed?.text || "What would you like to order?"}`, draft: resumed?.draft };
 }
@@ -2140,7 +2142,13 @@ type RoutedInput = {
     recipientUserId: string;
     actorRole: FamilyRole | null;
 };
-export type RoutedCommerceResult = { text: string; draft?: BrowserTaskDraft; delegatePharmacyText?: string } | null;
+export type RoutedCommerceResult = {
+    text: string;
+    draft?: BrowserTaskDraft;
+    delegatePharmacyText?: string;
+    /** Address line to show before a delegated (pharmacy) reply ("📍 Sending to *Clinic*."). */
+    lead?: string;
+} | null;
 
 function categoryFor(route: SaheliRoute, partner?: string): "food" | "grocery" | "pharmacy" | "other" {
     if (partner === "swiggy" || partner === "zomato") return "food";
@@ -2351,6 +2359,7 @@ async function clearPickingDraft(phone: string, draft: BrowserTaskDraft | null):
     }
 }
 
+/** Search with the family-book address gate; address notes ride in front of the reply. */
 async function startRoutedSearch(
     input: RoutedInput,
     home: RecipientAddress | null,
@@ -2361,6 +2370,25 @@ async function startRoutedSearch(
     rawText: string,
     restaurantName?: string | null,
     route?: Pick<SaheliRoute, "addressNickname" | "addressKind" | "addressText"> | null,
+): Promise<RoutedCommerceResult> {
+    const out = { lead: "" };
+    const r = await startRoutedSearchCore(input, home, category, query, partner, draft, rawText, restaurantName, route, out);
+    if (!r || !out.lead) return r;
+    if (r.delegatePharmacyText) return { ...r, lead: out.lead };
+    return { ...r, text: `${out.lead}\n\n${r.text}` };
+}
+
+async function startRoutedSearchCore(
+    input: RoutedInput,
+    home: RecipientAddress | null,
+    category: "food" | "grocery" | "pharmacy" | "other",
+    query: string,
+    partner: string | undefined,
+    draft: BrowserTaskDraft | null,
+    rawText: string,
+    restaurantName: string | null | undefined,
+    route: Pick<SaheliRoute, "addressNickname" | "addressKind" | "addressText"> | null | undefined,
+    out: { lead: string },
 ): Promise<RoutedCommerceResult> {
     const q = query.trim().slice(0, 80);
     let note = "";
@@ -2393,7 +2421,7 @@ async function startRoutedSearch(
                 await setChoice(input.familyId, input.recipientUserId, sp.addressId);
                 if (sp.created) await askPlaceName(input.phone, input.familyId, sp.addressId);
                 home = { full: sp.full, short: sp.short, pincode: sp.pincode, nickname: sp.nickname, addressId: sp.addressId };
-                note = `${savedPlaceCopy(sp)}${note ? `\n${note}` : ""}`;
+                out.lead = savedPlaceCopy(sp);
             }
         } else if (!places.length) {
             const pending = partner ? `order ${q || "food"} from ${partner}` : rawText;
@@ -2405,10 +2433,15 @@ async function startRoutedSearch(
         } else {
             const named = route?.addressNickname ? matchPlace(places, route.addressNickname, input.recipientUserId) : null;
             const chosen = named || (await currentChoice(input.familyId, input.recipientUserId));
-            if (named) await setChoice(input.familyId, input.recipientUserId, named.addressId);
-            if (!chosen) {
-                if (route?.addressNickname) lead = `I don't have a place called "${route.addressNickname}" saved.\n`;
-                return askAddressConfirm(input, places, pendingRoute, lead + (note ? `${note}\n` : ""));
+            if (named) {
+                await setChoice(input.familyId, input.recipientUserId, named.addressId);
+                out.lead = `${placeEmoji(named.nickname)} Sending to *${named.nickname}*.`;
+            }
+            // Named a place that isn't in the book ("beta ke ghar" with no such place): say so, then confirm.
+            const unknown = !named && (route?.addressNickname || (route?.addressKind === "other" && route.addressText));
+            if (unknown) lead = `I don't have "${String(route!.addressNickname || route!.addressText).slice(0, 40)}" saved yet — send its full address with pincode to add it.\n\n`;
+            if (!chosen || unknown) {
+                return askAddressConfirm(input, places, pendingRoute, lead + (note ? `${note}\n\n` : ""));
             }
             home = toResolved(chosen);
         }
