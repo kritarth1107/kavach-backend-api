@@ -40,10 +40,24 @@ export function asksForDifferentProduct(query: string, usual: UsualItem): boolea
     return q.some((w) => !name.includes(w) && !usual.aliases.some((a) => a.toLowerCase().includes(w)) && !/^(doodh|dudh|milk|litre|liter|ltr|packet|pack)$/.test(w));
 }
 
+/** Same product, ignoring pack size / brackets ("Amul Taaza Toned Milk" ≈ "Amul Taaza Toned Milk (1 ltr)"). */
+const coreWords = (x: string) => new Set(words(x.replace(/\([^)]*\)/g, " ")).filter((w) => !/^\d/.test(w) && !/^(ltr|litre|liter|pcs|pack|gm|kg|ml)$/.test(w)));
+/** Her query names this exact product (every core word of it). */
+export function namesProduct(query: string, item: string): boolean {
+    const q = coreWords(query), i = coreWords(item);
+    return i.size > 0 && [...i].every((w) => q.has(w));
+}
+export function sameProduct(a: string, b: string): boolean {
+    const t = (x: string) => new Set(words(x.replace(/\([^)]*\)/g, " ")).filter((w) => !/^\d/.test(w) && !/^(ltr|litre|liter|pcs|pack|gm|kg|ml)$/.test(w)));
+    const A = t(a), B = t(b);
+    if (!A.size || !B.size) return false;
+    const [s, l] = A.size <= B.size ? [A, B] : [B, A];
+    return [...s].every((w) => l.has(w));
+}
+
 export function recentlyRejected(item: string, rejections: UsualRejection[], since?: Date): UsualRejection | null {
-    const n = item.toLowerCase();
     const cutoff = Date.now() - 60 * 86_400_000;
-    const hits = rejections.filter((r) => r.item && n.includes(r.item.toLowerCase().slice(0, 40)) && new Date(r.at).getTime() > cutoff && (!since || new Date(r.at) > since));
+    const hits = rejections.filter((r) => r.item && sameProduct(item, r.item) && new Date(r.at).getTime() > cutoff && (!since || new Date(r.at) > since));
     return hits.length ? hits[hits.length - 1]! : null;
 }
 
@@ -82,7 +96,7 @@ export function shapeChoices<T extends { name: string }>(query: string, opts: T[
     if (ctx.rejections?.length) {
         const kept = list.filter((o) => {
             const r = recentlyRejected(o.name, ctx.rejections!);
-            return !r || query.toLowerCase().includes(r.item.toLowerCase().slice(0, 20));
+            return !r || namesProduct(query, r.item);
         });
         if (kept.length) list = kept;
     }

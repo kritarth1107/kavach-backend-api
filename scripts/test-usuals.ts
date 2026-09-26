@@ -37,6 +37,9 @@ eq("declined usual not re-offered", matchUsual(items, rej, { query: "milk", text
 const oldRej: UsualRejection[] = [{ item: milk.name, reason: "x", at: new Date(Date.now() - 10 * day) }];
 eq("decline before a later re-order doesn't block", matchUsual(items, oldRej, { query: "milk", text: "doodh", category: "grocery" })?.name, milk.name);
 
+const sizeRej: UsualRejection[] = [{ item: "Amul Lactose Free Milk 250 ml (1 pack)", reason: "mehenga", at: new Date() }];
+eq("decline of a sized variant blocks the usual", matchUsual(items, sizeRej, { query: "milk", text: "doodh", category: "grocery" }), null);
+
 // Choice count.
 const opts = [
     { name: "Amul Taaza Toned Milk 500 ml", pricePaise: 2900 },

@@ -1311,7 +1311,7 @@ async function shapeFor<T extends { name: string; pricePaise?: number; partner?:
             const now = r.shown[0]!.pricePaise;
             const was = usual.pricePaise;
             const moved = now && was && Math.abs(now - was) / was > 0.15 ? ` (was ${formatInr(was)} last time)` : "";
-            header = `Your usual ${U.usualEmoji(usual.key, usual.category)}${moved}`;
+            header = `Your usual ${usual.key} from *${partnerLabel(usual.partner)}* ${U.usualEmoji(usual.key, usual.category)}${moved}`;
         }
         return { shown: r.shown, header };
     } catch {
