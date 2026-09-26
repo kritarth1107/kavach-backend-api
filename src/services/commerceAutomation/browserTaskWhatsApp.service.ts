@@ -45,6 +45,7 @@ import {
 import { shouldPreferBrowserForPartner } from "./commerceBrowserFirst";
 import { classifyOrderInterrupt, type OrderInterrupt } from "./orderInterrupt.service";
 import { isAllowedOrderSite, refuseSiteCopy } from "./siteAllowlist";
+import { detectBlockedItem, blockedReply, logBlockedRequest } from "./blockedItems";
 import { classifyAddressMention, shortAddress, stripAddressPhrases } from "./kavachAddress";
 import {
     getRecipientDeliveryAddress,
@@ -355,7 +356,64 @@ function applyResultToDraft(
  * Handle private-browser WhatsApp turns for elder OR caregiver.
  * Returns reply text or null if not a browser-task turn.
  */
-export async function handleBrowserTaskWhatsAppTurn(input: {
+type GuardInput = { phone: string; familyId: string; actorUserId: string; recipientUserId: string };
+const CARD_PHASES = new Set(["awaiting_sku_confirm", "awaiting_mcp_confirm", "awaiting_confirm", "awaiting_restaurant_pick"]);
+
+/**
+ * Care guardrail, product-name re-check: whatever path produced the options / confirm card, a
+ * tobacco / gutka / vape / alcohol product never reaches a confirm card (vague requests included).
+ */
+async function blockedProductGuard(input: GuardInput, rawText: string, language?: string | null): Promise<{ text: string } | null> {
+    const d = await loadDraft(input.phone);
+    if (!d || !CARD_PHASES.has(d.phase)) return null;
+    const chosen = d.mcpCard?.pick?.name || d.selectedSku?.name;
+    let hit = chosen ? detectBlockedItem(chosen) : null;
+    let name = chosen || "";
+    if (!hit && !chosen && d.catalogOptions?.length) {
+        const flagged = d.catalogOptions.map((o) => detectBlockedItem(o.name));
+        if (flagged.every(Boolean)) {
+            hit = flagged[0];
+            name = d.catalogOptions[0].name;
+        }
+    }
+    if (!hit) return null;
+    if (d.mcpCard) void clearMcpCardCart(input.familyId, d.mcpCard);
+    await saveDraft(input.phone, null);
+    await logBlockedRequest({ ...input, cat: hit.cat, text: `${rawText} → ${name}`, stage: "product_name", source: "product_name" });
+    return { text: blockedReply(hit.cat, rawText, language) };
+}
+
+async function clearMcpCardCart(familyId: string, card: McpCard): Promise<void> {
+    try {
+        const { clearFamilyCart } = await import("./mcpCommerce/mcpCommerce.service");
+        await clearFamilyCart(familyId, card.store, card.pick);
+    } catch {
+        /* best effort */
+    }
+}
+
+export async function handleBrowserTaskWhatsAppTurn(
+    input: Parameters<typeof handleBrowserTaskWhatsAppTurnInner>[0],
+): ReturnType<typeof handleBrowserTaskWhatsAppTurnInner> {
+    const before = await loadDraft(input.phone);
+    const fresh = !before || before.phase === "idle" || before.phase === "done";
+    const hit = fresh ? detectBlockedItem(input.text) : null;
+    if (hit) {
+        await logBlockedRequest({ ...input, cat: hit.cat, text: input.text, stage: "browser_entry", source: "keywords" });
+        return { text: blockedReply(hit.cat, input.text) };
+    }
+    const r = await handleBrowserTaskWhatsAppTurnInner(input);
+    if (!r) return r;
+    return (await blockedProductGuard(input, input.text)) ?? r;
+}
+
+export async function handleRoutedCommerceTurn(input: RoutedInput, route: SaheliRoute, rawText: string): Promise<RoutedCommerceResult> {
+    const r = await handleRoutedCommerceTurnInner(input, route, rawText);
+    if (!r || r.delegatePharmacyText) return r;
+    return (await blockedProductGuard(input, rawText, route.language)) ?? r;
+}
+
+async function handleBrowserTaskWhatsAppTurnInner(input: {
     phone: string;
     text: string;
     familyId: string;
@@ -2183,7 +2241,7 @@ function categoryFor(route: SaheliRoute, partner?: string): "food" | "grocery" |
     return "grocery";
 }
 
-export async function handleRoutedCommerceTurn(input: RoutedInput, route: SaheliRoute, rawText: string): Promise<RoutedCommerceResult> {
+async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRoute, rawText: string): Promise<RoutedCommerceResult> {
     let draft = await loadDraft(input.phone);
     const home = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
     const active = Boolean(draft && draft.phase !== "idle" && draft.phase !== "done");
@@ -2416,6 +2474,13 @@ async function startRoutedSearchCore(
     out: { lead: string },
 ): Promise<RoutedCommerceResult> {
     const q = query.trim().slice(0, 80);
+    {
+        const hit = detectBlockedItem(q) || detectBlockedItem(restaurantName);
+        if (hit) {
+            await logBlockedRequest({ ...input, cat: hit.cat, text: rawText || q, stage: "search", source: "keywords" });
+            return { text: blockedReply(hit.cat, rawText || q) };
+        }
+    }
     let note = "";
     if (partner && BLOCKED_SITES[partner]) {
         note = `${BLOCKED_SITES[partner]} 🙏`;

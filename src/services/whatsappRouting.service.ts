@@ -1047,6 +1047,26 @@ async function dispatchRoutedTurn(a: {
     };
     const commerce = COMMERCE_INTENTS.has(route.intent);
     const flowReply = !NOT_A_FLOW_REPLY.has(route.intent);
+    // Care guardrail: tobacco / gutka / vapes / alcohol are refused BEFORE any search, on every
+    // store and path (MCP, browser, Apollo). Router decides; keyword backstop under it.
+    {
+        const { detectBlockedItem, blockedReply, logBlockedRequest, isBlockedCategory } = await import(
+            "./commerceAutomation/blockedItems"
+        );
+        const buying = route.intent === "order_new" || route.intent === "order_modify" || route.intent === "restaurant_list";
+        const kw = buying ? detectBlockedItem(route.productQuery) || detectBlockedItem(text) : null;
+        const cat = buying && isBlockedCategory(route.blockedItem) ? route.blockedItem : kw?.cat;
+        if (cat) {
+            await logBlockedRequest({
+                ...input,
+                cat,
+                text,
+                stage: "router",
+                source: route.blockedItem ? "gemini_router" : "keywords",
+            });
+            return { reply: blockedReply(cat, text, route.language), legacyGates: false, allowDashboard: false };
+        }
+    }
     const pharmacyTurn = async (t: string) => {
         const { handlePharmacyWhatsAppTurn } = await import("./pharmacyOrderFlow.service");
         return handlePharmacyWhatsAppTurn({ ...input, text: t, mediaUrl: a.mediaUrl, isRxPhoto: a.isRxPhoto });

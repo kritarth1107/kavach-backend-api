@@ -58,6 +58,8 @@ export type SaheliRoute = {
     /** ride: places named in this message. */
     ridePickup: string | null;
     rideDrop: string | null;
+    /** Care guardrail: the user wants tobacco / gutka-pan masala / vapes / alcohol (never ordered). */
+    blockedItem: "tobacco" | "gutka" | "vape" | "alcohol" | null;
     confidence: number;
     source: "gemini";
     latencyMs: number;
@@ -86,6 +88,7 @@ const SCHEMA = {
         otpCode: { type: "STRING", nullable: true },
         ridePickup: { type: "STRING", nullable: true },
         rideDrop: { type: "STRING", nullable: true },
+        blockedItem: { type: "STRING", enum: ["tobacco", "gutka", "vape", "alcohol"], nullable: true },
         confidence: { type: "NUMBER" },
     },
     required: ["intent", "language", "partners", "partnerOnly", "control", "confidence"],
@@ -113,6 +116,7 @@ Slots:
 - control/pickIndex: "1", "2nd one", "pehla wala" while options are shown → order_control, control=pick, pickIndex. "confirm"/"yes place it" → confirm. "cancel"/"rehne do"/"nahi chahiye" → cancel. "what's happening with my order" → status.
 - otpCode: the digits, only for otp_code.
 - ridePickup/rideDrop (intent=ride, also answers inside an active ride flow): just the place words ("railway station", "Apollo hospital Jubilee Hills"). "mujhe station jaana hai" → rideDrop="station". "ghar se" → ridePickup="home". If the ride flow is waiting for pickup (phase need_pickup) a bare place is ridePickup; if waiting for drop (need_drop / pickup noted) it is rideDrop. Never put filler words in a place.
+- blockedItem: set when the user wants to BUY/order cigarettes or any tobacco (bidi, cigar, hookah, "sutta", brands like Marlboro / Gold Flake / Classic Ice Burst) → "tobacco"; gutka, pan masala, zarda, khaini → "gutka"; vapes / e-cigarettes → "vape"; alcohol (beer, wine, whisky, "daru", "sharab") → "alcohol". Keep intent=order_new and category as usual. Only for buying — talking about it ("my son drinks too much", "I quit smoking") stays null. Ginger, root beer, non-alcoholic drinks, nicotine gum/patches are NOT blocked.
 - During an active order flow, small talk / health / reminders are NOT order intents.
 Return confidence 0..1.`;
 
@@ -210,6 +214,9 @@ export async function routeSaheliTurn(input: {
             otpCode: p.otpCode?.replace(/\D/g, "") || null,
             ridePickup: p.ridePickup?.trim() || null,
             rideDrop: p.rideDrop?.trim() || null,
+            blockedItem: (["tobacco", "gutka", "vape", "alcohol"] as const).includes(p.blockedItem as "tobacco")
+                ? (p.blockedItem as SaheliRoute["blockedItem"])
+                : null,
             confidence: typeof p.confidence === "number" ? p.confidence : 0.5,
             source: "gemini",
             latencyMs: Date.now() - started,

@@ -354,6 +354,15 @@ export async function handlePharmacyWhatsAppTurn(input: {
 }): Promise<{ text: string; draft?: PharmacyDraft } | null> {
     let text = input.text.trim();
     let draft = await loadDraft(input.phone);
+    // Care guardrail: tobacco / gutka / vapes / alcohol are never ordered (Apollo path too).
+    if (!input.isRxPhoto && !input.mediaUrl) {
+        const { detectBlockedItem, blockedReply, logBlockedRequest } = await import("./commerceAutomation/blockedItems");
+        const hit = detectBlockedItem(text);
+        if (hit) {
+            await logBlockedRequest({ ...input, cat: hit.cat, text, stage: "pharmacy", source: "keywords" });
+            return { text: blockedReply(hit.cat, text) };
+        }
+    }
 
     // Interrupts while a medicine order is open: unrelated chat → companion (order stays open).
     if (draft && draft.phase !== "idle" && draft.phase !== "placed" && !input.isRxPhoto && !input.mediaUrl) {
