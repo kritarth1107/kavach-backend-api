@@ -2901,6 +2901,14 @@ async function mcpSearchCore(
         );
         return { text: `I couldn't find "${q}" near 📍 ${place.short} 🙏\n${why.join("\n")}\n\nTry another name?` };
     }
+    // Named restaurant not on Swiggy near her → say so before the closest matches from elsewhere.
+    if (restaurantName && isFood) {
+        const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const want = n(restaurantName);
+        if (want && !hits.some((h) => n(h.restaurantName || "").includes(want) || want.includes(n(h.restaurantName || "") || "~"))) {
+            lead = [lead, `*${restaurantName}* isn't on Swiggy near you right now 🙏 Closest I found:`].filter(Boolean).join("\n\n");
+        }
+    }
     const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
     for (let k = 0; k < 5; k++) {
         for (const r of results) {
