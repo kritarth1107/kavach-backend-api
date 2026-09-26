@@ -105,6 +105,16 @@ async function applyCachedLocation(ctx: BrowserContext, loc: Loc): Promise<void>
 }
 
 /**
+ * Swiggy's location box has maxlength=30: a longer query gets cut mid-word and matches nothing
+ * ("Lake View Apartments Shyamla H…"). Drop leading words (flat/society) and keep area + city.
+ */
+export function fitLocationQuery(q: string, max: number): string {
+    let words = q.split(/\s+/).filter(Boolean);
+    while (words.length > 2 && words.join(" ").length > max) words = words.slice(1);
+    return words.join(" ").slice(0, max).trim();
+}
+
+/**
  * Set Swiggy's delivery location to the Kavach address (area search → pick the suggestion
  * in the right city). Cached per address for 12h (lat/lng cookie).
  */
@@ -129,7 +139,7 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
         else await page.getByText(/^(Other|Setup your location)$/).first().click({ timeout: 6000 }).catch(() => undefined);
         await input.waitFor({ state: "visible", timeout: 12_000 });
     }
-    const query = locationQueryFor(address);
+    const query = fitLocationQuery(locationQueryFor(address), 30);
     await input.fill(query);
     await page.waitForTimeout(2200);
     const city = (cityOf(address) || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&").trim();

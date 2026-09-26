@@ -1207,6 +1207,12 @@ async function grocerySearchCore(
         }
         // Nothing to confirm: don't leave an empty draft that would ask for *confirm*.
         await saveIfCurrent(input.phone, null, token);
+        // Raw site errors are for logs, not for her: say it honestly and offer another app.
+        if (/Catalog search failed|timeout|locator\.|Call log/i.test(catalog.unavailableReason || "")) {
+            console.warn(`[guest-search] ${playbook.partner} failed:`, (catalog.unavailableReason || "").slice(0, 300));
+            const other = String(playbook.partner) === "blinkit" ? "Instamart" : String(playbook.partner) === "zomato" ? "Swiggy" : "Blinkit";
+            return { text: `${partnerLabel(String(playbook.partner))} didn't load for me just now 🙏 Want me to try *${other}* instead?` };
+        }
         return { text: catalog.unavailableReason || `I couldn't find "${query}" near you. Try another name.` };
     }
     await saveIfCurrent(input.phone, draft, token);
