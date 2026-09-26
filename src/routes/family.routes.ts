@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getUsualsHandler } from "../controllers/usuals.controller";
+import { deleteUsualDeclineHandler, deleteUsualItemHandler, getUsualsHandler } from "../controllers/usuals.controller";
 import {
     acceptInvitation,
     acceptInvitationByIdHandler,
@@ -204,6 +204,8 @@ router.get(
     getActiveOrderSessionHandler,
 );
 router.get("/:familyId/recipients/:recipientUserId/saheli/usuals", protect, getUsualsHandler);
+router.delete("/:familyId/recipients/:recipientUserId/saheli/usuals/items", protect, deleteUsualItemHandler);
+router.delete("/:familyId/recipients/:recipientUserId/saheli/usuals/declines", protect, deleteUsualDeclineHandler);
 router.get("/:familyId/saheli/order-sessions/:sessionId", protect, getOrderSessionHandler);
 router.patch(
     "/:familyId/saheli/order-sessions/:sessionId/address",

@@ -165,3 +165,22 @@ export async function reorderOfferLine(w: Who, lang?: string | null): Promise<st
         ? `${e} Aapka *${u.name}* khatam hone wala hoga — mangwana ho to bas "${ask} mangwa do" likh dijiye.`
         : `${e} Your *${u.name}* is probably running low — just say "${ask}" and I'll get your usual.`;
 }
+
+/** Caregiver/dashboard: forget one usual (by name + app). */
+export async function removeUsualItem(w: Who, name: string, partner: string): Promise<boolean> {
+    const r = await ElderUsuals.updateOne({ familyId: w.familyId, recipientUserId: w.recipientUserId }, { $pull: { items: { name, partner } } } as never);
+    return r.modifiedCount > 0;
+}
+
+/** Caregiver/dashboard: forget one recorded decline (by item + time). */
+export async function removeDecline(w: Who, item: string, at: string): Promise<boolean> {
+    const doc = await ElderUsuals.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId });
+    if (!doc) return false;
+    const t = new Date(at).getTime();
+    const before = (doc.rejections || []).length;
+    doc.rejections = (doc.rejections || []).filter((r) => !(r.item === item && Math.abs(new Date(r.at).getTime() - t) < 1000));
+    if (doc.rejections.length === before) return false;
+    doc.markModified("rejections");
+    await doc.save();
+    return true;
+}
