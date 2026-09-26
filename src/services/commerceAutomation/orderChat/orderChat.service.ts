@@ -135,9 +135,13 @@ export async function orderChatTurn(input: {
     if (!st.language) st.language = input.language || null;
     else if (wordy && input.language && input.language !== "other" && input.language !== st.language) st.language = input.language;
 
-    const profile = await loadHealthProfile(input.familyId, input.recipientUserId).catch(() => null);
+    const [profile, prefs] = await Promise.all([
+        loadHealthProfile(input.familyId, input.recipientUserId).catch(() => null),
+        import("../usuals/usuals.service").then((U) => U.preferenceNotes({ familyId: input.familyId, recipientUserId: input.recipientUserId })).catch(() => ""),
+    ]);
     const prompt = [
         `Health profile (from Kavach):\n${profile ? healthProfileText(profile) : "(unavailable — do NOT assume any condition)"}`,
+        ...(prefs ? [`What Saheli knows about her habits (use it: suggest her usual brand/app first; never re-offer something she declined for a reason that still applies):\n${prefs}`] : []),
         `Known so far: category=${st.category || "?"} platform=${st.partner || "?"} questions_asked=${st.questions}${st.healthRaised ? ` health_note_already_raised_for="${st.healthRaised.item}" (${st.healthRaised.note})` : ""}${st.suggestions?.length ? ` last_suggestions=${st.suggestions.map((s, i) => `${i + 1}.${s}`).join(" ")}` : ""}${st.alternativesFor ? ` (those were alternatives because "${st.alternativesFor}" wasn't found)` : ""}`,
         `Router read of the latest message: intent=${input.routeHint.intent || "?"} product=${input.routeHint.productQuery || "none"} restaurant=${input.routeHint.restaurantName || "none"}`,
         `Reply language: ${st.language === "en" ? "English" : st.language === "hi" ? "Hindi (Devanagari only if she writes Devanagari, else Hinglish)" : st.language === "hinglish" ? "Hinglish" : "match her messages"} — keep it for the whole chat.`,

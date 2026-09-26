@@ -215,7 +215,7 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
     const addr = draft.addressLabel ? `📍 ${draft.addressLabel}` : "";
     const where = draft.restaurantName ? `*${draft.restaurantName}* on *${label}*` : `*${label}*`;
     if (opts.length > 1 && draft.compare) {
-        const shown = opts.slice(0, 5);
+        const shown = opts.slice(0, 3);
         return [
             `Prices for "${draft.productQuery || "your item"}" 🛒`,
             ...shown.map((o, i) => {
@@ -231,7 +231,7 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
             .join("\n");
     }
     if (opts.length > 1) {
-        const shown = opts.slice(0, 5);
+        const shown = opts.slice(0, 3);
         const lines = shown.map((o, i) => {
             const price = formatInr(o.pricePaise);
             return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}`;
@@ -1138,7 +1138,7 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
         };
 
         if (catalog.hits.length) {
-            draft.catalogOptions = catalog.hits.slice(0, 5).map((h) => ({
+            draft.catalogOptions = catalog.hits.slice(0, 3).map((h) => ({
                 id: h.id,
                 name: h.name,
                 pricePaise: h.pricePaise,
@@ -1195,7 +1195,8 @@ async function grocerySearchCore(
         productQuery: query,
         category: kind,
     };
-    const relevant = (await relevantOnly(input.phone, query, catalog.hits.slice(0, 8), kind === "food")).slice(0, 5);
+    const shaped = await shapeFor(input, query, await relevantOnly(input.phone, query, catalog.hits.slice(0, 8), kind === "food"));
+    const relevant = shaped.shown;
     if (relevant.length) {
         draft.catalogOptions = relevant.map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
         if (relevant.length === 1) draft.selectedSku = draft.catalogOptions[0];
@@ -1216,7 +1217,7 @@ async function grocerySearchCore(
         return { text: catalog.unavailableReason || `I couldn't find "${query}" near you. Try another name.` };
     }
     await saveIfCurrent(input.phone, draft, token);
-    return { text: skuConfirmCopy(draft), draft };
+    return { text: shaped.header ? `${shaped.header}\n${skuConfirmCopy(draft)}` : skuConfirmCopy(draft), draft };
 }
 
 /** Zomato dish search → confirm card; nothing usable → an honest "try Swiggy". */
@@ -1266,7 +1267,7 @@ function deferGuestWork(
     ack: string,
     work: (token: number) => Promise<{ text: string }>,
     currentDraft?: BrowserTaskDraft | null,
-): { text: string; draft?: BrowserTaskDraft } {
+): { text: string; draft?: BrowserTaskDraft; deferred: true } {
     const token = bumpGuestWork(input.phone);
     void (async () => {
         let text: string;
@@ -1285,7 +1286,37 @@ function deferGuestWork(
             text,
         }).catch(() => false);
     })();
-    return { text: ack, draft: currentDraft ?? undefined };
+    return { text: ack, draft: currentDraft ?? undefined, deferred: true };
+}
+
+/**
+ * Instinct: how many choices to show. Her usual → just it (with a "Your usual" header);
+ * one clear match → 1; otherwise ≤3; options she declined recently are dropped.
+ */
+async function shapeFor<T extends { name: string; pricePaise?: number; partner?: string }>(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId?: string },
+    query: string,
+    opts: T[],
+): Promise<{ shown: T[]; header: string }> {
+    try {
+        const U = await import("./usuals/usuals.service");
+        const ctx = U.usualCtx(input.phone);
+        const usual = ctx?.usual && ctx.usual.name.toLowerCase() === query.toLowerCase() ? ctx.usual : null;
+        if (usual) U.clearUsualCtx(input.phone);
+        const doc = ctx ? null : await U.loadUsuals({ familyId: input.familyId, recipientUserId: input.recipientUserId || input.actorUserId });
+        const rejections = ctx?.rejections || doc?.rejections || [];
+        const r = U.shapeChoices(query, opts, { usual, rejections });
+        let header = "";
+        if (usual && r.usualHit) {
+            const now = r.shown[0]!.pricePaise;
+            const was = usual.pricePaise;
+            const moved = now && was && Math.abs(now - was) / was > 0.15 ? ` (was ${formatInr(was)} last time)` : "";
+            header = `Your usual ${U.usualEmoji(usual.key, usual.category)}${moved}`;
+        }
+        return { shown: r.shown, header };
+    } catch {
+        return { shown: opts.slice(0, 3), header: "" };
+    }
 }
 
 /** No saved address for this recipient: ask for it and remember the order message to resume. */
@@ -1575,7 +1606,7 @@ async function startFoodFlowCore(
             text: `I couldn't set Swiggy's location to your saved address (📍 ${home.short}), so I won't show restaurants from another area. Please try again in a bit.`,
         };
     }
-    const open = res.restaurants.filter((r) => r.open === true).slice(0, 5);
+    const open = res.restaurants.filter((r) => r.open === true).slice(0, 3);
     if (!open.length) {
         await saveIfCurrent(input.phone, null, token);
         return { text: noOpenRestaurantsCopy(res.restaurants, home.short, dishQuery || undefined) };
@@ -1640,7 +1671,7 @@ async function showRestaurantMenuCore(
     if (!dishes.length && dishQuery) {
         return { text: `*${restaurant}* has nothing matching "${dishQuery}". Send another dish name, or *cancel*.`, draft };
     }
-    dishes = dishes.slice(0, 5);
+    dishes = dishes.slice(0, 3);
     if (!dishes.length) {
         return { text: `I couldn't read *${restaurant}*'s menu 🙏 Pick another restaurant, or *cancel*.`, draft };
     }
@@ -1769,6 +1800,20 @@ async function startParkedCheckoutFromWhatsApp(
             });
             if (run.status === "placed" || run.status === "placed_unverified") {
                 await saveDraft(input.phone, null).catch(() => undefined);
+                if (draft.selectedSku?.name) {
+                    const sku = draft.selectedSku;
+                    void import("./usuals/usuals.service").then(({ recordUsualFromOrder }) =>
+                        recordUsualFromOrder(input, {
+                            query: draft.productQuery || draft.dishQuery,
+                            name: sku.name,
+                            partner: String(sku.partner || draft.partner || "web"),
+                            category: draft.category === "food" ? "food" : draft.category === "pharmacy" ? "pharmacy" : "grocery",
+                            pricePaise: sku.pricePaise,
+                            placeNickname: null,
+                            restaurantName: draft.restaurantName || null,
+                        }),
+                    );
+                }
                 // Caregiver WhatsApp: short order-placed note (item, total, COD, ETA, order id).
                 if (run.status === "placed" && input.actorRole === FamilyRole.CARE_RECIPIENT) {
                     const { notifyCaregiversOrderPlaced } = await import("../saheliCaregiverAlert.service");
@@ -2296,6 +2341,8 @@ type RoutedInput = {
 };
 export type RoutedCommerceResult = {
     text: string;
+    /** text is only a "searching…" ack; the real answer is pushed later. */
+    deferred?: boolean;
     draft?: BrowserTaskDraft;
     delegatePharmacyText?: string;
     /** Address line to show before a delegated (pharmacy) reply ("📍 Sending to *Clinic*."). */
@@ -2743,7 +2790,7 @@ async function compareSearchCore(
             if (h) opts.push({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: (h as { productUrl?: string }).productUrl, partner: p.partner });
         }
     }
-    const shown = opts.slice(0, 5);
+    const { shown } = await shapeFor(input, query, opts);
     const misses = per
         .filter((p) => !p.hits.length)
         .map((p) => (p.rx ? `${partnerLabel(p.partner)}: only prescription medicines matched — send a photo of the prescription for those.` : `${partnerLabel(p.partner)}: nothing matching right now.`));
@@ -2844,7 +2891,7 @@ async function tryMcpRoute(
 }
 
 function mcpOptionsCopy(draft: BrowserTaskDraft): string {
-    const opts = (draft.catalogOptions || []).slice(0, 5);
+    const opts = (draft.catalogOptions || []).slice(0, 3);
     const stores = new Set(opts.map((o) => o.mcp?.store));
     const head = draft.compare && stores.size > 1 ? `Prices for "${draft.productQuery || "your item"}" 🛒` : `Found on *${partnerLabel(String(opts[0]?.partner || draft.partner || ""))}* 🛒`;
     return [
@@ -2996,7 +3043,8 @@ async function mcpSearchCore(
     const misses = results
         .filter((r) => !r.hits.length)
         .map((r) => (r.error === "unserviceable" ? `${MCP_STORE_LABEL[r.store]} doesn't deliver to 📍 ${place.nickname} right now.` : `${MCP_STORE_LABEL[r.store]}: nothing matching right now.`));
-    const shown = opts.slice(0, 5);
+    const shaped = await shapeFor(input, q, opts);
+    const shown = shaped.shown;
     const draft: BrowserTaskDraft = {
         phase: "awaiting_sku_confirm",
         goal: `Order ${q}`,
@@ -3011,8 +3059,15 @@ async function mcpSearchCore(
         mcpPlaceId: place.addressId,
         lastMessage: misses.length ? misses.join("\n") : undefined,
     };
-    await saveIfCurrent(input.phone, draft, token);
-    return { text: lead ? `${lead}\n\n${mcpOptionsCopy(draft)}` : mcpOptionsCopy(draft) };
+    if (!(await saveIfCurrent(input.phone, draft, token))) return { text: "" };
+    // Her usual on a linked store → build the real cart straight away (live price, COD, her
+    // address) and show the single confirm card; she still has to reply *confirm*.
+    if (shaped.header && shown.length === 1) {
+        const card = await handleMcpPickTurn({ ...input, actorRole: input.actorRole ?? null }, draft, "1").catch(() => null);
+        if (card?.text) return { text: [lead, `${shaped.header}\n${card.text}`].filter(Boolean).join("\n\n") };
+    }
+    const copy = shaped.header ? `${shaped.header}\n${mcpOptionsCopy(draft)}` : mcpOptionsCopy(draft);
+    return { text: lead ? `${lead}\n\n${copy}` : copy };
 }
 
 async function mcpPlaceFor(input: { familyId: string }, draft: BrowserTaskDraft): Promise<Place | null> {
@@ -3090,13 +3145,13 @@ async function handleMcpPickTurn(
                       ? `${pick.mcp.restaurantName || "That restaurant"} isn't taking orders right now.`
                       : `${storeLabel} doesn't deliver to 📍 ${place.nickname} right now.`;
             if (others.length && code !== "restaurant_closed") {
-                const next = { ...draft, catalogOptions: others.slice(0, 5), lastMessage: undefined };
+                const next = { ...draft, catalogOptions: others.slice(0, 3), lastMessage: undefined };
                 await saveDraft(input.phone, next);
                 return { text: `${why}\n\n${mcpOptionsCopy(next)}`, draft: next };
             }
             const rest = opts.filter((o) => o !== pick);
             if (rest.length) {
-                const next = { ...draft, catalogOptions: rest.slice(0, 5), lastMessage: undefined };
+                const next = { ...draft, catalogOptions: rest.slice(0, 3), lastMessage: undefined };
                 await saveDraft(input.phone, next);
                 return { text: `${why}\n\n${mcpOptionsCopy(next)}`, draft: next };
             }
@@ -3181,6 +3236,17 @@ async function handleMcpConfirmTurn(
     if (res.status === "placed") {
         await saveDraft(input.phone, null);
         logResult("order_placed", `${label}: order placed ${formatInr(res.totalPaise)} COD`, `${card.itemLine} → ${place.nickname}`);
+        void import("./usuals/usuals.service").then(({ recordUsualFromOrder }) =>
+            recordUsualFromOrder(input, {
+                query: draft.productQuery || draft.dishQuery,
+                name: draft.selectedSku?.name || card.itemLine,
+                partner: String(MCP_TO_PARTNER[card.store] || card.store),
+                category: draft.category === "food" ? "food" : draft.category === "pharmacy" ? "pharmacy" : "grocery",
+                pricePaise: draft.selectedSku?.pricePaise,
+                placeNickname: place.nickname,
+                restaurantName: draft.selectedSku?.mcp?.restaurantName || draft.restaurantName || null,
+            }),
+        );
         if (input.actorRole === FamilyRole.CARE_RECIPIENT) {
             const { notifyCaregiversOrderPlaced } = await import("../saheliCaregiverAlert.service");
             const { getFamilyMembersList } = await import("../familyMember.service");
@@ -3251,7 +3317,7 @@ async function mcpRestaurantList(
     const { listRestaurantsMcp } = await import("./mcpCommerce/mcpCommerce.service");
     try {
         const all = await listRestaurantsMcp(m.ctx, dishQuery);
-        const open = all.filter((r) => r.open).slice(0, 5);
+        const open = all.filter((r) => r.open).slice(0, 3);
         void logActivity({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,

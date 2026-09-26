@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { getUsualsHandler } from "../controllers/usuals.controller";
 import {
     acceptInvitation,
     acceptInvitationByIdHandler,
@@ -202,6 +203,7 @@ router.get(
     protect,
     getActiveOrderSessionHandler,
 );
+router.get("/:familyId/recipients/:recipientUserId/saheli/usuals", protect, getUsualsHandler);
 router.get("/:familyId/saheli/order-sessions/:sessionId", protect, getOrderSessionHandler);
 router.patch(
     "/:familyId/saheli/order-sessions/:sessionId/address",

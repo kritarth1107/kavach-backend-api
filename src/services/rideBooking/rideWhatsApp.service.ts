@@ -178,6 +178,9 @@ async function maybeNotifyCaregivers(input: {
 }): Promise<void> {
     if (input.actorRole !== FamilyRole.CARE_RECIPIENT) return;
     if (input.draft.phase !== "done") return;
+    void import("../commerceAutomation/usuals/usuals.service").then(({ recordRide }) =>
+        recordRide({ familyId: input.familyId, recipientUserId: input.recipientUserId }, input.draft.drop?.shortLabel),
+    );
     void import("../activityLog.service").then(({ logActivity }) =>
         logActivity({
             familyId: input.familyId,

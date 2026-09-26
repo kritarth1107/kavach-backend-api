@@ -1026,6 +1026,78 @@ const NOT_A_FLOW_REPLY = new Set([
 /** Non-commerce intents whose slots the dashboard-parity executor fills (reminders, approvals, DND, briefs…). */
 const DASHBOARD_INTENTS = new Set(["reminder_or_meds", "caregiver_share", "account_info", "order_status_history"]);
 
+/** The usual's health check + search + card, pushed as a follow-up (the ack already went out). */
+async function runUsualInBackground(
+    input: { phone: string; familyId: string; actorUserId: string; recipientUserId: string; actorRole: FamilyRole },
+    route: SaheliRoute,
+    text: string,
+    u: import("../models/elderUsuals.model").UsualItem,
+): Promise<void> {
+    const { pushWhatsAppBrowserFollowUp } = await import("./commerceAutomation/browserProgressNotify.service");
+    const push = (t: string) =>
+        t.trim()
+            ? pushWhatsAppBrowserFollowUp({ phone: input.phone, familyId: input.familyId, recipientUserId: input.recipientUserId, text: t }).catch(() => false)
+            : Promise.resolve(false);
+    try {
+        // Health check still runs on a usual (e.g. mithai with diabetes) — same order chat, same rules.
+        const { loadHealthProfile } = await import("./commerceAutomation/orderChat/healthProfile");
+        const hp = await loadHealthProfile(input.familyId, input.recipientUserId).catch(() => null);
+        if (hp && (hp.notes.length || hp.medicines.length || hp.profileMd.trim())) {
+            const { orderChatTurn } = await import("./commerceAutomation/orderChat/orderChat.service");
+            const d = await orderChatTurn({
+                ...input,
+                text: `${text} (her usual: ${u.name})`,
+                language: route.language,
+                routeHint: { category: u.category, productQuery: u.name, partners: [u.partner], restaurantName: u.restaurantName || null, addressNickname: u.placeNickname || null, intent: "order_new" },
+                state: null,
+            });
+            if (d.action === "reply") {
+                const { clearUsualCtx } = await import("./commerceAutomation/usuals/usuals.service");
+                clearUsualCtx(input.phone);
+                await push(d.text);
+                return;
+            }
+            if (d.action === "search" && conceptKeyDiffers(d.query, u)) {
+                // The model steered to something else (e.g. a health-guided swap) → normal search.
+                const { clearUsualCtx } = await import("./commerceAutomation/usuals/usuals.service");
+                clearUsualCtx(input.phone);
+                const { handleRoutedCommerceTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+                const r = await handleRoutedCommerceTurn(input, { ...route, productQuery: d.query, category: d.category, partners: d.partner ? [d.partner] : [], blockedItem: null }, text);
+                if (r?.text && !r.deferred) await push(r.text);
+                return;
+            }
+        }
+        const r2: SaheliRoute = {
+            ...route,
+            intent: "order_new",
+            control: "none",
+            pickIndex: null,
+            partnerOnly: false,
+            productQuery: u.name,
+            category: u.category,
+            partners: [u.partner],
+            restaurantName: u.restaurantName || null,
+            addressNickname: route.addressNickname || u.placeNickname || null,
+            blockedItem: null,
+        };
+        const { handleRoutedCommerceTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        const r = await handleRoutedCommerceTurn(input, r2, text);
+        if (r?.delegatePharmacyText) {
+            const { handlePharmacyWhatsAppTurn } = await import("./pharmacyOrderFlow.service");
+            const pr = await handlePharmacyWhatsAppTurn({ ...input, text: r.delegatePharmacyText });
+            if (pr) await push(r.lead ? `${r.lead}\n\n${pr.text}` : pr.text);
+        } else if (r?.text && !r.deferred) await push(r.text);
+        else if (r?.deferred && r.lead) await push(r.lead);
+    } catch (err) {
+        console.warn("[usuals] background failed:", err instanceof Error ? err.message : err);
+        await push("That didn't load for me just now 🙏 Please ask me again in a minute.");
+    }
+}
+function conceptKeyDiffers(q: string, u: { name: string }): boolean {
+    const n = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return !n(u.name).includes(n(q)) && !n(q).includes(n(u.name));
+}
+
 /**
  * Executes a Gemini route. Returns a reply, or tells the caller whether the regex gates
  * may still run (only for commerce intents the executors couldn't place).
@@ -1075,6 +1147,38 @@ async function dispatchRoutedTurn(a: {
             return { reply: blockedReply(cat, text, route.language), legacyGates: false, allowDashboard: false };
         }
     }
+    // Instinct: she turned down the single item on a card / swapped it → remember why.
+    if (liveFlow(bd) && (bd!.phase === "awaiting_sku_confirm" || bd!.phase === "awaiting_mcp_confirm" || bd!.phase === "awaiting_confirm")) {
+        const b = bd as unknown as { selectedSku?: { name: string; partner?: string }; catalogOptions?: Array<{ name: string; partner?: string }>; partner?: string };
+        const one = b.selectedSku || (b.catalogOptions?.length === 1 ? b.catalogOptions[0] : null);
+        const swap = (route.intent === "order_modify" || route.intent === "order_new") && route.productQuery && one && !one.name.toLowerCase().includes(route.productQuery.toLowerCase());
+        if (one?.name && (route.control === "cancel" || swap)) {
+            void import("./commerceAutomation/usuals/usuals.service").then(({ noteDecline }) =>
+                noteDecline(
+                    { familyId: a.familyId, recipientUserId: a.recipientUserId },
+                    { item: one.name, partner: String(one.partner || b.partner || ""), reason: text.slice(0, 160), replacedWith: swap ? route.productQuery : null },
+                ),
+            );
+        }
+    }
+    // Instinct: a familiar ask ("doodh mangwa do") → her usual. Instant ack now; the store work
+    // (health check → live search → one confirm card) runs in the background and is pushed.
+    if (route.intent === "order_new" && !a.mediaUrl && !a.isRxPhoto && !liveFlow(bd)) {
+        const { orderChatActive } = await import("./commerceAutomation/orderChat/orderChat.service");
+        if (!orderChatActive(doc?.orderChat)) {
+            const U = await import("./commerceAutomation/usuals/usuals.service");
+            const hit = await U.resolveUsual(
+                { familyId: a.familyId, recipientUserId: a.recipientUserId },
+                { query: route.productQuery, text, category: route.category, partners: route.partners },
+            ).catch(() => null);
+            if (hit?.usual) {
+                const u = hit.usual;
+                U.setUsualCtx(a.phone, { usual: u, rejections: hit.rejections, query: route.productQuery || text, ackSent: true });
+                void runUsualInBackground(input, route, text, u);
+                return { reply: U.usualAck(u), legacyGates: false, allowDashboard: false };
+            }
+        }
+    }
     // Conversational ordering (product rule): a vague ask never jumps to a store search — Gemini
     // chats (one question, 2–3 suggestions) until it's specific, and checks the item against her
     // health profile first. A clear specific ask goes straight to the search below.
@@ -1085,6 +1189,15 @@ async function dispatchRoutedTurn(a: {
         const newAsk = (route.intent === "order_new" || route.intent === "restaurant_list") && !media;
         const chatReply = Boolean(oc) && !media && !NOT_A_FLOW_REPLY.has(route.intent) && route.intent !== "ride" && route.intent !== "otp_code";
         if (newAsk || chatReply) {
+            // No long silences: if the order chat is slow, a short ack goes out first.
+            let slowAck: NodeJS.Timeout | null = null;
+            if (newAsk && !oc) {
+                slowAck = setTimeout(() => {
+                    void import("./commerceAutomation/browserProgressNotify.service").then(({ pushWhatsAppBrowserFollowUp }) =>
+                        pushWhatsAppBrowserFollowUp({ phone: a.phone, familyId: a.familyId, recipientUserId: a.recipientUserId, text: route.language === "en" ? "On it 👍" : "Dekh rahi hoon 👍" }).catch(() => false),
+                    );
+                }, 2500);
+            }
             const d = await orderChatTurn({
                 phone: a.phone,
                 familyId: a.familyId,
@@ -1101,7 +1214,7 @@ async function dispatchRoutedTurn(a: {
                     intent: route.intent,
                 },
                 state: oc,
-            });
+            }).finally(() => slowAck && clearTimeout(slowAck));
             if (d.action === "reply") return { reply: d.text, legacyGates: false, allowDashboard: false };
             if (d.action === "search" || d.action === "restaurants") {
                 const r2: SaheliRoute =

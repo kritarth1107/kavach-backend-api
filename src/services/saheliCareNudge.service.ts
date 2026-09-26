@@ -36,13 +36,21 @@ export async function deliverCareNudge(input: {
     preferredChannel: "whatsapp" | "phone" | "dashboard";
     preferredLanguage?: string;
 }): Promise<boolean> {
-    const text = buildCareNudgeText({
+    let text = buildCareNudgeText({
         nudgeKind: input.nudgeKind,
         title: input.title,
         time: input.time,
         displayName: input.displayName,
         preferredLanguage: input.preferredLanguage,
     });
+    // Instinct: a due usual (medicine top-up / milk) rides inside the once-a-day schedule
+    // message — no extra nudge, no question ending.
+    if (input.nudgeKind === "daily_schedule") {
+        const line = await import("./commerceAutomation/usuals/usuals.service")
+            .then((U) => U.reorderOfferLine({ familyId: input.familyId, recipientUserId: input.recipientUserId }, input.preferredLanguage))
+            .catch(() => "");
+        if (line) text = `${text}\n\n${line}`;
+    }
 
     const payloads = buildCareNudgeMessages({
         text,

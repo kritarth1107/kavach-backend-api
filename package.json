@@ -16,7 +16,8 @@
     "test:nudge-streak": "tsx scripts/test-nudge-streak.ts",
     "test:blocked-items": "tsx scripts/test-blocked-items.ts",
     "test:order-chat": "tsx scripts/test-order-chat.ts",
-    "test:remote-browser": "tsx scripts/test-remote-browser.ts"
+    "test:remote-browser": "tsx scripts/test-remote-browser.ts",
+    "test:usuals": "tsx scripts/test-usuals.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",
