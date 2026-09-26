@@ -171,9 +171,11 @@ function parseEtaMax(eta?: string): number | undefined {
     return Number(m[2] || m[1]);
 }
 
+const AD_LINE = /^(ad|sponsored|promoted)$/i;
+
 function parseListCard(lines: string[]): GuestRestaurant | null {
     const name = lines[0];
-    if (!name) return null;
+    if (!name || AD_LINE.test(name)) return null;
     const rl = lines.find((l) => /•/.test(l) && /min/i.test(l)) || "";
     const rating = rl.match(/^(\d(?:\.\d)?)/)?.[1];
     const eta = rl.match(/(\d+\s*-\s*\d+\s*mins?|\d+\s*mins?)/i)?.[1];
@@ -264,6 +266,8 @@ export async function listSwiggyRestaurants(input: {
                 )
                 .catch(() => [])) as Array<{ closed: boolean; lines: string[] }>;
             const restaurants = cards
+                // Sponsored cards ("Ad" first line) are promotions, not search matches — skip them.
+                .filter((c) => !AD_LINE.test(c.lines[0] || ""))
                 .map((c): GuestRestaurant | null => {
                     const name = c.lines[0];
                     if (!name) return null;
