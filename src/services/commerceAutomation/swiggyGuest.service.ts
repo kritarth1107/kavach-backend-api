@@ -335,6 +335,9 @@ export async function swiggyRestaurantMenu(input: {
 }
 
 /** Instamart item search at the Kavach address (guest). */
+/** Last "no item cards" page snippet (secret-gated debug only; no user data). */
+export let lastInstamartDebug = "";
+
 export async function instamartSearch(input: {
     address: string;
     query: string;
@@ -356,6 +359,7 @@ export async function instamartSearch(input: {
         if (!found) {
             const body = ((await page.locator("body").innerText().catch(() => "")) || "").replace(/\s+/g, " ").slice(0, 300);
             console.warn("[instamart-guest] no item cards", { url: page.url(), body });
+            lastInstamartDebug = `${page.url().slice(0, 80)} | ${body.slice(0, 200)}`;
         }
         await page.waitForTimeout(1500);
         const cards = (await page

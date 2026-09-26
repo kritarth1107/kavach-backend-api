@@ -2167,6 +2167,12 @@ async function compareSearchCore(
     const per = results.map((r, i) => {
         const hits = r.hits.filter((h) => !(h as { requiresRx?: boolean }).requiresRx && (h as { inStock?: boolean }).inStock !== false);
         const rx = r.hits.length - hits.length;
+        if (partners[i] === "instamart" && !r.hits.length) {
+            void import("./swiggyGuest.service").then(({ lastInstamartDebug }) => {
+                if (lastInstamartDebug)
+                    guestDebug.set(input.phone, [...(guestDebug.get(input.phone) || []).slice(-3), { at: Date.now(), partner: "instamart", reason: lastInstamartDebug }]);
+            });
+        }
         // Raw site errors are for logs, not for the elder.
         if (/Catalog search failed|timeout|locator\./i.test(r.unavailableReason || "")) {
             console.warn(`[compare] ${partners[i]} failed:`, (r.unavailableReason || "").slice(0, 300));

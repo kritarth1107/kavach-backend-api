@@ -28,6 +28,9 @@ export function vertexProModel(): string {
     return process.env.VERTEX_SNAPSHOT_MODEL?.trim() || "gemini-3.5-pro";
 }
 
+/** Last Vertex failure (status + short body) for secret-gated debug. */
+export let lastVertexError = "";
+
 export async function vertexGenerateText(input: {
     model: string;
     prompt: string;
@@ -69,7 +72,9 @@ export async function vertexGenerateText(input: {
             }),
         });
         if (!res.ok) {
-            console.warn(`vertex ${input.model} HTTP ${res.status}`);
+            const errBody = await res.text().catch(() => "");
+            lastVertexError = `HTTP ${res.status} ${errBody.replace(/\s+/g, " ").slice(0, 200)}`;
+            console.warn(`vertex ${input.model} ${lastVertexError}`);
             return null;
         }
         const body = (await res.json()) as {
@@ -82,6 +87,7 @@ export async function vertexGenerateText(input: {
             .trim();
         return text || null;
     } catch (err) {
+        lastVertexError = `failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200);
         console.warn(`vertex ${input.model} failed:`, err instanceof Error ? err.message : err);
         return null;
     } finally {

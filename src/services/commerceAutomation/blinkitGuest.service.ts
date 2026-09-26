@@ -28,7 +28,16 @@ async function setBlinkitLocation(ctx: BrowserContext, page: Page, address: stri
     }
     await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded", timeout: 25_000 });
     const input = page.locator('input[name="select-locality"], input[placeholder*="delivery location" i]').first();
-    if (!(await input.waitFor({ state: "visible", timeout: 20_000 }).then(() => true).catch(() => false))) {
+    // Some hosts don't get the auto-opened location modal: open it from the header.
+    if (!(await input.waitFor({ state: "visible", timeout: 8_000 }).then(() => true).catch(() => false))) {
+        await page
+            .locator("header, [class*='LocationBar'], [class*='location' i]")
+            .getByText(/delivery in|select location|detect my location|location/i)
+            .first()
+            .click({ timeout: 4000 })
+            .catch(() => undefined);
+    }
+    if (!(await input.waitFor({ state: "visible", timeout: 12_000 }).then(() => true).catch(() => false))) {
         const snip = ((await page.evaluate(() => `${document.title} | ${document.body?.innerText || ""}`).catch(() => "")) as string)
             .replace(/\s+/g, " ")
             .slice(0, 160);

@@ -7,7 +7,7 @@
  * Model: Gemini 3.5 Flash (VERTEX_ROUTER_MODEL) — Pro adds ~3–6 s per turn, too slow for a
  * router that runs on every message under the 35 s WhatsApp SLA.
  */
-import { vertexGenerateText, parseJsonLoose, vertexFlashModel } from "../clients/vertexGemini.client";
+import { vertexGenerateText, parseJsonLoose, vertexFlashModel, lastVertexError } from "../clients/vertexGemini.client";
 
 export const ROUTER_INTENTS = [
     "order_new",
@@ -130,7 +130,7 @@ export function recentTurns(phone: string): string {
 }
 
 const cache = new Map<string, { at: number; route: SaheliRoute | null }>();
-const lastRoutes = new Map<string, { at: number; route: SaheliRoute | null; state: string[] }>();
+const lastRoutes = new Map<string, { at: number; route: SaheliRoute | null; state: string[]; attempt?: number; raw?: string | null }>();
 
 /** Secret-gated mock/debug only: this phone's last route (never another phone's). */
 export function lastRouteFor(phone: string) {
@@ -150,19 +150,27 @@ export async function routeSaheliTurn(input: {
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < 20_000) return hit.route;
     const started = Date.now();
-    const raw = await vertexGenerateText({
-        model: process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel(),
-        system: SYSTEM,
-        responseSchema: SCHEMA,
-        timeoutMs: Number(process.env.VERTEX_ROUTER_TIMEOUT_MS) || 6000,
-        maxOutputTokens: 400,
-        prompt: [
-            `Sender: ${input.role}`,
-            `Active flows: ${input.state.length ? input.state.join(" | ") : "none"}`,
-            `Recent turns:\n${recentTurns(input.phone) || "(none)"}`,
-            `Message: ${text.slice(0, 600)}`,
-        ].join("\n\n"),
-    });
+    const call = (timeoutMs: number) =>
+        vertexGenerateText({
+            model: process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel(),
+            system: SYSTEM,
+            responseSchema: SCHEMA,
+            timeoutMs,
+            // Thinking models spend output tokens before the JSON — leave room or it truncates.
+            maxOutputTokens: 2048,
+            prompt: [
+                `Sender: ${input.role}`,
+                `Active flows: ${input.state.length ? input.state.join(" | ") : "none"}`,
+                `Recent turns:\n${recentTurns(input.phone) || "(none)"}`,
+                `Message: ${text.slice(0, 600)}`,
+            ].join("\n\n"),
+        });
+    let raw = await call(Number(process.env.VERTEX_ROUTER_TIMEOUT_MS) || 7000);
+    let attempt = 1;
+    if (!parseJsonLoose<{ intent?: string }>(raw)?.intent && Date.now() - started < 6000) {
+        attempt = 2;
+        raw = await call(5000); // one quick retry (transient Vertex error / truncated JSON)
+    }
     const p = parseJsonLoose<Partial<SaheliRoute>>(raw);
     let route: SaheliRoute | null = null;
     if (p && typeof p.intent === "string" && (ROUTER_INTENTS as readonly string[]).includes(p.intent)) {
@@ -187,8 +195,8 @@ export async function routeSaheliTurn(input: {
             latencyMs: Date.now() - started,
         };
     }
-    cache.set(key, { at: Date.now(), route });
-    lastRoutes.set(keyOf(input.phone), { at: Date.now(), route, state: input.state });
+    if (route) cache.set(key, { at: Date.now(), route });
+    lastRoutes.set(keyOf(input.phone), { at: Date.now(), route, state: input.state, attempt, raw: route ? null : `${(raw ?? "").slice(0, 160)} | ${lastVertexError.slice(0, 160)}` });
     if (lastRoutes.size > 2000) lastRoutes.delete(lastRoutes.keys().next().value as string);
     if (cache.size > 1000) cache.delete(cache.keys().next().value as string);
     return route;
