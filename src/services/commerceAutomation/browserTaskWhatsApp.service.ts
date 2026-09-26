@@ -2024,10 +2024,16 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
         }
         case "order_modify": {
             if (route.addressKind) {
-                log(`address:${route.addressKind}`);
-                if (active && draft) return { text: await addressReply(input, draft, route.addressKind, route.addressText || rawText, home), draft };
-                if (route.addressKind === "other") {
-                    const parsed = parseAddressReply(route.addressText || rawText);
+                // A full address with a pincode is always a set/update ("my address is …" reads as "same").
+                const kind = parseAddressReply((route.addressText || rawText).replace(/^.*?\b(?:address\s+is|deliver\s+to|send\s+to)\s+/i, "")) || parseAddressReply(rawText)
+                    ? "other"
+                    : route.addressKind;
+                log(`address:${kind}`);
+                if (active && draft) return { text: await addressReply(input, draft, kind, route.addressText || rawText, home), draft };
+                if (kind === "other") {
+                    const parsed =
+                        parseAddressReply((route.addressText || rawText).replace(/^.*?\b(?:address\s+is|deliver\s+to|send\s+to)\s+/i, "")) ||
+                        parseAddressReply(rawText);
                     if (parsed) {
                         await saveRecipientDeliveryAddress({
                             familyId: input.familyId,
