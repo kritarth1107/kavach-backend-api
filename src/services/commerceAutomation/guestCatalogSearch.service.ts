@@ -597,7 +597,9 @@ export async function searchGuestCatalog(input: {
                     ? undefined
                     : res.items.length
                       ? `Instamart shows nothing matching "${query}" near you. Try another name.`
-                      : `Instamart's page didn't show any products for your address just now — the store may be closed at this hour or the site didn't load for me. Please try again in a while.`,
+                      : (await import("./swiggyGuest.service")).lastInstamartDebug.includes("Something went wrong")
+                        ? `Instamart's website showed an error to my browser (it may be blocking automated visits right now). Please try again later.`
+                        : `Instamart's page didn't show any products for your address just now — the store may be closed at this hour or the site didn't load for me. Please try again in a while.`,
                 partner,
                 query,
             };

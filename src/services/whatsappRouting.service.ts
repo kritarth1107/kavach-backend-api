@@ -1053,8 +1053,12 @@ async function dispatchRoutedTurn(a: {
 
     // 1) Slot-filling steps get the raw message unless it's clearly something else.
     if (liveFlow(bd) && bd!.phase === "awaiting_address" && flowReply) {
-        const { handleBrowserTaskWhatsAppTurn } = await import("./commerceAutomation/browserTaskWhatsApp.service");
-        const r = await handleBrowserTaskWhatsAppTurn({ ...input, text, routed: true });
+        const { handleBrowserTaskWhatsAppTurn, handleRoutedCommerceTurn } = await import(
+            "./commerceAutomation/browserTaskWhatsApp.service"
+        );
+        const r = commerce
+            ? await handleRoutedCommerceTurn(input, route, text)
+            : await handleBrowserTaskWhatsAppTurn({ ...input, text, routed: true });
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
     }
     const newOrder = route.intent === "order_new" || route.intent === "restaurant_list";

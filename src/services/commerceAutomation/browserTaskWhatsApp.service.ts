@@ -109,6 +109,8 @@ export type BrowserTaskDraft = {
     category?: "food" | "grocery" | "pharmacy" | "other";
     /** Options came from several platforms (price comparison). */
     compare?: boolean;
+    /** awaiting_address (router path): what to search once the address is saved. */
+    pendingRoute?: { category: "food" | "grocery" | "pharmacy" | "other"; query: string; partner?: string; restaurantName?: string };
     confirm?: {
         items?: string[];
         totalLabel?: string;
@@ -374,9 +376,24 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
         });
         const pending = draft.pendingText;
         const resumeHint = draft.lastMessage;
+        const pendingRoute = draft.pendingRoute;
         // Keep any pharmacy draft (address asked at its confirm step); clear only this draft.
         await WhatsappSession.findOneAndUpdate({ phone: input.phone }, { $unset: { browserTaskDraft: 1 } });
         const saved = `Saved your delivery address ✅\n📍 ${parsed.full}`;
+        if (pendingRoute) {
+            const newHome = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
+            const resumed = await startRoutedSearch(
+                input,
+                newHome,
+                pendingRoute.category,
+                pendingRoute.query,
+                pendingRoute.partner,
+                null,
+                pendingRoute.query,
+                pendingRoute.restaurantName,
+            );
+            if (resumed?.text) return { text: `${saved}\n\n${resumed.text}`, draft: resumed.draft };
+        }
         if (pending) {
             const resumed = await handleBrowserTaskWhatsAppTurn({ ...input, text: pending });
             if (resumed) return { text: `${saved}\n\n${resumed.text}`, draft: resumed.draft };
@@ -1945,8 +1962,26 @@ export async function handleRoutedCommerceTurn(input: RoutedInput, route: Saheli
             data: { intent, phase: draft?.phase || null, source: "gemini_router", confidence: route.confidence },
         });
 
-    // Slot filling: the address reply goes verbatim to the address step.
-    if (draft?.phase === "awaiting_address") return ctl(rawText);
+    // Slot filling: the address reply goes verbatim to the address step — unless they're
+    // only adjusting the pending order (platform / item) before giving the address.
+    if (draft?.phase === "awaiting_address") {
+        const adjust = !route.addressKind && (route.partners[0] || route.productQuery) && (route.intent === "order_modify" || route.intent === "order_new");
+        if (adjust && draft.pendingRoute) {
+            const partner = route.partners[0];
+            draft.pendingRoute = {
+                ...draft.pendingRoute,
+                ...(route.productQuery ? { query: route.productQuery } : {}),
+                ...(partner ? { partner, category: categoryFor(route, partner) } : {}),
+            };
+            await saveDraft(input.phone, draft);
+            const what = `"${draft.pendingRoute.query}"${draft.pendingRoute.partner ? ` on *${partnerLabel(draft.pendingRoute.partner)}*` : ""}`;
+            return {
+                text: `Got it 👍 I'll look for ${what} as soon as I have your delivery address.\nPlease send it with the 6-digit pincode (flat/house, street/society, area, city, pincode) — or *cancel*.`,
+                draft,
+            };
+        }
+        return ctl(rawText);
+    }
 
     if (route.productQuery) rememberAsk(input.phone, { query: route.productQuery, category: route.category || undefined, partner: route.partners[0] });
     else if (route.partners[0]) rememberAsk(input.phone, { partner: route.partners[0] });
@@ -2086,7 +2121,11 @@ async function startRoutedSearch(
     }
     if (!home) {
         const pending = partner ? `order ${q || "food"} from ${partner}` : rawText;
-        return askForAddress(input, pending);
+        const asked = await askForAddress(input, pending);
+        asked.draft.pendingRoute = { category, query: q, partner, restaurantName: restaurantName || undefined };
+        asked.draft.pendingText = undefined;
+        await saveDraft(input.phone, asked.draft);
+        return asked;
     }
 
     // Restaurant food → Swiggy (Zomato blocked).
@@ -2134,10 +2173,10 @@ async function startRoutedSearch(
     const cat = category === "pharmacy" ? "pharmacy" : "grocery";
     const partners = COMPARE_PARTNERS[cat];
     const names = partners.map((p) => `*${partnerLabel(p)}*`).join(" and ");
-    const blockedNote = cat === "grocery" ? " (Zepto blocks automated browsing, so I can't include it.)" : "";
+    const blockedNote = cat === "grocery" && !/zepto/i.test(note) ? " (Zepto blocks automated browsing, so I can't include it.)" : "";
     return deferGuestWork(
         input,
-        `${note ? `${note}.\n` : ""}Comparing ${names} for "${q}" near 📍 ${home.short} 🔎 — I'll send the prices in a moment.${blockedNote}`,
+        `${note ? `${note}\n` : ""}Comparing ${names} for "${q}" near 📍 ${home.short} 🔎 — I'll send the prices in a moment.${blockedNote}`,
         (token) => compareSearchCore(input, cat, q, partners, home, token),
     );
 }
