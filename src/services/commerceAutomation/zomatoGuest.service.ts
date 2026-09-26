@@ -32,7 +32,7 @@ const SCHEMA = JSON.stringify({
                     veg: { type: "boolean" },
                     restaurant_url: { type: "string" },
                 },
-                required: ["dish", "restaurant", "price_rupees"],
+                required: ["dish", "restaurant"],
             },
         },
         notes: { type: "string" },
@@ -53,7 +53,7 @@ function task(address: string, query: string): string {
         `1. Set the DELIVERY location: click the location box in the top bar, type "${loc}" and pick the suggestion in ${cityOf(address) || "the same city"}${pincodeOf(address) ? ` (pincode ${pincodeOf(address)})` : ""}. Do not use "detect my location".`,
         `2. Type "${query}" in the search box and press Enter / pick the dish or restaurant suggestion.`,
         `3. The results list restaurants. Open the top 3 OPEN restaurants one by one (same tab, then go back) and in each menu find the item(s) that best match "${query}" with their price. If the search term is a restaurant name, open that restaurant and list its matching items.`,
-        `4. Report up to 6 results: dish name, restaurant name, the PRICE in rupees exactly as shown on the menu (required — skip an item if you can't read its price), veg or not, and the restaurant page URL. Skip closed restaurants, add-ons, sauces and extras. Don't spend more than ~25 steps.`,
+        `4. Report up to 6 results: dish name, restaurant name, the price in rupees exactly as shown on the menu (Zomato often hides menu prices from guests — then leave the price out, never guess it), veg or not, and the restaurant page URL. Skip closed restaurants, add-ons, sauces and extras. Don't spend more than ~25 steps.`,
         `If an access-denied / captcha page blocks you, stop and report blocked=true. Then finish.`,
     ].join("\n");
 }

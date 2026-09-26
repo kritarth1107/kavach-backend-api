@@ -1225,7 +1225,16 @@ async function zomatoSearchCore(
         console.warn("[zomato-guest] failed:", err instanceof Error ? err.message : err);
         return null;
     });
-    if (r) return r;
+    if (r) {
+        // Zomato hides menu prices from guests: say so; the exact total is on the final card
+        // (read from the real cart after sign-in) before anything is ordered.
+        const opts = r.draft?.catalogOptions || (r.draft?.selectedSku ? [r.draft.selectedSku] : []);
+        if (opts.some((o) => !o.pricePaise)) {
+            return { ...r, text: `${r.text}
+_Zomato shows prices only after sign-in — you'll see the exact total on the final card before anything is ordered._` };
+        }
+        return r;
+    }
     await saveIfCurrent(input.phone, null, token);
     return { text: `Zomato didn't load for me just now 🙏 Want me to look on *Swiggy* instead?` };
 }
