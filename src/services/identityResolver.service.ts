@@ -237,6 +237,9 @@ export async function resolveRecipientWhatsAppPhone(
             user?.phone?.countryCode && isInternalPhone(user.phone.countryCode)
                 ? `${user.phone.countryCode}${user.phone.number ?? ""}`.replace(/\D/g, "")
                 : "";
+        // Smoke +999 fixtures resolve (deliverOutboundMessage simulates their sends; never Meta).
+        const { isSmokeFixturePhone } = await import("./smokeFixtures.service");
+        if (isSmokeFixturePhone(candidate)) return candidate;
         if (
             candidate.replace(/\D/g, "") !== userPlaceholderKey &&
             !(await isPlaceholderWhatsAppNumber(candidate))
