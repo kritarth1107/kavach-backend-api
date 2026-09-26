@@ -65,6 +65,12 @@ app.use("/internal", internalRoutes);
 
 app.use(errorHandler);
 
+// A stray rejected promise (async route without try/catch, background browser work) must
+// never take the whole service down mid-conversation for every family.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason instanceof Error ? reason.stack || reason.message : reason);
+});
+
 app.listen(PORT, () => {
   console.log(`Kavach Backend running on port ${PORT}`);
   startOutreachScheduler();

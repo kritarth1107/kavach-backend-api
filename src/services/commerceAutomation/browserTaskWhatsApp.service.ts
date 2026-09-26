@@ -392,7 +392,11 @@ export async function handleBrowserTaskWhatsAppTurn(input: {
                 pendingRoute.query,
                 pendingRoute.restaurantName,
             );
-            if (resumed?.text) return { text: `${saved}\n\n${resumed.text}`, draft: resumed.draft };
+            if (resumed?.delegatePharmacyText) {
+                const { handlePharmacyWhatsAppTurn } = await import("../pharmacyOrderFlow.service");
+                const pr = await handlePharmacyWhatsAppTurn({ ...input, text: resumed.delegatePharmacyText });
+                if (pr?.text) return { text: `${saved}\n\n${pr.text}` };
+            } else if (resumed?.text) return { text: `${saved}\n\n${resumed.text}`, draft: resumed.draft };
         }
         if (pending) {
             const resumed = await handleBrowserTaskWhatsAppTurn({ ...input, text: pending });

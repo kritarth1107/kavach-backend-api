@@ -434,7 +434,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         touchWhatsAppInbound,
         parseLanguageChangeMessage,
         languageChangeConfirmation,
-        updateCompanionProfile,
+        setOwnPreferredLanguage,
     } = await import("./saheliCompanion.service");
     if (identity.role === FamilyRole.CARE_RECIPIENT) {
         await touchWhatsAppInbound(identity.familyId, identity.userId);
@@ -451,12 +451,8 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             }
         }
         if (langChange) {
-            await updateCompanionProfile(
-                identity.familyId,
-                identity.userId,
-                identity.userId,
-                { preferredLanguage: langChange },
-            );
+            // Elder's own setting (updateCompanionProfile is caregiver-only and threw 403 here).
+            await setOwnPreferredLanguage(identity.familyId, identity.userId, langChange);
             return outbound(phone, languageChangeConfirmation(langChange));
         }
     }

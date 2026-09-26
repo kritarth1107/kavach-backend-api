@@ -283,7 +283,14 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
             return;
         }
     }
-    const reply = await handleWhatsAppInbound(req.body);
+    let reply: Awaited<ReturnType<typeof handleWhatsAppInbound>>;
+    try {
+        reply = await handleWhatsAppInbound(req.body);
+    } catch (err) {
+        console.warn("mock WhatsApp inbound failed:", err instanceof Error ? err.message : err);
+        res.status(500).json({ success: false, message: err instanceof Error ? err.message.slice(0, 200) : "failed" });
+        return;
+    }
     const saheli =
         typeof req.body?.from === "string" ? await buildWhatsAppMockPeek(req.body.from).catch(() => null) : null;
     const { lastRouteFor } = await import("../services/saheliRouter.service");

@@ -72,6 +72,22 @@ export async function getCompanionProfile(
     return doc;
 }
 
+/**
+ * The elder changing Saheli's language for THEMSELF from WhatsApp (self-service; scoped to
+ * their own family + recipient row). Caregiver-only settings stay in updateCompanionProfile.
+ */
+export async function setOwnPreferredLanguage(
+    familyId: string,
+    recipientUserId: string,
+    preferredLanguage: SaheliLanguage,
+): Promise<void> {
+    await SaheliCompanion.findOneAndUpdate(
+        { familyId, recipientUserId },
+        { $set: { preferredLanguage }, $setOnInsert: { familyId, recipientUserId, ...DEFAULT_COMPANION } },
+        { upsert: true },
+    );
+}
+
 export async function updateCompanionProfile(
     familyId: string,
     recipientUserId: string,
