@@ -1071,10 +1071,22 @@ async function dispatchRoutedTurn(a: {
     }
     const newOrder = route.intent === "order_new" || route.intent === "restaurant_list";
     // Ride slots the model extracted → the "from X to Y" form the ride slot-filler parses.
-    const rideText =
-        route.ridePickup || route.rideDrop
-            ? [route.ridePickup ? `from ${route.ridePickup}` : "", route.rideDrop ? `to ${route.rideDrop}` : ""].filter(Boolean).join(" ")
-            : text;
+    // Places are resolved near THIS elder's own saved address ("station" → "station, Bhopal";
+    // "home"/"ghar" → their saved address) — otherwise the geocoder picks another country.
+    let rideText = text;
+    if (route.ridePickup || route.rideDrop) {
+        const { getRecipientDeliveryAddress } = await import("./commerceAutomation/recipientAddress.service");
+        const { cityOf } = await import("./commerceAutomation/kavachAddress");
+        const home = await getRecipientDeliveryAddress(a.familyId, a.recipientUserId).catch(() => null);
+        const city = home ? cityOf(home.full) : "";
+        const place = (p: string) => {
+            if (/^(home|my home|ghar|mera ghar|apna ghar|house|my house)$/i.test(p.trim())) return home?.full || p;
+            return city && !new RegExp(`\\b${city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(p) ? `${p}, ${city}` : p;
+        };
+        rideText = [route.ridePickup ? `from ${place(route.ridePickup)}` : "", route.rideDrop ? `to ${place(route.rideDrop)}` : ""]
+            .filter(Boolean)
+            .join(" ");
+    }
     if (liveFlow(rd) && (route.intent === "ride" || (flowReply && !newOrder && !liveFlow(bd) && !liveFlow(pd)))) {
         const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : rideText;
         const r = await rideTurn(t);
