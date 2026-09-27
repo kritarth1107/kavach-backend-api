@@ -17,7 +17,7 @@ import { isTestPhone } from "../../smokeFixtures.service";
 import { loadRideConfig } from "../rideConfig";
 import { geocodePlace } from "../geoResolve.service";
 import { olaLink, rapidoLink, serviceChain, uberLink, type CityTier, type RideConfig, type Vehicle } from "../rideServices";
-import { OlaMsg, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
+import { geocodeCandidates, OlaMsg, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
 import { FakeOlaDriver, PlaywrightOlaDriver, type OlaDriver } from "./olaDriver";
 
 export type OlaTurnInput = {
@@ -141,17 +141,26 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
         for (const k of ["pickup", "drop"] as const) {
             const pl = draft[k];
             if (pl && (pl.lat == null || pl.lng == null)) {
-                const q = pl.address || pl.raw || pl.shortLabel || "";
-                const g = q ? await geocodePlace(q).catch(() => null) : null;
-                if (g?.ok && g.place.lat != null && g.place.lng != null) draft[k] = { ...pl, lat: g.place.lat, lng: g.place.lng };
-                else log("ola_no_point", { end: k, phone: input.phone.slice(-4) });
+                // Full address first, then without the flat/house part, then the short name.
+                const tries = geocodeCandidates((pl.address || pl.raw || "").trim(), pl.shortLabel || "");
+                let hit = false;
+                for (const [i, q] of tries.entries()) {
+                    if (i) await sleep(1100); // public lookup service: max one request a second
+                    const g = await geocodePlace(q).catch(() => null);
+                    if (g?.ok && g.place.lat != null && g.place.lng != null) {
+                        draft[k] = { ...pl, lat: g.place.lat, lng: g.place.lng };
+                        hit = true;
+                        break;
+                    }
+                }
+                if (!hit) log("ola_no_point", { end: k, phone: input.phone.slice(-4) });
             }
         }
         const url = olaLink(draft.pickup, draft.drop);
         let types: Awaited<ReturnType<OlaDriver["rideTypes"]>> = [];
-        try {
+        if (url) try {
             const drv = await driverFor(input, true);
-            if (url) await drv.open(url);
+            await drv.open(url);
             types = orderRideTypes(await drv.rideTypes(), draft.vehicle || "cab");
         } catch (err) {
             log("ola_types_failed", { error: err instanceof Error ? err.message.slice(0, 160) : String(err) });
@@ -162,7 +171,9 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
             log("ola_types_empty", { phone: input.phone.slice(-4), hadUrl: Boolean(url) });
             await saveDraft(input.phone, null);
             await dropDriver(input.phone);
-            await send(input, fallbackText(lang, draft.pickup, draft.drop));
+            const hi = /^hi/i.test(String(lang || ""));
+            const pinTip = url ? "" : hi ? "\n\nAgar aap WhatsApp par apni location 📍 bhej dein, to main Ola yahin chat mein book kar sakti hoon." : "\n\nIf you share your location 📍 here on WhatsApp, I can book Ola right in this chat.";
+            await send(input, fallbackText(lang, draft.pickup, draft.drop) + pinTip);
             return;
         }
         cur.phase = "ola_pick_type";

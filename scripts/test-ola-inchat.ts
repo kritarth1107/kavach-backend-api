@@ -1,5 +1,5 @@
 /** In-chat Ola: page parsing, lifecycle classification, every message (EN + Hinglish), config. */
-import { OlaMsg, classifyRidePage, orderRideTypes, parseConfirm, parseDriver, parseRideTypes, pickRideType } from "../src/services/rideBooking/ola/olaCopy";
+import { OlaMsg, classifyRidePage, geocodeCandidates, orderRideTypes, parseConfirm, parseDriver, parseRideTypes, pickRideType } from "../src/services/rideBooking/ola/olaCopy";
 import { FakeOlaDriver } from "../src/services/rideBooking/ola/olaDriver";
 import { mergeRideConfig, DEFAULT_RIDE_CONFIG } from "../src/services/rideBooking/rideServices";
 import { hasStackWords } from "../src/services/stackScrub";
@@ -21,6 +21,11 @@ const loggedIn = ["AVAILABLE RIDES", "Auto", "Get an auto at your doorstep", "â‚
 const li = parseRideTypes(loggedIn);
 ok("logged-in ETAs not shifted", JSON.stringify(li.map((t) => t.etaMin ?? null)) === JSON.stringify([null, 4, 2, 4, 1]), li);
 ok("logged-in fares read", JSON.stringify(li.map((t) => [t.name, t.fare])) === JSON.stringify([["Auto", 356], ["Mini", 312], ["Bike", 199], ["Prime Sedan", 322], ["Prime SUV", 477]]), li);
+const gc = geocodeCandidates("C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH 492001", "");
+ok("lookup: full address first", gc[0]!.startsWith("C504"), gc);
+ok("lookup: drops 'near â€¦' part", gc.every((q) => !/NEAR TULIP/.test(q) || q === gc[0]), gc);
+ok("lookup: never city+state only", !gc.some((q) => /^RAIPUR, CHHATTISGARH/.test(q)), gc);
+ok("lookup: locality + city tried", gc.includes("LABHANDIH, RAIPUR"), gc);
 const ordered = orderRideTypes(li, "cab");
 ok("cab ask: cab types first", ordered[0]!.name === "Mini" && ordered.slice(-2).map((t) => t.name).join() === "Auto,Bike", ordered.map((t) => t.name));
 ok("auto ask: auto first", orderRideTypes(li, "auto")[0]!.name === "Auto");

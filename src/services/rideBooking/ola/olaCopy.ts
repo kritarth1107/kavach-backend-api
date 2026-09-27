@@ -268,3 +268,17 @@ export const OlaMsg = {
         ].join("\n");
     },
 };
+
+/** Address → lookup queries, most precise first: full, then without the flat / "near …" parts, then locality + city. */
+export function geocodeCandidates(address: string, shortLabel: string): string[] {
+    const parts = address.split(",").map((x) => x.trim()).filter(Boolean);
+    const clean = parts.filter((p) => !/^(near|opp\.?|opposite|behind|beside|next to)\b/i.test(p));
+    const noPin = clean.map((p) => p.replace(/\b\d{6}\b/, "").trim()).filter(Boolean);
+    const out = [address.trim()];
+    // Never down to just "city, state": a city-centre pin would send the driver to the wrong place.
+    for (let n = 1; n <= 3 && clean.length - n >= 3; n++) out.push(clean.slice(n).join(", "));
+    // Locality + city (city is the part before the state, state is last once the pincode is gone).
+    if (noPin.length >= 3) out.push(`${noPin[noPin.length - 3]}, ${noPin[noPin.length - 2]}`);
+    if (shortLabel) out.push(shortLabel);
+    return [...new Set(out.filter(Boolean))].slice(0, 6);
+}

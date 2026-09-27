@@ -364,6 +364,7 @@ export class FakeOlaDriver implements OlaDriver {
         return true;
     }
     async book(): Promise<BookResult> {
+        this.cancelled = false;
         return this.scenario === "book_fail" ? "failed" : "searching";
     }
     async status(): Promise<{ state: OlaPageState; driver?: OlaDriverInfo }> {
