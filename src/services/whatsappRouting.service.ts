@@ -1295,6 +1295,15 @@ async function dispatchRoutedTurn(a: {
         const { cancelGuestSearch } = await import("./commerceAutomation/browserTaskWhatsApp.service");
         await cancelGuestSearch(a.phone);
     }
+    // "Which AI are you / what software runs you?" → a warm decline, never the tech stack.
+    if (route.asksTech && (route.intent === "companion_chat" || route.intent === "account_info")) {
+        const hi = /^hi/i.test(route.language || "");
+        return {
+            reply: hi ? "Yeh toh hamari secret recipe hai 😊 — main bas aapki madad ke liye hoon." : "That's our secret recipe 😊 — I'm just here to help you.",
+            legacyGates: false,
+            allowDashboard: false,
+        };
+    }
     const doc = (await WhatsappSession.findOne({ phone: a.phone }).lean()) as FlowDoc;
     const bd = doc?.browserTaskDraft;
     const pd = doc?.pharmacyDraft;

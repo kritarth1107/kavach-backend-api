@@ -65,6 +65,8 @@ export type SaheliRoute = {
     feature?: string | null;
     /** Caregiver sender: the order / ride is for the caregiver themself, not the elder. */
     forSelf?: boolean;
+    /** Asks how Saheli is built / what AI, model, software or company runs her. */
+    asksTech?: boolean;
     confidence: number;
     source: "gemini";
     latencyMs: number;
@@ -96,6 +98,7 @@ const SCHEMA = {
         blockedItem: { type: "STRING", enum: ["tobacco", "gutka", "vape", "alcohol"], nullable: true },
         feature: { type: "STRING", nullable: true },
         forSelf: { type: "BOOLEAN", nullable: true },
+        asksTech: { type: "BOOLEAN", nullable: true },
         confidence: { type: "NUMBER" },
     },
     required: ["intent", "language", "partners", "partnerOnly", "control", "confidence"],
@@ -117,6 +120,7 @@ Slots:
 - productQuery: ONLY the product words ("rite bite protein bar", "amul milk 1 litre", "paneer butter masala"). Never include platform names, delivery/address words, filler ("can u order me"). null if no product in this message.
 - partners: platforms explicitly named in THIS message. A bare platform name reply ("Instamart", "on zepto", "apollo se") → partnerOnly=true, productQuery=null, intent=order_modify (it fills the platform for the pending product).
 - addressKind/addressText: message is about WHERE to deliver ("deliver to my home", "ghar pe bhejna", "my Bhopal address") → intent=order_modify, addressKind=same for home/saved/own address, other for a clearly different address; addressText = the address words. Address words are NEVER a productQuery. Questions about where orders go ("where will it be delivered?", "what is my delivery address?") are also order_modify with addressKind=same (even with no active order).
+- asksTech: true when the message asks how Saheli works inside or what technology, AI, model, software, app or company she runs on ("which AI are you", "ChatGPT ho?", "kaunsa software use karti ho", "aap kaise kaam karti ho"). Asking what she can DO for them is false.
 - forSelf: ONLY when the sender role is caregiver. true when the order/ride/health ask is for the caregiver THEMSELF ("mere liye", "for me", "mujhe sar dard hai, Dolo mangwa do", "I need a cab to my office") and nothing points to the elder; false when it is for the elder ("Mummy ke liye", "Maa ko", "for Dad") or unclear. Always false for an elder sender.
 - addressNickname: the family keeps nicknamed places (listed in Active flows as "saved places"). If the message names one — "beta ke ghar bhejo" → "Beta's flat", "ghar"/"home"/"mera ghar" → the one called Home (or the default), "clinic se ghar" (ride) → ridePickup="Clinic", rideDrop="Home" — return the nickname EXACTLY as listed. Only listed nicknames; null otherwise. In an order message ("atta bhejo beta ke ghar") keep intent=order_new with productQuery AND addressNickname.
 - WAITING FOR DELIVERY ADDRESS CONFIRM (options listed): "yes"/"haan"/"ok"/"theek hai" → intent=order_control, control=confirm; a number → control=pick, pickIndex; a place name → order_modify + addressNickname; a new full address → order_modify, addressKind=other, addressText; "no"/"cancel" → control=cancel.
@@ -238,6 +242,7 @@ export async function routeSaheliTurn(input: {
                 : null,
             feature: typeof p.feature === "string" && p.feature.trim() ? p.feature.trim().slice(0, 60) : null,
             forSelf: p.forSelf === true,
+            asksTech: p.asksTech === true,
             confidence: typeof p.confidence === "number" ? p.confidence : 0.5,
             source: "gemini",
             latencyMs: Date.now() - started,
