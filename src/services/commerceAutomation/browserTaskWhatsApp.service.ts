@@ -3322,7 +3322,12 @@ async function relevantOnly<T extends { name: string; pricePaise?: number; resta
     if (!items.length) return items;
     const { filterRelevant } = await import("./orderChat/relevance");
     const { orderIntentFor } = await import("./orderChat/orderChat.service");
-    return filterRelevant(orderIntentFor(phone) || q, q, items, { food }).catch(() => items);
+    // Her latest order words only count if they're about THIS search (a newer ask — "Telma 40" —
+    // must not filter out a paneer search that finished late).
+    const intent = orderIntentFor(phone) || "";
+    const words = q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+    const sameAsk = intent && words.some((w) => intent.toLowerCase().includes(w));
+    return filterRelevant(sameAsk ? intent : q, q, items, { food }).catch(() => items);
 }
 
 /** Nothing relevant found: 2–3 close alternatives (health-aware), or one obvious close match to search. */
