@@ -180,6 +180,8 @@ export async function syncOpenTask(
         const created = (await SaheliTask.create(doc)).toObject() as ISaheliTask;
         return created;
     }
+    // Saheli cleared the hours-old card herself while offering to finish it — not an ending.
+    if (before && cur && cur.resumeOfferedAt && now.getTime() - new Date(cur.resumeOfferedAt).getTime() < 5 * 60_000) return cur as ISaheliTask;
     if (before && cur) {
         // This turn ended the flow. A placement in the last minutes closes it as done (the
         // order hook also does); otherwise she cancelled / it finished without an order.
