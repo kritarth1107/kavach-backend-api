@@ -56,7 +56,7 @@ export function refuseSiteCopy(partner?: string | null): string {
     if (partner === "tata_1mg") return TATA_1MG_COPY;
     return (
         `Sorry, I can't order from ${name} 🙏\n` +
-        `I can order medicines from *Apollo* or *PharmEasy*, groceries & food from *Instamart, Swiggy, Zepto, Blinkit* or *Zomato*, and book an *Uber*.`
+        `I can order medicines from *Apollo* or *PharmEasy*, groceries & food from *Instamart, Swiggy, Zepto, Blinkit* or *Zomato*, and send you a ready *Uber, Ola or Rapido* link for a ride.`
     );
 }
 

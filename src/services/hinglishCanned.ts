@@ -5,6 +5,7 @@
  */
 type Rule = [RegExp, string];
 const RULES: Rule[] = [
+    [/I can order medicines from \*Apollo\* or \*PharmEasy\*, groceries & food from \*Instamart, Swiggy, Zepto, Blinkit\* or \*Zomato\*, and send you a ready \*Uber, Ola or Rapido\* link for a ride\./g, "Main *Apollo* ya *PharmEasy* se dawaiyan, *Instamart, Swiggy, Zepto, Blinkit* ya *Zomato* se saamaan aur khana mangwa sakti hoon, aur ride ke liye *Uber, Ola ya Rapido* ka taiyaar link bhej sakti hoon."],
     [/Zepto isn't available for me right now 🙏 I can get it from Instamart or Blinkit instead\./g, "Zepto abhi mere liye available nahi hai 🙏 Main Instamart ya Blinkit se mangwa sakti hoon."],
     [/To order on Zepto directly, link it once: Dashboard → Integrations → Zepto\./g, "Zepto se seedha order ke liye ek baar link kijiye: Dashboard → Integrations → Zepto."],
     [/\(Zepto isn't available for me right now\. /g, "(Zepto abhi mere liye available nahi hai. "],

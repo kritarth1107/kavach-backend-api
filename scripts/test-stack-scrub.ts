@@ -72,5 +72,12 @@ for (const lang of ["en", "hi"])
         ok(`no-service ${lang}/${canOfferFamily} clean`, !!m && !hasStackWords(m), m);
     }
 
+{
+    const { localizeCanned: lc } = require("../src/services/hinglishCanned") as typeof import("../src/services/hinglishCanned");
+    const cap = "I can order medicines from *Apollo* or *PharmEasy*, groceries & food from *Instamart, Swiggy, Zepto, Blinkit* or *Zomato*, and send you a ready *Uber, Ola or Rapido* link for a ride.";
+    const hiCap = lc(cap, "hinglish");
+    ok("capabilities line localized to Hinglish", /mangwa sakti hoon/.test(hiCap) && !/I can order/.test(hiCap), hiCap);
+}
+
 console.log(fail ? `\n${fail} failed` : "\nall passed");
 process.exit(fail ? 1 : 0);

@@ -896,7 +896,7 @@ case "notify_caregivers": {
             });
             return {
                 ...result,
-                note: "Confirm-before-book. Elder pastes Uber OTP in WhatsApp. Caregiver notify-only.",
+                note: "Saheli sends pre-filled Uber / Ola / Rapido app links; the person books by tapping in the app. Never say you booked it or that a code or OTP will come.",
             };
         }
         case "ride_status": {

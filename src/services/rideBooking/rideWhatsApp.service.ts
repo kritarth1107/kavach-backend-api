@@ -355,7 +355,7 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
     // PLUS: if text is exactly Yeah/Yes and no other draft — start ride (Instinct screenshot).
     const bareYeahStartsRide = isBareAffirmation(text) && text.length <= 8;
 
-    if (!starting && !bareYeahStartsRide && !(draft && draft.phase !== "idle" && draft.phase !== "done")) {
+    if (!starting && !bareYeahStartsRide && !input.forceStart && !(draft && draft.phase !== "idle" && draft.phase !== "done")) {
         return null;
     }
 
