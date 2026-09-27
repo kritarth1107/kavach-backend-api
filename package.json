@@ -21,7 +21,8 @@
     "test:elder-profile": "tsx scripts/test-elder-profile.ts",
     "test:signin-gate": "tsx scripts/test-signin-gate.ts",
     "test:fact-confidence": "tsx scripts/test-fact-confidence.ts",
-    "test:delegate": "tsx scripts/test-delegate.ts"
+    "test:delegate": "tsx scripts/test-delegate.ts",
+    "test:stack": "tsx scripts/test-stack-scrub.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

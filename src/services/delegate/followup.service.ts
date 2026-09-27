@@ -85,17 +85,30 @@ export async function onOrderPlaced(row: Row): Promise<void> {
     const chat = await recentChat(who.phone, row.recipientUserId, who.role === "elder", 6).catch(() => "");
     const guessItem = open?.item || open?.productQuery || "";
     const known = guessItem ? await findWhy({ familyId: row.familyId, recipientUserId: row.recipientUserId }, guessItem) : null;
+    // A resumed / re-run order starts a fresh task without the reason: carry it from the earlier
+    // task for the same item (last 3 days) so the delivery check still knows why it mattered.
+    let carriedWhy: string | undefined;
+    if (!open?.why && !known?.reason) {
+        const { textMentions } = await import("./why.service");
+        const itemText = `${guessItem} ${row.title} ${row.detail || ""}`;
+        const prior = (await SaheliTask.find({ phone: who.phone, kind: "open_task", why: { $nin: [null, ""] }, updatedAt: { $gte: new Date(Date.now() - 3 * 86_400_000) } })
+            .sort({ updatedAt: -1 })
+            .limit(10)
+            .lean()
+            .catch(() => [])) as ISaheliTask[];
+        carriedWhy = prior.find((p) => (p.item || p.productQuery) && textMentions(itemText, String(p.item || p.productQuery)))?.why || undefined;
+    }
     const ctx = await extractOrderContext({
         orderLog: `${row.title}\n${row.detail || ""}\n${JSON.stringify({ ...(row.data || {}), jobId: undefined, orderId: undefined, orderIds: undefined }).slice(0, 400)}`,
         openTask: open ? `${open.title}; ${phaseWords(open.phase)}${open.why ? `; why: ${open.why}` : ""}` : undefined,
         recentChat: chat,
-        knownWhy: known?.reason,
+        knownWhy: known?.reason || carriedWhy,
     }).catch(() => null);
     const category = isRide ? "ride" : ctx?.category || open?.category || undefined;
     const item = isRide ? `ride to ${String(row.data?.to || open?.rideTo || "destination")}` : ctx?.item || open?.item || String(row.detail || row.title).slice(0, 80);
     const partner = (isRide ? String(row.data?.provider || "uber") : ctx?.partner || open?.partner || String(row.data?.store || "")) || undefined;
     const isMedicine = !isRide && (ctx?.isMedicine ?? category === "pharmacy");
-    const why = ctx?.why || open?.why || known?.reason || undefined;
+    const why = ctx?.why || open?.why || known?.reason || carriedWhy || undefined;
     const placedAt = row.createdAt ? new Date(row.createdAt) : new Date();
     const w = { familyId: row.familyId, recipientUserId: row.recipientUserId };
     if (open && open.status === "open") await closeTask(open.taskId, "done", "placed", `Placed: ${item}`);

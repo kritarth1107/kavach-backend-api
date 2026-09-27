@@ -12,6 +12,8 @@ export interface IWhatsappSession {
     familyId?: string;
     userId?: string;
     pendingRecipientUserId?: string;
+    /** Caregiver ordering for THEMSELF: whose context the live order/ride uses. */
+    orderSubject?: { userId: string; at: Date };
     awaitingRecipientPick?: boolean;
     recipientOptions?: Array<{ userId: string; name: string }>;
     guestTurns?: number;
@@ -69,6 +71,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         pendingPlaceName: { type: Schema.Types.Mixed },
         pendingSearch: { type: Schema.Types.Mixed },
         pendingOffer: { type: Schema.Types.Mixed },
+        orderSubject: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

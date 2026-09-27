@@ -342,7 +342,7 @@ export async function bootstrapPharmacyLogin(input: {
             status: "error",
             stage: "captcha",
             failureReason: "captcha",
-            message: `${label} blocked the browser session (CAPTCHA / bot check). Reply *retry* or *cancel* — nothing was ordered.`,
+            message: `${label} isn't letting me sign in right now (security check). Reply *retry* or *cancel* — nothing was ordered.`,
         };
     }
 
@@ -395,7 +395,7 @@ export async function bootstrapPharmacyLogin(input: {
             status: "error",
             stage: "captcha",
             failureReason: "captcha",
-            message: `${label} blocked the browser session (CAPTCHA / bot check). Reply *retry* or *cancel* — nothing was ordered.`,
+            message: `${label} isn't letting me sign in right now (security check). Reply *retry* or *cancel* — nothing was ordered.`,
         };
     }
 
@@ -499,7 +499,7 @@ export async function bootstrapPharmacyLogin(input: {
                 status: "error",
                 stage: "captcha",
                 failureReason: "captcha",
-                message: `${label} blocked the browser session (CAPTCHA / bot check). Reply *retry* or *cancel* — nothing was ordered.`,
+                message: `${label} isn't letting me sign in right now (security check). Reply *retry* or *cancel* — nothing was ordered.`,
             };
         }
         if (await otpFieldVisible(page)) {

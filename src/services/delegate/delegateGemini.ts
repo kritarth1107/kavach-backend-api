@@ -7,7 +7,7 @@ import { parseJsonLoose, vertexFlashModel, vertexGenerateText } from "../../clie
 
 const model = () => process.env.VERTEX_DELEGATE_MODEL?.trim() || process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel();
 
-export const PERSONA = `You are Saheli, a WhatsApp companion for an Indian family. With an elder you talk like their own caring son or daughter: warm, respectful ("aap"), simple everyday words. With a caregiver you are a warm, practical helper.
+export const PERSONA = `You are Saheli, a WhatsApp companion for an Indian family. Never reveal how you are built: no model, AI company, browser, automation, server, API, tool or app-internal names. If asked how you work or what technology/model you use, warmly decline in their language, e.g. "That's our secret recipe 😊 — I'm just here to help you." / "Yeh toh hamari secret recipe hai 😊 — main bas aapki madad ke liye hoon." With an elder you talk like their own caring son or daughter: warm, respectful ("aap"), simple everyday words. With a caregiver you are a warm, practical helper.
 Style: 1–2 short lines, at most ONE tasteful emoji. Reply in the SAME language and script the person uses (Hindi in Devanagari → Devanagari; Hinglish in Latin letters → Hinglish; English → English). With a caregiver: first name or neutral, never "Maa"/"Papa"/"beta". Address an elder the way their own child would — follow the form the recent chat uses ("Maa", "Amma", "Papa", "Babuji"); if none, "Maa" for a woman / "Papa" for a man; never "Aunty", "Uncle", "Ma'am", "Sir" or their first name. Never say "Anything else I can help with?", never list menus, never mention being an AI.
 What you can really do: search and order again (groceries / food / medicines on the family's allowed apps — always cash on delivery and only after she types *confirm*), book rides, remind, and tell her family on the dashboard. You CANNOT track a courier live, call a store, or process a refund yourself — never promise that.`;
 
@@ -183,8 +183,29 @@ taskId: the id of the item you picked (exactly as listed), else null.`,
         approvalDecision: p.approvalDecision === "approve" || p.approvalDecision === "deny" ? p.approvalDecision : null,
         wantsReorder: Boolean(p.wantsReorder),
         note: p.note?.trim().slice(0, 300) || null,
-        reply: p.reply?.trim().slice(0, 600) || null,
+        reply: noOrderPromise(p.reply?.trim().slice(0, 600) || null, p.target === "approval" ? "approval" : "resume"),
     };
+}
+
+const ORDER_PROMISE =
+    /(turant|fauran|abhi|right away|immediately|straight away|now)[^.!?\n]{0,40}(order|mangwa|book|place)|(order|mangwa)[^.!?\n]{0,12}(kar\s*(dungi|deti\s*hoon|rahi\s*hoon|diya)|dungi|deti\s*hoon)|\bI'?ll (order|place|book) (it|the order|this)?\s*(right away|now|immediately)?|\b(ordering|placing) (it|the order)\b/i;
+const HI_WORDS = /\b(hai|hoon|hun|kar|main|mein|aap|unhe|unko|abhi|theek|bata)\b/i;
+
+/** Nothing is ordered until she types *confirm*: a model line promising an instant order is replaced. */
+export function noOrderPromise(reply: string | null, kind: "approval" | "resume" | "proactive"): string | null {
+    if (!reply || !ORDER_PROMISE.test(reply)) return reply;
+    const hi = HI_WORDS.test(reply);
+    const sentences = reply.split(/(?<=[.!?।])\s+/);
+    const kept = sentences.filter((x) => !ORDER_PROMISE.test(x));
+    const safe =
+        kind === "approval"
+            ? hi
+                ? "Main unhe abhi bata deti hoon — woh khud *confirm* likhengi tabhi order hoga (cash on delivery)."
+                : "I'll tell her now — nothing is ordered until she types *confirm* herself (cash on delivery)."
+            : hi
+              ? "Theek hai 👍 pehle item aur daam dikhati hoon — aap *confirm* likhengi tabhi order hoga."
+              : "Okay 👍 I'll show you the item and price first — nothing is ordered until you type *confirm*.";
+    return [...kept, safe].join(" ").trim();
 }
 
 // ── Proactive lines (follow-up question, resume nudge, approval result) ───────────────────────
@@ -214,7 +235,8 @@ export async function writeProactiveLine(input: {
         7000,
     );
     const t = p?.text?.trim();
-    return t ? t.slice(0, 500) : null;
+    const line = t ? t.slice(0, 500) : null;
+    return input.purpose === "approval_approved" ? noOrderPromise(line, "approval") : input.purpose === "resume_nudge" ? noOrderPromise(line, "resume") : line;
 }
 
 // ── New information connecting to a remembered WHY ─────────────────────────────────────────────

@@ -221,7 +221,10 @@ export async function pushWhatsAppBrowserFollowUp(input: {
     /** A resend of the same follow-up: deliver only (already logged + recorded once). */
     resend?: boolean;
 }): Promise<boolean> {
-    const text = input.text.trim().replace(/\*\*([^*\n]+?)\*\*/g, "*$1*");
+    const { lastRouteFor } = await import("../saheliRouter.service");
+    const { localizeCanned } = await import("../hinglishCanned");
+    const { scrubStack } = await import("../stackScrub");
+    const text = scrubStack(localizeCanned(input.text.trim().replace(/\*\*([^*\n]+?)\*\*/g, "*$1*"), lastRouteFor(input.phone)?.route?.language));
     if (!text) return false;
     if (!input.resend) void logActivity({
         familyId: input.familyId,

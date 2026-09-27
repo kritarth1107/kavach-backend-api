@@ -13,18 +13,18 @@ function replySlaMs(): number {
     return Math.min(Math.max(n, 8_000), 90_000);
 }
 
-function slaFallback(from: string | undefined): OutboundMessage {
+async function slaFallback(from: string | undefined): Promise<OutboundMessage> {
     const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(from ?? ""));
-    return {
-        channelType: ChannelType.WHATSAPP,
-        channelIdentifier: phone,
-        modality: "text",
-        content:
-            "I'm still working on that (browser can be slow). " +
-            "If you get an SMS OTP (Uber / commerce), paste it here. " +
-            "For medicines / Vit C, tell me the pharmacy (*Apollo*, *PharmEasy*, or *Tata 1mg*). " +
-            "For rides, reply *cancel* to drop the booking — nothing is booked until you confirm.",
-    };
+    let content = "One moment, still on it 🙏";
+    try {
+        const { stillWorkingLine } = await import("./stillWorkingCopy");
+        const { lastRouteFor } = await import("./saheliRouter.service");
+        const row = (await WhatsappSession.findOne({ phone }).lean()) as Record<string, unknown> | null;
+        content = stillWorkingLine(row, lastRouteFor(phone)?.route?.language);
+    } catch {
+        /* keep the plain line */
+    }
+    return { channelType: ChannelType.WHATSAPP, channelIdentifier: phone, modality: "text", content };
 }
 
 async function shouldSkipStillWorking(from: string | undefined): Promise<boolean> {
@@ -92,7 +92,8 @@ export async function handleWhatsAppInbound(body: {
                         console.warn(
                             `WhatsApp reply SLA hit after ${slaMs}ms — sending progress fallback`,
                         );
-                        if (!settled) resolve(slaFallback(body.from));
+                        const fb = await slaFallback(body.from);
+                        if (!settled) resolve(fb);
                     })();
                 }, slaMs);
             }),

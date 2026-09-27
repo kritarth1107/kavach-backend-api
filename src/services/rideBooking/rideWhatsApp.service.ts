@@ -31,6 +31,7 @@ import {
     providerFromText,
 } from "./slotParse";
 import { RIDE_CONFIRM_RE, type RideDraft, type RidePlace } from "./types";
+import { rideAppHandoffMessage } from "./rideHandoff";
 
 export { messageLooksLikeRideIntent, isRideCancel } from "./slotParse";
 export type { RideDraft } from "./types";
@@ -65,7 +66,8 @@ async function loadDraft(phone: string): Promise<RideDraft | null> {
 /** A ride still collecting pickup/drop that nobody touched for 30 min is abandoned — a later
  *  "haan" / "ok" must never resume it ("Where from, and where to?" out of nowhere). */
 export function isStaleRideDraft(d: { phase?: string; savedAt?: string | Date } | null | undefined): boolean {
-    if (!d?.phase || !["need_slots", "need_pickup", "need_drop"].includes(d.phase)) return false;
+    // Every pre-booking step goes stale (a 2-hour-old "Got the route… reply yes" must not eat a later "haan").
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable"].includes(d.phase)) return false;
     const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
     return !at || Date.now() - at > 30 * 60_000;
 }
@@ -417,6 +419,15 @@ export async function handleRideWhatsAppTurn(input: {
             };
         }
 
+        // Route confirm → honest app hand-off. Uber answers every automated web sign-in with an
+        // Arkose "Protecting your account — Start Puzzle" check (verified 27 Sep 2026), so NO login
+        // SMS is ever sent; we never solve captchas. Claiming "Uber may text a code" was false.
+        // The live web-login path stays behind RIDE_WEB_LOGIN=on for a future partner API.
+        if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text) && process.env.RIDE_WEB_LOGIN !== "on") {
+            const msg = rideAppHandoffMessage(draft);
+            await saveDraft(input.phone, null);
+            return { text: msg, draft: { ...draft, phase: "done", lastMessage: msg } };
+        }
         // Route confirm → ask Uber phone
         if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text)) {
             const phoneE164 = await actorPhoneE164(input.actorUserId, input.phone);

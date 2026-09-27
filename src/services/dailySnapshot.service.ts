@@ -4,7 +4,7 @@
  */
 import ActivityLog from "../models/activityLog.model";
 import DailySnapshot, { type IDailySnapshot } from "../models/dailySnapshot.model";
-import { parseJsonLoose, vertexGenerateText, vertexProModel } from "../clients/vertexGemini.client";
+import { parseJsonLoose, vertexGenerateText, vertexProModel, vertexFlashModel } from "../clients/vertexGemini.client";
 import { isInternalTalk, timelineDetail } from "./profile/profileCore";
 import { istDayKey } from "./activityLog.service";
 
@@ -67,21 +67,22 @@ export async function generateDailySnapshot(input: {
             return `${istTime(new Date(r.createdAt as Date))} [${r.kind}] ${r.title}${detail ? ` — ${detail}` : ""}`;
         })
         .slice(-400);
-    const model = vertexProModel();
     const who = input.elderName?.trim() || "the care recipient";
-    const raw = await vertexGenerateText({
-        model,
-        json: true,
-        timeoutMs: 45_000,
-        maxOutputTokens: 2048,
-        temperature: 0.3,
-        system:
-            `You write a caregiver's daily snapshot of ${who}'s day with Saheli (their WhatsApp companion). ` +
-            "Use ONLY the log. Warm, factual, short. Never diagnose or interpret health; quote what they said. " +
-            "Never mention Saheli's own technical problems, errors or missed replies — they are not part of the family's day. " +
-            'Reply ONLY JSON: {"summary":"3-5 sentence overview","highlights":["≤6 short bullets"],"concerns":["health/mood/safety items worth a caregiver\'s attention, else empty"],"mood":"one word or null"}',
-        prompt: `Day: ${dayKey} (IST)\nActivity log:\n${lines.join("\n")}`,
-    });
+    const system =
+        `You write a caregiver's daily snapshot of ${who}'s day with Saheli (their WhatsApp companion). ` +
+        "Use ONLY the log. Warm, factual, short. Never diagnose or interpret health; quote what they said. " +
+        "Never mention Saheli's own technical problems, errors or missed replies — they are not part of the family's day. " +
+        'Reply ONLY JSON: {"summary":"3-5 sentence overview","highlights":["≤6 short bullets"],"concerns":["health/mood/safety items worth a caregiver\'s attention, else empty"],"mood":"one word or null"}';
+    const prompt = `Day: ${dayKey} (IST)\nActivity log:\n${lines.join("\n")}`;
+    // Pro first (thinking eats the output budget, so a roomy cap + low thinking), then Flash —
+    // a busy or truncated Pro reply used to leave the family a "couldn't generate" card.
+    let model = vertexProModel();
+    let raw = await vertexGenerateText({ model, json: true, timeoutMs: 45_000, maxOutputTokens: 8192, temperature: 0.3, thinkingLevel: "low", system, prompt }).catch(() => null);
+    if (!parseJsonLoose<{ summary?: string }>(raw)?.summary) {
+        console.warn("[daily-snapshot] Pro reply unusable — Flash fallback");
+        model = vertexFlashModel();
+        raw = await vertexGenerateText({ model, json: true, timeoutMs: 30_000, maxOutputTokens: 4096, temperature: 0.3, system, prompt }).catch(() => null);
+    }
     const parsed = parseJsonLoose<{ summary?: string; highlights?: string[]; concerns?: string[]; mood?: string | null }>(raw);
     // Evolving profile: weekly "what Saheli learned" line + lower-tier unusual activity (dashboard only).
     if (parsed?.summary) {

@@ -3098,7 +3098,7 @@ async function compareSearchCore(
             ]);
         }
         const reason = /access denied|been blocked|just a moment/i.test(r.unavailableReason || "")
-            ? `${partnerLabel(partners[i]!)} is blocking my browser right now, so I can't see its prices.`
+            ? `${partnerLabel(partners[i]!)} isn't letting me in right now, so I can't see its prices.`
             : /Catalog search failed|timeout|locator\./i.test(r.unavailableReason || "")
             ? `${partnerLabel(partners[i]!)} didn't load for me just now.`
             : r.unavailableReason?.replace(/\s*Reply \*confirm\*[^.]*\.?/i, "").trim();

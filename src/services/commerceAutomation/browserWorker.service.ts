@@ -468,9 +468,9 @@ async function detectCommerceSiteBlock(
         });
         if (/captcha|unusual traffic|are you a robot|cf-browser-verification|access denied|bot detection|cloudflare/i.test(blob)) {
             if (ride) {
-                return "Uber blocked the browser session (CAPTCHA / bot check). Try again later or book in the Uber app — nothing was booked.";
+                return "Uber isn't letting me sign in right now (security check). Try again later or book in the Uber app — nothing was booked.";
             }
-            return `${label} blocked the browser session (CAPTCHA / bot check). Reply *retry* or *cancel* — nothing was ordered.`;
+            return `${label} isn't letting me sign in right now (security check). Reply *retry* or *cancel* — nothing was ordered.`;
         }
         if (
             ride &&

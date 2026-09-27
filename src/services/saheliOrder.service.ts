@@ -206,7 +206,7 @@ export function messageLooksLikeUnsupportedCommerce(text: string): boolean {
 }
 
 export function unsupportedCommerceReply(): string {
-    return "For phones or big electronics, say *order … from amazon* / *flipkart* (or paste a product link) and I'll shop via private browser — confirm before pay. Or ask for milk, veggies, a meal (Instamart/Swiggy/Zepto), or medicines (Apollo/PharmEasy/1mg).";
+    return "For phones or big electronics, say *order … from amazon* / *flipkart* (or paste a product link) and I'll shop for you — you confirm before paying. Or ask for milk, veggies, a meal (Instamart/Swiggy/Zepto), or medicines (Apollo/PharmEasy/1mg).";
 }
 
 export function messageLooksLikeOrder(text: string): boolean {

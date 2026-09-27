@@ -1,3 +1,4 @@
+import { scrubStack } from "../services/stackScrub";
 import config from "../config/app.config";
 import { assertSendableWhatsAppRecipient } from "../services/whatsappRecipientGuard.service";
 import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
@@ -147,6 +148,7 @@ async function sendSingleMetaWhatsAppText(
     text: string,
     contextMessageId?: string,
 ): Promise<string | undefined> {
+    text = scrubStack(text);
     await assertSendableWhatsAppRecipient(to);
     const meta = config.whatsapp.meta;
     if (!meta.phoneNumberId || !meta.accessToken) {
@@ -209,6 +211,15 @@ async function sendSingleMetaWhatsAppPayload(
     return readWamid(res);
 }
 
+function scrubPayload(p: MetaWhatsAppPayload): MetaWhatsAppPayload {
+    const q = JSON.parse(JSON.stringify(p)) as Record<string, any>;
+    if (q.type === "text" && q.text?.body) q.text.body = scrubStack(q.text.body);
+    if (q.interactive?.body?.text) q.interactive.body.text = scrubStack(q.interactive.body.text);
+    if (q.image?.caption) q.image.caption = scrubStack(q.image.caption);
+    if (q.document?.caption) q.document.caption = scrubStack(q.document.caption);
+    return q as MetaWhatsAppPayload;
+}
+
 function rememberOutbound(to: string, text: string | undefined): void {
     if (!text) return;
     void import("../services/saheliRouter.service")
@@ -225,6 +236,8 @@ export async function sendWhatsAppPayloads(
     payloads: MetaWhatsAppPayload[],
     opts: { contextMessageId?: string } = {},
 ): Promise<string[]> {
+    // Never reveal the tech stack in anything a user reads (text, buttons body, captions).
+    payloads = payloads.map((p) => scrubPayload(p));
     const ids: string[] = [];
     let ctx = opts.contextMessageId;
     const take = (id: string | undefined) => {

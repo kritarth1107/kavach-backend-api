@@ -1,3 +1,4 @@
+import { scrubStack } from "./stackScrub";
 import type { OutboundMessage } from "../channels/types";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { ChannelType, CareRecordSource } from "../types/careRecord.types";
@@ -27,7 +28,8 @@ import {
     isSaheliFallbackCopy,
     messageIsPresenceCheck,
 } from "./saheliElderFacts.service";
-import { routeSaheliTurn, rememberTurn, type SaheliRoute } from "./saheliRouter.service";
+import { routeSaheliTurn, rememberTurn, lastRouteFor, type SaheliRoute } from "./saheliRouter.service";
+import { localizeCanned } from "./hinglishCanned";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -60,6 +62,8 @@ export function hinglishRideCopy(t: string): string {
 function outbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
     // WhatsApp bold is *one* star; model markdown (**Rohan**, "## ") would show raw.
     text = String(text ?? "").replace(/\*\*([^*\n]+?)\*\*/g, "*$1*").replace(/^#{1,6}\s+/gm, "");
+    // Fixed flow lines follow the language of her latest message.
+    text = scrubStack(localizeCanned(text, lastRouteFor(phone)?.route?.language));
     const whatsappPayloads = composeWhatsAppReply(text, context);
     const content =
         whatsappPayloads.length > 1 || whatsappPayloads[0]?.type !== "text"
@@ -205,12 +209,16 @@ type FlowDoc = {
     orderChat?: { updatedAt?: number; turns?: Array<{ who: string; text: string }> } & Record<string, unknown>;
 } | null;
 
+/** One-line "I dropped your older list/ride" notes, prepended to the next routed reply. */
+const supersedeNotes = new Map<string, string>();
+
 function liveFlow(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
     return Boolean(d?.phase) && d!.phase !== "idle" && d!.phase !== "done" && !staleRideSlots(d);
 }
 /** Same rule as rideWhatsApp.isStaleRideDraft (kept local: this file imports ride code lazily). */
 function staleRideSlots(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
-    if (!d?.phase || !["need_slots", "need_pickup", "need_drop"].includes(d.phase)) return false;
+    // Every pre-booking step goes stale (a 2-hour-old "Got the route… reply yes" must not eat a later "haan").
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable"].includes(d.phase)) return false;
     const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
     return !at || Date.now() - at > 30 * 60_000;
 }
@@ -701,6 +709,23 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             });
         }
         subjectUserId = subject.subjectUserId;
+        // Caregiver self-care: "mere liye Dolo mangwa do" is the caregiver's own order — use
+        // THEIR context (health check, address default, activity), never the elder's record.
+        // A new order/ride ask decides it; follow-up picks / "haan" keep the live order's subject.
+        const NEW_ASK = new Set(["order_new", "restaurant_list", "ride", "health_concern"]);
+        if (route && NEW_ASK.has(route.intent)) {
+            if (route.forSelf) {
+                subjectUserId = identity.userId;
+                await WhatsappSession.updateOne({ phone }, { $set: { orderSubject: { userId: identity.userId, at: new Date() } } }).catch(() => undefined);
+            } else {
+                await WhatsappSession.updateOne({ phone }, { $unset: { orderSubject: 1 } }).catch(() => undefined);
+            }
+        } else {
+            const os = ((await WhatsappSession.findOne({ phone }, { orderSubject: 1 }).lean()) as { orderSubject?: { userId?: string; at?: Date } } | null)?.orderSubject;
+            if (os?.userId === identity.userId && os.at && Date.now() - new Date(os.at).getTime() < 3 * 3600_000) {
+                subjectUserId = identity.userId;
+            }
+        }
     }
 
     const waSession = await WhatsappSession.findOne({ phone }).lean();
@@ -758,6 +783,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     let legacyGates = true;
     let allowDashboard = true;
     if (route) {
+        supersedeNotes.delete(phone);
         const routedOut = await dispatchRoutedTurn({
             route,
             text,
@@ -779,7 +805,10 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 replySource: "saheliRouter",
                 fallbackUsed: `router:${route.intent}`,
             });
-            return outbound(phone, delegateLead && !routedOut.reply.startsWith(delegateLead) ? `${delegateLead}\n\n${routedOut.reply}` : routedOut.reply);
+            const note = supersedeNotes.get(phone);
+            supersedeNotes.delete(phone);
+            const body = note ? `${note}\n\n${routedOut.reply}` : routedOut.reply;
+            return outbound(phone, delegateLead && !body.startsWith(delegateLead) ? `${delegateLead}\n\n${body}` : body);
         }
         legacyGates = routedOut.legacyGates;
         allowDashboard = routedOut.allowDashboard;
@@ -1339,17 +1368,32 @@ async function dispatchRoutedTurn(a: {
         const oc = orderChatActive(doc?.orderChat) ? (doc!.orderChat as never) : null;
         const media = Boolean(a.mediaUrl || a.isRxPhoto);
         const newAsk = (route.intent === "order_new" || route.intent === "restaurant_list") && !media;
-        const chatReply = Boolean(oc) && !media && !NOT_A_FLOW_REPLY.has(route.intent) && route.intent !== "ride" && route.intent !== "otp_code";
+        // A ride asked AFTER the order chat owns the short replies ("yes" to "Got the route…").
+        const rideNewer =
+            liveFlow(rd) &&
+            new Date(((rd as { savedAt?: string | Date }).savedAt as string) || 0).getTime() >
+                Number((doc?.orderChat as { updatedAt?: number } | undefined)?.updatedAt || 0);
+        const chatReply = Boolean(oc) && !media && !NOT_A_FLOW_REPLY.has(route.intent) && route.intent !== "ride" && route.intent !== "otp_code" && !rideNewer && route.category !== "ride";
         if (newAsk || chatReply) {
             // No long silences: if the order chat is slow, a short ack goes out first.
+            // The ack must never arrive after the answer: it's skipped once the turn settles, and
+            // the reply waits for an ack that's already on its way.
             let slowAck: NodeJS.Timeout | null = null;
+            let ackSent: Promise<unknown> | null = null;
+            let settled = false;
             if (newAsk && !oc) {
                 slowAck = setTimeout(() => {
-                    void import("./commerceAutomation/browserProgressNotify.service").then(({ pushWhatsAppBrowserFollowUp }) =>
-                        pushWhatsAppBrowserFollowUp({ phone: a.phone, familyId: a.familyId, recipientUserId: a.recipientUserId, text: route.language === "en" ? "On it 👍" : "Dekh rahi hoon 👍" }).catch(() => false),
+                    if (settled) return;
+                    ackSent = import("./commerceAutomation/browserProgressNotify.service").then(({ pushWhatsAppBrowserFollowUp }) =>
+                        settled ? false : pushWhatsAppBrowserFollowUp({ phone: a.phone, familyId: a.familyId, recipientUserId: a.recipientUserId, text: route.language === "en" ? "On it 👍" : "Dekh rahi hoon 👍" }).catch(() => false),
                     );
                 }, 2500);
             }
+            const settleAck = async () => {
+                settled = true;
+                if (slowAck) clearTimeout(slowAck);
+                if (ackSent) await Promise.race([ackSent, new Promise((r) => setTimeout(r, 4000))]);
+            };
             const d = await orderChatTurn({
                 phone: a.phone,
                 familyId: a.familyId,
@@ -1366,7 +1410,7 @@ async function dispatchRoutedTurn(a: {
                     intent: route.intent,
                 },
                 state: oc,
-            }).finally(() => slowAck && clearTimeout(slowAck));
+            }).finally(settleAck);
             if (d.action === "reply") return { reply: d.text, legacyGates: false, allowDashboard: false };
             if (d.action === "search" || d.action === "restaurants") {
                 const r2: SaheliRoute =
@@ -1514,20 +1558,74 @@ async function dispatchRoutedTurn(a: {
             .join(" ");
     }
     // A store search running right now owns short replies ("haan", "ok") — not an older ride.
-    const searchRunning = Boolean(doc?.pendingSearch?.at && Date.now() - new Date(doc.pendingSearch.at).getTime() < 5 * 60_000);
-    if (liveFlow(rd) && (route.intent === "ride" || (flowReply && !newOrder && !liveFlow(bd) && !liveFlow(pd) && !searchRunning))) {
+    let searchRunning = Boolean(doc?.pendingSearch?.at && Date.now() - new Date(doc.pendingSearch.at).getTime() < 5 * 60_000);
+    // Newest ask wins across flows: a NEW cab ask drops an open (not yet placed) order list, and a
+    // NEW order drops a ride that isn't booked — she's told in one short line, and a later "yes"
+    // can only ever bind to the question she was asked last.
+    let bdLive = liveFlow(bd);
+    let pdLive = liveFlow(pd);
+    let rdLive = liveFlow(rd);
+    {
+        const PRE_BD = new Set(["awaiting_address", "awaiting_address_confirm", "awaiting_restaurant_pick", "awaiting_sku_confirm", "awaiting_confirm", "awaiting_mcp_confirm"]);
+        const PRE_PD = new Set(["ask_list_or_rx", "pick_partner", "awaiting_rx_photo", "confirm_basket"]);
+        const PRE_RD = new Set(["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "unavailable"]);
+        const hi = /^hi/i.test(route.language || "");
+        const { partnerLabel } = await import("./commerceAutomation/playbooks");
+        const dropped: string[] = [];
+        if (route.intent === "ride") {
+            const unset: Record<string, 1> = {};
+            if (bdLive && PRE_BD.has(String(bd!.phase))) {
+                const b = bd as { partner?: string; dishQuery?: string; pendingText?: string; catalogOptions?: unknown[] };
+                const store = b.partner && b.partner !== "generic" ? partnerLabel(String(b.partner)) : "";
+                dropped.push(store ? `${store} list` : hi ? "order list" : "order list");
+                unset.browserTaskDraft = 1;
+                bdLive = false;
+            }
+            if (pdLive && PRE_PD.has(String(pd!.phase))) {
+                const store = (pd as { partner?: string }).partner ? partnerLabel(String((pd as { partner?: string }).partner)) : "";
+                dropped.push(store ? `${store} medicine list` : "medicine list");
+                unset.pharmacyDraft = 1;
+                pdLive = false;
+            }
+            if (searchRunning) {
+                const { cancelGuestSearch } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+                await cancelGuestSearch(a.phone).catch(() => undefined);
+                searchRunning = false;
+                if (!dropped.length) dropped.push(hi ? "search" : "search");
+            }
+            if (doc?.orderChat) unset.orderChat = 1; // the order chat's pending question is superseded too
+            if (Object.keys(unset).length) await WhatsappSession.updateOne({ phone: a.phone }, { $unset: unset }).catch(() => undefined);
+            if (dropped.length) {
+                supersedeNotes.set(a.phone, hi
+                    ? `(${dropped.join(" aur ")} hata di — kuch order nahi hua.)`
+                    : `(I've dropped the ${dropped.join(" and ")} — nothing was ordered.)`);
+            }
+        } else if (newOrder && rdLive && PRE_RD.has(String(rd!.phase))) {
+            await WhatsappSession.updateOne({ phone: a.phone }, { $unset: { rideDraft: 1 } }).catch(() => undefined);
+            rdLive = false;
+            const app = (rd as { provider?: string }).provider === "ola" ? "Ola" : (rd as { provider?: string }).provider === "rapido" ? "Rapido" : "Uber";
+            supersedeNotes.set(a.phone, hi ? `(${app} ride hata di — kuch book nahi hua.)` : `(I've dropped the ${app} ride — nothing was booked.)`);
+        }
+    }
+    // A short reply belongs to the ride only if the ride is the newest thing she was asked about
+    // (an order card / offer / order chat after it owns "haan").
+    const tsOf = (x: unknown) => new Date(((x as { savedAt?: string | Date; at?: string | Date } | null)?.savedAt ?? (x as { at?: string | Date } | null)?.at ?? 0) as string).getTime() || 0;
+    const oc0 = (doc as { orderChat?: { updatedAt?: number } } | null)?.orderChat;
+    const newerThanRide = [doc?.pendingOffer, oc0?.updatedAt ? { at: new Date(oc0.updatedAt) } : null, bd, pd].some((x) => x && tsOf(x) > tsOf(rd));
+    // A short reply ("yes", "haan") goes to the ride when the ride is the newest open question.
+    if (rdLive && (route.intent === "ride" || (flowReply && !newOrder && !searchRunning && !newerThanRide))) {
         const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : rideText;
         const r = await rideTurn(t);
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
     }
     if (route.intent === "ride") {
-        const r = await rideTurn(liveFlow(rd) ? rideText : route.ridePickup || route.rideDrop ? `book a cab ${rideText}` : text);
+        const r = await rideTurn(rdLive ? rideText : route.ridePickup || route.rideDrop ? `book a cab ${rideText}` : text);
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
         return { legacyGates: true, allowDashboard: false };
     }
 
     if (commerce) {
-        let browserLive = liveFlow(bd);
+        let browserLive = bdLive;
         // Two open lists: the one she saw last wins; the older browser list is dropped (a "haan"
         // after an Apollo list must never confirm an hours-old protein-shake list).
         const stamp = (d: unknown) => new Date(((d as { savedAt?: string | Date } | null)?.savedAt as string) || 0).getTime();

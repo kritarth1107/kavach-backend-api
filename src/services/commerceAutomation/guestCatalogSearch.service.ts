@@ -599,7 +599,7 @@ export async function searchGuestCatalog(input: {
                     : res.items.length
                       ? `Instamart shows nothing matching "${query}" near you. Try another name.`
                       : (await import("./swiggyGuest.service")).lastInstamartDebug.includes("Something went wrong")
-                        ? `Instamart's website showed an error to my browser (it may be blocking automated visits right now). Please try again later.`
+                        ? `Instamart's website isn't responding for me right now. Please try again later.`
                         : `Instamart's page didn't show any products for your address just now — the store may be closed at this hour or the site didn't load for me. Please try again in a while.`,
                 partner,
                 query,
@@ -661,7 +661,7 @@ export async function searchGuestCatalog(input: {
             const { zomatoSearch } = await import("./zomatoGuest.service");
             const res = await zomatoSearch({ query, address: input.address });
             if (res.blocked) {
-                return { hits: [], searched: true, unavailableReason: "Zomato is blocking my browser right now 🙏 Try *Swiggy* instead?", partner, query };
+                return { hits: [], searched: true, unavailableReason: "Zomato isn't letting me in right now 🙏 Try *Swiggy* instead?", partner, query };
             }
             if (!res.location.ok) {
                 return {
@@ -696,7 +696,7 @@ export async function searchGuestCatalog(input: {
                     `I can't browse ${label} without signing in yet, so I can't show live items or prices for your address. ` +
                     (partner === "zomato"
                         ? `I can show open restaurants near you on *Swiggy* instead.`
-                        : `Reply *confirm* to sign in to ${label} in my browser (an OTP SMS will come) and I'll search there for your address — or say *order ${query} from Instamart* / *Blinkit*.`),
+                        : `Reply *confirm* to sign in to ${label} (an OTP SMS will come) and I'll search there for your address — or say *order ${query} from Instamart* / *Blinkit*.`),
                 partner,
                 query,
             };
