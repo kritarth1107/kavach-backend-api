@@ -51,7 +51,7 @@ Tuning (only if clearly shown): addressAs (how she likes to be called), preferre
 
 Reply ONLY JSON:
 {"ops":[{"op":"add|reinforce|revise","id":null,"category":"health|wellbeing|mood|medicines|routine|people|cognition|comfort|communication|preferences","text":"…","confidence":0.6,"evidence":"…","by":"elder|caregiver|orders|inferred","decayClass":"health_condition|allergy|safety|medication|routine|preference|transient_state|other"}],
- "judgements":[{"id":"<fact id>","verdict":"supports|contradicts|silent","opportunity":false,"by":"elder|caregiver|orders|inferred","evidence":"…","decayClass":null}],
+ "judgements":[{"id":"F1","verdict":"supports|contradicts|silent","opportunity":false,"by":"elder|caregiver|orders|inferred","evidence":"…","decayClass":null}],
  "careActions":[{"kind":"follow_up|reminder|company|offer|caregiver_suggestion","text":"…","say":"one short line Saheli can send her, in her language, warm like her own child (null for caregiver_suggestion)","why":"…","audience":"elder|caregiver"}],
  "unusual":[{"category":"repeat_order|bulk_quantity|large_spend|risky_meds|odd_hours|order_change|confusion|mood_drop|meds_missed|scam|other","confidence":0.6,"text":"…","evidence":"…"}],
  "day":{"mood":3,"moodWord":"…","lonely":false,"mentions":{"pain":false,"sleep":false,"appetite":false,"activity":false,"tired":false}},
@@ -129,13 +129,14 @@ async function dayCounts(w: Who, dayKey: string, rows: Array<{ kind: string; cre
 const S = (type: string, extra: Record<string, unknown> = {}) => ({ type, ...extra });
 const N = (type: string, extra: Record<string, unknown> = {}) => ({ type, nullable: true, ...extra });
 /** Structured output for the nightly reflection (Vertex OpenAPI subset). */
-const RESPONSE_SCHEMA = S("object", {
+/** Fact ids are short handles (F1, F2 …) constrained by enum, so the model can't invent / loop on ids. */
+const responseSchema = (handles: string[]) => S("object", {
     properties: {
         ops: S("array", {
             items: S("object", {
                 properties: {
                     op: S("string", { enum: ["add", "reinforce", "revise"] }),
-                    id: N("string"),
+                    id: handles.length ? N("string", { enum: handles }) : N("string"),
                     category: S("string", { enum: ["health", "wellbeing", "mood", "medicines", "routine", "people", "cognition", "comfort", "communication", "preferences"] }),
                     text: S("string"),
                     confidence: S("number"),
@@ -149,7 +150,7 @@ const RESPONSE_SCHEMA = S("object", {
         judgements: S("array", {
             items: S("object", {
                 properties: {
-                    id: S("string"),
+                    id: handles.length ? S("string", { enum: handles }) : S("string"),
                     verdict: S("string", { enum: ["supports", "contradicts", "silent"] }),
                     opportunity: S("boolean"),
                     by: N("string", { enum: ["elder", "caregiver", "orders", "inferred"] }),
@@ -251,9 +252,11 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     } catch {
         /* none */
     }
-    const current = (doc.facts || [])
-        .filter((f) => f.status !== "faded" && f.status !== "rejected")
-        .map((f) => `${f.id} [${f.category}] class=${f.decayClass || "?"} (${f.status}${f.status === "learned" ? ` ${f.confidence}` : ""}) ${f.text}`);
+    const listed = (doc.facts || []).filter((f) => f.status !== "faded" && f.status !== "rejected").slice(0, 120);
+    const handleOf = new Map(listed.map((f, i) => [f.id, `F${i + 1}`]));
+    const idOf = new Map(listed.map((f, i) => [`F${i + 1}`, f.id]));
+    const current = listed
+        .map((f) => `${handleOf.get(f.id)} [${f.category}] class=${f.decayClass || "?"} (${f.status}${f.status === "learned" ? ` ${f.confidence}` : ""}) ${f.text}`);
     const rejected = (doc.facts || []).filter((f) => f.status === "rejected").slice(-30).map((f) => `- ${f.text}`);
     let judgements: FactJudgement[] = [];
     let fallbackReason: string | undefined;
@@ -270,18 +273,18 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             `Day: ${dayKey} (IST)`,
             `Medicines/schedule today: ${counts.medsDone} done, ${counts.medsMissed} missed. Nudges: ${counts.nudgesSent} sent, ${counts.nudgesReplied} replied.`,
             declines ? `Declined options today: ${declines}` : "",
-            `Current profile facts (id [category] class (status confidence) text). Caregiver-confirmed/edited facts are fixed (still judge them). Give a judgement for EVERY one:\n${current.join("\n") || "(none yet)"}`,
+            `Current profile facts (handle [category] class (status confidence) text) — refer to them by handle (F1, F2 …) in "id". Caregiver-confirmed/edited facts are fixed (still judge them). Give a judgement for EVERY one:\n${current.join("\n") || "(none yet)"}`,
             rejected.length ? `REJECTED by the family — never re-learn these:\n${rejected.join("\n")}` : "",
             memory ? `Long-term memory notes (from Saheli's memory):\n${memory}` : "",
             `Timeline:\n${lines.join("\n")}`,
         ]
             .filter(Boolean)
             .join("\n\n");
-        const tryModel = async (m: string) => {
+        const tryModel = async (m: string, schema?: boolean) => {
             Vertex.resetVertexError?.();
-            const useSchema = opts.schema ?? process.env.REFLECTION_RESPONSE_SCHEMA !== "0";
+            const useSchema = schema ?? opts.schema ?? process.env.REFLECTION_RESPONSE_SCHEMA !== "0";
             const thinkingLevel = opts.thinkingLevel || process.env.REFLECTION_THINKING_LEVEL?.trim() || undefined;
-            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, ...(useSchema ? { responseSchema: RESPONSE_SCHEMA } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), prompt, timeoutMs: 150_000, maxOutputTokens: 24_576, temperature: 0.2 });
+            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, ...(useSchema ? { responseSchema: responseSchema([...idOf.keys()]) } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), prompt, timeoutMs: 120_000, maxOutputTokens: 16_384, temperature: 0.2 });
             const out = parseJsonLoose<Raw>(raw);
             if (!out && raw) rawDiag.push(`${m}: ${raw.length} chars … ${raw.slice(Math.max(0, raw.length - 240)).replace(/\s+/g, " ")}`);
             return out;
@@ -294,11 +297,20 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             console.warn(`[reflection] ${pro} unusable (${fallbackReason}); falling back to flash`);
             model = vertexFlashModel();
             parsed = await tryModel(model).catch(() => null);
+            if (!parsed?.ops && !parsed?.day) {
+                // Last resort: plain JSON mode (no response schema) — the pre-schema path.
+                fallbackReason += ` | flash: ${String(Vertex.lastVertexError || "unparseable").slice(0, 120)}`;
+                parsed = await tryModel(model, false).catch(() => null);
+                model = `${model} (json)`;
+            }
             if (!parsed?.ops && !parsed?.day) fallbackReason += ` | flash: ${String(Vertex.lastVertexError || "unparseable").slice(0, 160)}`;
         }
         if (parsed) {
-            ops = Array.isArray(parsed.ops) ? parsed.ops : [];
-            judgements = Array.isArray(parsed.judgements) ? parsed.judgements : [];
+            // Handles → real fact ids (unknown handles dropped / treated as new facts).
+            ops = (Array.isArray(parsed.ops) ? parsed.ops : []).map((o) => ({ ...o, id: o?.id ? idOf.get(String(o.id)) || null : null }));
+            judgements = (Array.isArray(parsed.judgements) ? parsed.judgements : [])
+                .map((j) => ({ ...j, id: idOf.get(String(j?.id)) || "" }))
+                .filter((j) => j.id);
             day = parsed.day || {};
             tuning = parsed.tuning || {};
             unusual = Array.isArray(parsed.unusual) ? parsed.unusual.slice(0, 3) : [];
