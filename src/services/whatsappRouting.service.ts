@@ -840,7 +840,9 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 (waForRide as { browserTaskDraft?: unknown } | null)?.browserTaskDraft ||
                     (waForRide as { pharmacyDraft?: unknown } | null)?.pharmacyDraft ||
                     (waForRide as { pendingCommerceOtp?: unknown } | null)?.pendingCommerceOtp ||
-                    (waForRide as { orderSessionId?: string } | null)?.orderSessionId,
+                    (waForRide as { orderSessionId?: string } | null)?.orderSessionId ||
+                    (waForRide as { pendingSearch?: unknown } | null)?.pendingSearch ||
+                    (waForRide as { pendingOffer?: unknown } | null)?.pendingOffer,
             );
             if (rideActive || messageLooksLikeRideIntent(text) || ( !busyElsewhere && /^(yeah|yes|yep|haan|ha|ok|okay|sure)$/i.test(text.trim()))) {
                 const rideReply = await handleRideWhatsAppTurn({

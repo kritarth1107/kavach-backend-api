@@ -2634,11 +2634,17 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
     // that search — bound to the offer, never the care-record Q&A. A search only; money steps keep
     // their literal-confirm guardrails.
     if (!active && (route.intent === "order_control" || (route.intent === "order_modify" && !route.productQuery && !route.addressKind && !route.addressNickname))) {
-        if (route.control === "status") {
-            const ps = (await WhatsappSession.findOne({ phone: input.phone }, { pendingSearch: 1 }).lean().catch(() => null)) as { pendingSearch?: { familyId?: string; at?: Date } } | null;
-            if (ps?.pendingSearch?.familyId === input.familyId) return { text: "Still checking 🔎 — I'll message you here the moment I have it." };
-        }
+        // A search is running: "any update?" and a plain "haan / ok / yes" to "I'll send the options
+        // in a moment" both just get a warm "still on it" (never a ride prompt or a care-record answer).
+        const ps = (await WhatsappSession.findOne({ phone: input.phone }, { pendingSearch: 1 }).lean().catch(() => null)) as { pendingSearch?: { familyId?: string; at?: Date } } | null;
+        const searching = ps?.pendingSearch?.familyId === input.familyId && Boolean(ps.pendingSearch.at) && Date.now() - new Date(ps.pendingSearch.at!).getTime() < 5 * 60_000;
+        const stillChecking = () =>
+            route.language === "hi" || route.language === "hinglish"
+                ? "Abhi dekh rahi hoon 🔎 — options milte hi yahin bhej dungi."
+                : "Still checking 🔎 — I'll message you here the moment I have it.";
+        if (searching && route.control === "status") return { text: stillChecking() };
         const offer = await peekOffer(input.phone, input.familyId);
+        if (searching && !offer && (route.control === "confirm" || route.control === "none")) return { text: stillChecking() };
         if (offer) {
             const said = route.partners[0];
             if (route.control === "cancel") {
