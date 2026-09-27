@@ -14,5 +14,7 @@ export function isSoftYes(text: string | null | undefined): boolean {
 }
 
 export function signInConfirmNudge(storeLabel: string): string {
+    // A multi-store list has no store yet: she picks a number first.
+    if (!storeLabel || /^the site$/i.test(storeLabel.trim())) return "Pick a number from the list first (e.g. *1*), then reply *confirm*. Or *cancel*.";
     return `To go ahead, reply *confirm* — I'll then open *${storeLabel}* and ask you for the login OTP. Or *cancel*.`;
 }

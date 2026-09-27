@@ -221,7 +221,7 @@ export async function pushWhatsAppBrowserFollowUp(input: {
     /** A resend of the same follow-up: deliver only (already logged + recorded once). */
     resend?: boolean;
 }): Promise<boolean> {
-    const text = input.text.trim();
+    const text = input.text.trim().replace(/\*\*([^*\n]+?)\*\*/g, "*$1*");
     if (!text) return false;
     if (!input.resend) void logActivity({
         familyId: input.familyId,

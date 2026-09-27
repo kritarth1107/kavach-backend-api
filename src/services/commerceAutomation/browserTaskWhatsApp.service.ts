@@ -322,7 +322,7 @@ async function saveDraft(phone: string, draft: BrowserTaskDraft | null): Promise
         return;
     }
     const set: Record<string, unknown> = {
-        browserTaskDraft: draft,
+        browserTaskDraft: { ...draft, savedAt: new Date() },
         updatedAt: new Date(),
     };
     if (draft.phase === "awaiting_otp" && draft.partner && draft.partner !== "generic") {

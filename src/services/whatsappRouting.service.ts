@@ -48,6 +48,8 @@ function isCaregiver(role: FamilyRole): boolean {
 }
 
 function outbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
+    // WhatsApp bold is *one* star; model markdown (**Rohan**, "## ") would show raw.
+    text = String(text ?? "").replace(/\*\*([^*\n]+?)\*\*/g, "*$1*").replace(/^#{1,6}\s+/gm, "");
     const whatsappPayloads = composeWhatsAppReply(text, context);
     const content =
         whatsappPayloads.length > 1 || whatsappPayloads[0]?.type !== "text"
@@ -1505,7 +1507,14 @@ async function dispatchRoutedTurn(a: {
     }
 
     if (commerce) {
-        const browserLive = liveFlow(bd);
+        let browserLive = liveFlow(bd);
+        // Two open lists: the one she saw last wins; the older browser list is dropped (a "haan"
+        // after an Apollo list must never confirm an hours-old protein-shake list).
+        const stamp = (d: unknown) => new Date(((d as { savedAt?: string | Date } | null)?.savedAt as string) || 0).getTime();
+        if (browserLive && liveFlow(pd) && stamp(pd) > stamp(bd) && ["awaiting_sku_confirm", "awaiting_address_confirm", "awaiting_address"].includes(String(bd?.phase))) {
+            await WhatsappSession.updateOne({ phone: a.phone }, { $unset: { browserTaskDraft: 1 } }).catch(() => undefined);
+            browserLive = false;
+        }
         // Pharmacy draft owns controls when no browser order is open.
         if (liveFlow(pd) && !browserLive && (route.intent === "order_control" || route.intent === "otp_code" || a.isRxPhoto)) {
             const t = canonical();

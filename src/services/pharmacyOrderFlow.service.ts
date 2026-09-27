@@ -185,7 +185,7 @@ async function loadDraft(phone: string): Promise<PharmacyDraft | null> {
 async function saveDraft(phone: string, draft: PharmacyDraft | null): Promise<void> {
     await WhatsappSession.findOneAndUpdate(
         { phone },
-        { $set: { pharmacyDraft: draft, updatedAt: new Date() } },
+        { $set: { pharmacyDraft: draft ? { ...draft, savedAt: new Date() } : draft, updatedAt: new Date() } },
         { upsert: true },
     );
 }
