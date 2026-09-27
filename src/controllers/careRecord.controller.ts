@@ -306,6 +306,19 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
         });
         return;
     }
+    // Test numbers: script the in-chat Ola page ({olaScenario:{name,timeScale}}) or run a watch tick now.
+    if (req.body?.olaScenario || req.body?.olaTick) {
+        const ola = await import("../services/rideBooking/ola/olaInChat.service");
+        const from = String(req.body?.from || "");
+        if (req.body?.olaScenario) {
+            const okSet = ola.setOlaTestScenario(from, String(req.body.olaScenario.name || "assigned"), Number(req.body.olaScenario.timeScale) || 1);
+            res.status(okSet ? 200 : 403).json({ success: okSet });
+            return;
+        }
+        await ola.runOlaWatchTick();
+        res.json({ success: true });
+        return;
+    }
     // Routing a mock message acts as that sender: in production only test numbers may be driven.
     const { isTestPhone } = await import("../services/smokeFixtures.service");
     if (process.env.NODE_ENV === "production" && !isTestPhone(String(req.body?.from || ""))) {

@@ -218,7 +218,7 @@ function liveFlow(d: { phase?: string; savedAt?: string | Date } | undefined | n
 /** Same rule as rideWhatsApp.isStaleRideDraft (kept local: this file imports ride code lazily). */
 function staleRideSlots(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
     // Every pre-booking step goes stale (a 2-hour-old "Got the route… reply yes" must not eat a later "haan").
-    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable", "offer_caregiver"].includes(d.phase)) return false;
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable", "offer_caregiver", "ola_loading", "ola_pick_type", "ola_confirm_signin", "ola_signing_in", "ola_awaiting_otp", "ola_checking_otp", "ola_confirm_book", "ola_offer"].includes(d.phase)) return false;
     const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
     return !at || Date.now() - at > 30 * 60_000;
 }
@@ -1586,7 +1586,7 @@ async function dispatchRoutedTurn(a: {
     {
         const PRE_BD = new Set(["awaiting_address", "awaiting_address_confirm", "awaiting_restaurant_pick", "awaiting_sku_confirm", "awaiting_confirm", "awaiting_mcp_confirm"]);
         const PRE_PD = new Set(["ask_list_or_rx", "pick_partner", "awaiting_rx_photo", "confirm_basket"]);
-        const PRE_RD = new Set(["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "unavailable", "offer_caregiver"]);
+        const PRE_RD = new Set(["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "unavailable", "offer_caregiver", "ola_loading", "ola_pick_type", "ola_confirm_signin", "ola_signing_in", "ola_awaiting_otp", "ola_checking_otp", "ola_confirm_book", "ola_offer"]);
         const hi = /^hi/i.test(route.language || "");
         const { partnerLabel } = await import("./commerceAutomation/playbooks");
         const dropped: string[] = [];
@@ -1620,6 +1620,7 @@ async function dispatchRoutedTurn(a: {
             }
         } else if (newOrder && rdLive && PRE_RD.has(String(rd!.phase))) {
             await WhatsappSession.updateOne({ phone: a.phone }, { $unset: { rideDraft: 1 } }).catch(() => undefined);
+            void import("./rideBooking/ola/olaInChat.service").then((m) => m.releaseOlaPage(a.phone)).catch(() => undefined);
             rdLive = false;
             const app = (rd as { provider?: string }).provider === "ola" ? "Ola" : (rd as { provider?: string }).provider === "rapido" ? "Rapido" : "Uber";
             supersedeNotes.set(a.phone, hi ? `(${app} ride hata di — kuch book nahi hua.)` : `(I've dropped the ${app} ride — nothing was booked.)`);

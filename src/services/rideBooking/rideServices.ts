@@ -23,6 +23,14 @@ export type RideConfig = {
     probeTtlHours: number;
     probeTimeoutMs: number;
     maxProbesPerHour: number;
+    /** Book Ola inside the chat where Ola runs (otherwise links only). */
+    olaInChat: boolean;
+    /** No driver after this long → cancel the search on Ola. */
+    olaSearchTimeoutSec: number;
+    /** Progress line to the user about this often while searching. */
+    olaUpdateEverySec: number;
+    /** Keep watching an assigned ride (driver cancels) this long. */
+    olaAssignedWatchMin: number;
 };
 
 const TIER_LABEL: Partial<Record<CityTier, string>> = { ncr: "Delhi NCR", mumbai: "Mumbai", bengaluru: "Bengaluru" };
@@ -55,6 +63,10 @@ export const DEFAULT_RIDE_CONFIG: RideConfig = {
     probeTtlHours: 24,
     probeTimeoutMs: 16_000,
     maxProbesPerHour: 60,
+    olaInChat: true,
+    olaSearchTimeoutSec: 300,
+    olaUpdateEverySec: 150,
+    olaAssignedWatchMin: 30,
 };
 
 const SERVICES: RideService[] = ["uber", "ola", "rapido"];
@@ -87,6 +99,10 @@ export function mergeRideConfig(doc: Record<string, unknown> | null | undefined)
     cfg.probeTtlHours = num(doc.probeTtlHours, 1, 24 * 14, cfg.probeTtlHours);
     cfg.probeTimeoutMs = num(doc.probeTimeoutMs, 3000, 30_000, cfg.probeTimeoutMs);
     cfg.maxProbesPerHour = num(doc.maxProbesPerHour, 0, 1000, cfg.maxProbesPerHour);
+    if (typeof doc.olaInChat === "boolean") cfg.olaInChat = doc.olaInChat;
+    cfg.olaSearchTimeoutSec = num(doc.olaSearchTimeoutSec, 60, 1800, cfg.olaSearchTimeoutSec);
+    cfg.olaUpdateEverySec = num(doc.olaUpdateEverySec, 60, 600, cfg.olaUpdateEverySec);
+    cfg.olaAssignedWatchMin = num(doc.olaAssignedWatchMin, 5, 180, cfg.olaAssignedWatchMin);
     return cfg;
 }
 

@@ -98,6 +98,8 @@ app.listen(PORT, () => {
       .catch((err) => console.warn("[guest-browse] sweep failed:", err instanceof Error ? err.message : err));
   setTimeout(sweepSearches, 30_000);
   setInterval(sweepSearches, 60_000).unref();
+  // In-chat Ola rides: driver search / assignment watch (durable — resumes after a restart).
+  void import("./services/rideBooking/ola/olaInChat.service").then(({ startOlaWatcher }) => startOlaWatcher());
   // Legacy per-person delivery addresses → family address book (idempotent, once per row).
   setTimeout(() => {
     void import("./services/familyAddressBook.service")

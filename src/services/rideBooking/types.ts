@@ -19,7 +19,25 @@ export type RidePhase =
     | "done"
     | "unavailable"
     /** No app serves the area: she was offered "shall I message your family?". */
-    | "offer_caregiver";
+    | "offer_caregiver"
+    // In-chat Ola booking (see ola/olaInChat.service.ts)
+    | "ola_loading"
+    | "ola_pick_type"
+    | "ola_confirm_signin"
+    | "ola_signing_in"
+    | "ola_awaiting_otp"
+    | "ola_checking_otp"
+    | "ola_confirm_book"
+    | "ola_booking"
+    | "ola_searching"
+    | "ola_assigned"
+    | "ola_cancel_assigned_ask"
+    | "ola_offer";
+
+/** Ola steps before anything is booked (a newer ask may drop these). */
+export const OLA_PRE_BOOKING_PHASES: RidePhase[] = [
+    "ola_loading", "ola_pick_type", "ola_confirm_signin", "ola_signing_in", "ola_awaiting_otp", "ola_checking_otp", "ola_confirm_book", "ola_offer",
+];
 
 export type RidePlace = {
     raw?: string;
@@ -60,6 +78,16 @@ export type RideDraft = {
     /** App she named ("Ola se"), honoured when it runs there. */
     requested?: "uber" | "ola" | "rapido" | "namma_yatri";
     unavailableReason?: string;
+    ola?: {
+        token: string;
+        lang?: string | null;
+        types?: Array<{ name: string; etaMin?: number; fare?: number }>;
+        chosen?: string;
+        confirm?: { pickup?: string; drop?: string; fare?: number; pay?: string; vehicle: string };
+        otpTries?: number;
+        phoneE164?: string;
+        rideId?: string;
+    };
 };
 
 export const RIDE_CANCEL_RE =

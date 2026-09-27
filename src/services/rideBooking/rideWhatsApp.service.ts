@@ -35,6 +35,8 @@ import {
 } from "./rideServices";
 import { awaitRideAvailability, readAvailability, warmRideAvailability } from "./rideAvailability";
 import { loadRideConfig } from "./rideConfig";
+import { handleOlaTurn, isOlaPhase, olaInChatEligible, startOlaInChat } from "./ola/olaInChat.service";
+import { OLA_PRE_BOOKING_PHASES } from "./types";
 
 export { messageLooksLikeRideIntent, isRideCancel } from "./slotParse";
 export type { RideDraft } from "./types";
@@ -50,7 +52,7 @@ async function loadDraft(phone: string): Promise<RideDraft | null> {
  *  "haan" / "ok" must never resume it ("Where from, and where to?" out of nowhere). */
 export function isStaleRideDraft(d: { phase?: string; savedAt?: string | Date } | null | undefined): boolean {
     // Every pre-booking step goes stale (a 2-hour-old "Got the route… reply yes" must not eat a later "haan").
-    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable", "offer_caregiver"].includes(d.phase)) return false;
+    if (!d?.phase || ![...["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable", "offer_caregiver"], ...OLA_PRE_BOOKING_PHASES].includes(d.phase as never)) return false;
     const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
     return !at || Date.now() - at > 30 * 60_000;
 }
@@ -241,6 +243,11 @@ async function multiAppHandoff(input: RideTurnInput, draft: RideDraft): Promise<
         { phone: input.phone },
         { $set: { lastRide: { pickup: draft.pickup, drop: draft.drop, at: new Date() } } },
     ).catch(() => undefined);
+    // Ola runs here: book it inside the chat (Uber / Rapido stay as links and fallbacks).
+    if (olaInChatEligible({ phone: input.phone, cfg, tier, vehicle, olaStatus: avail.ola, requested: draft.requested })) {
+        console.log(JSON.stringify({ evt: "ride_handoff_inchat", provider: "ola", cityKey: key, tier, vehicle }));
+        return await startOlaInChat(input, draft, lang);
+    }
     const msg = handoffMessage({ choice, vehicle, pickup: draft.pickup, drop: draft.drop, lang, tier });
     if (msg) {
         await saveDraft(input.phone, null);
@@ -274,6 +281,19 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
     const hint = `${input.hintText || ""} ${text}`;
     const hv = vehicleFromText(hint);
     const hs = serviceFromText(hint);
+
+    // In-chat Ola (booking steps, driver search, driver on the way) owns every turn while open.
+    // A new route typed while Ola is still at a pre-booking step: newest ask wins.
+    if (draft && (OLA_PRE_BOOKING_PHASES as string[]).includes(draft.phase) && input.forceStart && input.newPlacesTyped) {
+        const { releaseOlaPage } = await import("./ola/olaInChat.service");
+        await releaseOlaPage(input.phone);
+        await saveDraft(input.phone, null);
+        draft = null;
+    }
+    if (draft && isOlaPhase(draft.phase)) {
+        const r = await handleOlaTurn(input, draft, text);
+        return { text: r.text, draft: r.draft === null ? undefined : r.draft || draft };
+    }
 
     if (draft?.phase === "offer_caregiver") {
         const hi = isHindi(await rideLang(input.phone));
