@@ -21,11 +21,15 @@ const leaks = [
     "I use an LLM via an API behind a webhook.",
     "No live MCP price for \"atta\". Search the catalog and pick a listed item.",
     "I'm Saheli, built on Google Gemini. How can I help?",
+    "I run on Google's *Gemini* technology, Papa! But here, I'm just your Saheli, always ready to chat. 💚",
+    "Main ChatGPT nahi hoon. Main Saheli hoon.",
 ];
 for (const t of leaks) {
     const out = scrubStack(t);
     ok(`scrubbed: ${t.slice(0, 50)}`, !hasStackWords(out) && out.length > 0, out);
 }
+ok("model question → secret recipe", /secret recipe/.test(scrubStack("I run on Google's *Gemini* technology, Papa! But here, I'm just your Saheli.")));
+ok("hindi secret recipe", /hamari secret recipe/.test(scrubStack("Main Google Gemini AI par chalti hoon, Maa.")));
 ok("keeps normal text", scrubStack("Found on *Blinkit* 🛒\n1. Amul Taaza — ₹30") === "Found on *Blinkit* 🛒\n1. Amul Taaza — ₹30");
 ok("keeps zodiac Gemini", scrubStack("Aapki rashi Gemini hai? Bahut badhiya!").includes("Gemini"));
 ok("keeps retry sentence", /retry/.test(scrubStack("Browser task failed: boom. You can retry or *cancel*.")));

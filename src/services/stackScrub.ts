@@ -21,7 +21,10 @@ const REWRITES: Array<[RegExp, string]> = [
 
 /** Words that must never reach a user. "Gemini" alone can be a zodiac sign, so only its AI forms. */
 export const STACK_WORD_RE =
-    /\b(?:browser(?:[- ]use)?|chromium|playwright|puppeteer|stagehand|headless|MCP|dry[- ]?run|vertex(?: ai)?|LLM|large language model|AI model|webhook|API|backend|server|cloud run|google gemini|gemini[- ](?:\d|pro|flash|ai|model)|gpt-?\d|openai|anthropic|claude)\b/i;
+    /\b(?:browser(?:[- ]use)?|chromium|playwright|puppeteer|stagehand|headless|MCP|dry[- ]?run|vertex(?: ai)?|LLM|large language model|AI model|webhook|API|backend|server|cloud run|google'?s?\W{0,3}gemini|gemini\W{0,3}(?:\d|pro|flash|ai|model|technology|tech)|chat\s?gpt|gpt-?\d|openai|anthropic|claude|grok|xai|deepmind|(?:run|built|powered|made|based)\s+(?:on|by|with|using)\s+\W{0,3}(?:google|gemini|ai\b))\b/i;
+
+const VENDOR_RE =
+    /\b(?:google'?s?\W{0,3}gemini|gemini\W{0,3}(?:\d|pro|flash|ai|model|technology|tech)|chat\s?gpt|gpt-?\d|openai|anthropic|claude|grok|deepmind|LLM|large language model|AI model|(?:run|built|powered|made|based)\s+(?:on|by|with|using)\s+\W{0,3}(?:google|gemini))\b/i;
 
 export function hasStackWords(text: string): boolean {
     return STACK_WORD_RE.test(stripUrls(text));
@@ -36,6 +39,12 @@ export function scrubStack(text: string): string {
     let out = text;
     for (const [re, rep] of REWRITES) out = out.replace(re, rep);
     if (!hasStackWords(out)) return tidy(out);
+    // She was asked what she runs on and named a model / vendor → the warm "secret recipe" line.
+    if (VENDOR_RE.test(stripUrls(out)) && out.length < 600) {
+        return /\b(hai|hoon|hun|main|aap|kya|nahi|toh)\b|[\u0900-\u097F]/i.test(out)
+            ? "Yeh toh hamari secret recipe hai 😊 — main bas aapki madad ke liye hoon."
+            : "That's our secret recipe 😊 — I'm just here to help you.";
+    }
     // Drop any sentence that still names the stack (URLs are left alone).
     const lines = out.split("\n").map((line) => {
         if (!STACK_WORD_RE.test(stripUrls(line))) return line;
