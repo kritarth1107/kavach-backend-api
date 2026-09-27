@@ -37,6 +37,7 @@ import { awaitRideAvailability, readAvailability, warmRideAvailability } from ".
 import { loadRideConfig } from "./rideConfig";
 import { handleOlaTurn, isOlaPhase, olaInChatEligible, startOlaInChat } from "./ola/olaInChat.service";
 import { OLA_PRE_BOOKING_PHASES } from "./types";
+import { pinPlan } from "./pinPlan";
 
 export { messageLooksLikeRideIntent, isRideCancel } from "./slotParse";
 export type { RideDraft } from "./types";
@@ -99,14 +100,8 @@ async function maybeCompleteSlots(
     const parsed = parseFromTo(text);
 
     if (pin) {
-        if (!draft.pickup) {
-            draft.pickup = await enrichPlace(pin);
-        } else if (!draft.drop) {
-            draft.drop = await enrichPlace(pin);
-        } else {
-            // Extra pin replaces drop
-            draft.drop = await enrichPlace(pin);
-        }
+        // A shared location is where she is: always the pickup (beats a saved home), exact map point.
+        draft.pickup = await enrichPlace(pin);
     } else if (parsed.pickup || parsed.drop) {
         // "from home" with no saved home: ask for it instead of guessing a place with that name.
         if (parsed.pickup && GENERIC_PLACE.test(parsed.pickup.trim())) {
@@ -188,8 +183,8 @@ export async function handleRideWhatsAppTurn(input: RideTurnInput): Promise<{ te
 }
 
 async function rideLang(phone: string): Promise<string | null> {
-    const { lastRouteFor } = await import("../saheliRouter.service");
-    return lastRouteFor(phone)?.route?.language || null;
+    const { preferredLang } = await import("../saheliRouter.service");
+    return preferredLang(phone);
 }
 
 /** Route confirmed → the best app link for this city (plus one alternative), or the no-service offer. */
@@ -274,6 +269,46 @@ async function multiAppHandoff(input: RideTurnInput, draft: RideDraft): Promise<
     return { text, draft };
 }
 
+/** Pin → pickup (exact point kept); destination from the open ride or the last one in the past 30 min. */
+async function rideFromPin(
+    input: RideTurnInput,
+    draft: RideDraft | null,
+    pin: RidePlace,
+    hv: ReturnType<typeof vehicleFromText>,
+    hs: ReturnType<typeof serviceFromText>,
+): Promise<{ text: string; draft?: RideDraft }> {
+    const row = draft?.drop
+        ? null
+        : ((await WhatsappSession.findOne({ phone: input.phone }, { lastRide: 1 }).lean().catch(() => null)) as { lastRide?: { drop?: RidePlace; at?: Date } } | null);
+    const plan = pinPlan(draft, row?.lastRide, pin, Date.now(), OLA_PRE_BOOKING_PHASES as readonly string[]);
+    if (plan.releaseOla) {
+        const { releaseOlaPage } = await import("./ola/olaInChat.service");
+        await releaseOlaPage(input.phone);
+    }
+    const drop = plan.drop;
+    const pickup = await enrichPlace(pin);
+    // Never lose the point, whatever the lookup returned.
+    pickup.lat = pin.lat;
+    pickup.lng = pin.lng;
+    console.log(JSON.stringify({ evt: "ride_pin_pickup", phone: input.phone.slice(-4), hadDraft: Boolean(draft), draftPhase: draft?.phase || null, drop: Boolean(drop) }));
+    const next: RideDraft = {
+        phase: drop ? "confirming_route" : "need_drop",
+        provider: draft?.provider || providerFromText(input.hintText || input.text),
+        pickup,
+        drop,
+        vehicle: hv || draft?.vehicle || undefined,
+        requested: hs || draft?.requested || undefined,
+    };
+    if (drop) {
+        next.routeSummary = formatRouteSummary(pickup, drop);
+        return await multiAppHandoff(input, next);
+    }
+    await saveDraft(input.phone, next);
+    const hi = isHindi(await rideLang(input.phone));
+    const label = nameFor(pickup);
+    return { text: hi ? `Pickup: *${label}* 📍 Kahan jaana hai?` : `Pickup: *${label}* 📍 Where to?`, draft: next };
+}
+
 async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text: string; draft?: RideDraft } | null> {
     const text = input.text.trim();
     let draft = await loadDraft(input.phone);
@@ -281,6 +316,14 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
     const hint = `${input.hintText || ""} ${text}`;
     const hv = vehicleFromText(hint);
     const hs = serviceFromText(hint);
+
+    // A shared WhatsApp location is always the pickup, whatever came before it (a destination, a
+    // saved-home route, a failed attempt, an open Ola list). With a destination known, go straight on.
+    const pinNow = parseLocationPin(text);
+    const liveOla = draft && isOlaPhase(draft.phase) && !(OLA_PRE_BOOKING_PHASES as string[]).includes(draft.phase);
+    if (pinNow && !liveOla) {
+        return await rideFromPin(input, draft, pinNow, hv, hs);
+    }
 
     // In-chat Ola (booking steps, driver search, driver on the way) owns every turn while open.
     // A new route typed while Ola is still at a pre-booking step: newest ask wins.

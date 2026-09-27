@@ -51,7 +51,7 @@ export type ComputerUseObservation = {
     userConfirmed?: boolean;
 };
 
-function gcpProjectId(): string {
+export function gcpProjectId(): string {
     return (
         process.env.GCP_PROJECT_ID?.trim() ||
         process.env.GOOGLE_CLOUD_PROJECT?.trim() ||
@@ -59,7 +59,7 @@ function gcpProjectId(): string {
     );
 }
 
-function visionLocation(): string {
+export function visionLocation(): string {
     if (process.env.VERTEX_VISION_LOCATION?.trim()) {
         return process.env.VERTEX_VISION_LOCATION.trim();
     }
@@ -74,7 +74,7 @@ function visionLocation(): string {
     return process.env.VERTEX_LOCATION?.trim() || process.env.GCP_REGION?.trim() || "asia-south1";
 }
 
-function browserModel(): string {
+export function browserModel(): string {
     return (
         process.env.VERTEX_BROWSER_MODEL?.trim() ||
         process.env.VERTEX_VISION_MODEL?.trim() ||
@@ -82,7 +82,7 @@ function browserModel(): string {
     );
 }
 
-async function getAccessToken(): Promise<string | null> {
+export async function getAccessToken(): Promise<string | null> {
     try {
         const auth = new GoogleAuth({
             scopes: ["https://www.googleapis.com/auth/cloud-platform"],
@@ -99,7 +99,7 @@ async function getAccessToken(): Promise<string | null> {
     }
 }
 
-function parseJsonObject(raw: string): Record<string, unknown> | null {
+export function parseJsonObject(raw: string): Record<string, unknown> | null {
     let text = raw.trim();
     if (text.startsWith("```")) {
         text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");

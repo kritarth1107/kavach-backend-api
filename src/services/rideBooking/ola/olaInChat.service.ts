@@ -17,8 +17,9 @@ import { isTestPhone } from "../../smokeFixtures.service";
 import { loadRideConfig } from "../rideConfig";
 import { geocodePlace } from "../geoResolve.service";
 import { olaLink, rapidoLink, serviceChain, uberLink, type CityTier, type RideConfig, type Vehicle } from "../rideServices";
-import { geocodeCandidates, OlaMsg, type OlaFailReason, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
+import { geocodeCandidates, OlaMsg, pinTipFor, type OlaFailReason, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
 import { type CashResult, FakeOlaDriver, PlaywrightOlaDriver, type OlaDriver } from "./olaDriver";
+import { bookGate, type OlaGoal, type RecoveryLogEntry, type RecoveryOutcome } from "./olaRecovery";
 
 export type OlaTurnInput = {
     phone: string;
@@ -35,6 +36,50 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const drivers = new Map<string, { driver: OlaDriver; at: number }>();
 const scenarios = new Map<string, { scenario: string; timeScale: number }>();
 const busy = new Set<string>();
+
+// ── Page changed: goal-driven recovery ──────────────────────────────────────────────────────
+/**
+ * When a fixed step doesn't find what it expects, look at the screen and step toward the goal
+ * (bounded; every decision logged as "ola_recover_step" + one dashboard diag entry). Safety gates
+ * stay in code: recovery never books, pays, changes payment, sends a code or solves a robot check.
+ */
+async function recoverPage(input: OlaTurnInput, drv: OlaDriver, goal: OlaGoal, rideType: string): Promise<RecoveryOutcome | null> {
+    if (!drv.recover) return null;
+    const steps: RecoveryLogEntry[] = [];
+    const out = await drv
+        .recover(goal, rideType, (e) => {
+            steps.push(e);
+            log("ola_recover_step", { phone: input.phone.slice(-4), ...e });
+        })
+        .catch((): RecoveryOutcome => ({ ok: false, why: "error", steps: 0 }));
+    log("ola_recover", { phone: input.phone.slice(-4), goal, rideType, ...out });
+    const { logActivity } = await import("../../activityLog.service");
+    void logActivity({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        kind: "diag",
+        severity: out.ok ? "info" : "warn",
+        title: `Ola page check: ${goal} → ${out.ok ? `found ${out.screen}` : out.why}`,
+        detail: steps.map((e) => `${e.step}. ${e.screen} (${e.source}) → ${e.action.type}${e.action.target ? ` "${e.action.target}"` : ""}${e.allowed ? "" : ` refused:${e.refused}`}`).join("\n").slice(0, 1500),
+        data: { stage: `ola_recover_${goal}`, steps },
+    } as never).catch(() => undefined);
+    return out;
+}
+
+type ChooseResult = "login" | "confirm" | "failed" | "blocked" | "live_ride";
+/** Pick the ride type; if the page doesn't react as expected, recover toward sign-in / fare screen. */
+async function chooseSmart(input: OlaTurnInput, drv: OlaDriver, type: string): Promise<ChooseResult> {
+    const r = await drv.choose(type).catch(() => "failed" as const);
+    if (r !== "failed") return r;
+    const out = await recoverPage(input, drv, "chosen", type);
+    if (!out) return "failed";
+    if (out.ok) return out.screen === "confirm" ? "confirm" : "login";
+    if (out.why === "captcha") return "blocked";
+    if (out.why === "live_ride") return "live_ride";
+    return "failed";
+}
+const chooseFail = (r: ChooseResult, fallback: string) => (r === "blocked" ? "robot_check" : r === "live_ride" ? "active_ride" : fallback);
 
 /** Test numbers only (mock webhook): script Ola's page states and speed the clock up. */
 export function setOlaTestScenario(phone: string, scenario: string, timeScale = 1): boolean {
@@ -162,6 +207,10 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
             const drv = await driverFor(input, true);
             await drv.open(url);
             types = orderRideTypes(await drv.rideTypes(), draft.vehicle || "cab");
+            if (!types.length) {
+                const out = await recoverPage(input, drv, "ride_list", draft.vehicle === "auto" ? "Auto" : "Mini");
+                if (out?.ok) types = orderRideTypes(await drv.rideTypes(), draft.vehicle || "cab");
+            }
         } catch (err) {
             log("ola_types_failed", { error: err instanceof Error ? err.message.slice(0, 160) : String(err) });
         }
@@ -171,9 +220,10 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
             log("ola_types_empty", { phone: input.phone.slice(-4), hadUrl: Boolean(url) });
             await saveDraft(input.phone, null);
             await dropDriver(input.phone);
-            const hi = /^hi/i.test(String(lang || ""));
-            const pinTip = url ? "" : hi ? "\n\nAgar aap WhatsApp par apni location 📍 bhej dein, to main Ola yahin chat mein book kar sakti hoon." : "\n\nIf you share your location 📍 here on WhatsApp, I can book Ola right in this chat.";
-            await send(input, fallbackText(lang, draft.pickup, draft.drop, url ? "no_rides" : "no_map_point") + pinTip);
+            const pickupHasPoint = draft.pickup?.lat != null && draft.pickup?.lng != null;
+            // Never ask for a location she already shared.
+            const pinTip = pinTipFor(lang, Boolean(url), draft.pickup);
+            await send(input, fallbackText(lang, draft.pickup, draft.drop, url ? "no_rides" : pickupHasPoint ? "no_drop_point" : "no_map_point") + pinTip);
             return;
         }
         cur.phase = "ola_pick_type";
@@ -322,9 +372,9 @@ async function chooseType(input: OlaTurnInput, draft: RideDraft, type: string, r
             if (url) await drv.open(url).catch(() => undefined);
             await drv.rideTypes().catch(() => []);
             if (!(await current(input.phone, token))) return;
-            const r = await drv.choose(type).catch(() => "failed" as const);
+            const r = await chooseSmart(input, drv, type);
             if (r === "confirm") return showConfirmCard(input, token, drv);
-            if (r !== "login") return fail(input, token, "reopen_failed");
+            if (r !== "login") return fail(input, token, chooseFail(r, "reopen_failed"));
             const cur = await current(input.phone, token);
             if (!cur) return;
             cur.phase = "ola_confirm_signin";
@@ -338,7 +388,7 @@ async function chooseType(input: OlaTurnInput, draft: RideDraft, type: string, r
         await saveDraft(input.phone, draft);
         const token = draft.ola.token;
         later(async () => {
-            const r = await drv.choose(type).catch(() => "failed" as const);
+            const r = await chooseSmart(input, drv, type);
             if (r === "confirm") await showConfirmCard(input, token, drv);
             else if (r === "login") {
                 const cur = await current(input.phone, token);
@@ -346,7 +396,7 @@ async function chooseType(input: OlaTurnInput, draft: RideDraft, type: string, r
                 cur.phase = "ola_confirm_signin";
                 await saveDraft(input.phone, cur);
                 await send(input, OlaMsg.confirmSignIn(lang, type, cur.ola!.phoneE164 || e164(input.phone)));
-            } else await fail(input, token, "choose_failed");
+            } else await fail(input, token, chooseFail(r, "choose_failed"));
         }, "choose");
         return { text: OlaMsg.fetchingFare(lang), draft };
     }
@@ -357,7 +407,7 @@ async function chooseType(input: OlaTurnInput, draft: RideDraft, type: string, r
 
 /** Internal step → the reason the elder is told (one message, reason + links). */
 function reasonFor(why: string): OlaFailReason {
-    if (why === "not_cash" || why === "no_cash_option" || why === "no_fare" || why === "book_failed" || why === "code_wrong_3x") return why;
+    if (why === "not_cash" || why === "no_cash_option" || why === "no_fare" || why === "book_failed" || why === "code_wrong_3x" || why === "robot_check" || why === "active_ride") return why;
     if (why.startsWith("login_") || why === "otp_failed") return "sign_in_code";
     if (why === "otp_invalid_3x") return "code_wrong_3x";
     if (/reopen|choose|no_login_page|no_confirm/.test(why)) return "page_changed";
@@ -381,9 +431,9 @@ async function signIn(input: OlaTurnInput, token: string): Promise<void> {
     if (!cur) return;
     const lang = cur.ola?.lang ?? null;
     const drv = await driverFor(input);
-    const where = await drv.choose(cur.ola!.chosen!).catch(() => "failed" as const);
+    const where = await chooseSmart(input, drv, cur.ola!.chosen!);
     if (where === "confirm") return showConfirmCard(input, token, drv);
-    if (where !== "login") return fail(input, token, "no_login_page");
+    if (where !== "login") return fail(input, token, chooseFail(where, "no_login_page"));
     const p10 = phone10(input.phone) || (isTestPhone(input.phone) ? "9999999999" : null);
     if (!p10) return fail(input, token, "not_indian_number");
     const r = await drv.startLogin(p10).catch(() => "failed" as const);
@@ -423,18 +473,27 @@ async function submitCode(input: OlaTurnInput, token: string, code: string): Pro
         }
     }
     if (r === "list") {
-        const w = await drv.choose(cur.ola!.chosen!).catch(() => "failed" as const);
-        if (w !== "confirm") return fail(input, token, "no_confirm_after_login");
+        const w = await chooseSmart(input, drv, cur.ola!.chosen!);
+        if (w !== "confirm") return fail(input, token, chooseFail(w, "no_confirm_after_login"));
     }
     await showConfirmCard(input, token, drv);
+}
+
+async function readConfirmSmart(input: OlaTurnInput, drv: OlaDriver, type: string): Promise<OlaConfirmInfo | null> {
+    const info = await drv.readConfirm(type).catch(() => null);
+    if (info?.fare) return info;
+    const out = await recoverPage(input, drv, "confirm", type);
+    return out?.ok ? await drv.readConfirm(type).catch(() => null) : null;
 }
 
 async function showConfirmCard(input: OlaTurnInput, token: string, drv: OlaDriver): Promise<void> {
     const cur = await current(input.phone, token);
     if (!cur) return;
     const lang = cur.ola?.lang ?? null;
-    const info = await drv.readConfirm(cur.ola!.chosen!).catch(() => null);
+    const info = await readConfirmSmart(input, drv, cur.ola!.chosen!);
     if (!info?.fare) return fail(input, token, "no_fare");
+    // Never a different ride type than she picked.
+    if (info.vehicle && info.vehicle.toLowerCase() !== cur.ola!.chosen!.toLowerCase()) return fail(input, token, "no_fare", { shownVehicle: info.vehicle });
     // Cash only: select it on Ola's payment picker and read it back; never book otherwise.
     const cash: CashResult = await drv.ensureCash().catch((): CashResult => ({ ok: false, reason: "select_failed" }));
     log("ola_cash", { ok: cash.ok, reason: cash.ok ? undefined : cash.reason, selected: cash.selected, options: cash.options });
@@ -452,6 +511,25 @@ async function book(input: OlaTurnInput, token: string): Promise<void> {
     if (!cur) return;
     const lang = cur.ola?.lang ?? null;
     const drv = await driverFor(input);
+    // HARD gate (code, not the model): the page must still show the ride, fare and pickup she
+    // confirmed, with Cash read back from Ola's picker. Anything changed → ask her again.
+    const shown = cur.ola?.confirm;
+    const page = await readConfirmSmart(input, drv, cur.ola!.chosen!);
+    const cashNow: CashResult = page ? await drv.ensureCash().catch((): CashResult => ({ ok: false, reason: "select_failed" })) : { ok: false, reason: "no_selector" };
+    const gate = bookGate(shown ? { ...shown, vehicle: shown.vehicle || cur.ola!.chosen! } : undefined, page ? { ...page, vehicle: page.vehicle || "" } : null, cashNow.ok);
+    log("ola_book_gate", { ok: gate.ok, why: gate.ok ? undefined : gate.why, shownFare: shown?.fare, pageFare: page?.fare, cash: cashNow.ok });
+    if (!gate.ok) {
+        if (gate.reask) {
+            const again = await current(input.phone, token, ["ola_booking"]);
+            if (!again) return;
+            again.phase = "ola_confirm_book";
+            again.ola = { ...again.ola!, confirm: { ...page!, vehicle: page!.vehicle || again.ola!.chosen!, pay: "Cash" } };
+            await saveDraft(input.phone, again);
+            await send(input, OlaMsg.confirmChanged(lang, gate.why, again.ola.confirm!));
+            return;
+        }
+        return fail(input, token, gate.why === "not_cash" ? "not_cash" : "no_fare", { at: "book_gate", why: gate.why });
+    }
     const r = await drv.book().catch(() => "failed" as const);
     log("ola_book", { result: r });
     if (r === "not_cash") return fail(input, token, "not_cash", { at: "book" });
@@ -468,7 +546,7 @@ async function book(input: OlaTurnInput, token: string): Promise<void> {
         lang,
         status: "searching",
         vehicle: c.vehicle,
-        fare: c.fare,
+        fare: page?.fare ?? c.fare,
         pickupLabel: c.pickup,
         dropLabel: c.drop,
         pickup: cur.pickup as Record<string, unknown>,

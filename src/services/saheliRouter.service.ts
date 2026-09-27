@@ -169,6 +169,29 @@ export function recentTurns(phone: string): string {
 const cache = new Map<string, { at: number; route: SaheliRoute | null }>();
 const lastRoutes = new Map<string, { at: number; route: SaheliRoute | null; state: string[]; attempt?: number; raw?: string | null }>();
 
+/**
+ * The language she actually speaks, per phone. Short replies ("Ok", "1", a shared pin) are often
+ * classified as English, so only substantive messages (3+ words, not a pin) move it.
+ */
+const stickyLangs = new Map<string, { lang: string; at: number }>();
+const STICKY_LANG_MS = 2 * 60 * 60 * 1000;
+export function isSubstantiveForLanguage(text: string): boolean {
+    const t = text.trim();
+    if (/^\[location\b/i.test(t) || /^-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+$/.test(t)) return false;
+    return t.split(/\s+/).filter((w) => /[\p{L}]{2,}/u.test(w)).length >= 3;
+}
+export function noteLanguage(phone: string, text: string, lang?: string | null): void {
+    if (!lang || !isSubstantiveForLanguage(text)) return;
+    stickyLangs.set(keyOf(phone), { lang, at: Date.now() });
+    if (stickyLangs.size > 5000) stickyLangs.delete(stickyLangs.keys().next().value as string);
+}
+/** Her language: the sticky one (last 2 h), else the last route's. */
+export function preferredLang(phone: string): string | null {
+    const s = stickyLangs.get(keyOf(phone));
+    if (s && Date.now() - s.at < STICKY_LANG_MS) return s.lang;
+    return lastRoutes.get(keyOf(phone))?.route?.language || null;
+}
+
 /** Secret-gated mock/debug only: this phone's last route (never another phone's). */
 export function lastRouteFor(phone: string) {
     return lastRoutes.get(keyOf(phone)) ?? null;
@@ -250,6 +273,7 @@ export async function routeSaheliTurn(input: {
     }
     if (route) cache.set(key, { at: Date.now(), route });
     lastRoutes.set(keyOf(input.phone), { at: Date.now(), route, state: input.state, attempt, raw: route ? null : `${(raw ?? "").slice(0, 160)} | ${lastVertexError.slice(0, 160)}` });
+    noteLanguage(input.phone, text, route?.language);
     if (lastRoutes.size > 2000) lastRoutes.delete(lastRoutes.keys().next().value as string);
     if (cache.size > 1000) cache.delete(cache.keys().next().value as string);
     return route;

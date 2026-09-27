@@ -15,15 +15,18 @@ const CAB_TYPES = new Set(["Mini", "Prime Sedan", "Prime SUV", "Prime Plus", "El
 const hiOf = (lang?: string | null) => /^hi/i.test(String(lang || ""));
 
 export type OlaFailReason =
-    | "generic" | "not_cash" | "no_cash_option" | "no_rides" | "no_map_point" | "sign_in_code" | "code_wrong_3x"
-    | "no_fare" | "book_failed" | "page_changed";
+    | "generic" | "not_cash" | "no_cash_option" | "no_rides" | "no_map_point" | "no_drop_point" | "sign_in_code" | "code_wrong_3x"
+    | "no_fare" | "book_failed" | "page_changed" | "robot_check" | "active_ride";
 /** [English, Hinglish] — the specific, honest reason, always saying nothing was booked. */
 export const OLA_FAIL_REASON: Record<OlaFailReason, [string, string]> = {
+    robot_check: ["Ola asked for a robot check, which I don't do, so nothing was booked 🙏", "Ola ne robot wali jaanch maangi, woh main nahi karti, isliye kuch book nahi kiya 🙏"],
+    active_ride: ["Ola already shows a ride in progress on this account, so I didn't book another 🙏", "Ola par is account mein pehle se ek ride chal rahi hai, isliye maine doosri book nahi ki 🙏"],
     generic: ["I couldn't finish this on Ola right now, so nothing was booked 🙏", "Ola par abhi yeh poora nahi ho paaya, isliye kuch book nahi kiya 🙏"],
     not_cash: ["Ola wouldn't let me switch the payment to cash, so I didn't book anything 🙏", "Ola par payment cash par nahi ho paaya, isliye maine kuch book nahi kiya 🙏"],
     no_cash_option: ["Ola isn't offering cash for this ride, so I didn't book anything 🙏", "Ola is ride ke liye cash ka option nahi de raha, isliye maine kuch book nahi kiya 🙏"],
     no_rides: ["Ola isn't showing rides for this route right now 🙏", "Ola abhi is raaste ke liye gaadiyan nahi dikha raha 🙏"],
     no_map_point: ["I couldn't find this pickup on Ola's map 🙏", "Ola ke map par yeh pickup nahi mil paaya 🙏"],
+    no_drop_point: ["I couldn't find the destination on Ola's map 🙏", "Ola ke map par yeh manzil nahi mil paayi 🙏"],
     sign_in_code: ["Ola didn't send the sign-in code this time, so nothing was booked 🙏", "Ola ne is baar sign in ka code nahi bheja, isliye kuch book nahi hua 🙏"],
     code_wrong_3x: ["Ola didn't accept the code three times, so I stopped — nothing was booked 🙏", "Ola ne teen baar code nahi maana, isliye maine rok diya — kuch book nahi hua 🙏"],
     no_fare: ["I couldn't read the exact fare on Ola, so I didn't book 🙏", "Ola par sahi kiraya nahi dikh paaya, isliye book nahi kiya 🙏"],
@@ -141,6 +144,14 @@ export function parseDriver(lines: string[]): OlaDriverInfo {
 const rs = (n?: number) => (n != null ? `₹${n}` : "");
 export const maskPhone = (e164: string) => `+91……${e164.replace(/\D/g, "").slice(-4)}`;
 
+/** The "share your location" tip — only when she hasn't given a map point for the pickup. */
+export function pinTipFor(lang: string | null | undefined, hadUrl: boolean, pickup?: { lat?: number | null; lng?: number | null } | null): string {
+    if (hadUrl || (pickup?.lat != null && pickup?.lng != null)) return "";
+    return /^hi/i.test(String(lang || ""))
+        ? "\n\nAgar aap WhatsApp par apni location 📍 bhej dein, to main Ola yahin chat mein book kar sakti hoon."
+        : "\n\nIf you share your location 📍 here on WhatsApp, I can book Ola right in this chat.";
+}
+
 export const OlaMsg = {
     checking: (lang?: string | null) => (hiOf(lang) ? "Ola par gaadiyan dekh rahi hoon 🙏" : "Checking Ola for rides 🙏"),
 
@@ -176,6 +187,14 @@ export const OlaMsg = {
     otpNeedDigits: (lang?: string | null) => (hiOf(lang) ? "Ola ka 4 ank ka code likhiye (sirf number)." : "Please type Ola's 4-digit code (numbers only)."),
     fetchingFare: (lang?: string | null) => (hiOf(lang) ? "Ola par kiraya dekh rahi hoon…" : "Getting the fare on Ola…"),
 
+    /** Ola's page changed after she confirmed: tell her what changed and ask again (nothing booked). */
+    confirmChanged(lang: string | null | undefined, why: "fare_up" | "type_changed" | "pickup_changed", c: OlaConfirmInfo): string {
+        const hi = hiOf(lang);
+        const what = hi
+            ? why === "fare_up" ? "Ola par kiraya badh gaya hai" : why === "type_changed" ? "Ola par gaadi badal gayi hai" : "Ola par pickup ki jagah badal gayi hai"
+            : why === "fare_up" ? "The fare on Ola went up" : why === "type_changed" ? "The ride type on Ola changed" : "The pickup point on Ola changed";
+        return `${what}, ${hi ? "isliye maine abhi book nahi kiya 🙏" : "so I haven't booked yet 🙏"}\n\n${OlaMsg.confirmBook(lang, c)}`;
+    },
     confirmBook(lang: string | null | undefined, c: OlaConfirmInfo): string {
         const hi = hiOf(lang);
         return [

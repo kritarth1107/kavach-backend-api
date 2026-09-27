@@ -28,7 +28,7 @@ import {
     isSaheliFallbackCopy,
     messageIsPresenceCheck,
 } from "./saheliElderFacts.service";
-import { routeSaheliTurn, rememberTurn, lastRouteFor, type SaheliRoute } from "./saheliRouter.service";
+import { routeSaheliTurn, rememberTurn, lastRouteFor, preferredLang, type SaheliRoute } from "./saheliRouter.service";
 import { localizeCanned } from "./hinglishCanned";
 
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -63,7 +63,7 @@ function outbound(phone: string, text: string, context: WhatsAppReplyContext = {
     // WhatsApp bold is *one* star; model markdown (**Rohan**, "## ") would show raw.
     text = String(text ?? "").replace(/\*\*([^*\n]+?)\*\*/g, "*$1*").replace(/^#{1,6}\s+/gm, "");
     // Fixed flow lines follow the language of her latest message.
-    text = scrubStack(localizeCanned(text, lastRouteFor(phone)?.route?.language));
+    text = scrubStack(localizeCanned(text, preferredLang(phone)));
     const whatsappPayloads = composeWhatsAppReply(text, context);
     const content =
         whatsappPayloads.length > 1 || whatsappPayloads[0]?.type !== "text"
@@ -1634,6 +1634,15 @@ async function dispatchRoutedTurn(a: {
     const oc0 = (doc as { orderChat?: { updatedAt?: number } } | null)?.orderChat;
     const newerThanRide = [doc?.pendingOffer, oc0?.updatedAt ? { at: new Date(oc0.updatedAt) } : null, bd, pd].some((x) => x && tsOf(x) > tsOf(rd));
     // A short reply ("yes", "haan") goes to the ride when the ride is the newest open question.
+    // A location pin right after a ride ask (open ride, or one in the last 30 min) is her pickup.
+    if (pinShared && !bdLive && !pdLive) {
+        const lr = (doc as { lastRide?: { at?: Date } } | null)?.lastRide;
+        const recentRide = Boolean(lr?.at && Date.now() - new Date(lr.at).getTime() < 30 * 60_000);
+        if (rdLive || recentRide || route.intent === "ride") {
+            const r = await rideTurn(text);
+            if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };
+        }
+    }
     if (rdLive && (route.intent === "ride" || (flowReply && !newOrder && !searchRunning && !newerThanRide))) {
         const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : rideText;
         const r = await rideTurn(t);

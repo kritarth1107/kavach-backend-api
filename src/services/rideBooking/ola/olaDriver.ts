@@ -15,6 +15,7 @@ import {
     type OlaPageState,
     type OlaRideType,
 } from "./olaCopy";
+import { recoverTo, geminiScreenClassifier, type OlaGoal, type RecoveryLogEntry, type RecoveryOutcome, type RecoveryPage, type ScreenSnapshot } from "./olaRecovery";
 
 export type LoginStart = "otp_sent" | "failed" | "blocked";
 export type OtpResult = "confirm" | "list" | "invalid" | "failed";
@@ -48,6 +49,8 @@ export interface OlaDriver {
     storageState(): Promise<string | null>;
     /** Failure snapshot (masked screenshot + visible text) for the family dashboard; real page only. */
     diagnose?(meta: { familyId: string; userId: string; recipientUserId: string; stage: string; reason: string }): Promise<void>;
+    /** Page changed: look at the screen and step toward the goal (bounded, logged, safety-gated). */
+    recover?(goal: OlaGoal, rideType: string, log: (e: RecoveryLogEntry) => void): Promise<RecoveryOutcome>;
     close(): Promise<void>;
 }
 
@@ -133,6 +136,63 @@ const PAY_SET_JS = (value: string) => `(() => {
   return true;
 })()`;
 
+/** Centre of the smallest visible element whose own text is exactly the label (Ola keeps hidden copies). */
+const FIND_LABEL_JS = (label: string) => `(() => {
+  const want = ${JSON.stringify(label)}.replace(/\\s+/g, " ").trim().toLowerCase();
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+    for (let e = el; e; e = e.parentElement || (e.getRootNode && e.getRootNode().host)) {
+      const s = getComputedStyle(e);
+      if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0" || s.pointerEvents === "none" && e === el) return false;
+    }
+    return true;
+  };
+  let best = null;
+  const visit = (root) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) visit(el.shadowRoot);
+      const own = (el.innerText !== undefined ? el.innerText : el.textContent || "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const aria = (el.getAttribute && (el.getAttribute("aria-label") || "")).trim().toLowerCase();
+      if (own !== want && aria !== want) continue;
+      if (!shown(el)) continue;
+      const r = el.getBoundingClientRect();
+      const area = r.width * r.height;
+      if (!best || area < best.area) best = { x: r.left + r.width / 2, y: r.top + r.height / 2, area };
+    }
+  };
+  visit(document);
+  return best;
+})()`;
+
+/** Visible clickable labels (buttons, links, role=button, pointer-cursor rows), short texts only. */
+const BUTTONS_JS = `(() => {
+  const out = new Set();
+  const shown = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2 || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+    for (let e = el; e; e = e.parentElement || (e.getRootNode && e.getRootNode().host)) {
+      const s = getComputedStyle(e);
+      if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+    }
+    return true;
+  };
+  const visit = (root) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.shadowRoot) visit(el.shadowRoot);
+      const tag = el.tagName;
+      const clickable = tag === "BUTTON" || tag === "A" || el.getAttribute("role") === "button" || (tag === "INPUT" && /button|submit/.test(el.type)) || getComputedStyle(el).cursor === "pointer";
+      if (!clickable) continue;
+      const t = ((tag === "INPUT" ? el.value : el.innerText) || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim();
+      if (!t || t.length > 40 || t.includes("\\n")) continue;
+      if (shown(el)) out.add(t);
+      if (out.size > 60) return;
+    }
+  };
+  visit(document);
+  return [...out];
+})()`;
+
 const maskDigits = (s: string) => s.replace(/\d{3,}/g, "•••").slice(0, 40);
 export const isCashLabel = (s?: string | null) => /^\s*cash\s*$/i.test(String(s || ""));
 
@@ -143,6 +203,7 @@ export class PlaywrightOlaDriver implements OlaDriver {
     private browser: import("playwright").Browser | null = null;
     private ctx: import("playwright").BrowserContext | null = null;
     private page: import("playwright").Page | null = null;
+    private rideUrl: string | null = null;
     constructor(private storageStateJson: string | null) {}
 
     private async ensure(): Promise<import("playwright").Page> {
@@ -181,9 +242,12 @@ export class PlaywrightOlaDriver implements OlaDriver {
         return (await p.evaluate<PayState | null>(PAY_READ_JS).catch(() => null)) || null;
     }
 
+    /** On screen now (visible text only — Ola keeps hidden copies of earlier screens, so getByText().first() can be a hidden one). */
     private async seen(re: RegExp | string, exact = false): Promise<boolean> {
-        const p = await this.ensure();
-        return p.getByText(re, typeof re === "string" ? { exact } : undefined).first().isVisible().catch(() => false);
+        const l = await this.lines();
+        if (typeof re !== "string") return l.some((x) => re.test(x));
+        const w = re.toLowerCase();
+        return l.some((x) => (exact ? x.toLowerCase() === w : x.toLowerCase().includes(w)));
     }
 
     /** Ola's sign-in lives in an accounts.olacabs.com iframe inside book.olacabs.com (seen live 28 Sep 2026). */
@@ -207,6 +271,7 @@ export class PlaywrightOlaDriver implements OlaDriver {
 
     async open(url: string): Promise<void> {
         const p = await this.ensure();
+        this.rideUrl = url;
         await p.goto(url, { waitUntil: "domcontentloaded", timeout: 25_000 });
         const cow = p.getByText("Continue on web").first();
         if (await cow.isVisible({ timeout: 3000 }).catch(() => false)) await cow.click().catch(() => undefined);
@@ -225,22 +290,28 @@ export class PlaywrightOlaDriver implements OlaDriver {
 
     async choose(type: string): Promise<"login" | "confirm" | "failed"> {
         const p = await this.ensure();
-        const el = p.getByText(type, { exact: true }).first();
-        if (!(await el.isVisible().catch(() => false))) return "failed";
-        await el.click().catch(() => undefined);
+        // By position of the visible copy: getByText().first() can be a hidden stale row (live 28 Sep).
+        // The row can render a moment after its name shows up in the page text.
+        if (!(await this.waitFor(async () => Boolean(await this.visibleLabel(type)), 8000, 500))) return "failed";
+        if (!(await this.clickLabel(type))) return "failed";
         let kind: "login" | "confirm" | "failed" = "failed";
         // Signed out, Ola shows the ride page with a "Continue" button (fare hidden) that leads to sign-in.
-        for (let step = 0; step < 2 && kind === "failed"; step++) {
-            let cont = false;
-            await this.waitFor(async () => {
-                if (await this.seen(/confirm\s*&\s*book/i)) kind = "confirm";
-                else if (/enter your mobile number/i.test(await this.authText()) || (await this.seen(/enter your mobile number/i))) kind = "login";
-                else if (step === 0 && (await this.seen("Continue", true))) cont = true;
-                return kind !== "failed" || cont;
-            }, 15_000);
-            if (kind !== "failed" || !cont) break;
-            await p.getByText("Continue", { exact: true }).first().click({ timeout: 5000 }).catch(() => undefined);
-        }
+        // The button shows up before it reacts (live 28 Sep: a click 40 ms after it appeared was lost),
+        // so wait for the page to settle and press again if it is still there.
+        let presses = 0;
+        let lastPress = 0;
+        await this.waitFor(async () => {
+            if (await this.seen(/confirm\s*&\s*book/i)) kind = "confirm";
+            else if (/enter your mobile number/i.test(await this.authText()) || (await this.seen(/enter your mobile number/i))) kind = "login";
+            else if (presses < 3 && Date.now() - lastPress > 3500 && (await this.visibleLabel("Continue"))) {
+                await p.waitForTimeout(presses ? 300 : 1200);
+                if (await this.clickLabel("Continue")) {
+                    presses++;
+                    lastPress = Date.now();
+                }
+            }
+            return kind !== "failed";
+        }, 20_000);
         return kind;
     }
 
@@ -291,7 +362,11 @@ export class PlaywrightOlaDriver implements OlaDriver {
     async readConfirm(vehicle: string): Promise<OlaConfirmInfo | null> {
         if (!(await this.waitFor(() => this.seen(/confirm\s*&\s*book/i), 15_000))) return null;
         await (await this.ensure()).waitForTimeout(1500);
-        const c = parseConfirm(await this.lines(), vehicle);
+        const l = await this.lines();
+        const c = parseConfirm(l, vehicle);
+        // If the screen names exactly one ride type and it isn't hers, report that one (the booking gate re-asks).
+        const shownTypes = OLA_TYPES.filter((t) => l.some((x) => x.toLowerCase() === t.toLowerCase()));
+        if (shownTypes.length === 1 && shownTypes[0]!.toLowerCase() !== vehicle.toLowerCase()) c.vehicle = shownTypes[0]!;
         return c.fare ? c : null;
     }
 
@@ -330,7 +405,7 @@ export class PlaywrightOlaDriver implements OlaDriver {
         const st = await this.payState();
         const visPay = parseConfirm(await this.lines(), "").pay;
         if (st ? !isCashLabel(st.selected) : !isCashLabel(visPay)) return "not_cash";
-        await p.getByText(/confirm\s*&\s*book/i).first().click({ timeout: 6000 }).catch(() => undefined);
+        if (!(await this.clickLabel("Confirm & Book"))) await p.getByText(/confirm\s*&\s*book/i).first().click({ timeout: 6000 }).catch(() => undefined);
         let res: BookResult = "unknown";
         const ok = await this.waitFor(async () => {
             const s = classifyRidePage((await this.lines()).join("\n"));
@@ -392,6 +467,57 @@ export class PlaywrightOlaDriver implements OlaDriver {
         await captureCheckoutDiagnostic(this.page, { ...meta, flow: "checkout" }).catch(() => null);
     }
 
+    private async visibleLabel(label: string): Promise<{ x: number; y: number } | null> {
+        const p = await this.ensure();
+        return (await p.evaluate<{ x: number; y: number } | null>(FIND_LABEL_JS(label)).catch(() => null)) || null;
+    }
+
+    /** Click the visible copy of a label by its position on screen. */
+    async clickLabel(label: string): Promise<boolean> {
+        const p = await this.ensure();
+        const at = await this.visibleLabel(label);
+        if (!at) return false;
+        await p.mouse.click(at.x, at.y).catch(() => undefined);
+        return true;
+    }
+
+    private recoveryPage(): RecoveryPage {
+        return {
+            snapshot: async (withShot: boolean): Promise<ScreenSnapshot> => {
+                const p = await this.ensure();
+                const lines = await this.lines();
+                const buttons = await p.evaluate<string[]>(BUTTONS_JS).catch(() => [] as string[]);
+                const auth = await this.authText();
+                const f = this.authFrame();
+                const authPhone = Boolean(f) && (/enter your mobile number/i.test(auth) || (await f!.locator('input[type="tel"], input#phone-number').first().isVisible().catch(() => false)));
+                const authOtp = Boolean(f) && /enter (the )?(4.digit )?otp|otp sent|sent to \+?91/i.test(auth);
+                const captcha = await p.locator('iframe[src*="recaptcha"][src*="bframe"], iframe[src*="hcaptcha"], iframe[title*="challenge" i]').first().isVisible().catch(() => false);
+                let screenshotB64: string | undefined;
+                if (withShot) {
+                    const buf = await p.screenshot({ type: "jpeg", quality: 45, timeout: 8000 }).catch(() => null);
+                    screenshotB64 = buf ? buf.toString("base64") : undefined;
+                }
+                return { url: p.url(), lines, buttons, authPhone, authOtp, captcha, screenshotB64 };
+            },
+            clickLabel: (label) => this.clickLabel(label),
+            back: async () => {
+                const p = await this.ensure();
+                await p.keyboard.press("Escape").catch(() => undefined);
+                await p.goBack({ timeout: 8000 }).catch(() => undefined);
+            },
+            reopen: async () => {
+                if (this.rideUrl) await this.open(this.rideUrl);
+            },
+            wait: async (ms) => {
+                await (await this.ensure()).waitForTimeout(ms);
+            },
+        };
+    }
+
+    async recover(goal: OlaGoal, rideType: string, log: (e: RecoveryLogEntry) => void): Promise<RecoveryOutcome> {
+        return recoverTo(this.recoveryPage(), goal, rideType, { classifier: geminiScreenClassifier, log, maxSteps: 6, maxMs: 45_000 });
+    }
+
     async storageState(): Promise<string | null> {
         try {
             return this.ctx ? JSON.stringify(await this.ctx.storageState()) : null;
@@ -410,13 +536,76 @@ export class PlaywrightOlaDriver implements OlaDriver {
 }
 
 /**
+ * Scripted Ola screens for recovery tests (test numbers only): a popup, a reordered list, a renamed
+ * button, an unknown screen, a captcha. Clicking a label moves to the next screen.
+ */
+type FakeScreen = { lines: string[]; buttons: string[]; on?: Record<string, string>; authPhone?: boolean; captcha?: boolean; reopen?: string };
+export class FakeOlaScreens implements RecoveryPage {
+    clicks: string[] = [];
+    constructor(
+        public at: string,
+        private signedIn: () => boolean,
+        private type: () => string,
+    ) {}
+    private screens(): Record<string, FakeScreen> {
+        const types = ["Auto", "Mini", "Bike", "Prime Sedan", "Prime SUV"];
+        const after = this.signedIn() ? "confirm" : "cont";
+        const pick = Object.fromEntries(types.map((t) => [t, after]));
+        return {
+            list: { lines: ["AVAILABLE RIDES", ...types.flatMap((t) => [t, "4 min"])], buttons: types, on: pick },
+            reordered: { lines: ["Choose a ride", "Prime SUV", "₹477", "Bike", "Zip through traffic", "Mini", "Comfy hatchbacks", "Auto", "Prime Sedan"], buttons: ["Prime SUV", "Bike", "Mini", "Auto", "Prime Sedan", "Offers"], on: pick },
+            cont: { lines: ["Mini", "Comfy hatchbacks", "Continue"], buttons: ["Continue"], on: { Continue: "phone" } },
+            cont_renamed: { lines: ["Mini", "Comfy hatchbacks", "Proceed"], buttons: ["Proceed", "Book for someone else"], on: { Proceed: "phone" } },
+            phone: { lines: ["Enter your mobile number"], buttons: ["Next"], authPhone: true },
+            confirm: { lines: ["PICKUP", "Rajiv Chowk Gate No.6", "DROP", "Delhi Airport T3", "FARE", "₹312", "PAY BY", "Cash", "Confirm & Book"], buttons: ["Confirm & Book", "Cash"] },
+            popup: { lines: ["Get the Ola app", "Rides are faster on the app"], buttons: ["Install app", "Not now"], on: { "Not now": "list" } },
+            banner: { lines: ["Big savings this festive season", "Tap to know more"], buttons: ["Know more", "Maybe later"], on: { "Maybe later": "list" } },
+            unknown: { lines: ["Welcome back", "Plan your day"], buttons: ["Home", "Offers"], reopen: "list" },
+            captcha: { lines: ["Please verify you are human"], buttons: ["Verify"], captcha: true },
+        };
+    }
+    async snapshot(): Promise<ScreenSnapshot> {
+        const sc = this.screens()[this.at]!;
+        return { url: "https://book.olacabs.com/", lines: sc.lines, buttons: sc.buttons, authPhone: sc.authPhone, captcha: sc.captcha };
+    }
+    async clickLabel(label: string): Promise<boolean> {
+        this.clicks.push(label);
+        const sc = this.screens()[this.at]!;
+        const to = sc.on?.[label];
+        if (!sc.buttons.includes(label)) return false;
+        if (to) this.at = to;
+        return true;
+    }
+    async back(): Promise<void> {
+        this.at = "list";
+    }
+    async reopen(): Promise<void> {
+        this.at = this.screens()[this.at]?.reopen || "list";
+    }
+    async wait(): Promise<void> {}
+}
+
+/**
  * Scripted Ola for test numbers. Page state is derived from the booking time (so it survives a
  * restart like the real ride) and `timeScale` speeds the clock up for tests.
  *  assigned | timeout | ola_none | driver_cancel | cancel_fails_once | otp_fail | logged_in | book_fail
  */
+const FAKE_BROKEN_START: Record<string, string> = {
+    popup_once: "popup",
+    banner: "banner",
+    renamed_button: "cont_renamed",
+    reordered: "reordered",
+    unknown_screen: "unknown",
+    captcha: "captcha",
+};
+
 export class FakeOlaDriver implements OlaDriver {
     readonly kind = "fake" as const;
     private signedIn: boolean;
+    private chosenType = "Mini";
+    private broken = true;
+    private reads = 0;
+    screens: FakeOlaScreens | null = null;
     private onConfirm = false;
     private cancelled = false;
     private labels = { pickup: "Rajiv Chowk Gate No.6", drop: "Delhi Airport T3" };
@@ -425,7 +614,10 @@ export class FakeOlaDriver implements OlaDriver {
         private timeScale: number,
         private ride: { bookedAt?: Date; cancelAttempts?: number } = {},
     ) {
-        this.signedIn = scenario === "logged_in";
+        this.signedIn = scenario === "logged_in" || /_in$/.test(scenario);
+    }
+    private base(): string {
+        return this.scenario.replace(/_in$/, "");
     }
     bind(ride: { bookedAt?: Date; cancelAttempts?: number }): void {
         this.ride = ride;
@@ -455,9 +647,23 @@ export class FakeOlaDriver implements OlaDriver {
     async loggedIn(): Promise<boolean> {
         return this.signedIn;
     }
-    async choose(): Promise<"login" | "confirm" | "failed"> {
+    async choose(type = "Mini"): Promise<"login" | "confirm" | "failed"> {
+        this.chosenType = type;
+        // Page-changed scenarios: the fixed step fails once and recovery has to find its way.
+        const start = FAKE_BROKEN_START[this.base()];
+        if (start && this.broken) {
+            this.broken = false;
+            this.screens = new FakeOlaScreens(start, () => this.signedIn, () => this.chosenType);
+            return "failed";
+        }
         this.onConfirm = this.signedIn;
         return this.signedIn ? "confirm" : "login";
+    }
+    async recover(goal: OlaGoal, rideType: string, log: (e: RecoveryLogEntry) => void): Promise<RecoveryOutcome> {
+        const pg = this.screens || new FakeOlaScreens("list", () => this.signedIn, () => this.chosenType);
+        const out = await recoverTo(pg, goal, rideType, { classifier: geminiScreenClassifier, log, maxSteps: 6, maxMs: 20_000 });
+        if (out.ok && out.screen === "confirm") this.onConfirm = true;
+        return out;
     }
     async startLogin(): Promise<LoginStart> {
         return this.scenario === "otp_fail" ? "failed" : "otp_sent";
@@ -471,11 +677,16 @@ export class FakeOlaDriver implements OlaDriver {
     async readConfirm(vehicle: string): Promise<OlaConfirmInfo | null> {
         if (!this.onConfirm) return null;
         const fares: Record<string, number> = { Auto: 356, Mini: 312, Bike: 199, "Prime Sedan": 322, "Prime SUV": 477 };
-        return { vehicle, pickup: this.labels.pickup, drop: this.labels.drop, fare: fares[vehicle] ?? 312, pay: "Cash" };
+        this.reads++;
+        // fare_up: Ola's fare rises between the card and the booking tap (read 2 onwards).
+        const up = this.base() === "fare_up" && this.reads >= 2 ? 40 : 0;
+        // pickup_moved: Ola snaps the pickup elsewhere before the tap.
+        const pickup = this.base() === "pickup_moved" && this.reads >= 2 ? "Palika Bazaar Gate 2" : this.labels.pickup;
+        return { vehicle, pickup, drop: this.labels.drop, fare: (fares[vehicle] ?? 312) + up, pay: "Cash" };
     }
     async ensureCash(): Promise<CashResult> {
-        if (this.scenario === "no_cash") return { ok: false, reason: "no_cash_option", selected: "Ola Money", options: ["Ola Money", "UPI"] };
-        if (this.scenario === "cash_stuck") return { ok: false, reason: "select_failed", selected: "Ola Money", options: ["Ola Money", "Cash"] };
+        if (this.base() === "no_cash") return { ok: false, reason: "no_cash_option", selected: "Ola Money", options: ["Ola Money", "UPI"] };
+        if (this.base() === "cash_stuck") return { ok: false, reason: "select_failed", selected: "Ola Money", options: ["Ola Money", "Cash"] };
         return { ok: true, selected: "Cash", options: ["Ola Money", "Cash"] };
     }
     async book(): Promise<BookResult> {
@@ -486,7 +697,8 @@ export class FakeOlaDriver implements OlaDriver {
         if (this.cancelled) return { state: "cancelled" };
         const t = this.elapsedSec();
         const driver: OlaDriverInfo = { name: "Ramesh Kumar", vehicle: "White Swift Dzire", plate: "DL 1C AB 1234", etaMin: 6, otp: "4821" };
-        switch (this.scenario) {
+        const sc = FAKE_BROKEN_START[this.base()] || ["fare_up", "pickup_moved"].includes(this.base()) ? "assigned" : this.scenario;
+        switch (sc) {
             case "assigned":
             case "logged_in":
                 return t >= 60 ? { state: "assigned", driver } : { state: "searching" };
