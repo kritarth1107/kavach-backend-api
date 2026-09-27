@@ -257,6 +257,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     const rejected = (doc.facts || []).filter((f) => f.status === "rejected").slice(-30).map((f) => `- ${f.text}`);
     let judgements: FactJudgement[] = [];
     let fallbackReason: string | undefined;
+    const rawDiag: string[] = [];
     const memory = await memoryProfileMd(w);
     let ops: ReflectionOp[] = [];
     let actions: CareAction[] = [];
@@ -279,7 +280,9 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         const tryModel = async (m: string) => {
             Vertex.resetVertexError?.();
             const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, responseSchema: RESPONSE_SCHEMA, prompt, timeoutMs: 150_000, maxOutputTokens: 24_576, temperature: 0.2 });
-            return parseJsonLoose<Raw>(raw);
+            const out = parseJsonLoose<Raw>(raw);
+            if (!out && raw) rawDiag.push(`${m}: ${raw.length} chars … ${raw.slice(Math.max(0, raw.length - 240)).replace(/\s+/g, " ")}`);
+            return out;
         };
         const pro = opts.model || process.env.VERTEX_REFLECTION_MODEL?.trim() || vertexProModel();
         let parsed = await tryModel(pro).catch(() => null);
@@ -412,7 +415,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     }
     forgetProfileCache(w);
     await applyRetention(w).catch(() => undefined);
-    return { dayKey, model, fallbackReason, rows: rows.length, activeDay, judged: judgements.length, ...merged, facts: undefined, questions: newQuestions, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
+    return { dayKey, model, fallbackReason, rawDiag: rawDiag.length ? rawDiag : undefined, rows: rows.length, activeDay, judged: judgements.length, ...merged, facts: undefined, questions: newQuestions, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
 }
 
 /** Nightly: every elder with activity yesterday (or who has a profile). */
