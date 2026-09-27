@@ -153,6 +153,13 @@ export async function onOrderPlaced(row: Row): Promise<void> {
         { phone: who.phone, kind: "followup", taskId: { $ne: created.taskId }, status: { $in: ["open", "asked"] }, $or: same },
         { $set: { status: "done", outcome: "reordered", resolvedAt: new Date() }, $push: { history: { at: new Date(), event: "reordered", note: `New order placed ${whenIST(placedAt)}` } } } as never,
     ).catch(() => undefined);
+    // The unfinished order this placement completes is no longer unfinished.
+    if (open && open.status === "open" && (open.category === "ride") === isRide) {
+        await SaheliTask.updateOne(
+            { taskId: open.taskId, status: "open" },
+            { $set: { status: "done", outcome: "placed", resolvedAt: new Date() }, $push: { history: { at: new Date(), event: "placed", note: `Placed ${whenIST(placedAt)}` } } } as never,
+        ).catch(() => undefined);
+    }
     void log(created, isRide ? `Saheli will check she reached (${whenIST(dueAt)})` : `Saheli will check ${item} arrived (${whenIST(dueAt)})`, why ? `Why: ${why}` : undefined, "info", { dueAt, whyId });
 }
 

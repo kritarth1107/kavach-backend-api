@@ -79,7 +79,10 @@ export async function interpretEarly(input: { phone: string; text: string; ident
     const sessionFresh =
         Boolean(snapshotSession(session as Record<string, any> | null, identity.familyId)) &&
         now - new Date((session as { updatedAt?: Date } | null)?.updatedAt || 0).getTime() < STALE_MS();
-    const tasks = sessionFresh ? allTasks.filter((t) => ["approval", "reorder", "why_check", "store_alt"].includes(String(t.flow))) : allTasks;
+    // …except a task Saheli just offered to finish: the "yes" to that offer is a resume, even though
+    // the offer turn itself refreshed the session.
+    const justOffered = (t: ISaheliTask) => Boolean(t.resumeOfferedAt) && now - new Date(t.resumeOfferedAt!).getTime() < 30 * 60_000;
+    const tasks = sessionFresh ? allTasks.filter((t) => ["approval", "reorder", "why_check", "store_alt"].includes(String(t.flow)) || justOffered(t)) : allTasks;
     const whys = await whysMentionedIn({ familyId: identity.familyId, recipientUserId: subjectUserId }, text).catch(() => [] as ISaheliWhy[]);
     if (!followups.length && !tasks.length && !approvals.length && !whys.length) return null;
     const chat = await recentChat(phone, subjectUserId, role === "elder", 24).catch(() => "");
