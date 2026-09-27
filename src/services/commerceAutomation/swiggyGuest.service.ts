@@ -384,8 +384,12 @@ export async function instamartSearch(input: {
     return withGuest(async (ctx, page) => {
         const location = await setSwiggyLocation(ctx, page, address);
         if (!location.ok) return { location, items: [] };
-        await page.goto(`${BASE}/instamart/search?custom_back=true&query=${encodeURIComponent(input.query)}`, {
-            waitUntil: "domcontentloaded",
+        const searchUrl = `${BASE}/instamart/search?custom_back=true&query=${encodeURIComponent(input.query)}`;
+        // The India proxy occasionally drops / aborts one navigation (seen in prod): try once more.
+        await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(async (err) => {
+            console.warn("[instamart-guest] search nav retry:", err instanceof Error ? err.message.slice(0, 160) : err);
+            await page.waitForTimeout(1500);
+            await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 35_000 });
         });
         await waitForContent(page);
         const cardSel = '[data-testid="item-collection-card-full"]';

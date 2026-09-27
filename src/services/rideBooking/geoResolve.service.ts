@@ -32,7 +32,7 @@ async function fetchJson(url: string, headers?: Record<string, string>): Promise
 }
 
 async function nominatimGeocode(query: string): Promise<GeoResult> {
-    const url = `${NOMINATIM}/search?format=json&limit=1&q=${encodeURIComponent(query)}`;
+    const url = `${NOMINATIM}/search?format=json&limit=1&countrycodes=in&q=${encodeURIComponent(query)}`;
     const data = (await fetchJson(url, { "User-Agent": UA })) as Array<{
         lat?: string;
         lon?: string;
@@ -89,7 +89,7 @@ async function nominatimReverse(lat: number, lng: number): Promise<GeoResult> {
 }
 
 async function googleGeocode(query: string, key: string): Promise<GeoResult> {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${key}`;
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&components=country:IN&region=in&key=${key}`;
     const data = (await fetchJson(url)) as {
         status?: string;
         results?: Array<{
@@ -141,7 +141,7 @@ async function googleReverse(lat: number, lng: number, key: string): Promise<Geo
 }
 
 async function mapboxGeocode(query: string, token: string): Promise<GeoResult> {
-    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${token}&limit=1`;
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${token}&limit=1&country=in`;
     const data = (await fetchJson(url)) as {
         features?: Array<{ place_name?: string; center?: [number, number] }>;
     };

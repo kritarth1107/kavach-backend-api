@@ -850,6 +850,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         role: isCaregiver(identity.role) ? "caregiver" : "elder",
         recipientName: (await getFamilyMembersList(identity.familyId, identity.userId))
             .members.find(m => m.userId === subjectUserId)?.name,
+        routeIntent: route?.intent ?? null,
     });
     if (dashboardAction.handled && dashboardAction.reply) {
         const stampedParityReply = await stampCompanionVoice(dashboardAction.reply, {
@@ -1468,9 +1469,13 @@ async function dispatchRoutedTurn(a: {
         const place = (p: string) => {
             const saved = matchPlace(places, p, a.recipientUserId);
             if (saved) return saved.full;
+            // "home"/"ghar" with no saved home: leave it for the ride flow to ask — never geocode the word.
+            if (/^(my\s+)?(home|house|ghar|mera\s+ghar|apna\s+ghar)$/i.test(p.trim())) return home ? home.full : "";
             return city && !new RegExp(`\\b${city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(p) ? `${p}, ${city}` : p;
         };
-        rideText = [route.ridePickup ? `from ${place(route.ridePickup)}` : "", route.rideDrop ? `to ${place(route.rideDrop)}` : ""]
+        const pu = route.ridePickup ? place(route.ridePickup) : "";
+        const dr = route.rideDrop ? place(route.rideDrop) : "";
+        rideText = [pu ? `from ${pu}` : "", dr ? `to ${dr}` : ""]
             .filter(Boolean)
             .join(" ");
     }

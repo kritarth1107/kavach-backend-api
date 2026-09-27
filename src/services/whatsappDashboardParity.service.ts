@@ -662,7 +662,9 @@ export async function tryHandleCaregiverBrief(input: {
         sections.push(`*Care Brief for ${brief.subjectName}*\n`);
         
         if (brief.sections.narrative) {
-            sections.push(brief.sections.narrative.slice(0, 500));
+            // WhatsApp bold is *one* star: "**How they are**" would show literal asterisks.
+            const n = brief.sections.narrative.replace(/\*\*(.+?)\*\*/g, "*$1*").replace(/^#+\s*/gm, "");
+            sections.push(n.length > 700 ? `${n.slice(0, 700).replace(/\s+\S*$/, "")}…` : n);
         }
 
         if (brief.sections.recentSignals?.length) {
@@ -909,9 +911,12 @@ export async function tryHandleSetReminder(input: {
     recipientUserId: string;
     actorUserId: string;
     text: string;
+    /** Router said reminder_or_meds: "Remind Mummy to…", "papa ko yaad dilana…" also count. */
+    routedReminder?: boolean;
 }): Promise<DashboardParityResult> {
     const text = input.text.trim();
     const looksLike =
+        (input.routedReminder && /\b(remind|reminder|yaad)\b/i.test(text)) ||
         /\b(?:set|add|create)\s+(?:a\s+)?reminder\b/i.test(text) ||
         /\bremind\s+me\b/i.test(text) ||
         /\bevery\s+hour\b/i.test(text) ||
@@ -1100,6 +1105,8 @@ export async function tryHandleWhatsAppDashboardAction(input: {
     interactiveId?: string;
     role: "caregiver" | "elder";
     recipientName?: string;
+    /** What the Gemini router understood (when it ran): keeps a reminder from becoming a care brief. */
+    routeIntent?: string | null;
 }): Promise<DashboardParityResult> {
     const familyWho = await tryHandleFamilyWhoQuery({
         familyId: input.familyId,
@@ -1159,6 +1166,7 @@ export async function tryHandleWhatsAppDashboardAction(input: {
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
         text: input.text,
+        routedReminder: input.routeIntent === "reminder_or_meds",
     });
     if (setReminder.handled) return setReminder;
 
@@ -1187,7 +1195,7 @@ export async function tryHandleWhatsAppDashboardAction(input: {
         });
         if (partnerConnect.handled) return partnerConnect;
 
-        const caregiverBrief = await tryHandleCaregiverBrief({
+        const caregiverBrief = input.routeIntent === "reminder_or_meds" ? { handled: false as const } : await tryHandleCaregiverBrief({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
             actorUserId: input.actorUserId,
