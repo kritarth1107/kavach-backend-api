@@ -291,13 +291,17 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             return out;
         };
         const pro = opts.model || process.env.VERTEX_REFLECTION_MODEL?.trim() || vertexProModel();
-        let parsed = await tryModel(pro).catch(() => null);
+        // Pro in JSON mode first (same JSON contract, validated in code): with the full responseSchema,
+        // gemini-3.1-pro-preview looped in free-text fields on ~half of the nights we measured
+        // (27 Sep: 5 of 10 runs hit MAX_TOKENS / timeout). Flash + responseSchema is the fallback.
+        // REFLECTION_PRO_SCHEMA=1 puts Pro back on the response schema.
+        let parsed = await tryModel(pro, opts.schema ?? process.env.REFLECTION_PRO_SCHEMA === "1").catch(() => null);
         model = pro;
         if (!parsed?.ops && !parsed?.day) {
             fallbackReason = String(Vertex.lastVertexError || "unparseable").slice(0, 160);
             console.warn(`[reflection] ${pro} unusable (${fallbackReason}); falling back to flash`);
             model = vertexFlashModel();
-            parsed = await tryModel(model).catch(() => null);
+            parsed = await tryModel(model, true).catch(() => null);
             if (!parsed?.ops && !parsed?.day) {
                 // Last resort: plain JSON mode (no response schema) — the pre-schema path.
                 fallbackReason += ` | flash: ${String(Vertex.lastVertexError || "unparseable").slice(0, 120)}`;
