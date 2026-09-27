@@ -12,23 +12,104 @@ export type Availability = "yes" | "no" | "unknown";
 
 export const SERVICE_LABEL: Record<RideService, string> = { uber: "Uber", ola: "Ola", rapido: "Rapido" };
 
-const CITY_TABLE: Array<[CityTier, string, RegExp]> = [
-    ["ncr", "Delhi NCR", /\b(new delhi|delhi|gurugram|gurgaon|noida|greater noida|ghaziabad|faridabad)\b/i],
-    ["mumbai", "Mumbai", /\b(mumbai|bombay|thane|navi mumbai)\b/i],
-    ["bengaluru", "Bengaluru", /\b(bengaluru|bangalore)\b/i],
-    ["metro", "", /\b(hyderabad|secunderabad|chennai|kolkata|pune|ahmedabad)\b/i],
-    [
-        "tier2",
-        "",
-        /\b(raipur|bhilai|durg|bilaspur|bhopal|indore|gwalior|jabalpur|lucknow|kanpur|agra|varanasi|prayagraj|allahabad|meerut|jaipur|jodhpur|udaipur|kota|chandigarh|mohali|panchkula|ludhiana|amritsar|jalandhar|dehradun|nagpur|nashik|aurangabad|kolhapur|surat|vadodara|rajkot|kochi|cochin|thiruvananthapuram|trivandrum|kozhikode|thrissur|coimbatore|madurai|tiruchirappalli|trichy|salem|mysuru|mysore|mangaluru|mangalore|hubli|belagavi|visakhapatnam|vizag|vijayawada|guntur|tirupati|warangal|bhubaneswar|cuttack|patna|ranchi|jamshedpur|dhanbad|guwahati|siliguri|goa|panaji|margao|srinagar|jammu|shimla)\b/i,
-    ],
-];
+export type RideConfig = {
+    /** tier → city names (lower-case). */
+    cities: Record<Exclude<CityTier, "tier3">, string[]>;
+    cabChains: Record<CityTier, RideService[]>;
+    autoChain: RideService[];
+    disabled: RideService[];
+    /** Tier-3 towns where Uber is known to run. */
+    uberExtraCities: string[];
+    probeTtlHours: number;
+    probeTimeoutMs: number;
+    maxProbesPerHour: number;
+};
 
-export function detectCity(...texts: Array<string | null | undefined>): { city: string | null; tier: CityTier } {
-    const t = texts.filter(Boolean).join(" | ");
-    for (const [tier, label, re] of CITY_TABLE) {
+const TIER_LABEL: Partial<Record<CityTier, string>> = { ncr: "Delhi NCR", mumbai: "Mumbai", bengaluru: "Bengaluru" };
+
+export const DEFAULT_RIDE_CONFIG: RideConfig = {
+    cities: {
+        ncr: ["new delhi", "delhi", "gurugram", "gurgaon", "noida", "greater noida", "ghaziabad", "faridabad"],
+        mumbai: ["mumbai", "bombay", "thane", "navi mumbai"],
+        bengaluru: ["bengaluru", "bangalore"],
+        metro: ["hyderabad", "secunderabad", "chennai", "kolkata", "pune", "ahmedabad"],
+        tier2: (
+            "raipur bhilai durg bilaspur bhopal indore gwalior jabalpur lucknow kanpur agra varanasi prayagraj allahabad meerut " +
+            "jaipur jodhpur udaipur kota chandigarh mohali panchkula ludhiana amritsar jalandhar dehradun nagpur nashik aurangabad " +
+            "kolhapur surat vadodara rajkot kochi cochin thiruvananthapuram trivandrum kozhikode thrissur coimbatore madurai " +
+            "tiruchirappalli trichy salem mysuru mysore mangaluru mangalore hubli belagavi visakhapatnam vizag vijayawada guntur " +
+            "tirupati warangal bhubaneswar cuttack patna ranchi jamshedpur dhanbad guwahati siliguri goa panaji margao srinagar jammu shimla"
+        ).split(" "),
+    },
+    cabChains: {
+        ncr: ["uber", "ola", "rapido"],
+        mumbai: ["uber", "ola", "rapido"],
+        metro: ["uber", "ola", "rapido"],
+        bengaluru: ["uber", "rapido", "ola"],
+        tier2: ["uber", "rapido", "ola"],
+        tier3: ["rapido", "uber", "ola"],
+    },
+    autoChain: ["rapido", "uber", "ola"],
+    disabled: [],
+    uberExtraCities: [],
+    probeTtlHours: 24,
+    probeTimeoutMs: 16_000,
+    maxProbesPerHour: 60,
+};
+
+const SERVICES: RideService[] = ["uber", "ola", "rapido"];
+const TIERS: CityTier[] = ["ncr", "mumbai", "bengaluru", "metro", "tier2", "tier3"];
+
+/** Merge an operator doc over the defaults; anything malformed is ignored (never breaks rides). */
+export function mergeRideConfig(doc: Record<string, unknown> | null | undefined): RideConfig {
+    const cfg: RideConfig = JSON.parse(JSON.stringify(DEFAULT_RIDE_CONFIG));
+    if (!doc) return cfg;
+    const words = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()).map((x) => (x as string).trim().toLowerCase()) : []);
+    const chain = (v: unknown) => {
+        const c = words(v).filter((x): x is RideService => SERVICES.includes(x as RideService));
+        return c.length ? [...new Set(c)] : null;
+    };
+    const cities = (doc.cities || {}) as Record<string, unknown>;
+    for (const t of Object.keys(cfg.cities) as Array<keyof RideConfig["cities"]>) {
+        const extra = words(cities[t]);
+        if (extra.length) cfg.cities[t] = [...new Set([...cfg.cities[t], ...extra])];
+    }
+    const chains = (doc.cabChains || {}) as Record<string, unknown>;
+    for (const t of TIERS) {
+        const c = chain(chains[t]);
+        if (c) cfg.cabChains[t] = c;
+    }
+    const ac = chain(doc.autoChain);
+    if (ac) cfg.autoChain = ac;
+    cfg.disabled = words(doc.disabled).filter((x): x is RideService => SERVICES.includes(x as RideService));
+    cfg.uberExtraCities = words(doc.uberExtraCities);
+    const num = (v: unknown, lo: number, hi: number, d: number) => (typeof v === "number" && v >= lo && v <= hi ? v : d);
+    cfg.probeTtlHours = num(doc.probeTtlHours, 1, 24 * 14, cfg.probeTtlHours);
+    cfg.probeTimeoutMs = num(doc.probeTimeoutMs, 3000, 30_000, cfg.probeTimeoutMs);
+    cfg.maxProbesPerHour = num(doc.maxProbesPerHour, 0, 1000, cfg.maxProbesPerHour);
+    return cfg;
+}
+
+const reCache = new WeakMap<RideConfig, Array<[CityTier, RegExp]>>();
+function cityRegexes(cfg: RideConfig): Array<[CityTier, RegExp]> {
+    let r = reCache.get(cfg);
+    if (!r) {
+        const esc = (w: string) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+        r = (Object.keys(cfg.cities) as Array<keyof RideConfig["cities"]>)
+            .filter((t) => cfg.cities[t].length)
+            // Longer names first inside a tier ("navi mumbai" before "mumbai").
+            .map((t) => [t, new RegExp(`\\b(${[...cfg.cities[t]].sort((a, b) => b.length - a.length).map(esc).join("|")})\\b`, "i")] as [CityTier, RegExp]);
+        reCache.set(cfg, r);
+    }
+    return r;
+}
+
+export function detectCity(...texts: Array<string | null | undefined | RideConfig>): { city: string | null; tier: CityTier } {
+    const cfg = (texts.find((x) => typeof x === "object" && x !== null) as RideConfig | undefined) || DEFAULT_RIDE_CONFIG;
+    const t = texts.filter((x): x is string => typeof x === "string" && Boolean(x)).join(" | ");
+    for (const [tier, re] of cityRegexes(cfg)) {
         const m = t.match(re);
-        if (m) return { city: label || cap(m[1]!), tier };
+        if (m) return { city: TIER_LABEL[tier] || cap(m[1]!.toLowerCase()), tier };
     }
     return { city: null, tier: "tier3" };
 }
@@ -38,18 +119,20 @@ function cap(s: string): string {
 }
 
 /** City of a place: the tail of its geocoded address ("…, Raipur, Chhattisgarh, 492001, India"). */
-export function cityOfPlaces(p?: RidePlace | null, d?: RidePlace | null): { city: string | null; tier: CityTier } {
+export function cityOfPlaces(p?: RidePlace | null, d?: RidePlace | null, cfg: RideConfig = DEFAULT_RIDE_CONFIG): { city: string | null; tier: CityTier } {
     const tail = (x?: RidePlace | null) => (x?.address || x?.raw || x?.shortLabel || "").split(",").map((s) => s.trim()).filter(Boolean).slice(-5).join(", ");
-    const a = detectCity(tail(p));
+    const a = detectCity(tail(p), cfg);
     if (a.city) return a;
-    const b = detectCity(tail(d));
+    const b = detectCity(tail(d), cfg);
     if (b.city) return b;
-    return detectCity(p?.address, p?.raw, p?.shortLabel);
+    return detectCity(p?.address, p?.raw, p?.shortLabel, cfg);
 }
 
-/** Uber runs in every metro and tier-2 city above (static list; its logged-out page can't be trusted). */
-export function uberCovers(tier: CityTier): boolean {
-    return tier !== "tier3";
+/** Uber: every metro / tier-2 city plus configured towns (its logged-out page can't be trusted). */
+export function uberCovers(tier: CityTier, placeText = "", cfg: RideConfig = DEFAULT_RIDE_CONFIG): boolean {
+    if (tier !== "tier3") return true;
+    const t = placeText.toLowerCase();
+    return cfg.uberExtraCities.some((c) => new RegExp(`\\b${c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(t));
 }
 
 export function isAirport(p?: RidePlace | null): boolean {
@@ -73,21 +156,9 @@ export function serviceFromText(t: string): RideService | "namma_yatri" | null {
 }
 
 /** Fallback order per city tier and vehicle (first available wins). */
-export function serviceChain(tier: CityTier, vehicle: Vehicle): RideService[] {
-    if (vehicle === "auto" || vehicle === "bike") {
-        return ["rapido", "uber", "ola"];
-    }
-    switch (tier) {
-        case "ncr":
-        case "mumbai":
-        case "metro":
-            return ["uber", "ola", "rapido"];
-        case "bengaluru":
-        case "tier2":
-            return ["uber", "rapido", "ola"];
-        case "tier3":
-            return ["rapido", "uber", "ola"];
-    }
+export function serviceChain(tier: CityTier, vehicle: Vehicle, cfg: RideConfig = DEFAULT_RIDE_CONFIG): RideService[] {
+    const c = vehicle === "auto" || vehicle === "bike" ? cfg.autoChain : cfg.cabChains[tier];
+    return c.filter((s) => !cfg.disabled.includes(s));
 }
 
 /** Elders go by cab to airports unless they clearly asked for something else. */
@@ -111,9 +182,12 @@ export function chooseServices(input: {
     requested?: RideService | "namma_yatri" | null;
     status: (s: RideService) => Availability;
     airport: boolean;
+    placeText?: string;
+    cfg?: RideConfig;
 }): Choice {
-    const chain = serviceChain(input.tier, input.vehicle);
-    const st = (s: RideService): Availability => (s === "uber" ? (uberCovers(input.tier) ? "yes" : "no") : input.status(s));
+    const cfg = input.cfg || DEFAULT_RIDE_CONFIG;
+    const chain = serviceChain(input.tier, input.vehicle, cfg);
+    const st = (s: RideService): Availability => (s === "uber" ? (uberCovers(input.tier, input.placeText, cfg) ? "yes" : "no") : input.status(s));
     // Confirmed first, then unknown (keeps the chain order inside each group); "no" dropped.
     const usable = [...chain.filter((s) => st(s) === "yes"), ...chain.filter((s) => st(s) === "unknown")];
     let primary: RideService | null = usable[0] ?? null;

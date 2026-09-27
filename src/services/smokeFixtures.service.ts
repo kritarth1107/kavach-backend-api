@@ -34,6 +34,16 @@ const FIXTURES = [
 const DELEGATE_FIXTURE_PHONES = ["+999730000001", "+999730000002", "+999730000003", "+999730000004"];
 
 /** Exactly one of the fixed fixture phones above (never a real or random placeholder number). */
+/**
+ * Test-only numbers: the smoke fixtures plus the reserved fake +9997… range (no real Indian
+ * number starts 9997; real ones are +91…). Test hooks (mock routing, scheduler bypass) only ever
+ * act on these in production.
+ */
+export function isTestPhone(raw: string | undefined | null): boolean {
+    const digits = String(raw ?? "").replace(/\D/g, "");
+    return /^9997\d{6,}$/.test(digits) || isSmokeFixturePhone(digits);
+}
+
 export function isSmokeFixturePhone(raw: string | undefined | null): boolean {
     const digits = String(raw ?? "").replace(/\D/g, "");
     return FIXTURES.some((f) => f.phone.replace(/\D/g, "") === digits) || DELEGATE_FIXTURE_PHONES.some((p) => p.replace(/\D/g, "") === digits);

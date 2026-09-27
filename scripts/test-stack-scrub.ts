@@ -3,7 +3,7 @@ import { scrubStack, hasStackWords } from "../src/services/stackScrub";
 import { localizeCanned } from "../src/services/hinglishCanned";
 import { TATA_1MG_COPY } from "../src/services/commerceAutomation/siteAllowlist";
 import { stillWorkingLine } from "../src/services/stillWorkingCopy";
-import { rideAppHandoffMessage } from "../src/services/rideBooking/rideHandoff";
+import { handoffMessage, noServiceMessage, type RideService } from "../src/services/rideBooking/rideServices";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -57,9 +57,20 @@ ok("newest task wins", /Apollo Pharmacy for Dolo 650/.test(newer) && !/Uber/.tes
 ok("hindi still-working", /bas ek pal/.test(stillWorkingLine(ride, "hi")));
 ok("plain still-working", !hasStackWords(stillWorkingLine(null, "en")));
 
-const hand = rideAppHandoffMessage({ phase: "confirming_route", provider: "uber", pickup: { lat: 21.2, lng: 81.6, shortLabel: "Home" }, drop: { lat: 21.18, lng: 81.74, address: "Swami Vivekananda Airport, Raipur" }, routeSummary: "Home → Airport" });
-ok("ride handoff has deep link", hand.includes("https://m.uber.com/ul/?action=setPickup"), hand);
-ok("ride handoff never promises a code", !/may text|will send|forward it here|paste/i.test(hand) && !hasStackWords(hand), hand);
+const P = { lat: 21.2, lng: 81.6, shortLabel: "Home" };
+const D = { lat: 21.18, lng: 81.74, address: "Swami Vivekananda Airport, Raipur" };
+for (const lang of ["en", "hi"])
+    for (const primary of ["uber", "ola", "rapido"] as RideService[])
+        for (const vehicle of ["cab", "auto", "bike"] as const) {
+            const alt = (["uber", "ola", "rapido"] as RideService[]).find((x) => x !== primary)!;
+            const m = handoffMessage({ choice: { primary, alt, nammaYatriNote: true, airportAutoNote: true }, vehicle, pickup: P, drop: D, lang }) || "";
+            ok(`handoff ${lang}/${primary}/${vehicle} has link, no stack words, no code promise`, /https:\/\//.test(m) && !hasStackWords(m) && !/may text|will send|forward it here|paste|otp/i.test(m), m);
+        }
+for (const lang of ["en", "hi"])
+    for (const canOfferFamily of [true, false]) {
+        const m = noServiceMessage({ pickup: P, lang, canOfferFamily, familyName: "Priya" });
+        ok(`no-service ${lang}/${canOfferFamily} clean`, !!m && !hasStackWords(m), m);
+    }
 
 console.log(fail ? `\n${fail} failed` : "\nall passed");
 process.exit(fail ? 1 : 0);

@@ -1,3 +1,4 @@
+import { isTestPhone } from "../smokeFixtures.service";
 /**
  * Proactive delegate messages (delivery check, medicine-start check, resume nudge, approval
  * result) through the SAME nudge system as check-ins: quiet hours, the nudge gate (no active
@@ -59,6 +60,10 @@ export async function sendDelegateMessage(
     facts: string,
     opts: { bypassGate?: boolean; bypassQuiet?: boolean; direct?: boolean } = {},
 ): Promise<SendResult> {
+    if ((opts.bypassGate || opts.bypassQuiet) && !isTestPhone(task.phone)) {
+        // Test-only overrides never apply to a real family.
+        opts = { ...opts, bypassGate: false, bypassQuiet: false };
+    }
     const now = new Date();
     const isElder = task.actorRole !== "caregiver";
     let companion: import("../../models/saheliCompanion.model").ISaheliCompanion | null = null;

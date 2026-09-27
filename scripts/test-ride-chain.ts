@@ -1,7 +1,8 @@
 /** Multi-app ride hand-off: city tiers, fallback chains, links and copy. */
 import {
     chooseServices, cityOfPlaces, detectCity, handoffMessage, noServiceMessage, olaLink, rapidoLink,
-    serviceChain, serviceFromText, uberLink, vehicleFromText, isAirport, type Availability, type RideService,
+    serviceChain, serviceFromText, uberLink, vehicleFromText, isAirport, linkFor, mergeRideConfig, uberCovers,
+    DEFAULT_RIDE_CONFIG, type Availability, type RideService,
 } from "../src/services/rideBooking/rideServices";
 import { hasStackWords } from "../src/services/stackScrub";
 
@@ -79,6 +80,34 @@ ok("HI message", /kholne ke liye tap kijiye/.test(hi) && /Namma Yatri/.test(hi) 
 const none = noServiceMessage({ pickup: P("Sheo, Barmer, Rajasthan"), lang: "en", canOfferFamily: true });
 ok("no-service offers family (offer only)", /Shall I message your family/.test(none), none);
 for (const [n, t] of [["en", en], ["hi", hi], ["none", none], ["none-hi", noServiceMessage({ pickup: CP, lang: "hi", canOfferFamily: true })]]) ok(`no tech words: ${n}`, !hasStackWords(t));
+
+// ── URL encoding: Hindi, apostrophes, &, #, + must round-trip exactly ──
+const weird = [
+    { lat: 28.6328, lng: 77.2197, shortLabel: "राजीव चौक मेट्रो", address: "राजीव चौक, नई दिल्ली" },
+    { lat: 19.0544, lng: 72.8406, shortLabel: "St. Mary's Church & School #3", address: "St. Mary's Church & School #3, Hill Rd + Bandra" },
+];
+for (const svc of ["uber", "ola", "rapido"] as const) {
+    const u = linkFor(svc, weird[0], weird[1]);
+    ok(`${svc} link is a valid URL`, !!u && (() => { try { new URL(u!); return true; } catch { return false; } })(), u);
+    ok(`${svc} link has no raw spaces / non-ASCII`, !!u && !/[\s\u0080-\uffff]/.test(u!), u);
+}
+const uu = new URL(uberLink(weird[0], weird[1])!);
+const allVals = [...uu.searchParams.values()].join(" | ");
+ok("uber decoded values round-trip Hindi", allVals.includes("राजीव चौक"), allVals);
+ok("uber decoded values round-trip & # + '", allVals.includes("St. Mary's Church & School #3"), allVals);
+
+// ── Operator config: merges, validates, never breaks ──
+const cfg = mergeRideConfig({ cities: { tier2: ["bastar", "  Jagdalpur "] }, cabChains: { tier3: ["ola", "bogus", "uber"] }, disabled: ["rapido", "x"], probeTtlHours: -3, maxProbesPerHour: 5 });
+ok("config adds a tier-2 city", detectCity("Main Rd, Jagdalpur, Chhattisgarh", cfg).tier === "tier2");
+ok("config default city still there", detectCity("Raipur", cfg).tier === "tier2");
+ok("config chain validated (bogus dropped) + disabled removed", JSON.stringify(serviceChain("tier3", "cab", cfg)) === JSON.stringify(["ola", "uber"]), serviceChain("tier3", "cab", cfg));
+ok("config auto chain drops disabled rapido", !serviceChain("tier2", "auto", cfg).includes("rapido"));
+ok("config bad TTL ignored", cfg.probeTtlHours === 24 && cfg.maxProbesPerHour === 5);
+ok("config null doc = defaults", JSON.stringify(mergeRideConfig(null)) === JSON.stringify(DEFAULT_RIDE_CONFIG));
+ok("config garbage doc = defaults", JSON.stringify(mergeRideConfig({ cities: 5, cabChains: "x", disabled: {} } as never)) === JSON.stringify(DEFAULT_RIDE_CONFIG));
+const uberTown = mergeRideConfig({ uberExtraCities: ["ambikapur"] });
+ok("config uber extra town", uberCovers("tier3", "Ambikapur, Chhattisgarh", uberTown) && !uberCovers("tier3", "Ambikapur, Chhattisgarh"));
+ok("chooseServices honours config", chooseServices({ tier: "tier3", vehicle: "cab", status: () => "yes", airport: false, cfg }).primary === "ola");
 
 console.log(fail ? `\n${fail} failed` : "\nall passed");
 process.exit(fail ? 1 : 0);

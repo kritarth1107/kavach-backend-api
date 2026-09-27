@@ -25,6 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Gate: type-check + unit/integration suites must pass before anything is deployed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Tests (tsc, stack words, rides, delegate)
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test:ci
+
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}

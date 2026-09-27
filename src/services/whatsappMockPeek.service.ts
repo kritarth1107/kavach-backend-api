@@ -9,6 +9,7 @@
  */
 import { ChannelType } from "../types/careRecord.types";
 import { normalizeChannelIdentifier } from "./identityResolver.service";
+import { isTestPhone } from "./smokeFixtures.service";
 
 type OutboundRow = { at: string; text: string; source: string };
 
@@ -28,6 +29,10 @@ function redact(text: string): string {
 export function recordSaheliOutbound(phone: string, text: string, source = "browser"): void {
     const k = key(phone);
     if (!k || !text?.trim()) return;
+    // The peek buffer exists for the test harness: in production it only holds test numbers, so
+    // real families' messages are never kept in memory.
+    if (process.env.NODE_ENV === "production" && !isTestPhone(k)) return;
+    if (!outbound.has(k) && outbound.size >= 500) outbound.delete(outbound.keys().next().value as string);
     const now = Date.now();
     const rows = (outbound.get(k) || []).filter((r) => now - Date.parse(r.at) < TTL_MS);
     rows.push({ at: new Date(now).toISOString(), text: redact(text.trim()).slice(0, 3000), source });

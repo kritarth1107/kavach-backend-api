@@ -23,7 +23,8 @@
     "test:fact-confidence": "tsx scripts/test-fact-confidence.ts",
     "test:delegate": "tsx scripts/test-delegate.ts",
     "test:stack": "tsx scripts/test-stack-scrub.ts",
-    "test:rides": "tsx scripts/test-ride-chain.ts"
+    "test:rides": "tsx scripts/test-ride-chain.ts && tsx scripts/test-ride-availability.ts",
+    "test:ci": "tsc --noEmit -p . && npm run test:stack && npm run test:rides && npm run test:delegate"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

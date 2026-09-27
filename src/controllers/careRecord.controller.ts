@@ -306,6 +306,12 @@ export async function postWhatsAppMockWebhook(req: Request, res: Response) {
         });
         return;
     }
+    // Routing a mock message acts as that sender: in production only test numbers may be driven.
+    const { isTestPhone } = await import("../services/smokeFixtures.service");
+    if (process.env.NODE_ENV === "production" && !isTestPhone(String(req.body?.from || ""))) {
+        res.status(403).json({ success: false, message: "test numbers only" });
+        return;
+    }
     const { handleWhatsAppInbound } = await import("../services/whatsappInbound.service");
     const mockMessageId =
         typeof req.body?.messageId === "string" ? req.body.messageId.trim() : "";
@@ -647,6 +653,10 @@ export async function postPhoneMockWebhook(req: Request, res: Response) {
         res.status(404).json({ success: false, message: "Not found" });
         return;
     }
+    if (process.env.NODE_ENV === "production" && !(await import("../services/smokeFixtures.service")).isTestPhone(String(req.body?.from || ""))) {
+        res.status(403).json({ success: false, message: "test numbers only" });
+        return;
+    }
     const { reply } = await phoneMockAdapter.receive({
         channelType: ChannelType.PHONE,
         channelIdentifier: req.body.from,
@@ -660,6 +670,10 @@ export async function postPhoneMockWebhook(req: Request, res: Response) {
 export async function postSpeakerMockWebhook(req: Request, res: Response) {
     if (!isMockAuthorized(req)) {
         res.status(404).json({ success: false, message: "Not found" });
+        return;
+    }
+    if (process.env.NODE_ENV === "production" && !String(req.body?.deviceId || "").startsWith("test-")) {
+        res.status(403).json({ success: false, message: "test devices only" });
         return;
     }
     const { reply } = await smartSpeakerMockAdapter.receive({

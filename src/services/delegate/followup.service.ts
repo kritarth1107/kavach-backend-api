@@ -1,3 +1,4 @@
+import { isTestPhone } from "../smokeFixtures.service";
 /**
  * Post-action follow-through. A placed order / booked ride becomes a durable follow-up that
  * Saheli checks at a sensible time after the ETA ("Did your Telma arrive? 🙂"; for medicines
@@ -234,6 +235,9 @@ export async function sendResumeNudge(t: ISaheliTask, opts: { bypassGate?: boole
 let ticking = false;
 export async function runDelegateTick(opts: { now?: Date; onlyPhone?: string; bypassGate?: boolean; bypassQuiet?: boolean } = {}): Promise<Record<string, number>> {
     if (process.env.DELEGATE_ENABLED === "false") return {};
+    if ((opts.bypassGate || opts.bypassQuiet) && !(opts.onlyPhone && isTestPhone(opts.onlyPhone))) {
+        opts = { ...opts, bypassGate: false, bypassQuiet: false };
+    }
     if (ticking && !opts.onlyPhone) return {};
     if (!opts.onlyPhone) ticking = true;
     const now = opts.now ?? new Date();

@@ -1,25 +1,15 @@
 /**
  * WhatsApp ride-booking state machine (Instinct parity).
- * Slot-fill from/to (text + location pin) → route confirm → Uber-on-this-number →
- * OTP paste → fare confirm-before-book → driver/car/plate. Cancel clears session.
- * Never block WA on Chromium — kick browser async + immediate OTP ask.
+ * Slot-fill from/to (text + location pin) → route confirm → pre-filled Uber / Ola / Rapido app
+ * links (chosen by city tier, vehicle and live availability). Nothing is booked in chat: the user
+ * books in the app. Cancel clears the draft.
  */
-import { isLiteralConfirm, isSoftYes } from "../commerceAutomation/literalConfirm";
+import { isSoftYes } from "../commerceAutomation/literalConfirm";
 import WhatsappSession from "../../models/whatsappSession.model";
 import User from "../../models/users.model";
 import { FamilyRole } from "../../types/family.types";
 import { notifyCaregivers } from "../saheliCaregiverAlert.service";
 import { GENERIC_PLACE, resolveRidePlace } from "./geoResolve.service";
-import {
-    confirmRideBook,
-    dryRunDriverMessage,
-    dryRunFares,
-    formatFareCard,
-    parseFaresFromBrowserResult,
-    providerLabel,
-    startRideBrowserLogin,
-    submitRideOtp,
-} from "./rideBrowser.service";
 import {
     formatRouteSummary,
     isBareAffirmation,
@@ -43,31 +33,12 @@ import {
     serviceFromText,
     vehicleFromText,
 } from "./rideServices";
-import { awaitRideAvailability, cachedAvailability, warmRideAvailability } from "./rideAvailability";
+import { awaitRideAvailability, readAvailability, warmRideAvailability } from "./rideAvailability";
+import { loadRideConfig } from "./rideConfig";
 
 export { messageLooksLikeRideIntent, isRideCancel } from "./slotParse";
 export type { RideDraft } from "./types";
 
-
-function parseDriverFromMessage(message: string): RideDraft["driver"] | undefined {
-    const name =
-        message.match(/Driver:\s*\*?([^*\n]+)\*?/i)?.[1]?.trim() ||
-        message.match(/driver\s+([A-Z][a-zA-Z.\s]{1,40})/i)?.[1]?.trim();
-    const vehicle =
-        message.match(/Car:\s*\*?([^*\n]+)\*?/i)?.[1]?.trim() ||
-        message.match(/vehicle:\s*([^\n]+)/i)?.[1]?.trim();
-    const plate =
-        message.match(/Plate:\s*\*?([^*\n]+)\*?/i)?.[1]?.trim() ||
-        message.match(/\b([A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{1,2}[-\s]?\d{1,4})\b/)?.[1];
-    const etaRaw = message.match(/ETA:\s*~?(\d+)/i)?.[1];
-    if (!name && !vehicle && !plate) return undefined;
-    return {
-        name,
-        vehicle,
-        plate,
-        etaMinutes: etaRaw ? Number(etaRaw) : undefined,
-    };
-}
 
 async function loadDraft(phone: string): Promise<RideDraft | null> {
     const row = await WhatsappSession.findOne({ phone }).lean();
@@ -97,31 +68,6 @@ async function saveDraft(phone: string, draft: RideDraft | null): Promise<void> 
         { $set: { rideDraft: { ...draft, savedAt: new Date() }, updatedAt: new Date() } },
         { upsert: true },
     );
-}
-
-async function actorPhoneE164(userId: string, fallbackPhone: string): Promise<string> {
-    try {
-        const user = await User.findById(userId).lean();
-        const cc = (user as { phone?: { countryCode?: string; number?: string } } | null)?.phone
-            ?.countryCode;
-        const num = (user as { phone?: { countryCode?: string; number?: string } } | null)?.phone
-            ?.number;
-        if (cc && num) return `${cc}${num}`;
-    } catch {
-        /* ignore */
-    }
-    const digits = fallbackPhone.replace(/\D/g, "");
-    if (digits.length === 10) return `+91${digits}`;
-    if (digits.length >= 11) return `+${digits}`;
-    return fallbackPhone.startsWith("+") ? fallbackPhone : `+${fallbackPhone}`;
-}
-
-function maskE164(e164: string): string {
-    const d = e164.replace(/\D/g, "");
-    if (d.length < 6) return e164;
-    const cc = d.length > 10 ? d.slice(0, d.length - 10) : "91";
-    const last4 = d.slice(-4);
-    return `+${cc}•••••${last4}`;
 }
 
 async function enrichPlace(place: RidePlace): Promise<RidePlace> {
@@ -209,46 +155,6 @@ async function maybeCompleteSlots(
     return { draft, reply: askSlotsMessage() };
 }
 
-async function maybeNotifyCaregivers(input: {
-    familyId: string;
-    actorUserId: string;
-    recipientUserId: string;
-    actorRole: FamilyRole | null;
-    draft: RideDraft;
-}): Promise<void> {
-    if (input.actorRole !== FamilyRole.CARE_RECIPIENT) return;
-    if (input.draft.phase !== "done") return;
-    void import("../commerceAutomation/usuals/usuals.service").then(({ recordRide }) =>
-        recordRide({ familyId: input.familyId, recipientUserId: input.recipientUserId }, input.draft.drop?.shortLabel),
-    );
-    void import("../activityLog.service").then(({ logActivity }) =>
-        logActivity({
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            actorUserId: input.actorUserId,
-            kind: "ride",
-            title: `${providerLabel(input.draft.provider)} ride booked`,
-            detail: `${input.draft.pickup?.shortLabel || "pickup"} → ${input.draft.drop?.shortLabel || "drop"}`,
-            data: {
-                provider: input.draft.provider || null,
-                from: input.draft.pickup?.shortLabel || null,
-                to: input.draft.drop?.shortLabel || null,
-            },
-        }),
-    );
-    const from = input.draft.pickup?.shortLabel || "pickup";
-    const to = input.draft.drop?.shortLabel || "drop";
-    void notifyCaregivers({
-        familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
-        actorUserId: input.actorUserId,
-        message: `Booked a ${providerLabel(input.draft.provider)} ride: ${from} → ${to}.`,
-        urgency: "low",
-        // Dashboard activity feed only (caregiver WhatsApp = orders + health red flags).
-        kind: "ride",
-    });
-}
-
 /**
  * Handle ride WhatsApp turns. Returns reply or null if not a ride turn.
  */
@@ -270,8 +176,9 @@ export async function handleRideWhatsAppTurn(input: RideTurnInput): Promise<{ te
     // Route shown → check Ola / Rapido for this city in the background, so "yes" is instant.
     const d = r?.draft;
     if (d?.phase === "confirming_route" && d.pickup && d.drop) {
-        const { city } = cityOfPlaces(d.pickup, d.drop);
-        void warmRideAvailability(cityKey(city, d.pickup), d.pickup, d.drop).catch(() => undefined);
+        void loadRideConfig()
+            .then((cfg) => warmRideAvailability(cityKey(cityOfPlaces(d.pickup, d.drop, cfg).city, d.pickup), cfg, d.pickup, d.drop))
+            .catch(() => undefined);
     }
     return r;
 }
@@ -291,15 +198,43 @@ async function multiAppHandoff(input: RideTurnInput, draft: RideDraft): Promise<
             if (r?.lat != null && r?.lng != null) draft[k] = { ...pl, lat: r.lat, lng: r.lng };
         }
     }
+    const started = Date.now();
     const lang = await rideLang(input.phone);
-    const { city, tier } = cityOfPlaces(draft.pickup, draft.drop);
+    const cfg = await loadRideConfig();
+    const { city, tier } = cityOfPlaces(draft.pickup, draft.drop, cfg);
     const key = cityKey(city, draft.pickup);
-    void warmRideAvailability(key, draft.pickup, draft.drop).catch(() => undefined);
-    await awaitRideAvailability(key, 7000);
+    // Probes normally ran while she read the route; wait briefly for any still running, never long.
+    void warmRideAvailability(key, cfg, draft.pickup, draft.drop);
+    await awaitRideAvailability(key, 6000);
+    const avail = await readAvailability(key);
     const vehicle = draft.vehicle || "cab";
     const airport = isAirport(draft.pickup) || isAirport(draft.drop);
-    const choice = chooseServices({ tier, vehicle, requested: draft.requested, status: (s) => cachedAvailability(key, s), airport });
-    console.log(`[ride-handoff] ${key} tier=${tier} veh=${vehicle} req=${draft.requested || "-"} → ${choice.primary || "none"}/${choice.alt || "-"}`);
+    const placeText = `${draft.pickup?.address || ""} ${draft.pickup?.raw || ""}`;
+    const choice = chooseServices({ tier, vehicle, requested: draft.requested, status: (s) => (s === "uber" ? "unknown" : avail[s]), airport, placeText, cfg });
+    const reason = choice.requestedUnavailable
+        ? "requested_unavailable"
+        : draft.requested && choice.primary === draft.requested
+          ? "requested"
+          : choice.primary
+            ? "chain"
+            : "no_service";
+    console.log(
+        JSON.stringify({
+            evt: "ride_handoff",
+            cityKey: key,
+            tier,
+            vehicle,
+            airport,
+            requested: draft.requested || null,
+            primary: choice.primary,
+            alt: choice.alt,
+            reason,
+            ola: avail.ola,
+            rapido: avail.rapido,
+            lang: lang || null,
+            ms: Date.now() - started,
+        }),
+    );
     await WhatsappSession.updateOne(
         { phone: input.phone },
         { $set: { lastRide: { pickup: draft.pickup, drop: draft.drop, at: new Date() } } },
@@ -314,6 +249,7 @@ async function multiAppHandoff(input: RideTurnInput, draft: RideDraft): Promise<
                 actorUserId: input.actorUserId,
                 kind: "ride",
                 title: `Ride link sent (${choice.primary})`,
+                data: { primary: choice.primary, alt: choice.alt, tier, vehicle, reason },
                 detail: `${nameFor(draft.pickup)} → ${nameFor(draft.drop)} · not booked until opened in the app`,
             }),
         ).catch(() => undefined);
@@ -369,244 +305,23 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
 
     // Active mid-flow (including OTP / fare confirm)
     if (draft && draft.phase !== "idle" && draft.phase !== "done") {
-        // OTP paste
-        if (draft.phase === "awaiting_otp" && /^\d{4,8}$/.test(text)) {
-            draft.lastMessage = "Got the code — checking fares…";
-            await saveDraft(input.phone, draft);
-
-            const result = await submitRideOtp({
-                familyId: input.familyId,
-                userId: input.actorUserId,
-                draft,
-                otp: text,
-            });
-            draft.mode = result.mode;
-
-            if (result.status === "error") {
-                draft.phase = "unavailable";
-                draft.unavailableReason = result.message;
-                await saveDraft(input.phone, null);
-                return {
-                    text:
-                        `Couldn't continue on ${providerLabel(draft.provider)} right now. ` +
-                        `${result.message.slice(0, 180)}\n` +
-                        `Nothing was booked. Local taxi options (GoaMiles / TaxiBazaar) are coming later — try again shortly or book in the Uber app.`,
-                    draft,
-                };
-            }
-
-            // Live Chromium still waiting on OTP / login — stay in awaiting_otp
-            if (result.status === "need_otp" && result.mode === "playwright") {
-                const msg =
-                    result.message ||
-                    `${providerLabel(draft.provider)} still needs the login code — *paste the OTP here*, or *cancel*.`;
-                draft.lastMessage = msg;
-                await saveDraft(input.phone, draft);
-                return { text: msg, draft };
-            }
-
-            const scraped = parseFaresFromBrowserResult(result);
-            const liveOk =
-                result.mode === "playwright" &&
-                (result.status === "need_user_confirm" || Boolean(scraped?.length));
-
-            // Live mode: never invent stub fares if scrape failed
-            if (result.mode === "playwright" && !scraped?.length && result.status !== "need_user_confirm") {
-                draft.phase = "unavailable";
-                draft.unavailableReason = result.message;
-                await saveDraft(input.phone, null);
-                return {
-                    text:
-                        `Couldn't read live fares from ${providerLabel(draft.provider)} yet. ` +
-                        `${(result.message || "").slice(0, 160)}\n` +
-                        `Nothing was booked — try again or use the Uber app.`,
-                    draft,
-                };
-            }
-
-            const fares =
-                scraped ||
-                (result.mode === "dry_run"
-                    ? dryRunFares(draft.pickup, draft.drop)
-                    : undefined);
-            if (!fares?.length) {
-                draft.phase = "unavailable";
-                await saveDraft(input.phone, null);
-                return {
-                    text: `No fare options came back from ${providerLabel(draft.provider)}. Nothing was booked — try again shortly.`,
-                    draft,
-                };
-            }
-            draft.fares = fares;
-            draft.selectedFareId = fares[0]?.id;
-            draft.phase = "awaiting_book_confirm";
-            const card =
-                liveOk && /₹|fare|UberX|confirm|book/i.test(result.message)
-                    ? result.message
-                    : formatFareCard(fares, draft.provider);
-            draft.lastMessage = card;
-            await saveDraft(input.phone, draft);
-            return { text: card, draft };
-        }
-
-        if (draft.phase === "awaiting_otp") {
-            return {
-                text:
-                    draft.lastMessage ||
-                    `${providerLabel(draft.provider)} will text a 4-digit code — *forward or paste it here*.`,
-                draft,
-            };
-        }
-
-        // Confirm book
-        if (
-            draft.phase === "awaiting_book_confirm" &&
-            RIDE_CONFIRM_RE.test(text)
-        ) {
-            draft.phase = "booking";
-            draft.selectedFareId = draft.selectedFareId || draft.fares?.[0]?.id;
-            await saveDraft(input.phone, draft);
-
-            const result = await confirmRideBook({
-                familyId: input.familyId,
-                userId: input.actorUserId,
-                draft,
-            });
-            draft.mode = result.mode;
-
-            if (result.status === "done" || (result.mode === "dry_run" && result.status !== "error")) {
-                draft.phase = "done";
-                if (result.mode === "dry_run") {
-                    draft.driver = {
-                        name: "Ravi K.",
-                        vehicle: "White Swift Dzire",
-                        plate: "KA-01-AB-4231",
-                        etaMinutes: draft.fares?.[0]?.etaMinutes ?? 8,
-                    };
-                    const msg = dryRunDriverMessage(draft);
-                    draft.lastMessage = msg;
-                    await saveDraft(input.phone, null);
-                    await maybeNotifyCaregivers({ ...input, draft });
-                    return { text: msg, draft };
-                }
-                // Live: trust browser message; parse driver fields best-effort
-                const msg =
-                    result.message?.trim() ||
-                    `Ride requested on ${providerLabel(draft.provider)}. Watch the Uber app for driver details.`;
-                draft.driver = parseDriverFromMessage(msg) || {
-                    name: undefined,
-                    vehicle: undefined,
-                    plate: undefined,
-                    etaMinutes: draft.fares?.[0]?.etaMinutes,
-                };
-                draft.lastMessage = msg;
-                await saveDraft(input.phone, null);
-                await maybeNotifyCaregivers({ ...input, draft });
-                return { text: msg, draft };
-            }
-
-            // Still asking confirm mid-book (shouldn't silent-book)
-            if (result.status === "need_user_confirm") {
-                draft.phase = "awaiting_book_confirm";
-                draft.lastMessage = result.message;
-                await saveDraft(input.phone, draft);
-                return { text: result.message, draft };
-            }
-
-            draft.phase = "unavailable";
-            await saveDraft(input.phone, null);
-            return {
-                text:
-                    `Booking didn't complete: ${result.message.slice(0, 180)}. ` +
-                    `Nothing was booked or paid. You can try again or use the Uber app.`,
-                draft,
-            };
-        }
-
-        if (draft.phase === "awaiting_book_confirm") {
-            return {
-                text: draft.lastMessage || formatFareCard(draft.fares || dryRunFares(), draft.provider),
-                draft,
-            };
+        // Drafts left in the retired in-chat sign-in steps (before the link hand-off) finish as a hand-off.
+        if (["ask_uber_phone", "awaiting_otp", "awaiting_book_confirm", "booking", "showing_fares", "unavailable"].includes(draft.phase) && draft.pickup && draft.drop) {
+            return await multiAppHandoff(input, draft);
         }
 
         // Route confirm → honest app hand-off. Uber answers every automated web sign-in with an
         // Arkose "Protecting your account — Start Puzzle" check (verified 27 Sep 2026), so NO login
         // SMS is ever sent; we never solve captchas. Claiming "Uber may text a code" was false.
-        // The live web-login path stays behind RIDE_WEB_LOGIN=on for a future partner API.
-        if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text) && process.env.RIDE_WEB_LOGIN !== "on") {
+        if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text)) {
             return await multiAppHandoff(input, draft);
         }
-        // Route confirm → ask Uber phone
-        if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text)) {
-            const phoneE164 = await actorPhoneE164(input.actorUserId, input.phone);
-            draft.phoneE164 = phoneE164;
-            draft.phase = "ask_uber_phone";
-            const masked = maskE164(phoneE164);
-            const msg =
-                `Is your ${providerLabel(draft.provider)} account on this number (${masked})? ` +
-                `If yes, ${providerLabel(draft.provider)} will send a 4-digit code — *forward it here*.\n` +
-                `Reply *confirm* to continue (I'll open ${providerLabel(draft.provider)} and it sends the code), or *cancel*.`;
-            draft.lastMessage = msg;
-            await saveDraft(input.phone, draft);
-            return { text: msg, draft };
-        }
-
         if (draft.phase === "confirming_route") {
             // Allow re-slotting
             const updated = await maybeCompleteSlots(draft, text);
             draft = updated.draft;
             await saveDraft(input.phone, draft);
             return { text: updated.reply || routeConfirmMessage(draft), draft };
-        }
-
-        // Sign-in guardrail: the cab-app login (OTP) starts only on the literal word "confirm".
-        if (draft.phase === "ask_uber_phone" && !isLiteralConfirm(text) && (RIDE_CONFIRM_RE.test(text) || isSoftYes(text))) {
-            return { text: `To go ahead, reply *confirm* — I'll then open *${providerLabel(draft.provider)}* and it will send you a login code. Or *cancel*.`, draft };
-        }
-        // Uber phone confirm → kick browser async + await OTP
-        if (draft.phase === "ask_uber_phone" && isLiteralConfirm(text)) {
-            const challenge = `ride-${draft.provider}-${Date.now()}`;
-            draft.otpChallengeId = challenge;
-            draft.phase = "awaiting_otp";
-            const phoneE164 = draft.phoneE164 || (await actorPhoneE164(input.actorUserId, input.phone));
-            draft.phoneE164 = phoneE164;
-
-            await saveDraft(input.phone, draft);
-
-            // Async — do not block WhatsApp typing on Chromium
-            void startRideBrowserLogin({
-                familyId: input.familyId,
-                userId: input.actorUserId,
-                draft,
-            }).catch((err) => {
-                console.warn(
-                    "ride browser login background failed:",
-                    err instanceof Error ? err.message : err,
-                );
-            });
-
-            const msg = [
-                `Opening *${providerLabel(draft.provider)}* for:`,
-                `${draft.routeSummary || formatRouteSummary(draft.pickup || {}, draft.drop || {})}`,
-                ``,
-                `${providerLabel(draft.provider)} may text a login code to ${maskE164(phoneE164)} — *paste or forward the 4-digit OTP here*.`,
-                `(I never read your device SMS — only what you send on WhatsApp.)`,
-                ``,
-                `Reply *cancel* to stop — nothing is booked yet.`,
-            ].join("\n");
-            draft.lastMessage = msg;
-            await saveDraft(input.phone, draft);
-            return { text: msg, draft };
-        }
-
-        if (draft.phase === "ask_uber_phone") {
-            return {
-                text:
-                    draft.lastMessage ||
-                    `Is your ${providerLabel(draft.provider)} account on this WhatsApp number? Reply *confirm* or *cancel*.`,
-                draft,
-            };
         }
 
         // Still collecting slots
