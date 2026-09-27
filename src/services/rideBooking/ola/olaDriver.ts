@@ -306,6 +306,7 @@ export class FakeOlaDriver implements OlaDriver {
     private signedIn: boolean;
     private onConfirm = false;
     private cancelled = false;
+    private labels = { pickup: "Rajiv Chowk Gate No.6", drop: "Delhi Airport T3" };
     constructor(
         private scenario: string,
         private timeScale: number,
@@ -319,7 +320,15 @@ export class FakeOlaDriver implements OlaDriver {
     private elapsedSec(): number {
         return this.ride.bookedAt ? ((Date.now() - new Date(this.ride.bookedAt).getTime()) / 1000) * this.timeScale : 0;
     }
-    async open(): Promise<void> {}
+    async open(url: string): Promise<void> {
+        // Echo the route like Ola does (it snaps the pickup to a nearby named point; the test copy keeps the name).
+        try {
+            const q = new URL(url).searchParams;
+            this.labels = { pickup: q.get("pickup_name") || this.labels.pickup, drop: q.get("drop_name") || this.labels.drop };
+        } catch {
+            /* keep defaults */
+        }
+    }
     async rideTypes(): Promise<OlaRideType[]> {
         const f = (n: number) => (this.signedIn ? n : undefined);
         return [
@@ -349,7 +358,7 @@ export class FakeOlaDriver implements OlaDriver {
     async readConfirm(vehicle: string): Promise<OlaConfirmInfo | null> {
         if (!this.onConfirm) return null;
         const fares: Record<string, number> = { Auto: 356, Mini: 312, Bike: 199, "Prime Sedan": 322, "Prime SUV": 477 };
-        return { vehicle, pickup: "Rajiv Chowk Gate No.6", drop: "Delhi Airport T3", fare: fares[vehicle] ?? 312, pay: "Cash" };
+        return { vehicle, pickup: this.labels.pickup, drop: this.labels.drop, fare: fares[vehicle] ?? 312, pay: "Cash" };
     }
     async ensureCash(): Promise<boolean> {
         return true;

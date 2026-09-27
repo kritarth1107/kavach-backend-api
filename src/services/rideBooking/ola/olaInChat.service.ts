@@ -39,7 +39,7 @@ const busy = new Set<string>();
 /** Test numbers only (mock webhook): script Ola's page states and speed the clock up. */
 export function setOlaTestScenario(phone: string, scenario: string, timeScale = 1): boolean {
     if (!isTestPhone(phone)) return false;
-    scenarios.set(phone, { scenario, timeScale: Math.min(Math.max(timeScale, 1), 60) });
+    scenarios.set(phone.replace(/\D/g, ""), { scenario, timeScale: Math.min(Math.max(timeScale, 1), 60) });
     return true;
 }
 
@@ -52,7 +52,7 @@ async function driverFor(input: OlaTurnInput, fresh = false): Promise<OlaDriver>
     if (have) await have.driver.close().catch(() => undefined);
     let d: OlaDriver;
     if (isTestPhone(input.phone)) {
-        const s = scenarios.get(input.phone) || { scenario: "assigned", timeScale: 1 };
+        const s = scenarios.get(input.phone.replace(/\D/g, "")) || { scenario: "assigned", timeScale: 1 };
         d = new FakeOlaDriver(s.scenario, s.timeScale);
     } else {
         const { getOrCreateBrowserProfile } = await import("../../commerceAutomation/browserProfile.service");
@@ -423,7 +423,7 @@ async function book(input: OlaTurnInput, token: string): Promise<void> {
     log("ola_book", { result: r });
     if (r === "failed") return fail(input, token, "book_failed");
     const rideId = randomUUID();
-    const sc = drv.kind === "fake" ? scenarios.get(input.phone) || { scenario: "assigned", timeScale: 1 } : null;
+    const sc = drv.kind === "fake" ? scenarios.get(input.phone.replace(/\D/g, "")) || { scenario: "assigned", timeScale: 1 } : null;
     const c = cur.ola!.confirm!;
     const doc = await OlaRide.create({
         rideId,
@@ -557,6 +557,10 @@ async function cancelOnOla(doc: IOlaRide, drv: OlaDriver, cfg: RideConfig): Prom
     if (attempts >= 45) {
         await OlaRide.updateOne({ rideId: doc.rideId }, { $set: { status: "failed", endedAt: new Date(), cancelAttempts: attempts } });
         log("ola_cancel_gave_up", { rideId: doc.rideId });
+        const hi = /^hi/i.test(String(lang || ""));
+        const link = olaLink(doc.pickup as RidePlace, doc.drop as RidePlace) || "https://book.olacabs.com/";
+        await setDraftPhase(doc.phone, doc.rideId, null);
+        await send(doc, hi ? `Maaf kijiye 🙏 Main Ola par request band nahi kar paayi. Ola app mein kholkar ise cancel kar dijiye: ${link}` : `I'm sorry 🙏 I couldn't stop the request on Ola. Please open the Ola app and cancel it there: ${link}`);
         return;
     }
     if (attempts >= 3 && !doc.cancelNotifiedStuck) {
