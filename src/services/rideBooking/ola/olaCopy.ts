@@ -14,6 +14,23 @@ const CAB_TYPES = new Set(["Mini", "Prime Sedan", "Prime SUV", "Prime Plus", "El
 
 const hiOf = (lang?: string | null) => /^hi/i.test(String(lang || ""));
 
+export type OlaFailReason =
+    | "generic" | "not_cash" | "no_cash_option" | "no_rides" | "no_map_point" | "sign_in_code" | "code_wrong_3x"
+    | "no_fare" | "book_failed" | "page_changed";
+/** [English, Hinglish] — the specific, honest reason, always saying nothing was booked. */
+export const OLA_FAIL_REASON: Record<OlaFailReason, [string, string]> = {
+    generic: ["I couldn't finish this on Ola right now, so nothing was booked 🙏", "Ola par abhi yeh poora nahi ho paaya, isliye kuch book nahi kiya 🙏"],
+    not_cash: ["Ola wouldn't let me switch the payment to cash, so I didn't book anything 🙏", "Ola par payment cash par nahi ho paaya, isliye maine kuch book nahi kiya 🙏"],
+    no_cash_option: ["Ola isn't offering cash for this ride, so I didn't book anything 🙏", "Ola is ride ke liye cash ka option nahi de raha, isliye maine kuch book nahi kiya 🙏"],
+    no_rides: ["Ola isn't showing rides for this route right now 🙏", "Ola abhi is raaste ke liye gaadiyan nahi dikha raha 🙏"],
+    no_map_point: ["I couldn't find this pickup on Ola's map 🙏", "Ola ke map par yeh pickup nahi mil paaya 🙏"],
+    sign_in_code: ["Ola didn't send the sign-in code this time, so nothing was booked 🙏", "Ola ne is baar sign in ka code nahi bheja, isliye kuch book nahi hua 🙏"],
+    code_wrong_3x: ["Ola didn't accept the code three times, so I stopped — nothing was booked 🙏", "Ola ne teen baar code nahi maana, isliye maine rok diya — kuch book nahi hua 🙏"],
+    no_fare: ["I couldn't read the exact fare on Ola, so I didn't book 🙏", "Ola par sahi kiraya nahi dikh paaya, isliye book nahi kiya 🙏"],
+    book_failed: ["Ola didn't take the booking, so nothing was booked 🙏", "Ola ne booking nahi li, isliye kuch book nahi hua 🙏"],
+    page_changed: ["Ola's page changed midway, so I stopped — nothing was booked 🙏", "Ola ka page beech mein badal gaya, isliye maine rok diya — kuch book nahi hua 🙏"],
+};
+
 /** "₹312" / "₹ 1,204" → 312 / 1204 */
 export function parseRupees(s: string): number | undefined {
     const m = s.match(/₹\s?([\d,]{2,7})/);
@@ -67,9 +84,15 @@ export function pickRideType(text: string, shown: OlaRideType[]): OlaRideType | 
 
 /** Confirm-ride page: PICKUP / DROP / FARE / PAY BY labels followed by their values. */
 export function parseConfirm(lines: string[], vehicle: string): OlaConfirmInfo {
+    // A value is the next line that is not itself a label (a hidden stale card can read "PICKUP", "DROP").
+    const LABEL = /^(pickup|drop|fare|pay by|coupon|total fare)$/i;
     const after = (label: RegExp) => {
-        const i = lines.findIndex((l) => label.test(l.trim()));
-        return i >= 0 ? lines.slice(i + 1).find((l) => l.trim()) : undefined;
+        for (let i = lines.length - 1; i >= 0; i--) {
+            if (!label.test(lines[i]!.trim())) continue;
+            const v = lines[i + 1]?.trim();
+            if (v && !LABEL.test(v)) return v;
+        }
+        return undefined;
     };
     const fareLine = after(/^fare$/i);
     return {
@@ -239,18 +262,20 @@ export const OlaMsg = {
             ? `Aapki Ola ride chalu hai${d.plate ? ` — *${d.plate}*` : ""}${d.otp ? `, OTP *${d.otp}*` : ""}. Cancel karna ho to *cancel* likhiye.`
             : `Your Ola ride is on${d.plate ? ` — *${d.plate}*` : ""}${d.otp ? `, OTP *${d.otp}*` : ""}. Say *cancel* to cancel it.`,
 
-    failed(lang: string | null | undefined, olaLink: string | null, uberLink: string | null, rapidoLink: string | null = null): string {
+    /** One warm message: the specific reason, then the app links. Never two stacked failure lines. */
+    failed(lang: string | null | undefined, olaLink: string | null, uberLink: string | null, rapidoLink: string | null = null, reason: OlaFailReason = "generic"): string {
         const hi = hiOf(lang);
         return [
-            hi ? "Ola par yeh abhi nahi ho paaya 🙏" : "I couldn't get this done on Ola right now 🙏",
-            olaLink ? (hi ? `Ola app mein seedha: ${olaLink}` : `Book directly in the Ola app: ${olaLink}`) : "",
-            uberLink ? (hi ? `Ya Uber: ${uberLink}` : `Or Uber: ${uberLink}`) : "",
-            rapidoLink ? (hi ? `Ya Rapido: ${rapidoLink}` : `Or Rapido: ${rapidoLink}`) : "",
+            OLA_FAIL_REASON[reason][hi ? 1 : 0],
+            "",
+            hi ? "Aap khud app mein book kar sakte hain — raasta pehle se bhara hai:" : "You can book it yourself — the route is already filled in:",
+            olaLink ? `*Ola*: ${olaLink}` : "",
+            uberLink ? `*Uber*: ${uberLink}` : "",
+            rapidoLink ? `*Rapido*: ${rapidoLink}` : "",
             hi ? "Jab tak aap app mein confirm nahi karte, kuch book nahi hota." : "Nothing is booked until you confirm in the app.",
-        ].filter(Boolean).join("\n");
+        ].filter((x, k) => x || k === 1).join("\n");
     },
-    notCash: (lang?: string | null) =>
-        hiOf(lang) ? "Ola par cash payment chun nahi paayi, isliye book nahi kiya 🙏" : "I couldn't set cash payment on Ola, so I didn't book 🙏",
+    notCash: (lang?: string | null) => OLA_FAIL_REASON.not_cash[hiOf(lang) ? 1 : 0],
     links(lang: string | null | undefined, uber: string | null, rapido: string | null): string {
         const hi = hiOf(lang);
         return [

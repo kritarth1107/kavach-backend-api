@@ -18,7 +18,15 @@ import {
 
 export type LoginStart = "otp_sent" | "failed" | "blocked";
 export type OtpResult = "confirm" | "list" | "invalid" | "failed";
-export type BookResult = "searching" | "assigned" | "unknown" | "failed";
+export type BookResult = "searching" | "assigned" | "unknown" | "failed" | "not_cash";
+/** Cash is verified by reading Ola's payment picker back after selecting it. */
+export type CashResult = {
+    ok: boolean;
+    reason?: "no_cash_option" | "select_failed" | "no_selector";
+    /** What the picker shows now, and the choices it offered (digits masked). */
+    selected?: string;
+    options?: string[];
+};
 
 export interface OlaDriver {
     readonly kind: "real" | "fake";
@@ -30,7 +38,7 @@ export interface OlaDriver {
     startLogin(phone10: string): Promise<LoginStart>;
     submitOtp(code: string): Promise<OtpResult>;
     readConfirm(vehicle: string): Promise<OlaConfirmInfo | null>;
-    ensureCash(): Promise<boolean>;
+    ensureCash(): Promise<CashResult>;
     book(): Promise<BookResult>;
     status(): Promise<{ state: OlaPageState; driver?: OlaDriverInfo }>;
     /** Press Ola's own cancel control and verify on the page that it is cancelled. */
@@ -38,6 +46,8 @@ export interface OlaDriver {
     /** Reopen the live ride after a restart (saved sign-in). */
     reattach(): Promise<boolean>;
     storageState(): Promise<string | null>;
+    /** Failure snapshot (masked screenshot + visible text) for the family dashboard; real page only. */
+    diagnose?(meta: { familyId: string; userId: string; recipientUserId: string; stage: string; reason: string }): Promise<void>;
     close(): Promise<void>;
 }
 
@@ -57,6 +67,76 @@ const DEEP_TEXT_JS = `(() => {
   if (document.body) visit(document.body);
   return out;
 })()`;
+
+/**
+ * Only what is on screen: Ola's single-page app keeps earlier screens in the DOM, hidden
+ * (a stale "PICKUP / DROP" card sits before the real one), so parsing reads visible text.
+ */
+const VISIBLE_TEXT_JS = `(() => {
+  const out = [];
+  const shown = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1 || r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return false;
+    for (let e = el; e; e = e.parentElement || (e.getRootNode && e.getRootNode().host)) {
+      const s = getComputedStyle(e);
+      if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+    }
+    return true;
+  };
+  const visit = (n) => {
+    if (n.nodeType === 3) { const t = (n.textContent || "").trim(); if (t && shown(n.parentElement)) out.push(t); return; }
+    if (n.tagName && /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|OPTION)$/.test(n.tagName)) return;
+    if (n.tagName === "SELECT") { const o = n.options[n.selectedIndex]; if (o && shown(n)) out.push(o.text.trim()); return; }
+    if (n.shadowRoot) visit(n.shadowRoot);
+    n.childNodes.forEach(visit);
+  };
+  if (document.body) visit(document.body);
+  return out;
+})()`;
+
+/**
+ * Ola's payment picker (seen live 28 Sep 2026): a native <select id="paymentSelector" class="ola-select
+ * pay-select"> inside a shadow root, options like {value:"1", text:"Cash"}. Its option texts are in
+ * the DOM whether selected or not, so reading "the line after PAY BY" is not the selected method.
+ */
+const PAY_READ_JS = `(() => {
+  let sel = null;
+  const find = (r) => {
+    if (sel) return;
+    for (const e of r.querySelectorAll("select")) {
+      if (e.id === "paymentSelector" || /pay/i.test(e.className || "") || /pay/i.test(e.id || "")) { sel = e; return; }
+    }
+    for (const e of r.querySelectorAll("*")) if (e.shadowRoot) find(e.shadowRoot);
+  };
+  find(document);
+  if (!sel) return null;
+  const o = sel.options[sel.selectedIndex];
+  return { selected: o ? o.text.trim() : "", value: sel.value, options: [...sel.options].map((x) => ({ value: x.value, text: x.text.trim(), disabled: x.disabled })) };
+})()`;
+
+/** Fallback when Playwright's selectOption can't reach it: set the value and fire the events a user's pick fires. */
+const PAY_SET_JS = (value: string) => `(() => {
+  let sel = null;
+  const find = (r) => {
+    if (sel) return;
+    for (const e of r.querySelectorAll("select")) {
+      if (e.id === "paymentSelector" || /pay/i.test(e.className || "") || /pay/i.test(e.id || "")) { sel = e; return; }
+    }
+    for (const e of r.querySelectorAll("*")) if (e.shadowRoot) find(e.shadowRoot);
+  };
+  find(document);
+  if (!sel) return false;
+  sel.value = ${JSON.stringify(value)};
+  sel.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+  sel.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  return true;
+})()`;
+
+const maskDigits = (s: string) => s.replace(/\d{3,}/g, "•••").slice(0, 40);
+export const isCashLabel = (s?: string | null) => /^\s*cash\s*$/i.test(String(s || ""));
+
+type PayState = { selected: string; value: string; options: Array<{ value: string; text: string; disabled: boolean }> };
 
 export class PlaywrightOlaDriver implements OlaDriver {
     readonly kind = "real" as const;
@@ -90,10 +170,15 @@ export class PlaywrightOlaDriver implements OlaDriver {
     private async lines(): Promise<string[]> {
         const p = await this.ensure();
         // A plain string: bundlers inject helpers into compiled functions that don't exist in the page.
-        const raw = await p
-            .evaluate<string[]>(DEEP_TEXT_JS)
-            .catch(() => [] as string[]);
-        return raw.map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean);
+        const clean = (a: string[]) => a.map((s) => s.replace(/\s+/g, " ").trim()).filter(Boolean);
+        const vis = clean(await p.evaluate<string[]>(VISIBLE_TEXT_JS).catch(() => [] as string[]));
+        if (vis.length >= 3) return vis;
+        return clean(await p.evaluate<string[]>(DEEP_TEXT_JS).catch(() => [] as string[]));
+    }
+
+    private async payState(): Promise<PayState | null> {
+        const p = await this.ensure();
+        return (await p.evaluate<PayState | null>(PAY_READ_JS).catch(() => null)) || null;
     }
 
     private async seen(re: RegExp | string, exact = false): Promise<boolean> {
@@ -210,18 +295,41 @@ export class PlaywrightOlaDriver implements OlaDriver {
         return c.fare ? c : null;
     }
 
-    async ensureCash(): Promise<boolean> {
-        const c = parseConfirm(await this.lines(), "");
-        if (/cash/i.test(c.pay || "")) return true;
+    async ensureCash(): Promise<CashResult> {
         const p = await this.ensure();
-        if (c.pay) await p.getByText(c.pay, { exact: true }).first().click({ timeout: 4000 }).catch(() => undefined);
-        await p.getByText("Cash", { exact: true }).first().click({ timeout: 4000 }).catch(() => undefined);
-        await p.waitForTimeout(1500);
-        return /cash/i.test(parseConfirm(await this.lines(), "").pay || "");
+        const opts = (st: PayState | null) => st?.options.map((o) => maskDigits(o.text));
+        let st = await this.payState();
+        if (!st) {
+            // No picker found: only trust a visible "PAY BY  Cash".
+            const c = parseConfirm(await this.lines(), "");
+            return isCashLabel(c.pay) ? { ok: true, selected: "Cash" } : { ok: false, reason: "no_selector", selected: c.pay ? maskDigits(c.pay) : undefined };
+        }
+        if (isCashLabel(st.selected)) return { ok: true, selected: st.selected, options: opts(st) };
+        const cash = st.options.find((o) => isCashLabel(o.text) && !o.disabled);
+        if (!cash) return { ok: false, reason: "no_cash_option", selected: maskDigits(st.selected), options: opts(st) };
+        for (let attempt = 0; attempt < 3; attempt++) {
+            if (attempt < 2) {
+                await p
+                    .locator("select#paymentSelector, select.pay-select")
+                    .first()
+                    .selectOption({ value: cash.value }, { timeout: 5000 })
+                    .catch(() => undefined);
+            } else {
+                await p.evaluate(PAY_SET_JS(cash.value)).catch(() => false);
+            }
+            await p.waitForTimeout(1500);
+            st = await this.payState();
+            if (st && isCashLabel(st.selected)) return { ok: true, selected: st.selected, options: opts(st) };
+        }
+        return { ok: false, reason: "select_failed", selected: st ? maskDigits(st.selected) : undefined, options: opts(st) };
     }
 
     async book(): Promise<BookResult> {
         const p = await this.ensure();
+        // Last check right before the tap: Cash must still be the chosen payment.
+        const st = await this.payState();
+        const visPay = parseConfirm(await this.lines(), "").pay;
+        if (st ? !isCashLabel(st.selected) : !isCashLabel(visPay)) return "not_cash";
         await p.getByText(/confirm\s*&\s*book/i).first().click({ timeout: 6000 }).catch(() => undefined);
         let res: BookResult = "unknown";
         const ok = await this.waitFor(async () => {
@@ -277,6 +385,11 @@ export class PlaywrightOlaDriver implements OlaDriver {
         } catch {
             return false;
         }
+    }
+
+    async diagnose(meta: { familyId: string; userId: string; recipientUserId: string; stage: string; reason: string }): Promise<void> {
+        const { captureCheckoutDiagnostic } = await import("../../commerceAutomation/checkoutDiagnostics.service");
+        await captureCheckoutDiagnostic(this.page, { ...meta, flow: "checkout" }).catch(() => null);
     }
 
     async storageState(): Promise<string | null> {
@@ -360,8 +473,10 @@ export class FakeOlaDriver implements OlaDriver {
         const fares: Record<string, number> = { Auto: 356, Mini: 312, Bike: 199, "Prime Sedan": 322, "Prime SUV": 477 };
         return { vehicle, pickup: this.labels.pickup, drop: this.labels.drop, fare: fares[vehicle] ?? 312, pay: "Cash" };
     }
-    async ensureCash(): Promise<boolean> {
-        return true;
+    async ensureCash(): Promise<CashResult> {
+        if (this.scenario === "no_cash") return { ok: false, reason: "no_cash_option", selected: "Ola Money", options: ["Ola Money", "UPI"] };
+        if (this.scenario === "cash_stuck") return { ok: false, reason: "select_failed", selected: "Ola Money", options: ["Ola Money", "Cash"] };
+        return { ok: true, selected: "Cash", options: ["Ola Money", "Cash"] };
     }
     async book(): Promise<BookResult> {
         this.cancelled = false;

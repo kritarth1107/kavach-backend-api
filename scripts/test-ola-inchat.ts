@@ -27,10 +27,19 @@ ok("lookup: drops 'near …' part", gc.every((q) => !/NEAR TULIP/.test(q) || q =
 ok("lookup: never city+state only", !gc.some((q) => /^RAIPUR, CHHATTISGARH/.test(q)), gc);
 ok("lookup: locality + city tried", gc.includes("LABHANDIH, RAIPUR"), gc);
 // Live ride: only ride talk is captured; everything else goes to the normal chat.
-void import("../src/services/rideBooking/ola/olaInChat.service").then(({ isOlaLiveRideTalk: talk }) => {
-    for (const t of ["driver kahan hai?", "cancel", "gaadi kab aayegi", "where is my cab", "OTP kya hai", "ruko"]) ok(`ride talk: ${t}`, talk(t));
-    for (const t of ["maine khana kha liya", "mera BP aaj 130/85 aaya", "good morning", "dawai le li", "dawai kab leni hai?", "beta aaya tha"]) ok(`not ride talk: ${t}`, !talk(t));
-});
+// Live 28 Sep: a hidden stale "PICKUP / DROP" card sits before the real one; payment is a <select>.
+{
+    const stale = ["Ride Details", "SOS", "PICKUP", "DROP", "Got it", "Mini", "PICKUP", "Current location", "DROP", "Raipur Airport", "FARE", "₹289", "PAY BY", "Cash", "Confirm & Book"];
+    const pc = parseConfirm(stale, "Mini");
+    ok("confirm: skips stale label-only card", pc.pickup === "Current location" && pc.drop === "Raipur Airport" && pc.fare === 289 && pc.pay === "Cash", pc);
+}
+// One failure message: specific reason + links, never two stacked failure lines.
+for (const lang of ["hinglish", "en"]) {
+    const m = OlaMsg.failed(lang, "https://book.olacabs.com/x", "https://m.uber.com/ul/x", "https://m.rapido.bike/x", "not_cash");
+    ok(`${lang}: single failure message w/ reason + 3 links`, (m.match(/🙏/g) || []).length === 1 && /cash/i.test(m) && /olacabs/.test(m) && /uber/.test(m) && /rapido/.test(m), m);
+    ok(`${lang}: no generic line stacked`, !/yeh abhi nahi ho paaya|couldn't get this done/i.test(m), m);
+}
+ok("hinglish reason is Hinglish", /isliye maine kuch book nahi kiya/.test(OlaMsg.failed("hinglish", null, null, null, "not_cash")));
 const ordered = orderRideTypes(li, "cab");
 ok("cab ask: cab types first", ordered[0]!.name === "Mini" && ordered.slice(-2).map((t) => t.name).join() === "Auto,Bike", ordered.map((t) => t.name));
 ok("auto ask: auto first", orderRideTypes(li, "auto")[0]!.name === "Auto");
@@ -83,7 +92,23 @@ ok("Hinglish searching line", /Driver dhoondh rahi hoon 🙏/.test(OlaMsg.search
 ok("caregiver line", /booked an \*Ola Mini\*/.test(OlaMsg.caregiverBooked("Kamla", c, D)) && /DL 1C AB 1234/.test(OlaMsg.caregiverBooked("Kamla", c, D)));
 
 // Scripted Ola (test numbers) follows the lifecycle over (accelerated) time
+async function talkChecks() {
+    const { isOlaLiveRideTalk: talk } = await import("../src/services/rideBooking/ola/olaInChat.service");
+    for (const t of ["driver kahan hai?", "cancel", "gaadi kab aayegi", "where is my cab", "OTP kya hai", "ruko"]) ok(`ride talk: ${t}`, talk(t));
+    for (const t of ["maine khana kha liya", "mera BP aaj 130/85 aaya", "good morning", "dawai le li", "dawai kab leni hai?", "beta aaya tha"]) ok(`not ride talk: ${t}`, !talk(t));
+}
+async function cashChecks() {
+    const { isCashLabel, FakeOlaDriver: F } = await import("../src/services/rideBooking/ola/olaDriver");
+    ok("cash label exact", isCashLabel("Cash") && isCashLabel(" cash ") && !isCashLabel("Ola Money") && !isCashLabel("Cash + Ola Money"));
+    const nc = await new F("no_cash", 1).ensureCash();
+    ok("fake no_cash → no_cash_option", !nc.ok && nc.reason === "no_cash_option", nc);
+    const cs = await new F("cash_stuck", 1).ensureCash();
+    ok("fake cash_stuck → select_failed", !cs.ok && cs.reason === "select_failed", cs);
+    ok("fake default → cash verified", (await new F("assigned", 1).ensureCash()).ok);
+}
 async function lifecycle() {
+    await cashChecks();
+    await talkChecks();
     const at = (sec: number) => ({ bookedAt: new Date(Date.now() - sec * 1000), cancelAttempts: 0 });
     const a = new FakeOlaDriver("assigned", 1, at(10));
     ok("fake: searching early", (await a.status()).state === "searching");

@@ -4,6 +4,7 @@
  * Evidence: /workspace/cabs-2026-09-27/REPORT.md (tested link formats, city coverage).
  */
 import type { RidePlace } from "./types";
+import { CURRENT_LOCATION, displayLabel } from "./placeLabel";
 
 export type RideService = "uber" | "ola" | "rapido";
 export type Vehicle = "cab" | "auto" | "bike";
@@ -228,11 +229,11 @@ export function chooseServices(input: {
 // ── Links (formats verified in the feasibility report) ─────────────────────────────────────
 
 function textFor(p?: RidePlace | null): string {
-    const full = p?.address || p?.shortLabel || p?.raw || "";
+    const full = displayLabel(p?.address) || displayLabel(p?.shortLabel) || displayLabel(p?.raw) || (p?.lat != null ? CURRENT_LOCATION : "");
     return full.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 4).join(", ");
 }
 export function nameFor(p?: RidePlace | null): string {
-    const v = (p?.shortLabel || p?.address || p?.raw || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 2).join(", ");
+    const v = (displayLabel(p?.shortLabel) || displayLabel(p?.address) || displayLabel(p?.raw) || (p?.lat != null ? CURRENT_LOCATION : "")).split(",").map((x) => x.trim()).filter(Boolean).slice(0, 2).join(", ");
     return v.length > 60 ? `${v.slice(0, 59)}…` : v;
 }
 /** encodeURIComponent leaves ( ) ! ' * — Rapido's router breaks on parentheses. */

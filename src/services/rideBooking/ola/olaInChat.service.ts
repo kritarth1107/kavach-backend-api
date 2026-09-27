@@ -17,8 +17,8 @@ import { isTestPhone } from "../../smokeFixtures.service";
 import { loadRideConfig } from "../rideConfig";
 import { geocodePlace } from "../geoResolve.service";
 import { olaLink, rapidoLink, serviceChain, uberLink, type CityTier, type RideConfig, type Vehicle } from "../rideServices";
-import { geocodeCandidates, OlaMsg, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
-import { FakeOlaDriver, PlaywrightOlaDriver, type OlaDriver } from "./olaDriver";
+import { geocodeCandidates, OlaMsg, type OlaFailReason, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
+import { type CashResult, FakeOlaDriver, PlaywrightOlaDriver, type OlaDriver } from "./olaDriver";
 
 export type OlaTurnInput = {
     phone: string;
@@ -109,8 +109,8 @@ function phone10(phone: string): string | null {
     return /^91\d{10}$/.test(d) ? d.slice(2) : null;
 }
 
-function fallbackText(lang: string | null | undefined, p?: RidePlace, d?: RidePlace): string {
-    return OlaMsg.failed(lang, olaLink(p, d), uberLink(p, d), rapidoLink(p, d));
+function fallbackText(lang: string | null | undefined, p?: RidePlace, d?: RidePlace, reason: OlaFailReason = "generic"): string {
+    return OlaMsg.failed(lang, olaLink(p, d), uberLink(p, d), rapidoLink(p, d), reason);
 }
 
 /** Run background work after the reply has gone out (acks always arrive first). */
@@ -173,7 +173,7 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
             await dropDriver(input.phone);
             const hi = /^hi/i.test(String(lang || ""));
             const pinTip = url ? "" : hi ? "\n\nAgar aap WhatsApp par apni location 📍 bhej dein, to main Ola yahin chat mein book kar sakti hoon." : "\n\nIf you share your location 📍 here on WhatsApp, I can book Ola right in this chat.";
-            await send(input, fallbackText(lang, draft.pickup, draft.drop) + pinTip);
+            await send(input, fallbackText(lang, draft.pickup, draft.drop, url ? "no_rides" : "no_map_point") + pinTip);
             return;
         }
         cur.phase = "ola_pick_type";
@@ -355,13 +355,25 @@ async function chooseType(input: OlaTurnInput, draft: RideDraft, type: string, r
     return { text: OlaMsg.confirmSignIn(lang, type, draft.ola.phoneE164 || e164(input.phone)), draft };
 }
 
-async function fail(input: OlaTurnInput, token: string, why: string, extra?: string): Promise<void> {
+/** Internal step → the reason the elder is told (one message, reason + links). */
+function reasonFor(why: string): OlaFailReason {
+    if (why === "not_cash" || why === "no_cash_option" || why === "no_fare" || why === "book_failed" || why === "code_wrong_3x") return why;
+    if (why.startsWith("login_") || why === "otp_failed") return "sign_in_code";
+    if (why === "otp_invalid_3x") return "code_wrong_3x";
+    if (/reopen|choose|no_login_page|no_confirm/.test(why)) return "page_changed";
+    return "generic";
+}
+
+async function fail(input: OlaTurnInput, token: string, why: string, detail?: Record<string, unknown>): Promise<void> {
     const cur = await current(input.phone, token);
     if (!cur) return;
-    log("ola_failed", { why });
+    log("ola_failed", { why, ...(detail || {}) });
+    // Keep what Ola's page showed (masked) so a live failure can be diagnosed from the dashboard.
+    const d = drivers.get(input.phone)?.driver;
+    if (d?.diagnose) await d.diagnose({ familyId: input.familyId, userId: input.actorUserId, recipientUserId: input.recipientUserId, stage: `ola_${why}`, reason: JSON.stringify(detail || {}).slice(0, 300) }).catch(() => undefined);
     await saveDraft(input.phone, null);
     await dropDriver(input.phone);
-    await send(input, [extra, fallbackText(cur.ola?.lang, cur.pickup, cur.drop)].filter(Boolean).join("\n\n"));
+    await send(input, fallbackText(cur.ola?.lang, cur.pickup, cur.drop, reasonFor(why)));
 }
 
 async function signIn(input: OlaTurnInput, token: string): Promise<void> {
@@ -423,7 +435,10 @@ async function showConfirmCard(input: OlaTurnInput, token: string, drv: OlaDrive
     const lang = cur.ola?.lang ?? null;
     const info = await drv.readConfirm(cur.ola!.chosen!).catch(() => null);
     if (!info?.fare) return fail(input, token, "no_fare");
-    if (!(await drv.ensureCash().catch(() => false))) return fail(input, token, "not_cash", OlaMsg.notCash(lang));
+    // Cash only: select it on Ola's payment picker and read it back; never book otherwise.
+    const cash: CashResult = await drv.ensureCash().catch((): CashResult => ({ ok: false, reason: "select_failed" }));
+    log("ola_cash", { ok: cash.ok, reason: cash.ok ? undefined : cash.reason, selected: cash.selected, options: cash.options });
+    if (!cash.ok) return fail(input, token, cash.reason === "no_cash_option" ? "no_cash_option" : "not_cash", { selected: cash.selected, options: cash.options });
     const again = await current(input.phone, token);
     if (!again) return;
     again.phase = "ola_confirm_book";
@@ -439,6 +454,7 @@ async function book(input: OlaTurnInput, token: string): Promise<void> {
     const drv = await driverFor(input);
     const r = await drv.book().catch(() => "failed" as const);
     log("ola_book", { result: r });
+    if (r === "not_cash") return fail(input, token, "not_cash", { at: "book" });
     if (r === "failed") return fail(input, token, "book_failed");
     const rideId = randomUUID();
     const sc = drv.kind === "fake" ? scenarios.get(input.phone.replace(/\D/g, "")) || { scenario: "assigned", timeScale: 1 } : null;

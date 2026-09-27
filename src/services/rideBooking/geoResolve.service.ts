@@ -6,6 +6,7 @@
 import type { RidePlace } from "./types";
 
 import { airportPlace } from "./airports";
+import { CURRENT_LOCATION, hasCoords } from "./placeLabel";
 const NOMINATIM = "https://nominatim.openstreetmap.org";
 const UA = "KavachCare-SaheliRides/1.0 (elder-care; contact=support@kavach.care)";
 
@@ -230,6 +231,15 @@ export async function geocodePlace(query: string): Promise<GeoResult> {
 
 /** Reverse-geocode a WhatsApp location pin. */
 export async function reverseGeocode(lat: number, lng: number): Promise<GeoResult> {
+    const r = await reverseGeocodeRaw(lat, lng);
+    // A lookup that only echoes the numbers back is no name at all.
+    if (hasCoords(r.place.address) || hasCoords(r.place.shortLabel)) {
+        return { ...r, ok: false, place: { lat, lng, shortLabel: CURRENT_LOCATION, source: "location_pin" }, error: r.error || "no_name" };
+    }
+    return r;
+}
+
+async function reverseGeocodeRaw(lat: number, lng: number): Promise<GeoResult> {
     const googleKey = (process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEOCODING_API_KEY || "").trim();
     const mapbox = (process.env.MAPBOX_ACCESS_TOKEN || "").trim();
     try {
@@ -243,7 +253,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<GeoResul
             place: {
                 lat,
                 lng,
-                shortLabel: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+                shortLabel: CURRENT_LOCATION,
                 source: "location_pin",
             },
             error: err instanceof Error ? err.message : "reverse_failed",

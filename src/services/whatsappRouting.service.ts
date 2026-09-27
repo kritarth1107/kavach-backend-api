@@ -1555,7 +1555,9 @@ async function dispatchRoutedTurn(a: {
         const pf = parseFromTo(text);
         if (pf.pickup || pf.drop) route = { ...route, ridePickup: pf.pickup ?? null, rideDrop: pf.drop ?? null };
     }
-    if (route.ridePickup || route.rideDrop) {
+    // A shared location pin goes to the ride flow as-is (the model's copy of it is just numbers).
+    const pinShared = /\[location\s+lat=/i.test(text);
+    if (!pinShared && (route.ridePickup || route.rideDrop)) {
         // Saved family places first ("clinic se ghar" → Clinic → Home), then "near my city".
         const { listPlaces, matchPlace, pickDefault } = await import("./familyAddressBook.service");
         const { cityOf } = await import("./commerceAutomation/kavachAddress");

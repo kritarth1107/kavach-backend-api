@@ -2,6 +2,7 @@
  * Pure parsers for ride slot-fill: intent, from/to text, WhatsApp location pins, cancel.
  */
 import { RIDE_CANCEL_RE, RIDE_INTENT_RE, type RidePlace, type RideProvider } from "./types";
+import { CURRENT_LOCATION, coordsFromText, displayLabel } from "./placeLabel";
 
 /** Encoded by metaWhatsApp extractInboundText for location messages. */
 export const LOCATION_PIN_RE =
@@ -32,9 +33,10 @@ export function parseLocationPin(text: string): RidePlace | null {
     const lat = Number(m[1]);
     const lng = Number(m[2]);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    const name = (m[3] || "").trim();
-    const address = (m[4] || "").trim();
-    const shortLabel = name || address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+    const name = displayLabel(m[3]);
+    const address = displayLabel(m[4]);
+    // No name from WhatsApp: looked up from the map point later; never show the numbers.
+    const shortLabel = name || address || CURRENT_LOCATION;
     return {
         lat,
         lng,
@@ -93,20 +95,23 @@ export function isBareAffirmation(text: string): boolean {
 
 export function formatRouteSummary(pickup: RidePlace, drop: RidePlace): string {
     const from =
-        pickup.shortLabel ||
-        pickup.address ||
-        pickup.raw ||
-        (pickup.lat != null ? `${pickup.lat.toFixed(4)}, ${pickup.lng?.toFixed(4)}` : "pickup");
+        displayLabel(pickup.shortLabel) ||
+        displayLabel(pickup.address) ||
+        displayLabel(pickup.raw) ||
+        (pickup.lat != null ? CURRENT_LOCATION : "pickup");
     const to =
-        drop.shortLabel ||
-        drop.address ||
-        drop.raw ||
-        (drop.lat != null ? `${drop.lat.toFixed(4)}, ${drop.lng?.toFixed(4)}` : "drop");
+        displayLabel(drop.shortLabel) ||
+        displayLabel(drop.address) ||
+        displayLabel(drop.raw) ||
+        (drop.lat != null ? CURRENT_LOCATION : "drop");
     return `Got the route: from ${from} to ${to}.`;
 }
 
 export function placeFromText(raw: string): RidePlace {
     const trimmed = raw.trim().slice(0, 200);
+    // Map numbers typed or echoed as text ("21.2403, 81.6935, RAIPUR") are a pin, not a place name.
+    const c = coordsFromText(trimmed);
+    if (c) return { lat: c.lat, lng: c.lng, raw: trimmed, shortLabel: CURRENT_LOCATION, source: "location_pin" };
     return {
         raw: trimmed,
         shortLabel: trimmed,
