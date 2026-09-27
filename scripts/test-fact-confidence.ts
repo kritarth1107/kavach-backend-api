@@ -82,6 +82,10 @@ eq("contradicted routine: 0.75 → 0.40", F(c3.facts, "Walks").confidence, 0.4);
 const rev = applyReflection(r.facts, [{ op: "revise", id: med.id, category: "medicines", text: "Stopped Telma 40", confidence: 0.8, by: "elder" }], { ...at(1) });
 eq("Gemini 'revise' on a medication → question, text kept", [F(rev.facts, "Takes Telma").text, rev.questions.length], ["Takes Telma 40 for BP every morning", 1]);
 
+const g0 = F(r.facts, "Might have");
+const c4 = applyReflection(r.facts, [], { ...at(1), activeDay: true, judgements: [{ id: g0.id, verdict: "contradicts", by: "elder", evidence: "phone pe sab saaf sunai deta hai" }] });
+eq("contradicted Gemini guess (health class, unproven) just drops — no question", [F(c4.facts, "Might have").status, c4.questions.length], ["faded", 0]);
+
 // 4) Silent days never count against; support resets + reinforces by strength.
 const s1 = applyReflection(r.facts, [], { ...at(1), activeDay: true, judgements: [{ id: pref.id, verdict: "supports", by: "orders" }] });
 eq("orders support: +0.12", F(s1.facts, "Prefers Amul").confidence, 0.67);

@@ -166,7 +166,9 @@ export function applyReflection(
         f.fadedAt = now;
         f.fadeCount = (f.fadeCount || 0) + 1;
     };
-    const protectedFact = (f: ProfileFact) => permanent(f) || (f.decayClass ? DECAY[f.decayClass].askOnContradiction : false);
+    // Pinned facts, and believed health/medication facts, are never silently changed. A lone Gemini
+    // guess (never above ~0.4, no strong evidence) just drops — no point asking the family about it.
+    const protectedFact = (f: ProfileFact) => permanent(f) || (f.decayClass ? DECAY[f.decayClass].askOnContradiction && ruleFor(f) === DECAY[f.decayClass] : false);
 
     for (const raw of ops.slice(0, 40)) {
         const text = String(raw.text || "").trim().slice(0, 240);
