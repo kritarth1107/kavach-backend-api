@@ -706,7 +706,7 @@ export async function searchGuestCatalog(input: {
             hits: [],
             searched: true,
             unavailableReason:
-                `Live guest prices for ${partner} aren't wired yet. ` +
+                `I can't see live prices on ${partner} yet. ` +
                 `Reply *confirm* to open the site and find the exact item (login/OTP may be asked) — I won't invent a price.`,
             partner,
             query,
