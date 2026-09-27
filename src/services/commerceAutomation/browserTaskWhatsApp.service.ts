@@ -3158,6 +3158,10 @@ async function zeptoLinkedFor(familyId: string): Promise<boolean> {
 async function noLinkNote(input: RoutedInput, missing: McpStore[]): Promise<string> {
     const { MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
     const accounts = [...new Set(missing.map((s) => (s === "zepto" ? "Zepto" : "Swiggy")))];
+    // Once per family+accounts per 6h — not a banner on every message.
+    const key = `${input.familyId}|${accounts.join("+")}`;
+    if (Date.now() - (linkNudged.get(key) || 0) < 6 * 3600_000) return "";
+    linkNudged.set(key, Date.now());
     void logActivity({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
@@ -3168,8 +3172,11 @@ async function noLinkNote(input: RoutedInput, missing: McpStore[]): Promise<stri
         detail: `Link ${accounts.join(" and ")} in the Kavach dashboard → Integrations so orders go through without an OTP.`,
         data: { needsLink: missing, stores: missing.map((s) => MCP_STORE_LABEL[s]) },
     });
-    return `💡 Ask your caregiver to link ${accounts.join(" and ")} in the Kavach app — then I can order without an OTP.`;
+    return input.actorRole === FamilyRole.CARE_RECIPIENT
+        ? `💡 Ask your caregiver to link ${accounts.join(" and ")} in the Kavach app — then I can order without an OTP.`
+        : `💡 Link ${accounts.join(" and ")} in the Kavach app (Integrations) — then I can order without an OTP.`;
 }
+const linkNudged = new Map<string, number>();
 
 async function tryMcpRoute(
     input: RoutedInput,
