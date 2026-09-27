@@ -1353,10 +1353,12 @@ async function unmarkSearch(phone: string, token: number): Promise<void> {
 
 async function pushFollowUp(input: { phone: string; familyId: string; recipientUserId: string }, text: string): Promise<boolean> {
     const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
-    const send = () => pushWhatsAppBrowserFollowUp({ phone: input.phone, familyId: input.familyId, recipientUserId: input.recipientUserId, text }).catch(() => false);
-    if (await send()) return true;
+    const send = (resend: boolean) => pushWhatsAppBrowserFollowUp({ phone: input.phone, familyId: input.familyId, recipientUserId: input.recipientUserId, text, resend }).catch(() => false);
+    if (await send(false)) return true;
     await new Promise((r) => setTimeout(r, 4000));
-    return send(); // one retry — a lost follow-up is exactly the silence we must avoid
+    const ok = await send(true); // one resend — a lost follow-up is exactly the silence we must avoid
+    if (!ok) console.warn(`[guest-search] follow-up undelivered for …${input.phone.slice(-4)} (logged to activity)`);
+    return ok;
 }
 
 function lostSearchCopy(retry?: SearchOffer | null): string {
@@ -3037,7 +3039,7 @@ async function compareSearchCore(
     partners: string[],
     home: RecipientAddress,
     token?: number,
-): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+): Promise<WorkResult> {
     const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
     const results = await Promise.all(
         partners.map((p) =>
@@ -3090,11 +3092,20 @@ async function compareSearchCore(
         .map((p) => (p.rx ? `${partnerLabel(p.partner)}: only prescription medicines matched — send a photo of the prescription for those.` : `${partnerLabel(p.partner)}: nothing matching right now.`));
     if (!shown.length) {
         await saveIfCurrent(input.phone, null, token);
-        const allBlocked = per.every((p) => p.reason && /blocking|didn't load/i.test(p.reason));
-        if (rawAny || !allBlocked) {
+        // A store that didn't load / blocked us means we don't KNOW it's missing — never answer
+        // that with suggested substitutes; say which store failed and offer the next step.
+        const broken = per.filter((p) => p.reason && /blocking|didn't load/i.test(p.reason));
+        if (rawAny || !broken.length) {
             const alt = await notFoundAlternatives(input, query, category, null);
             if (alt.text) return { text: alt.text };
             if (alt.searchQuery) return compareSearchCore(input, category, alt.searchQuery, partners, home, token);
+        }
+        if (broken.length) {
+            const lines = per.map((p) => `• ${p.reason || `${partnerLabel(p.partner)}: nothing matching "${query}".`}`).join("\n");
+            return {
+                text: `I couldn't check every store for "${query}" just now 🙏\n${lines}\n\nWant me to try again?`,
+                offer: { partner: undefined, query, category },
+            };
         }
         return {
             text: `I couldn't find "${query}" near ${whereLabel(home)} 🙏\n${per.map((p) => `• ${p.reason || `${partnerLabel(p.partner)}: nothing matching`}`).join("\n")}\n\nTry another name?`,

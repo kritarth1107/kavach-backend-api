@@ -218,10 +218,12 @@ export async function pushWhatsAppBrowserFollowUp(input: {
     familyId: string;
     recipientUserId: string;
     text: string;
+    /** A resend of the same follow-up: deliver only (already logged + recorded once). */
+    resend?: boolean;
 }): Promise<boolean> {
     const text = input.text.trim();
     if (!text) return false;
-    void logActivity({
+    if (!input.resend) void logActivity({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         kind: "message_out",
@@ -230,11 +232,13 @@ export async function pushWhatsAppBrowserFollowUp(input: {
         data: { source: "browser" },
     });
     // Readable via POST /api/webhooks/whatsapp/mock {"from":…,"peek":true} (confirm-card check).
-    try {
-        const { recordSaheliOutbound } = await import("../whatsappMockPeek.service");
-        recordSaheliOutbound(input.phone, text, "browser");
-    } catch {
-        /* ignore */
+    if (!input.resend) {
+        try {
+            const { recordSaheliOutbound } = await import("../whatsappMockPeek.service");
+            recordSaheliOutbound(input.phone, text, "browser");
+        } catch {
+            /* ignore */
+        }
     }
     try {
         if (isMetaWhatsAppEnabled()) {
