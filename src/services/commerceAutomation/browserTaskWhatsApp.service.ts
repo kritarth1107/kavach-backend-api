@@ -3196,7 +3196,7 @@ async function noLinkNote(input: RoutedInput, missing: McpStore[]): Promise<stri
     });
     return input.actorRole === FamilyRole.CARE_RECIPIENT
         ? `💡 Ask your caregiver to link ${accounts.join(" and ")} in the Kavach app — then I can order without an OTP.`
-        : `💡 Link ${accounts.join(" and ")} in the Kavach app (Integrations) — then I can order without an OTP.`;
+        : `💡 To order without an OTP: open the Kavach dashboard → *Integrations* (left menu, under Account) → tap *Connect* on ${[...new Set(missing.map((s) => (s === "swiggy" ? "Swiggy Food" : MCP_STORE_LABEL[s] || s)))].join(" / ")}.`;
 }
 const linkNudged = new Map<string, number>();
 
