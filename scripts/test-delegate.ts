@@ -33,7 +33,7 @@ eq("offer (same family)", snapshotSession({ pendingOffer: { query: "dolo 650", p
 eq("offer (other family) → none", snapshotSession({ pendingOffer: { query: "dolo", familyId: "f2", at: new Date() } }, "f1"), null);
 eq("title", taskTitle({ kind: "open_task", item: "Dolo 650", partner: "apollo", category: "pharmacy" } as never), "Order Dolo 650 (Apollo)");
 eq("ride title", taskTitle({ kind: "open_task", category: "ride", rideFrom: "Home", rideTo: "Clinic" } as never), "Ride from Home to Clinic");
-eq("phase words", phaseWords("awaiting_confirm"), "confirm card was shown, waiting for her *confirm*");
+eq("phase words", phaseWords("awaiting_confirm"), "confirm card was shown, waiting for *confirm*");
 
 // ── Why tokens ───────────────────────────────────────────────────────────────────────────────
 eq("why token", whyToken("Telma 40 Tablets"), "telma");

@@ -47,7 +47,7 @@ export async function extractOrderContext(input: { orderLog: string; openTask?: 
 - partner: store key (instamart, zepto, blinkit, swiggy, zomato, apollo, pharmeasy, tata_1mg, uber) or null.
 - isMedicine: true for medicines/tablets/syrups/insulin (not vitamins-only snacks).
 - etaMinutes / etaText: only if the log or chat states a delivery time ("arriving in 25 mins", "delivery by tomorrow").
-- why: the REASON / CONTEXT in one short line of plain English, from what the person said ("ran out of BP medicine; doctor said continue", "grandchildren visiting on Sunday", "fever since yesterday"). Only reasons the PERSON (User lines) actually said or clearly implied — never Saheli's own words or guesses; null if none. If an earlier known reason is given and nothing new was said, reuse it.
+- why: the REASON / CONTEXT in one short line of plain English (translate Hindi/Hinglish to English, third person), from what the person said ("ran out of BP medicine; doctor said continue", "grandchildren visiting on Sunday", "fever since yesterday"). Only reasons the PERSON (User lines) actually said or clearly implied — never Saheli's own words or guesses; null if none. If an earlier known reason is given and nothing new was said, reuse it.
 - importance: high for regular/critical medicines, health needs, or anything she said is urgent; else normal.
 ${LANGUAGE_RULE}`,
         [`Order log:\n${input.orderLog.slice(0, 1200)}`, input.openTask ? `What she was doing: ${input.openTask.slice(0, 400)}` : "", input.knownWhy ? `Known earlier reason: ${input.knownWhy}` : "", `Recent chat:\n${input.recentChat.slice(0, 2500) || "(none)"}`].filter(Boolean).join("\n\n"),
@@ -84,7 +84,7 @@ ${LANGUAGE_RULE}`,
 /** The reason behind an important request still in progress (open task). */
 export async function extractWhy(input: { item: string; recentChat: string }): Promise<{ why: string | null; importance: "high" | "normal"; isMedicine: boolean; language: string | null } | null> {
     const p = await call<{ why?: string | null; importance?: string; isMedicine?: boolean; language?: string | null }>(
-        `From the chat, extract WHY the person wants this item: one short plain-English line of the reason/context the PERSON (User lines) actually said or clearly implied ("ran out of BP medicine; doctor said continue", "guests coming tonight") — never Saheli's own words or guesses. null if the person gave no reason. importance=high for regular/critical medicines or health needs or stated urgency. isMedicine=true for medicines.\n${LANGUAGE_RULE}`,
+        `From the chat, extract WHY the person wants this item: one short plain-English line (translate Hindi/Hinglish to English, third person) of the reason/context the PERSON (User lines) actually said or clearly implied ("ran out of BP medicine; doctor said continue", "guests coming tonight") — never Saheli's own words or guesses. null if the person gave no reason. importance=high for regular/critical medicines or health needs or stated urgency. isMedicine=true for medicines.\n${LANGUAGE_RULE}`,
         `Item: ${input.item}\n\nRecent chat:\n${input.recentChat.slice(0, 2500) || "(none)"}`,
         {
             type: "OBJECT",
@@ -128,7 +128,7 @@ You are Saheli's follow-through step. Saheli is carrying unfinished things for t
 
 target:
 - "followup": the message answers one of the PENDING FOLLOW-UP QUESTIONS (e.g. "haan aa gayi", "abhi tak nahi aayi", "galat dawai aa gayi", "packet phata hua tha", "shuru kar di", "abhi nahi li", "doctor ne band kar di", "pahunch gayi"). Set outcome:
-  arrived | not_arrived | wrong_item | damaged | started | not_started | doctor_stopped | wait_more (she says it's on the way / will come later) | reached (ride) | ride_issue | other.
+  arrived | not_arrived | wrong_item | damaged | started | not_started | doctor_stopped | wait_more (she says it's on the way / will come later; or, for stage=started, she will start it later today/tonight) | reached (ride) | ride_issue | other.
   wantsReorder=true only if she asks to order it again in this message.
 - "resume": about an UNFINISHED TASK. resumeAction:
   "offer" — a greeting / return / vague opener ("hi", "namaste", "main aa gayi", "suno") while a task has NOT been offered yet (offered=no): reply = ONE warm line naming what was left and when, asking if you should finish it (e.g. "Namaste 🙂 Kal hum Dolo 650 order kar rahe the — poora kar doon?"). If every task was already offered, use target "none" for greetings.

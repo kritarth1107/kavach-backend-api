@@ -193,6 +193,11 @@ export async function postMockDelegate(req: Request, res: Response) {
             for (const a of await ActivityLog.find({ familyId: who.familyId, recipientUserId: subject, createdAt: { $gte: new Date(Date.now() - 4 * 86_400_000) } }).select({ _id: 1, createdAt: 1 }).lean()) {
                 await ActivityLog.collection.updateOne({ _id: a._id }, { $set: { createdAt: new Date(new Date(a.createdAt as Date).getTime() - ms) } });
             }
+            // The chat session ages too (a live draft left hours ago is no longer "fresh").
+            const WS = (await import("../models/whatsappSession.model")).default;
+            const sess = await WS.findOne({ phone }).lean();
+            const su = (sess as { updatedAt?: Date } | null)?.updatedAt;
+            if (sess && su) await WS.collection.updateOne({ phone }, { $set: { updatedAt: new Date(new Date(su).getTime() - ms) } });
             if (req.body?.dropSession) {
                 const WhatsappSession = (await import("../models/whatsappSession.model")).default;
                 await WhatsappSession.deleteOne({ phone });

@@ -193,6 +193,8 @@ async function applyFollowup(t: ISaheliTask, d: DelegateDecision, route: SaheliR
         case "arrived": {
             // The first one came after all: drop the redundant re-order search (never placed).
             if (reorderStarted(t)) await clearStaleDrafts(t.phone);
+            // …and the "dobara mangwa doon?" offer for it is no longer needed.
+            await SaheliTask.updateMany({ phone: t.phone, kind: "open_task", status: "open", flow: "reorder", orderRef: t.taskId }, { $set: { status: "cancelled", outcome: "not_needed", resolvedAt: now } }).catch(() => undefined);
             if (t.isMedicine && t.stage === "delivery" && perms.medicineStartCheck) {
                 await SaheliTask.updateOne({ taskId: t.taskId }, { $set: { stage: "started", status: "asked", askedAt: now, askCount: 1, lastSaheliLine: d.reply || "" }, ...hist("arrived") } as never);
             } else {
@@ -234,7 +236,8 @@ async function applyFollowup(t: ISaheliTask, d: DelegateDecision, route: SaheliR
             return say("Oh ho 😟 Dobara mangwa doon?");
         }
         case "wait_more":
-            await SaheliTask.updateOne({ taskId: t.taskId }, { $set: { status: "open", dueAt: new Date(now.getTime() + 3 * 3600_000) }, ...hist("wait_more") } as never);
+            // "Aaj raat se shuru karungi" → ask again next morning; a late delivery → a few hours.
+            await SaheliTask.updateOne({ taskId: t.taskId }, { $set: { status: "open", dueAt: t.stage === "started" ? nextMorning(10) : new Date(now.getTime() + 3 * 3600_000) }, ...hist("wait_more") } as never);
             return say("Theek hai, thodi der mein phir poochungi 🙂");
         case "reached":
             await closeTask(t.taskId, "done", "reached", note);
@@ -250,9 +253,9 @@ async function applyFollowup(t: ISaheliTask, d: DelegateDecision, route: SaheliR
 }
 
 async function reorderNow(t: ISaheliTask, route: SaheliRoute | null, lead?: string | null): Promise<PreDispatchResult> {
-    const { riskyMedClass } = await import("../profile/unusualCore");
-    const q = t.productQuery || t.item || "";
-    if (!q || riskyMedClass(q)) return lead ? { reply: lead } : null;
+    // Same path as if she typed it again: the normal flow's bulk / risky-medicine pause still applies.
+    const q = (t.productQuery || t.item || "").replace(/\([^)]*\)/g, " ").replace(/[·|]/g, " ").replace(/\s+/g, " ").trim();
+    if (!q && t.category !== "ride") return lead ? { reply: lead } : null;
     await clearStaleDrafts(t.phone);
     const r = { ...baseRoute(route, t.language), intent: (t.category === "ride" ? "ride" : "order_new") as SaheliRoute["intent"], productQuery: t.category === "ride" ? null : q, category: (t.category === "other" ? null : t.category || null) as SaheliRoute["category"], partners: t.partner && isKnownStore(t.partner) ? [t.partner] : [], ridePickup: t.rideFrom || null, rideDrop: t.rideTo || null };
     return { reroute: r, text: t.category === "ride" ? `book a cab${t.rideFrom ? ` from ${t.rideFrom}` : ""}${t.rideTo ? ` to ${t.rideTo}` : ""}` : q, lead: lead || undefined };

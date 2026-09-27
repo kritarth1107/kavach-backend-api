@@ -89,7 +89,9 @@ export async function sendDelegateMessage(
             const { sessionHasActiveFlow } = await import("../saheliNudgeGate.service");
             const row = await WhatsappSession.findOne({ phone: task.phone }).lean().catch(() => null);
             const active = sessionHasActiveFlow(row as unknown as Record<string, unknown>);
-            if (active) return { sent: false, reason: `active_flow:${active}` };
+            // Resume nudge: the stale draft is the abandoned task itself — fine once untouched for an hour.
+            const idle = now.getTime() - new Date((row as { updatedAt?: Date } | null)?.updatedAt || 0).getTime();
+            if (active && !(purpose === "resume_nudge" && idle >= 60 * 60_000)) return { sent: false, reason: `active_flow:${active}` };
         }
     }
     // Silence streak → threaded follow-up (elder only; caregivers have no check-in streak).
@@ -111,7 +113,8 @@ export async function sendDelegateMessage(
             }
         }
     }
-    const language = isElder ? await elderLanguage(task.familyId, task.recipientUserId, task.language) : task.language || null;
+    // The language she actually used for this task wins over the profile default.
+    const language = task.language || (isElder ? await elderLanguage(task.familyId, task.recipientUserId, null) : null);
     const name = await personName(task.familyId, task.ownerUserId);
     const chat = await recentChat(task.phone, task.recipientUserId, isElder, 24).catch(() => "");
     const item = task.item || task.productQuery || "order";
