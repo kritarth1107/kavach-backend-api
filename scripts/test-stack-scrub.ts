@@ -1,5 +1,7 @@
 /** No outgoing WhatsApp text may name the tech stack; progress lines name only the active task. */
 import { scrubStack, hasStackWords } from "../src/services/stackScrub";
+import { localizeCanned } from "../src/services/hinglishCanned";
+import { TATA_1MG_COPY } from "../src/services/commerceAutomation/siteAllowlist";
 import { stillWorkingLine } from "../src/services/stillWorkingCopy";
 import { rideAppHandoffMessage } from "../src/services/rideBooking/rideHandoff";
 
@@ -23,6 +25,8 @@ const leaks = [
     "I'm Saheli, built on Google Gemini. How can I help?",
     "I run on Google's *Gemini* technology, Papa! But here, I'm just your Saheli, always ready to chat. 💚",
     "Main ChatGPT nahi hoon. Main Saheli hoon.",
+    "Zepto blocks automated browsing, so I can't see its items or prices 🙏",
+    "Blinkit looks blocked (CAPTCHA / bot wall).",
 ];
 for (const t of leaks) {
     const out = scrubStack(t);
@@ -35,6 +39,15 @@ ok("keeps zodiac Gemini", scrubStack("Aapki rashi Gemini hai? Bahut badhiya!").i
 ok("keeps retry sentence", /retry/.test(scrubStack("Browser task failed: boom. You can retry or *cancel*.")));
 ok("keeps urls", scrubStack("Tap https://m.uber.com/ul/?action=setPickup&x=api").includes("https://m.uber.com/ul/"));
 
+{
+    const zepto = "Zepto isn't available for me right now 🙏 I can get it from Instamart or Blinkit instead.\nTo order on Zepto directly, link it once: Dashboard → Integrations → Zepto.";
+    for (const [n, t] of [["zepto", zepto], ["1mg", TATA_1MG_COPY]] as const) {
+        ok(`${n} copy clean`, !hasStackWords(t) && scrubStack(t) === t, t);
+        const h = localizeCanned(t, "hinglish");
+        ok(`${n} hindi`, h !== t && !hasStackWords(h), h);
+    }
+    ok("1mg working-on-it rule", /working on Tata 1mg ordering/.test(TATA_1MG_COPY));
+}
 const ride = { rideDraft: { phase: "awaiting_otp", provider: "uber", drop: { shortLabel: "Raipur Airport" }, savedAt: new Date() } };
 const sw = stillWorkingLine(ride, "en");
 ok("still-working names the ride", /Uber ride to Raipur Airport/.test(sw), sw);

@@ -47,9 +47,13 @@ const PRETTY: Record<string, string> = {
     rapido: "Rapido",
 };
 
+export const TATA_1MG_COPY = "I'm working on Tata 1mg ordering 🙏 I'll tell you as soon as it's live. Meanwhile I can get it from Apollo or PharmEasy.";
+
 /** Honest refusal copy for anything outside the allowlist. */
 export function refuseSiteCopy(partner?: string | null): string {
     const name = partner && partner !== "generic" && partner !== "generic_grocery" ? PRETTY[partner] || partner : "that site";
+    // Unsupported-but-planned store: the "working on it" rule, never a flat refusal.
+    if (partner === "tata_1mg") return TATA_1MG_COPY;
     return (
         `Sorry, I can't order from ${name} 🙏\n` +
         `I can order medicines from *Apollo* or *PharmEasy*, groceries & food from *Instamart, Swiggy, Zepto, Blinkit* or *Zomato*, and book an *Uber*.`

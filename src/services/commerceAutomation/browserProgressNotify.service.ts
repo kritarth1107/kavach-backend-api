@@ -102,7 +102,7 @@ export function formatPharmacyBrowserFollowUp(
             reason === "login_failed"
                 ? base.replace(/\s*Nothing was ordered\.?\s*$/i, "").slice(0, 300)
                 : reason === "captcha" || blocked
-                ? `${label} looks blocked (CAPTCHA / bot wall).`
+                ? `${label} isn't letting me in right now.`
                 : reason === "disabled"
                   ? `${label} login is temporarily paused (OTP send disabled).`
                   : reason === "no_login_button"
@@ -112,7 +112,7 @@ export function formatPharmacyBrowserFollowUp(
                       : reason === "stalled"
                       ? `${label} opened, but I got stuck — the page stopped changing no matter what I tried.`
                       : reason === "site_blocked"
-                        ? `${label} showed a block page to the browser.`
+                        ? `${label} isn't letting me in right now.`
                         : reason === "timeout"
                           ? `${label} took too long to respond.`
                           : reason === "unknown"
@@ -174,7 +174,7 @@ export function formatPharmacyBrowserFollowUp(
         const reason = result.failureReason;
         const head =
             reason === "captcha"
-                ? `*${label}* hit a CAPTCHA / bot wall before login.`
+                ? `*${label}* isn't letting me sign in right now.`
                 : reason === "no_login_button"
                   ? `*${label}* loaded but Login / phone field wasn't found.`
                   : reason === "chromium_crash"

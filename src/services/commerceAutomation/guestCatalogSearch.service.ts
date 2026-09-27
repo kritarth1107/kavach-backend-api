@@ -558,7 +558,7 @@ export async function searchGuestCatalog(input: {
                 hits: [],
                 searched: true,
                 unavailableReason:
-                    "Tata 1mg does not expose guest prices without login. Reply *confirm* to open 1mg (OTP may be asked), or try *Apollo* / *PharmEasy* for live guest prices.",
+                    "I'm working on Tata 1mg ordering 🙏 I'll tell you as soon as it's live. Meanwhile I can get it from Apollo or PharmEasy.",
                 partner,
                 query,
             };

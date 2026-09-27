@@ -46,7 +46,7 @@ export function rideAppHandoffMessage(draft: RideDraft, lang?: string | null): s
             `*${from}* → *${to}*`,
             ``,
             `Gaadi chunkar ${label} app mein hi book kijiye — fare wahin booking se pehle dikhega.`,
-            `Main aapke liye ${label} mein sign in nahi kar sakti — woh automatic sign-in ko security puzzle se rok deta hai, isliye koi login code nahi aayega. Abhi kuch book nahi hua hai.`,
+            `Main abhi aapke liye ${label} mein sign in nahi kar sakti, isliye koi login code nahi aayega. Abhi kuch book nahi hua hai.`,
         ].join("\n");
     }
     return [
@@ -55,7 +55,7 @@ export function rideAppHandoffMessage(draft: RideDraft, lang?: string | null): s
         `*${from}* → *${to}*`,
         ``,
         `Pick the car and book it in the ${label} app — you'll see the fare there before booking.`,
-        `I can't sign in to ${label} for you: it blocks automated sign-in with a security puzzle, so no login code is sent. Nothing has been booked.`,
+        `I can't sign in to ${label} for you yet, so no login code is sent. Nothing has been booked.`,
     ].join("\n");
 }
 

@@ -2506,8 +2506,8 @@ function adoptPickPartner(draft: BrowserTaskDraft): void {
 
 /** Platforms whose sites block our browser (said honestly, never pretended). */
 const BLOCKED_SITES_ALL: Record<string, string> = {
-    zepto: "Zepto blocks automated browsing, so I can't see its items or prices",
-    zomato: "Zomato blocks automated browsing, so I can't see its restaurants",
+    zepto: "Zepto isn't available for me right now 🙏 I can get it from Instamart or Blinkit instead.\nTo order on Zepto directly, link it once: Dashboard → Integrations → Zepto.",
+    zomato: "Zomato isn't available for me right now 🙏 I can get it from Swiggy instead.",
 };
 /** Zomato opens on the remote India-proxy Chrome when BROWSER_REMOTE=browseruse. */
 const BLOCKED_SITES: Record<string, string> = new Proxy(BLOCKED_SITES_ALL, {
@@ -2900,7 +2900,7 @@ async function startRoutedSearchCore(
     // call it "blocked" (and never swap it for other stores) when the family has linked it.
     const zeptoLinked = await zeptoLinkedFor(input.familyId);
     if (partner && BLOCKED_SITES[partner] && !(partner === "zepto" && zeptoLinked)) {
-        note = `${BLOCKED_SITES[partner]} 🙏`;
+        note = BLOCKED_SITES[partner]!;
         partner = partner === "zomato" ? "swiggy" : undefined;
     }
     if (partner && partner !== "generic" && !isAllowedOrderSite(partner)) {
@@ -3039,7 +3039,7 @@ async function startRoutedSearchCore(
     const cat = category === "pharmacy" ? "pharmacy" : "grocery";
     const partners = COMPARE_PARTNERS[cat];
     const names = partners.map((p) => `*${partnerLabel(p)}*`).join(" and ");
-    const blockedNote = cat === "grocery" && !/zepto/i.test(note) && !zeptoLinked ? " (Zepto blocks automated browsing, so I can't include it.)" : "";
+    const blockedNote = cat === "grocery" && !/zepto/i.test(note) && !zeptoLinked ? `\n(Zepto isn't available for me right now. ${"To order on Zepto directly, link it once: Dashboard → Integrations → Zepto."})` : "";
     return deferGuestWork(
         input,
         `${note ? `${note}\n` : ""}Comparing ${names} for "${q}" near ${whereLabel(home)} 🔎 — I'll send the prices in a moment.${blockedNote}`,

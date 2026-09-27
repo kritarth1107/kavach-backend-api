@@ -5,6 +5,13 @@
  */
 type Rule = [RegExp, string];
 const RULES: Rule[] = [
+    [/Zepto isn't available for me right now 🙏 I can get it from Instamart or Blinkit instead\./g, "Zepto abhi mere liye available nahi hai 🙏 Main Instamart ya Blinkit se mangwa sakti hoon."],
+    [/To order on Zepto directly, link it once: Dashboard → Integrations → Zepto\./g, "Zepto se seedha order ke liye ek baar link kijiye: Dashboard → Integrations → Zepto."],
+    [/\(Zepto isn't available for me right now\. /g, "(Zepto abhi mere liye available nahi hai. "],
+    [/Zomato isn't available for me right now 🙏 I can get it from Swiggy instead\./g, "Zomato abhi mere liye available nahi hai 🙏 Main Swiggy se mangwa sakti hoon."],
+    [/I'm working on Tata 1mg ordering 🙏 I'll tell you as soon as it's live\. Meanwhile I can get it from Apollo or PharmEasy\./g, "Tata 1mg se order par main kaam kar rahi hoon 🙏 Jaise hi shuru hoga, aapko bata dungi. Tab tak Apollo ya PharmEasy se mangwa sakti hoon."],
+    [/\*([^*]+)\* isn't letting me sign in right now\./g, "*$1* abhi mujhe sign in nahi karne de raha."],
+    [/(\w[\w ]*) isn't letting me in right now\./g, "$1 abhi mujhe andar nahi jaane de raha."],
     [/Searching \*([^*]+)\* for "([^"]+)" near (🏠 )?\*([^*]+)\* 🔎 — I'll send the options in a moment\./g, "*$1* par \"$2\" dhoondh rahi hoon, $3*$4* ke liye 🔎 — options abhi yahin bhejti hoon."],
     [/Searching \*([^*]+)\* for "([^"]+)" near (🏠 )?\*([^*]+)\* 🔎 — this one takes a couple of minutes, I'll send the options\./g, "*$1* par \"$2\" dhoondh rahi hoon, $3*$4* ke liye 🔎 — isme do-teen minute lagte hain, options bhej dungi."],
     [/Comparing \*([^*]+)\* and \*([^*]+)\* for "([^"]+)" near (🏠 )?\*([^*]+)\* 🔎 — I'll send the prices in a moment\./g, "*$1* aur *$2* par \"$3\" ke daam dekh rahi hoon, $4*$5* ke liye 🔎 — abhi bhejti hoon."],

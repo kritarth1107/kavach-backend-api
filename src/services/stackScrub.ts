@@ -21,7 +21,7 @@ const REWRITES: Array<[RegExp, string]> = [
 
 /** Words that must never reach a user. "Gemini" alone can be a zodiac sign, so only its AI forms. */
 export const STACK_WORD_RE =
-    /\b(?:browser(?:[- ]use)?|chromium|playwright|puppeteer|stagehand|headless|MCP|dry[- ]?run|vertex(?: ai)?|LLM|large language model|AI model|webhook|API|backend|server|cloud run|google'?s?\W{0,3}gemini|gemini\W{0,3}(?:\d|pro|flash|ai|model|technology|tech)|chat\s?gpt|gpt-?\d|openai|anthropic|claude|grok|xai|deepmind|(?:run|built|powered|made|based)\s+(?:on|by|with|using)\s+\W{0,3}(?:google|gemini|ai\b))\b/i;
+    /\b(?:browser(?:[- ]use)?|chromium|playwright|puppeteer|stagehand|headless|MCP|dry[- ]?run|vertex(?: ai)?|LLM|large language model|AI model|webhook|API|automated|automation|captcha|bot wall|bot check|anti-?bot|backend|server|cloud run|google'?s?\W{0,3}gemini|gemini\W{0,3}(?:\d|pro|flash|ai|model|technology|tech)|chat\s?gpt|gpt-?\d|openai|anthropic|claude|grok|xai|deepmind|(?:run|built|powered|made|based)\s+(?:on|by|with|using)\s+\W{0,3}(?:google|gemini|ai\b))\b/i;
 
 const VENDOR_RE =
     /\b(?:google'?s?\W{0,3}gemini|gemini\W{0,3}(?:\d|pro|flash|ai|model|technology|tech)|chat\s?gpt|gpt-?\d|openai|anthropic|claude|grok|deepmind|LLM|large language model|AI model|(?:run|built|powered|made|based)\s+(?:on|by|with|using)\s+\W{0,3}(?:google|gemini))\b/i;
