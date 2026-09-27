@@ -158,7 +158,11 @@ export async function postReflectionJob(req: Request, res: Response, next: NextF
             who = { familyId: String(req.body.familyId), recipientUserId: String(req.body.recipientUserId) };
         }
         if (who) {
-            res.json({ success: true, job: "reflection", result: await reflectElderDay(who, dayKey, { model: req.body?.model ? String(req.body.model) : undefined }) });
+            res.json({ success: true, job: "reflection", result: await reflectElderDay(who, dayKey, {
+                    model: req.body?.model ? String(req.body.model) : undefined,
+                    schema: typeof req.body?.schema === "boolean" ? req.body.schema : undefined,
+                    thinkingLevel: req.body?.thinkingLevel ? String(req.body.thinkingLevel) : undefined,
+                }) });
             return;
         }
         // Long run: answer now, keep working (Cloud Run keeps CPU for in-flight work only with always-on CPU; the

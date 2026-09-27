@@ -232,7 +232,7 @@ async function phraseQuestions(qs: NewQuestion[], name: string): Promise<string[
     }
 }
 
-export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.now() - 86_400_000)), opts: { model?: string; now?: Date } = {}) {
+export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.now() - 86_400_000)), opts: { model?: string; now?: Date; schema?: boolean; thinkingLevel?: string } = {}) {
     const now = opts.now || new Date();
     const rows = await ActivityLog.find({ familyId: w.familyId, recipientUserId: w.recipientUserId, dayKey }).sort({ createdAt: 1 }).limit(1500).lean();
     const doc =
@@ -279,7 +279,9 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             .join("\n\n");
         const tryModel = async (m: string) => {
             Vertex.resetVertexError?.();
-            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, responseSchema: RESPONSE_SCHEMA, prompt, timeoutMs: 150_000, maxOutputTokens: 24_576, temperature: 0.2 });
+            const useSchema = opts.schema ?? process.env.REFLECTION_RESPONSE_SCHEMA !== "0";
+            const thinkingLevel = opts.thinkingLevel || process.env.REFLECTION_THINKING_LEVEL?.trim() || undefined;
+            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, ...(useSchema ? { responseSchema: RESPONSE_SCHEMA } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), prompt, timeoutMs: 150_000, maxOutputTokens: 24_576, temperature: 0.2 });
             const out = parseJsonLoose<Raw>(raw);
             if (!out && raw) rawDiag.push(`${m}: ${raw.length} chars … ${raw.slice(Math.max(0, raw.length - 240)).replace(/\s+/g, " ")}`);
             return out;
