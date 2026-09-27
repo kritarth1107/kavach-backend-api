@@ -33,6 +33,10 @@ export interface IWhatsappSession {
     orderChat?: Record<string, unknown>;
     /** Saheli asked "what should I call this place?" for a newly saved family place. */
     pendingPlaceName?: { addressId: string; familyId: string; at: Date };
+    /** A background store search promised with "I'll send the options in a moment" (survives restarts). */
+    pendingSearch?: Record<string, unknown>;
+    /** Saheli offered a next step ("Want me to try Blinkit instead?") — a "yes" runs it. */
+    pendingOffer?: Record<string, unknown>;
     expiresAt: Date;
 }
 
@@ -63,6 +67,8 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         rideDraft: { type: Schema.Types.Mixed },
         orderChat: { type: Schema.Types.Mixed },
         pendingPlaceName: { type: Schema.Types.Mixed },
+        pendingSearch: { type: Schema.Types.Mixed },
+        pendingOffer: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

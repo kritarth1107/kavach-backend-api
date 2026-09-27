@@ -79,8 +79,19 @@ export function tidyNickname(s: string): string {
 }
 
 export function formatFull(p: Pick<Place, "line1" | "line2" | "landmark" | "city" | "state" | "pincode">): string {
-    const tail = [p.state, p.pincode].filter(Boolean).join(" ");
-    return [p.line1, p.line2, p.landmark, p.city, tail].map((x) => (x || "").trim()).filter(Boolean).join(", ");
+    // A part already contained in the earlier ones is dropped (a comma-less typed address used to
+    // repeat itself: "…bangalore karnataka india, …bangalore, 560092").
+    const norm = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9\u0900-\u097f]+/g, " ").trim()} `;
+    const out: string[] = [];
+    for (const x of [p.line1, p.line2, p.landmark, p.city]) {
+        const v = (x || "").trim();
+        if (!v) continue;
+        if (out.length && norm(out.join(" ")).includes(norm(v))) continue;
+        out.push(v);
+    }
+    const state = p.state && !norm(out.join(" ")).includes(norm(p.state)) ? p.state : "";
+    const tail = [state, p.pincode].filter(Boolean).join(" ");
+    return [...out, tail].filter(Boolean).join(", ");
 }
 
 /** Split a typed one-line address ("C-12, Green Park, Near X, Bhopal, Madhya Pradesh 462001"). */
@@ -97,7 +108,10 @@ export function splitAddress(text: string): { line1: string; landmark?: string; 
     let city: string | undefined;
     if (parts.length && STATE_RE.test(parts[parts.length - 1]!)) state = parts.pop();
     if (parts.length > 1) city = parts.pop();
+    // No commas → no reliable city split; guessing copied the whole line into city (duplicated address).
+    else if (parts.length === 1 && !state) city = undefined;
     else city = cityOf(full);
+    if (city && parts.length === 1 && parts[0]!.toLowerCase().includes(city.toLowerCase())) city = undefined;
     let landmark: string | undefined;
     parts = parts.filter((p) => {
         if (!landmark && /^(near|opp\.?|opposite|behind|beside|next to|in front of)\b/i.test(p)) {

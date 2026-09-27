@@ -70,6 +70,7 @@ export class McpStoreError extends Error {
             | "cod_unavailable"
             | "cart_check"
             | "search_failed"
+            | "auth_expired"
             | "restaurant_closed",
         message: string,
     ) {
@@ -347,9 +348,23 @@ export async function searchStore(ctx: McpCtx, store: McpStore, query: string, o
             return { store, hits: hits.slice(0, 5), addressVia: addr.via };
         });
     } catch (err) {
-        const code = err instanceof McpStoreError ? err.code : "search_failed";
-        return { store, hits: [], error: code, message: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+        const message = describeMcpError(err);
+        const code = err instanceof McpStoreError ? err.code : isMcpAuthError(message) ? "auth_expired" : "search_failed";
+        return { store, hits: [], error: code, message };
     }
+}
+
+/** Never an empty diagnostic: message, else error name / code / cause. */
+export function describeMcpError(err: unknown): string {
+    if (!(err instanceof Error)) return String(err ?? "unknown").slice(0, 200) || "unknown";
+    const e = err as Error & { code?: unknown; cause?: unknown };
+    const cause = e.cause instanceof Error ? e.cause.message : e.cause ? String(e.cause) : "";
+    return [e.message || e.name || "Error", e.code != null ? `code=${String(e.code)}` : "", cause ? `cause=${cause}` : ""].filter(Boolean).join(" ").slice(0, 200);
+}
+
+/** The store rejected the linked account (401 / invalid or revoked token) — needs a re-link, not a retry. */
+export function isMcpAuthError(message: string): boolean {
+    return /\b401\b|unauthori[sz]ed|invalid_grant|invalid_token|token (?:has )?expired|re-?authori[sz]/i.test(message || "");
 }
 
 // ── Cart build (shared by prepare + place) ──────────────────────────────────

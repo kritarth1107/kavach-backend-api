@@ -188,6 +188,8 @@ type FlowDoc = {
     pendingCommerceOtp?: { partner?: string };
     orderSessionId?: string;
     pendingPlaceName?: { addressId: string; familyId: string; at: Date };
+    pendingOffer?: { partner?: string; query?: string; at?: Date; familyId?: string };
+    pendingSearch?: { at?: Date; ack?: string; familyId?: string };
     orderChat?: { updatedAt?: number; turns?: Array<{ who: string; text: string }> } & Record<string, unknown>;
 } | null;
 
@@ -225,6 +227,16 @@ async function buildFlowState(phone: string, doc: FlowDoc, who?: { familyId: str
         const pn = doc?.pendingPlaceName;
         if (pn && pn.familyId === who.familyId && Date.now() - new Date(pn.at).getTime() < 30 * 60_000) {
             lines.push("ASKED FOR PLACE NAME (what to call the newly saved place)");
+        }
+        // Saheli's own open offer ("Want me to try Blinkit instead?") — a yes answers IT.
+        if (doc?.pendingOffer?.familyId === who.familyId) {
+            const { offerSummary } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+            const o = offerSummary(doc.pendingOffer);
+            if (o) lines.push(o);
+        }
+        const ps = doc?.pendingSearch;
+        if (ps?.familyId === who.familyId && ps.at && Date.now() - new Date(ps.at).getTime() < 5 * 60_000) {
+            lines.push(`SEARCH RUNNING (Saheli said: "${String(ps.ack || "").slice(0, 120)}") — "any update?", "kya hua?", "still waiting" = intent=order_control control=status`);
         }
     }
     return lines;

@@ -99,6 +99,10 @@ export type BrowserTaskDraft = {
     lastMessage?: string;
     /** Delivery address shown at confirm / passed into browser goal (this recipient's own saved address). */
     addressLabel?: string;
+    /** Family address-book nickname of that place ("Home") — chat copy names it instead of repeating the full address. */
+    addressNickname?: string;
+    /** awaiting_address: pincode / place name she already gave ("560092 home") — only the rest is asked. */
+    partialAddress?: { pincode?: string; nickname?: string; text?: string };
     /** awaiting_address: the order message to resume once the elder sends their address. */
     pendingText?: string;
     /** Swiggy food flow: open restaurants shown for the elder to pick. */
@@ -213,7 +217,7 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
     const label = partnerLabel(String(draft.partner || "the site"));
     const opts = draft.catalogOptions ?? [];
     // Only ever this recipient's own saved address — never a store-account / other family's address.
-    const addr = draft.addressLabel ? `📍 ${draft.addressLabel}` : "";
+    const addr = draftPlaceLine(draft);
     const where = draft.restaurantName ? `*${draft.restaurantName}* on *${label}*` : `*${label}*`;
     if (opts.length > 1 && draft.compare) {
         const shown = opts.slice(0, 3);
@@ -436,8 +440,30 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
             await saveDraft(input.phone, null);
             return { text: "Okay, cancelled ✅ Nothing was ordered." };
         }
-        const parsed = parseAddressReply(text);
+        // Gemini reads the reply: pincode + place name she already gave are kept ("560092 home"),
+        // only the missing street part is asked; a comma-less full address is split into parts.
+        const partial = draft.partialAddress;
+        const { understandAddressText, composeAddress } = await import("../addressUnderstanding.service");
+        const u = await understandAddressText(text, { pincode: partial?.pincode, nickname: partial?.nickname }).catch(() => null);
+        const nickname = u?.label || partial?.nickname || undefined;
+        let parsed: RecipientAddress | null = null;
+        if (u?.complete) parsed = parseAddressReply(composeAddress(u));
+        if (!parsed && !u?.complete) {
+            // Rule fallback (model down): her text, plus the pincode she gave earlier.
+            const withPin = partial?.pincode && !/\b[1-9]\d{5}\b/.test(text) ? `${text} ${partial.pincode}` : text;
+            parsed = u && !u.line1 ? null : parseAddressReply(withPin);
+        }
         if (!parsed) {
+            const pin = u?.pincode || partial?.pincode;
+            if (pin || nickname) {
+                draft.partialAddress = { pincode: pin || undefined, nickname, text: [partial?.text, text].filter(Boolean).join(" ").slice(0, 200) };
+                await saveDraft(input.phone, draft);
+                const have = [nickname ? `${placeEmoji(nickname)} *${nickname}*` : "", pin ? `pincode ${pin}` : ""].filter(Boolean).join(", ");
+                return {
+                    text: `Got it 👍 ${have}.\nNow just the house/flat number, street and area${pin ? "" : " (with the 6-digit pincode)"}, please.`,
+                    draft,
+                };
+            }
             return {
                 text:
                     "Please send your full delivery address with the 6-digit pincode " +
@@ -451,10 +477,12 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
             address: parsed.full,
             source: input.actorUserId === input.recipientUserId ? "elder_whatsapp" : "caregiver",
             setByUserId: input.actorUserId,
+            nickname: nickname || null,
         });
         if (savedPlace?.addressId) {
             await setChoice(input.familyId, input.recipientUserId, savedPlace.addressId).catch(() => undefined);
-            if (savedPlace.created) await askPlaceName(input.phone, input.familyId, savedPlace.addressId);
+            // She already named it ("home") → never ask "What should I call this place?".
+            if (savedPlace.created && !nickname) await askPlaceName(input.phone, input.familyId, savedPlace.addressId);
         }
         void logActivity({
             familyId: input.familyId,
@@ -469,7 +497,7 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
         const pendingRoute = draft.pendingRoute;
         // Keep any pharmacy draft (address asked at its confirm step); clear only this draft.
         await WhatsappSession.findOneAndUpdate({ phone: input.phone }, { $unset: { browserTaskDraft: 1 } });
-        const saved = savedPlace ? savedPlaceCopy(savedPlace) : `Saved your delivery address ✅\n📍 ${parsed.full}`;
+        const saved = savedPlace ? savedPlaceCopy(savedPlace, { named: Boolean(nickname) }) : `Saved your delivery address ✅\n📍 ${parsed.full}`;
         if (pendingRoute) {
             const newHome = await getRecipientDeliveryAddress(input.familyId, input.recipientUserId);
             const resumed = await startRoutedSearch(
@@ -1012,9 +1040,10 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
                     const pbz = resolvePlaybook("zomato" as CommercePartnerKey, `order ${zq} from zomato`);
                     return deferGuestWork(
                         input,
-                        `Searching *Zomato* for "${zq}" near 📍 ${home.short} 🔎 — this one takes a couple of minutes, I'll send the options.`,
+                        `Searching *Zomato* for "${zq}" near ${whereLabel(home)} 🔎 — this one takes a couple of minutes, I'll send the options.`,
                         (token) => zomatoSearchCore(input, zq, pbz, home, token),
                         draft,
+                        { slow: true, searching: "Zomato", retry: { partner: "zomato", query: zq, category: "food" }, fallback: { partner: "swiggy", query: zq, category: "food" } },
                     );
                 }
                 if (partner === "zomato") {
@@ -1031,9 +1060,10 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
                 const goalText = text;
                 return deferGuestWork(
                     input,
-                    `Searching *Instamart* for "${query}" near 📍 ${home.short} 🔎 — one moment.`,
+                    `Searching *Instamart* for "${query}" near ${whereLabel(home)} 🔎 — one moment.`,
                     (token) => grocerySearchCore(input, goalText, query, { partner: "instamart", siteKey: "instamart" }, home, token),
                     draft,
+                    { searching: "Instamart", retry: { partner: "instamart", query, category: "grocery" }, fallback: { partner: "blinkit", query, category: "grocery" } },
                 );
             }
             const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
@@ -1091,8 +1121,10 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
                 const pbz = resolvePlaybook("zomato" as CommercePartnerKey, `order ${zq} from zomato`);
                 return deferGuestWork(
                     input,
-                    `Searching *Zomato* for "${zq}" near 📍 ${home!.short} 🔎 — this one takes a couple of minutes, I'll send the options.`,
+                    `Searching *Zomato* for "${zq}" near ${whereLabel(home!)} 🔎 — this one takes a couple of minutes, I'll send the options.`,
                     (token) => zomatoSearchCore(input, zq, pbz, home!, token),
+                    null,
+                    { slow: true, searching: "Zomato", retry: { partner: "zomato", query: zq, category: "food" }, fallback: { partner: "swiggy", query: zq, category: "food" } },
                 );
             }
             if (partner === "zomato") {
@@ -1115,8 +1147,10 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
             const goalText = text;
             return deferGuestWork(
                 input,
-                `Searching *Instamart* for "${query}" near 📍 ${home.short} 🔎 — I'll send the options in a moment.`,
+                `Searching *Instamart* for "${query}" near ${whereLabel(home)} 🔎 — I'll send the options in a moment.`,
                 (token) => grocerySearchCore(input, goalText, query, playbook, home, token),
+                null,
+                { searching: "Instamart", retry: { partner: "instamart", query, category: "grocery" }, fallback: { partner: "blinkit", query, category: "grocery" } },
             );
         }
 
@@ -1180,7 +1214,7 @@ async function grocerySearchCore(
     home: RecipientAddress,
     token?: number,
     kind: "grocery" | "food" = "grocery",
-): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+): Promise<WorkResult> {
     const { searchGuestCatalog } = await import("./guestCatalogSearch.service");
     const catalog = await searchGuestCatalog({
         partner: String(playbook.partner),
@@ -1197,6 +1231,7 @@ async function grocerySearchCore(
         siteKey: playbook.siteKey,
         startUrl: playbook.startUrl,
         addressLabel: home.full,
+        addressNickname: home.nickname || undefined,
         productQuery: query,
         category: kind,
     };
@@ -1216,9 +1251,14 @@ async function grocerySearchCore(
         // Raw site errors are for logs, not for her: say it honestly and offer another app.
         if (/Catalog search failed|timeout|locator\.|Call log/i.test(catalog.unavailableReason || "")) {
             console.warn(`[guest-search] ${playbook.partner} failed:`, (catalog.unavailableReason || "").slice(0, 300));
-            const other = String(playbook.partner) === "blinkit" ? "Instamart" : String(playbook.partner) === "zomato" ? "Swiggy" : "Blinkit";
-            return { text: `${partnerLabel(String(playbook.partner))} didn't load for me just now 🙏 Want me to try *${other}* instead?` };
+            const other = String(playbook.partner) === "blinkit" ? "instamart" : String(playbook.partner) === "zomato" ? "swiggy" : "blinkit";
+            rememberGuestFailure(input.phone, String(playbook.partner), catalog.unavailableReason || "");
+            return {
+                text: `${partnerLabel(String(playbook.partner))} didn't load for me just now 🙏 Want me to try *${partnerLabel(other)}* instead?`,
+                offer: { partner: other, query, category: other === "swiggy" ? "food" : "grocery" },
+            };
         }
+        if (catalog.unavailableReason) rememberGuestFailure(input.phone, String(playbook.partner), catalog.unavailableReason);
         return { text: catalog.unavailableReason || `I couldn't find "${query}" near you. Try another name.` };
     }
     await saveIfCurrent(input.phone, draft, token);
@@ -1232,7 +1272,7 @@ async function zomatoSearchCore(
     pb: { partner: CommercePartnerKey | "generic" | string; siteKey?: string; startUrl?: string },
     home: RecipientAddress,
     token?: number,
-): Promise<{ text: string; draft?: BrowserTaskDraft }> {
+): Promise<WorkResult> {
     const r = await grocerySearchCore(input, `Order ${query} from Zomato`, query, pb, home, token, "food").catch((err) => {
         console.warn("[zomato-guest] failed:", err instanceof Error ? err.message : err);
         return null;
@@ -1248,7 +1288,7 @@ _Zomato shows prices only after sign-in — you'll see the exact total on the fi
         return r;
     }
     await saveIfCurrent(input.phone, null, token);
-    return { text: `Zomato didn't load for me just now 🙏 Want me to look on *Swiggy* instead?` };
+    return { text: `Zomato didn't load for me just now 🙏 Want me to look on *Swiggy* instead?`, offer: { partner: "swiggy", query, category: "food" } };
 }
 
 /** Guest browsing (15–30s) runs in the background; the result is pushed to WhatsApp. */
@@ -1267,31 +1307,172 @@ async function saveIfCurrent(phone: string, draft: BrowserTaskDraft | null, toke
     return true;
 }
 
+/** A next step Saheli offers after a miss ("Want me to try *Blinkit* instead?"); a "yes" runs it. */
+export type SearchOffer = { partner?: string; query: string; category: "food" | "grocery" | "pharmacy" | "other"; restaurantName?: string };
+type WorkResult = { text: string; draft?: BrowserTaskDraft; offer?: SearchOffer };
+const OFFER_TTL_MS = 20 * 60_000;
+
+async function setOffer(phone: string, familyId: string, offer: SearchOffer): Promise<void> {
+    await WhatsappSession.updateOne({ phone }, { $set: { pendingOffer: { ...offer, familyId, at: new Date() } } }).catch(() => undefined);
+}
+async function clearOffer(phone: string): Promise<void> {
+    await WhatsappSession.updateOne({ phone }, { $unset: { pendingOffer: 1 } }).catch(() => undefined);
+}
+/** This phone's fresh offer for THIS family (never another family's). */
+async function peekOffer(phone: string, familyId: string): Promise<SearchOffer | null> {
+    const doc = (await WhatsappSession.findOne({ phone }, { pendingOffer: 1 }).lean().catch(() => null)) as { pendingOffer?: SearchOffer & { familyId?: string; at?: Date } } | null;
+    const o = doc?.pendingOffer;
+    if (!o?.query || o.familyId !== familyId || !o.at || Date.now() - new Date(o.at).getTime() > OFFER_TTL_MS) return null;
+    return { partner: o.partner, query: o.query, category: o.category || "grocery", restaurantName: o.restaurantName };
+}
+/** Router context line for a pending offer (phone-scoped). */
+export function offerSummary(o: { partner?: string; query?: string; at?: Date | string } | null | undefined): string | null {
+    if (!o?.query || !o.at || Date.now() - new Date(o.at).getTime() > OFFER_TTL_MS) return null;
+    const where = o.partner ? `on ${partnerLabel(o.partner)}` : "again";
+    return `SAHELI JUST OFFERED to search "${o.query}" ${where} and is waiting for yes/no — "yes", "go for it", "haan", "ok try", "sure", "please do" = intent=order_control control=confirm; "no"/"rehne do" = control=cancel`;
+}
+
+/** Hard ceiling for one background search: past it she gets an honest answer, never silence. */
+function guestDeadlineMs(slow = false): number {
+    const base = Number(process.env.GUEST_WORK_DEADLINE_MS) || 150_000;
+    return slow ? Math.max(base, Number(process.env.GUEST_WORK_SLOW_DEADLINE_MS) || 270_000) : base;
+}
+const SEARCH_INSTANCE = `${process.env.K_REVISION || "local"}:${process.pid}:${Date.now().toString(36)}`;
+type Inflight = { token: number; input: { phone: string; familyId: string; recipientUserId: string }; retry?: SearchOffer; startedAt: number };
+const inflight = new Map<string, Inflight>();
+
+async function markSearch(input: { phone: string; familyId: string; recipientUserId: string }, token: number, ack: string, retry?: SearchOffer): Promise<void> {
+    await WhatsappSession.updateOne(
+        { phone: input.phone },
+        { $set: { pendingSearch: { token, instance: SEARCH_INSTANCE, at: new Date(), familyId: input.familyId, recipientUserId: input.recipientUserId, ack: ack.slice(0, 160), retry: retry || null } } },
+    ).catch(() => undefined);
+}
+async function unmarkSearch(phone: string, token: number): Promise<void> {
+    await WhatsappSession.updateOne({ phone, "pendingSearch.token": token, "pendingSearch.instance": SEARCH_INSTANCE }, { $unset: { pendingSearch: 1 } }).catch(() => undefined);
+}
+
+async function pushFollowUp(input: { phone: string; familyId: string; recipientUserId: string }, text: string): Promise<boolean> {
+    const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
+    const send = () => pushWhatsAppBrowserFollowUp({ phone: input.phone, familyId: input.familyId, recipientUserId: input.recipientUserId, text }).catch(() => false);
+    if (await send()) return true;
+    await new Promise((r) => setTimeout(r, 4000));
+    return send(); // one retry — a lost follow-up is exactly the silence we must avoid
+}
+
+function lostSearchCopy(retry?: SearchOffer | null): string {
+    const what = retry?.query ? ` for "${retry.query}"` : "";
+    return `Sorry 🙏 my search${what} got interrupted on my side, so I couldn't finish it.${retry?.query ? " Want me to try again?" : " Please ask me again."}`;
+}
+
 function deferGuestWork(
     input: { phone: string; familyId: string; recipientUserId: string },
     ack: string,
-    work: (token: number) => Promise<{ text: string }>,
+    work: (token: number) => Promise<WorkResult>,
     currentDraft?: BrowserTaskDraft | null,
+    opts: { retry?: SearchOffer; fallback?: SearchOffer; slow?: boolean; searching?: string } = {},
 ): { text: string; draft?: BrowserTaskDraft; deferred: true } {
     const token = bumpGuestWork(input.phone);
+    const deadline = guestDeadlineMs(opts.slow);
+    inflight.set(input.phone, { token, input, retry: opts.retry, startedAt: Date.now() });
+    void markSearch(input, token, ack, opts.retry);
     void (async () => {
-        let text: string;
+        let res: WorkResult;
+        let timedOut = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-            text = (await work(token)).text;
+            res = await Promise.race([
+                work(token),
+                new Promise<never>((_, rej) => {
+                    timer = setTimeout(() => rej(new Error("guest_work_deadline")), deadline);
+                }),
+            ]);
         } catch (err) {
-            console.warn("[guest-browse] failed:", err instanceof Error ? err.message : err);
-            text = "The site didn't load for me just now 🙏 Please try again in a minute.";
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(`[guest-browse] failed (${Date.now() - (inflight.get(input.phone)?.startedAt ?? Date.now())}ms):`, msg);
+            timedOut = msg === "guest_work_deadline";
+            const what = timedOut
+                ? opts.searching
+                    ? `*${opts.searching}* is taking too long for me right now`
+                    : "This is taking much longer than it should"
+                : "The site didn't load for me just now";
+            const fb = opts.fallback;
+            res = fb?.partner
+                ? { text: `${what} 🙏 Want me to try *${partnerLabel(fb.partner)}* instead?`, offer: fb }
+                : opts.retry
+                  ? { text: `${what} 🙏 Want me to try again?`, offer: opts.retry }
+                  : { text: `${what} 🙏 Please ask me again in a minute, or name another app.` };
+        } finally {
+            if (timer) clearTimeout(timer);
         }
-        if (!guestWorkCurrent(input.phone, token)) return; // cancelled / superseded
-        const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
-        await pushWhatsAppBrowserFollowUp({
-            phone: input.phone,
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            text,
-        }).catch(() => false);
+        if (inflight.get(input.phone)?.token === token) inflight.delete(input.phone);
+        if (!guestWorkCurrent(input.phone, token)) {
+            // Superseded by a newer search she started (or cancelled) — that turn answers her.
+            await unmarkSearch(input.phone, token);
+            return;
+        }
+        // The late result must never show up (or save options) after the honest answer.
+        if (timedOut) bumpGuestWork(input.phone);
+        let text = res.text?.trim();
+        if (!text) {
+            text = opts.retry ? `I couldn't finish the search for "${opts.retry.query}" 🙏 Want me to try again?` : "I couldn't finish that search 🙏 Please ask me again.";
+            if (opts.retry) res.offer = opts.retry;
+        }
+        await unmarkSearch(input.phone, token);
+        if (res.offer && !res.draft) await setOffer(input.phone, input.familyId, res.offer);
+        await pushFollowUp(input, text);
     })();
     return { text: ack, draft: currentDraft ?? undefined, deferred: true };
+}
+
+/**
+ * Searches promised by an instance that died (deploy / crash) or by a promise that never settled:
+ * tell her honestly and offer to retry. Runs on startup and every minute; older than the deadline
+ * + grace only, so a live search on the old revision still gets to answer first.
+ */
+export async function sweepLostSearches(): Promise<number> {
+    const cutoff = new Date(Date.now() - guestDeadlineMs(true) - 60_000);
+    const rows = (await WhatsappSession.find({ "pendingSearch.at": { $lt: cutoff } }, { phone: 1, pendingSearch: 1 }).limit(25).lean().catch(() => [])) as Array<{
+        phone: string;
+        pendingSearch?: { token: number; instance: string; familyId: string; recipientUserId: string; retry?: SearchOffer | null; at: Date };
+    }>;
+    let n = 0;
+    for (const r of rows) {
+        const ps = r.pendingSearch;
+        if (!ps?.familyId) continue;
+        const live = ps.instance === SEARCH_INSTANCE && inflight.get(r.phone)?.token === ps.token;
+        if (live) continue;
+        const claimed = await WhatsappSession.updateOne({ phone: r.phone, "pendingSearch.token": ps.token, "pendingSearch.instance": ps.instance }, { $unset: { pendingSearch: 1 } }).catch(() => null);
+        if (!claimed?.modifiedCount) continue;
+        if (ps.retry?.query) await setOffer(r.phone, ps.familyId, ps.retry);
+        await pushFollowUp({ phone: r.phone, familyId: ps.familyId, recipientUserId: ps.recipientUserId }, lostSearchCopy(ps.retry));
+        void logActivity({ familyId: ps.familyId, recipientUserId: ps.recipientUserId, kind: "order_step", severity: "warn", title: "Search lost (restart) — told her and offered a retry", data: { instance: ps.instance, at: ps.at } });
+        n++;
+    }
+    return n;
+}
+
+/** SIGTERM (new revision rolling out): answer every search this instance still owes, right now. */
+export async function answerInflightOnShutdown(): Promise<number> {
+    const rows = [...inflight.values()];
+    inflight.clear();
+    await Promise.all(
+        rows.map(async (f) => {
+            bumpGuestWork(f.input.phone);
+            await unmarkSearch(f.input.phone, f.token);
+            if (f.retry?.query) await setOffer(f.input.phone, f.input.familyId, f.retry);
+            await pushFollowUp(f.input, lostSearchCopy(f.retry)).catch(() => false);
+        }),
+    );
+    return rows.length;
+}
+
+/** Chat copy names the saved place ("🏠 *Home*") instead of repeating the full address. */
+function whereLabel(h: { nickname?: string | null; short?: string; full?: string }): string {
+    return h.nickname ? `${placeEmoji(h.nickname)} *${h.nickname}*` : `📍 ${h.short || h.full || "your address"}`;
+}
+function draftPlaceLine(draft: BrowserTaskDraft): string {
+    if (draft.addressNickname) return `${placeEmoji(draft.addressNickname)} Delivering to *${draft.addressNickname}*`;
+    return draft.addressLabel ? `📍 ${draft.addressLabel}` : "";
 }
 
 /**
@@ -1376,9 +1557,11 @@ function pincodeOfLabel(label?: string): string | undefined {
 }
 
 /** "Saved ✅ as *Home* 🏠 … What should I call it?" (name question only for a NEW place). */
-export function savedPlaceCopy(p: { nickname?: string; full: string; short?: string; created?: boolean }): string {
+export function savedPlaceCopy(p: { nickname?: string; full: string; short?: string; created?: boolean }, opts: { named?: boolean } = {}): string {
     const nick = p.nickname || "Home";
     if (p.created === false) return `${placeEmoji(nick)} That's *${nick}* — already in your address book (${p.short || p.full}).`;
+    // She named it herself: confirm once with the address, no naming question.
+    if (opts.named) return `Saved ${placeEmoji(nick)} *${nick}* to your family's address book ✅\n📍 ${p.short || p.full}`;
     return (
         `Saved to your family's address book ✅\n${placeEmoji(nick)} *${nick}* — ${p.full}\n` +
         `What should I call this place? (e.g. *Home*, *Beta's flat*, *Clinic*) — or I'll keep *${nick}*.`
@@ -1598,8 +1781,10 @@ async function startFoodFlow(
 ): Promise<{ text: string; draft?: BrowserTaskDraft }> {
     return deferGuestWork(
         input,
-        `Checking which restaurants are open on *Swiggy* near 📍 ${home.short}${dishQuery ? ` for "${dishQuery}"` : ""} 🔎 — I'll send the list in a moment.`,
+        `Checking which restaurants are open on *Swiggy* near ${whereLabel(home)}${dishQuery ? ` for "${dishQuery}"` : ""} 🔎 — I'll send the list in a moment.`,
         (token) => startFoodFlowCore(input, dishQuery, home, token),
+        null,
+        { searching: "Swiggy", retry: { partner: "swiggy", query: dishQuery || "food", category: "food" } },
     );
 }
 
@@ -1636,6 +1821,7 @@ async function startFoodFlowCore(
         partner: "swiggy",
         siteKey: "swiggy",
         addressLabel: home.full,
+        addressNickname: home.nickname || undefined,
         dishQuery: dishQuery || undefined,
         restaurantOptions: open.map((r) => ({ name: r.name, cuisines: r.cuisines, rating: r.rating, eta: r.eta })),
     };
@@ -2442,6 +2628,33 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
         return ctl(rawText);
     }
 
+    // "Go for it" / "haan" to Saheli's own offer ("Want me to try *Blinkit* instead?") runs exactly
+    // that search — bound to the offer, never the care-record Q&A. A search only; money steps keep
+    // their literal-confirm guardrails.
+    if (!active && (route.intent === "order_control" || (route.intent === "order_modify" && !route.productQuery && !route.addressKind && !route.addressNickname))) {
+        if (route.control === "status") {
+            const ps = (await WhatsappSession.findOne({ phone: input.phone }, { pendingSearch: 1 }).lean().catch(() => null)) as { pendingSearch?: { familyId?: string; at?: Date } } | null;
+            if (ps?.pendingSearch?.familyId === input.familyId) return { text: "Still checking 🔎 — I'll message you here the moment I have it." };
+        }
+        const offer = await peekOffer(input.phone, input.familyId);
+        if (offer) {
+            const said = route.partners[0];
+            if (route.control === "cancel") {
+                await clearOffer(input.phone);
+                log("offer:declined");
+                return { text: "Okay 👍 I won't look further. Tell me whenever you want something." };
+            }
+            if (route.control === "confirm" || route.control === "retry" || route.control === "pick" || said) {
+                await clearOffer(input.phone);
+                const partner = said || offer.partner;
+                log(`offer:accepted:${partner || "retry"}`);
+                rememberAsk(input.phone, { query: offer.query, category: offer.category, partner });
+                return startRoutedSearch(input, home, partner === "swiggy" || partner === "zomato" ? "food" : offer.category, offer.query, partner, draft, rawText, offer.restaurantName, route);
+            }
+        }
+    }
+    if (route.productQuery || route.intent === "order_new") void clearOffer(input.phone);
+
     if (route.productQuery) rememberAsk(input.phone, { query: route.productQuery, category: route.category || undefined, partner: route.partners[0] });
     else if (route.partners[0]) rememberAsk(input.phone, { partner: route.partners[0] });
 
@@ -2511,7 +2724,15 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
                         return { text: `Your *${label}* order is already being placed for 📍 ${draft.addressLabel ? shortAddress(draft.addressLabel) : "the chosen address"} — reply *cancel* first to send it to *${place.nickname}* instead.`, draft };
                     }
                     if (active && draft) return { text: await addressReply(input, draft, "same", rawText, home, place.nickname), draft };
-                    return { text: `${placeEmoji(place.nickname)} Okay — your next order goes to *${place.nickname}* (${place.short}). What would you like?` };
+                    // She just asked for something (or a search is still running): carry on at this place.
+                    const ask = lastAsk.get(input.phone);
+                    if (ask?.query && Date.now() - ask.at < ASK_TTL_MS) {
+                        const cat = (ask.category === "food" || ask.category === "pharmacy" || ask.category === "grocery" ? ask.category : categoryFor(route, ask.partner)) as "food" | "grocery" | "pharmacy";
+                        const r = await startRoutedSearch(input, toResolved(place), cat, ask.query, ask.partner, draft, rawText, undefined, null);
+                        if (r?.text) return { ...r, text: `${placeEmoji(place.nickname)} Delivering to *${place.nickname}*.\n\n${r.text}` };
+                        return r;
+                    }
+                    return { text: `${placeEmoji(place.nickname)} Okay — your next order goes to *${place.nickname}*. What would you like?` };
                 }
             }
             if (route.addressKind) {
@@ -2641,7 +2862,10 @@ async function startRoutedSearchCore(
         }
     }
     let note = "";
-    if (partner && BLOCKED_SITES[partner]) {
+    // Zepto blocks our browser, but a caregiver-linked Zepto account works through its MCP — never
+    // call it "blocked" (and never swap it for other stores) when the family has linked it.
+    const zeptoLinked = await zeptoLinkedFor(input.familyId);
+    if (partner && BLOCKED_SITES[partner] && !(partner === "zepto" && zeptoLinked)) {
         note = `${BLOCKED_SITES[partner]} 🙏`;
         partner = partner === "zomato" ? "swiggy" : undefined;
     }
@@ -2706,6 +2930,13 @@ async function startRoutedSearchCore(
         linkNote = m.linkNote || "";
     }
     if (linkNote) out.lead = [out.lead, linkNote].filter(Boolean).join("\n\n");
+    if (partner === "zepto") {
+        // Linked Zepto but the MCP route couldn't start (no mapped place / MCP off): the website
+        // blocks automated browsing, so say it and offer Instamart — never a silent swap.
+        await clearPickingDraft(input.phone, draft);
+        await setOffer(input.phone, input.familyId, { partner: "instamart", query: q, category: "grocery" });
+        return { text: `I can't reach Zepto just now 🙏 Want me to try *Instamart* instead?` };
+    }
 
     // Zomato (no MCP): guest search on the remote India-proxy Chrome → the same confirm card;
     // login via the OTP step only after she confirms. Remote off → Swiggy as before.
@@ -2715,8 +2946,10 @@ async function startRoutedSearchCore(
         const query = [q, restaurantName].filter(Boolean).join(" ").trim() || "popular food";
         return deferGuestWork(
             input,
-            `Searching *Zomato* for "${query}" near 📍 ${home.short} 🔎 — this one takes a couple of minutes, I'll send the options.`,
+            `Searching *Zomato* for "${query}" near ${whereLabel(home)} 🔎 — this one takes a couple of minutes, I'll send the options.`,
             (token) => zomatoSearchCore(input, query, pb, home!, token),
+            null,
+            { slow: true, searching: "Zomato", retry: { partner: "zomato", query, category: "food" }, fallback: { partner: "swiggy", query, category: "food" } },
         );
     }
 
@@ -2731,6 +2964,7 @@ async function startRoutedSearchCore(
                 partner: "swiggy",
                 siteKey: "swiggy",
                 addressLabel: home.full,
+                addressNickname: home.nickname || undefined,
                 dishQuery: q || undefined,
                 category: "food",
             };
@@ -2752,8 +2986,14 @@ async function startRoutedSearchCore(
         if (partner === "instamart" || partner === "blinkit") {
             return deferGuestWork(
                 input,
-                `Searching *${partnerLabel(partner)}* for "${q}" near 📍 ${home.short} 🔎 — I'll send the options in a moment.`,
+                `Searching *${partnerLabel(partner)}* for "${q}" near ${whereLabel(home)} 🔎 — I'll send the options in a moment.`,
                 (token) => grocerySearchCore(input, `Order ${q} from ${partnerLabel(partner!)}`, q, pb, home, token),
+                null,
+                {
+                    searching: partnerLabel(partner),
+                    retry: { partner, query: q, category: "grocery" },
+                    fallback: { partner: partner === "blinkit" ? "instamart" : "blinkit", query: q, category: "grocery" },
+                },
             );
         }
         // Other allowlisted sites: existing guest search → confirm card.
@@ -2765,11 +3005,13 @@ async function startRoutedSearchCore(
     const cat = category === "pharmacy" ? "pharmacy" : "grocery";
     const partners = COMPARE_PARTNERS[cat];
     const names = partners.map((p) => `*${partnerLabel(p)}*`).join(" and ");
-    const blockedNote = cat === "grocery" && !/zepto/i.test(note) ? " (Zepto blocks automated browsing, so I can't include it.)" : "";
+    const blockedNote = cat === "grocery" && !/zepto/i.test(note) && !zeptoLinked ? " (Zepto blocks automated browsing, so I can't include it.)" : "";
     return deferGuestWork(
         input,
-        `${note ? `${note}\n` : ""}Comparing ${names} for "${q}" near 📍 ${home.short} 🔎 — I'll send the prices in a moment.${blockedNote}`,
+        `${note ? `${note}\n` : ""}Comparing ${names} for "${q}" near ${whereLabel(home)} 🔎 — I'll send the prices in a moment.${blockedNote}`,
         (token) => compareSearchCore(input, cat, q, partners, home, token),
+        null,
+        { retry: { query: q, category: cat } },
     );
 }
 
@@ -2777,6 +3019,15 @@ async function startRoutedSearchCore(
 const guestDebug = new Map<string, Array<{ at: number; partner: string; reason: string }>>();
 export function lastGuestDebugFor(phone: string) {
     return guestDebug.get(phone) ?? null;
+}
+/** Raw site failure → logs + the secret-gated mock peek (never the elder's chat). */
+function rememberGuestFailure(phone: string, partner: string, reason: string): void {
+    console.warn(`[guest-search] ${partner} failed:`, reason.slice(0, 300));
+    const add = (r: string) => guestDebug.set(phone, [...(guestDebug.get(phone) || []).slice(-3), { at: Date.now(), partner, reason: r.slice(0, 400) }]);
+    add(reason);
+    if (partner === "instamart") {
+        void import("./swiggyGuest.service").then(({ lastInstamartDebug }) => lastInstamartDebug && add(`page: ${lastInstamartDebug}`)).catch(() => undefined);
+    }
 }
 
 async function compareSearchCore(
@@ -2846,13 +3097,14 @@ async function compareSearchCore(
             if (alt.searchQuery) return compareSearchCore(input, category, alt.searchQuery, partners, home, token);
         }
         return {
-            text: `I couldn't find "${query}" near 📍 ${home.short} 🙏\n${per.map((p) => `• ${p.reason || `${partnerLabel(p.partner)}: nothing matching`}`).join("\n")}\n\nTry another name?`,
+            text: `I couldn't find "${query}" near ${whereLabel(home)} 🙏\n${per.map((p) => `• ${p.reason || `${partnerLabel(p.partner)}: nothing matching`}`).join("\n")}\n\nTry another name?`,
         };
     }
     const draft: BrowserTaskDraft = {
         phase: "awaiting_sku_confirm",
         goal: `Order ${query}`,
         addressLabel: home.full,
+        addressNickname: home.nickname || undefined,
         productQuery: query,
         category,
         compare: true,
@@ -2879,6 +3131,17 @@ async function compareSearchCore(
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MCP_TO_PARTNER: Record<McpStore, CommercePartnerKey> = { swiggy: "swiggy", instamart: "instamart", zepto: "zepto" };
+
+/** The family linked Zepto (MCP) and Zepto ordering is enabled. */
+async function zeptoLinkedFor(familyId: string): Promise<boolean> {
+    try {
+        const { familyStoreConnections, mcpOrderStores } = await import("./mcpCommerce/mcpCommerce.service");
+        if (!mcpOrderStores().includes("zepto")) return false;
+        return (await familyStoreConnections(familyId)).has("zepto");
+    } catch {
+        return false;
+    }
+}
 
 /** Honest note for the elder + a dashboard entry for the caregiver (no caregiver WhatsApp). */
 async function noLinkNote(input: RoutedInput, missing: McpStore[]): Promise<string> {
@@ -2929,8 +3192,36 @@ async function tryMcpRoute(
     await clearPickingDraft(input.phone, draft);
     const names = linked.map((s) => `*${MCP_STORE_LABEL[s]}*`).join(" and ");
     const what = `"${q}"${restaurantName ? ` from ${restaurantName}` : ""}`;
-    const ack = `${note ? `${note}\n` : ""}Checking ${names} for ${what} near 📍 ${home.short} 🔎 — I'll send the options in a moment.`;
-    return { result: deferGuestWork(input, ack, (token) => mcpSearchCore(input, linked, q, place, home, isFood, restaurantName, token)) };
+    const ack = `${note ? `${note}\n` : ""}Checking ${names} for ${what} near ${whereLabel(home)} 🔎 — I'll send the options in a moment.`;
+    return {
+        result: deferGuestWork(input, ack, (token) => mcpSearchCore(input, linked, q, place, home, isFood, restaurantName, token), null, {
+            searching: linked.map((s) => MCP_STORE_LABEL[s]).join(" and "),
+            retry: { partner: linked.length === 1 ? MCP_TO_PARTNER[linked[0]!] : undefined, query: q, category: isFood ? "food" : "grocery", restaurantName: restaurantName || undefined },
+        }),
+    };
+}
+
+/** One dashboard warning per family+store per 6h; a short honest line for the chat. */
+const relinkWarned = new Map<string, number>();
+function relinkNote(input: RoutedInput, labels: string[]): string {
+    const names = [...new Set(labels)].join(" and ");
+    const key = `${input.familyId}|${names}`;
+    if (Date.now() - (relinkWarned.get(key) || 0) > 6 * 3600_000) {
+        relinkWarned.set(key, Date.now());
+        void logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "order_step",
+            severity: "warn",
+            title: `${names} link expired — reconnect it in Integrations`,
+            detail: `The store rejected the linked ${names} account (401 even after a token refresh). Disconnect and connect ${names} again in the Kavach dashboard → Integrations.`,
+            data: { source: "mcp", needsRelink: labels },
+        });
+    }
+    return input.actorRole === FamilyRole.CARE_RECIPIENT
+        ? `💡 The linked ${names} account needs reconnecting — ask your caregiver to reconnect it in the Kavach app. I'm checking the ${names} website instead.`
+        : `💡 Your linked ${names} account needs reconnecting (Kavach app → Integrations). I'm checking the ${names} website instead.`;
 }
 
 function mcpOptionsCopy(draft: BrowserTaskDraft): string {
@@ -2945,7 +3236,7 @@ function mcpOptionsCopy(draft: BrowserTaskDraft): string {
             return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}${tail}`;
         }),
         ...(draft.lastMessage ? [``, draft.lastMessage] : []),
-        draft.addressLabel ? `📍 ${draft.addressLabel}` : "",
+        draftPlaceLine(draft),
         ``,
         `${replyPickCopy(opts.length)} to pick, or *cancel*. Cash on Delivery only.`,
     ]
@@ -3012,7 +3303,7 @@ async function mcpSearchCore(
     token: number,
     hop = 0,
     lead = "",
-): Promise<{ text: string }> {
+): Promise<WorkResult> {
     const { searchStore, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
     const ctx = { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place };
     const t0 = Date.now();
@@ -3029,6 +3320,10 @@ async function mcpSearchCore(
             results: results.map((r) => ({ store: r.store, hits: r.hits.length, error: r.error || null, addressVia: r.addressVia || null, message: r.message || null })),
         },
     });
+    // A linked account the store no longer accepts (token rejected even after a refresh) needs a
+    // re-link by the caregiver — say so honestly instead of "didn't load", then use the website.
+    const authDead = results.filter((r) => r.error === "auth_expired").map((r) => r.store);
+    if (authDead.length && hop === 0) lead = [lead, relinkNote(input, authDead.map((s) => MCP_STORE_LABEL[s]))].filter(Boolean).join("\n\n");
     let hits = results.flatMap((r) => r.hits);
     const rawCount = hits.length;
     if (hits.length) {
@@ -3043,12 +3338,13 @@ async function mcpSearchCore(
         if (!rawCount && broken.length === results.length) {
             // MCP down for every linked store → the website (browser) as today.
             console.warn(`[mcp-order] search failed, browser fallback:`, results.map((r) => `${r.store}:${r.error}:${r.message}`).join(" | "));
-            if (isFood) return startFoodFlow(input, q, home);
+            const withLead = (r: WorkResult): WorkResult => (lead && r.text ? { ...r, text: `${lead}\n\n${r.text}` } : r);
+            if (isFood) return withLead(await startFoodFlow(input, q, home));
             if (stores.includes("instamart")) {
                 const pb = resolvePlaybook("instamart", `order ${q} from instamart`);
-                return grocerySearchCore(input, `Order ${q} from Instamart`, q, pb, home, token);
+                return withLead(await grocerySearchCore(input, `Order ${q} from Instamart`, q, pb, home, token));
             }
-            return { text: `Zepto isn't answering just now 🙏 Want me to try *Instamart* instead?` };
+            return { text: `${lead ? `${lead}\n\n` : ""}Zepto isn't answering just now 🙏 Want me to try *Instamart* instead?`, offer: { partner: "instamart", query: q, category: "grocery" } };
         }
         await saveIfCurrent(input.phone, null, token);
         const reachable = results.some((r) => r.error !== "unserviceable" && r.error !== "no_address_coords");
@@ -3066,7 +3362,7 @@ async function mcpSearchCore(
                   ? `• ${MCP_STORE_LABEL[r.store]}: I couldn't pin 📍 ${place.nickname} on the map for it.`
                   : `• ${MCP_STORE_LABEL[r.store]}: nothing matching "${q}".`,
         );
-        return { text: `I couldn't find "${q}" near 📍 ${place.short} 🙏\n${why.join("\n")}\n\nTry another name?` };
+        return { text: `I couldn't find "${q}" near ${whereLabel(place)} 🙏\n${why.join("\n")}\n\nTry another name?` };
     }
     // Named restaurant not on Swiggy near her → say so before the closest matches from elsewhere.
     if (restaurantName && isFood) {
@@ -3092,6 +3388,7 @@ async function mcpSearchCore(
         phase: "awaiting_sku_confirm",
         goal: `Order ${q}`,
         addressLabel: place.full,
+        addressNickname: place.nickname || undefined,
         productQuery: q,
         dishQuery: isFood ? q : undefined,
         restaurantName: restaurantName || undefined,
@@ -3394,6 +3691,7 @@ async function mcpRestaurantList(
             partner: "swiggy",
             siteKey: "swiggy",
             addressLabel: m.place.full,
+            addressNickname: m.place.nickname || undefined,
             dishQuery: dishQuery || undefined,
             mcpPlaceId: m.place.addressId,
             restaurantOptions: open.map((r) => ({ id: r.id, name: r.name, cuisines: r.cuisines, rating: r.rating, eta: r.eta })),
@@ -3426,7 +3724,7 @@ async function mcpRestaurantMenu(
             const r = found.find((x) => norm(x.name).includes(want) || want.includes(norm(x.name))) || null;
             if (!r) {
                 await saveIfCurrent(input.phone, null, token);
-                return { text: `*${restaurant}* isn't taking orders near 📍 ${m.place.short} right now 🙏 Want me to show restaurants that are open?` };
+                return { text: `*${restaurant}* isn't taking orders near ${whereLabel(m.place)} right now 🙏 Want me to show restaurants that are open?` };
             }
             target = { id: r.id, name: r.name };
         }
@@ -3450,6 +3748,7 @@ async function mcpRestaurantMenu(
             siteKey: "swiggy",
             category: "food",
             addressLabel: m.place.full,
+            addressNickname: m.place.nickname || undefined,
             restaurantName: target.name,
             dishQuery: dish || undefined,
             productQuery: dish || target.name,

@@ -71,11 +71,31 @@ process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection]", reason instanceof Error ? reason.stack || reason.message : reason);
 });
 
+// Cloud Run sends SIGTERM before stopping an instance (deploy / scale-in): answer every search this
+// instance still owes (honest "interrupted — want me to try again?") within the ~10 s grace, then exit.
+process.once("SIGTERM", () => {
+  console.log("[shutdown] SIGTERM — answering in-flight searches");
+  const done = import("./services/commerceAutomation/browserTaskWhatsApp.service")
+    .then(({ answerInflightOnShutdown }) => answerInflightOnShutdown())
+    .then((n) => console.log(`[shutdown] answered ${n} in-flight search(es)`))
+    .catch((err) => console.warn("[shutdown] in-flight answer failed:", err instanceof Error ? err.message : err));
+  void Promise.race([done, new Promise((r) => setTimeout(r, 7000))]).finally(() => process.exit(0));
+});
+
 app.listen(PORT, () => {
   console.log(`Kavach Backend running on port ${PORT}`);
   startOutreachScheduler();
   startCareNudgeScheduler();
   startMemoryConsolidationScheduler();
+  // Never leave anyone hanging after "I'll send the options in a moment": searches promised by a
+  // previous revision / a lost promise get an honest answer + retry offer (startup, then every minute).
+  const sweepSearches = () =>
+    void import("./services/commerceAutomation/browserTaskWhatsApp.service")
+      .then(({ sweepLostSearches }) => sweepLostSearches())
+      .then((n) => n && console.log(`[guest-browse] answered ${n} lost search(es)`))
+      .catch((err) => console.warn("[guest-browse] sweep failed:", err instanceof Error ? err.message : err));
+  setTimeout(sweepSearches, 30_000);
+  setInterval(sweepSearches, 60_000).unref();
   // Legacy per-person delivery addresses → family address book (idempotent, once per row).
   setTimeout(() => {
     void import("./services/familyAddressBook.service")
