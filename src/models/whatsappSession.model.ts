@@ -14,6 +14,8 @@ export interface IWhatsappSession {
     pendingRecipientUserId?: string;
     /** Caregiver ordering for THEMSELF: whose context the live order/ride uses. */
     orderSubject?: { userId: string; at: Date };
+    /** Last ride route that got app links (30 min) — "Ola se" / "cab chahiye" reuse it. */
+    lastRide?: Record<string, unknown>;
     awaitingRecipientPick?: boolean;
     recipientOptions?: Array<{ userId: string; name: string }>;
     guestTurns?: number;
@@ -72,6 +74,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         pendingSearch: { type: Schema.Types.Mixed },
         pendingOffer: { type: Schema.Types.Mixed },
         orderSubject: { type: Schema.Types.Mixed },
+        lastRide: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

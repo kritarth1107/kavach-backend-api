@@ -31,7 +31,19 @@ import {
     providerFromText,
 } from "./slotParse";
 import { RIDE_CONFIRM_RE, type RideDraft, type RidePlace } from "./types";
-import { rideAppHandoffMessage } from "./rideHandoff";
+import {
+    chooseServices,
+    cityKey,
+    cityOfPlaces,
+    handoffMessage,
+    isAirport,
+    isHindi,
+    nameFor,
+    noServiceMessage,
+    serviceFromText,
+    vehicleFromText,
+} from "./rideServices";
+import { awaitRideAvailability, cachedAvailability, warmRideAvailability } from "./rideAvailability";
 
 export { messageLooksLikeRideIntent, isRideCancel } from "./slotParse";
 export type { RideDraft } from "./types";
@@ -67,7 +79,7 @@ async function loadDraft(phone: string): Promise<RideDraft | null> {
  *  "haan" / "ok" must never resume it ("Where from, and where to?" out of nowhere). */
 export function isStaleRideDraft(d: { phase?: string; savedAt?: string | Date } | null | undefined): boolean {
     // Every pre-booking step goes stale (a 2-hour-old "Got the route… reply yes" must not eat a later "haan").
-    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable"].includes(d.phase)) return false;
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable", "offer_caregiver"].includes(d.phase)) return false;
     const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
     return !at || Date.now() - at > 30 * 60_000;
 }
@@ -240,20 +252,119 @@ async function maybeNotifyCaregivers(input: {
 /**
  * Handle ride WhatsApp turns. Returns reply or null if not a ride turn.
  */
-export async function handleRideWhatsAppTurn(input: {
+type RideTurnInput = {
     phone: string;
     text: string;
     familyId: string;
     actorUserId: string;
     recipientUserId: string;
     actorRole: FamilyRole | null;
-}): Promise<{ text: string; draft?: RideDraft } | null> {
+    /** Her original words (the router may have rewritten `text` into "from X to Y"). */
+    hintText?: string;
+    /** The router decided this is a ride ask — start one even if the words look plain. */
+    forceStart?: boolean;
+};
+
+export async function handleRideWhatsAppTurn(input: RideTurnInput): Promise<{ text: string; draft?: RideDraft } | null> {
+    const r = await handleRideWhatsAppTurnInner(input);
+    // Route shown → check Ola / Rapido for this city in the background, so "yes" is instant.
+    const d = r?.draft;
+    if (d?.phase === "confirming_route" && d.pickup && d.drop) {
+        const { city } = cityOfPlaces(d.pickup, d.drop);
+        void warmRideAvailability(cityKey(city, d.pickup), d.pickup, d.drop).catch(() => undefined);
+    }
+    return r;
+}
+
+async function rideLang(phone: string): Promise<string | null> {
+    const { lastRouteFor } = await import("../saheliRouter.service");
+    return lastRouteFor(phone)?.route?.language || null;
+}
+
+/** Route confirmed → the best app link for this city (plus one alternative), or the no-service offer. */
+async function multiAppHandoff(input: RideTurnInput, draft: RideDraft): Promise<{ text: string; draft: RideDraft }> {
+    // Links need coordinates; a saved address without them is geocoded.
+    for (const k of ["pickup", "drop"] as const) {
+        const pl = draft[k];
+        if (pl && (pl.lat == null || pl.lng == null) && (pl.address || pl.raw)) {
+            const r = await resolveRidePlace({ raw: pl.address || pl.raw }).catch(() => null);
+            if (r?.lat != null && r?.lng != null) draft[k] = { ...pl, lat: r.lat, lng: r.lng };
+        }
+    }
+    const lang = await rideLang(input.phone);
+    const { city, tier } = cityOfPlaces(draft.pickup, draft.drop);
+    const key = cityKey(city, draft.pickup);
+    void warmRideAvailability(key, draft.pickup, draft.drop).catch(() => undefined);
+    await awaitRideAvailability(key, 7000);
+    const vehicle = draft.vehicle || "cab";
+    const airport = isAirport(draft.pickup) || isAirport(draft.drop);
+    const choice = chooseServices({ tier, vehicle, requested: draft.requested, status: (s) => cachedAvailability(key, s), airport });
+    console.log(`[ride-handoff] ${key} tier=${tier} veh=${vehicle} req=${draft.requested || "-"} → ${choice.primary || "none"}/${choice.alt || "-"}`);
+    await WhatsappSession.updateOne(
+        { phone: input.phone },
+        { $set: { lastRide: { pickup: draft.pickup, drop: draft.drop, at: new Date() } } },
+    ).catch(() => undefined);
+    const msg = handoffMessage({ choice, vehicle, pickup: draft.pickup, drop: draft.drop, lang });
+    if (msg) {
+        await saveDraft(input.phone, null);
+        void import("../activityLog.service").then(({ logActivity }) =>
+            logActivity({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind: "ride",
+                title: `Ride link sent (${choice.primary})`,
+                detail: `${nameFor(draft.pickup)} → ${nameFor(draft.drop)} · not booked until opened in the app`,
+            }),
+        ).catch(() => undefined);
+        return { text: msg, draft: { ...draft, phase: "done", lastMessage: msg } };
+    }
+    const elder = input.actorRole === FamilyRole.CARE_RECIPIENT;
+    const text = noServiceMessage({ pickup: draft.pickup, lang, canOfferFamily: elder });
+    if (elder) {
+        draft.phase = "offer_caregiver";
+        draft.lastMessage = text;
+        await saveDraft(input.phone, draft);
+    } else await saveDraft(input.phone, null);
+    return { text, draft };
+}
+
+async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text: string; draft?: RideDraft } | null> {
     const text = input.text.trim();
     let draft = await loadDraft(input.phone);
+
+    const hint = `${input.hintText || ""} ${text}`;
+    const hv = vehicleFromText(hint);
+    const hs = serviceFromText(hint);
+
+    if (draft?.phase === "offer_caregiver") {
+        const hi = isHindi(await rideLang(input.phone));
+        if (RIDE_CONFIRM_RE.test(text) || isSoftYes(text)) {
+            const u = (await User.findById(input.recipientUserId).lean().catch(() => null)) as { firstName?: string } | null;
+            const who = u?.firstName || "Your family member";
+            await notifyCaregivers({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                kind: "elder_share",
+                urgency: "medium",
+                message: `${who} needs a ride from ${nameFor(draft.pickup) || "home"} to ${nameFor(draft.drop) || "their destination"} — Uber, Ola and Rapido don't serve that area right now. Could you help arrange one?`,
+            }).catch(() => undefined);
+            await saveDraft(input.phone, null);
+            return { text: hi ? "Maine parivaar ko message kar diya hai 🙏 Woh ride ka intezaam kar denge." : "I've messaged your family 🙏 They'll help arrange a ride." };
+        }
+        await saveDraft(input.phone, null);
+        if (isRideCancel(text) || /^(no|nahi|nahin|mat|rehne do)$/i.test(text)) return { text: hi ? "Theek hai 🙏" : "Okay 🙏" };
+        draft = null; // anything else moves on
+    }
 
     if (draft && isRideCancel(text)) {
         await saveDraft(input.phone, null);
         return { text: "Okay — cancelled. Nothing was booked or paid." };
+    }
+    if (draft && draft.phase !== "done") {
+        if (hv) draft.vehicle = hv;
+        if (hs) draft.requested = hs;
     }
 
     // Active mid-flow (including OTP / fare confirm)
@@ -424,18 +535,7 @@ export async function handleRideWhatsAppTurn(input: {
         // SMS is ever sent; we never solve captchas. Claiming "Uber may text a code" was false.
         // The live web-login path stays behind RIDE_WEB_LOGIN=on for a future partner API.
         if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text) && process.env.RIDE_WEB_LOGIN !== "on") {
-            // Uber's link needs coordinates for the pickup; a saved address without them is geocoded.
-            for (const k of ["pickup", "drop"] as const) {
-                const pl = draft[k];
-                if (pl && (pl.lat == null || pl.lng == null) && (pl.address || pl.raw)) {
-                    const r = await resolveRidePlace({ raw: pl.address || pl.raw }).catch(() => null);
-                    if (r?.lat != null && r?.lng != null) draft[k] = { ...pl, lat: r.lat, lng: r.lng };
-                }
-            }
-            const { lastRouteFor } = await import("../saheliRouter.service");
-            const msg = rideAppHandoffMessage(draft, lastRouteFor(input.phone)?.route?.language);
-            await saveDraft(input.phone, null);
-            return { text: msg, draft: { ...draft, phase: "done", lastMessage: msg } };
+            return await multiAppHandoff(input, draft);
         }
         // Route confirm → ask Uber phone
         if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text)) {
@@ -544,12 +644,28 @@ export async function handleRideWhatsAppTurn(input: {
         return null;
     }
 
-    if (starting || bareYeahStartsRide) {
+    // "cab chahiye" / "Ola se" right after a ride link: same route, new app or vehicle.
+    if ((starting || input.forceStart) && (hv || hs)) {
+        const pf = parseFromTo(text);
+        const row = (await WhatsappSession.findOne({ phone: input.phone }, { lastRide: 1 }).lean().catch(() => null)) as {
+            lastRide?: { pickup?: RidePlace; drop?: RidePlace; at?: Date };
+        } | null;
+        const lr = row?.lastRide;
+        if (!pf.pickup && !pf.drop && lr?.pickup && lr?.drop && lr.at && Date.now() - new Date(lr.at).getTime() < 30 * 60_000) {
+            const again: RideDraft = { phase: "confirming_route", provider: providerFromText(text), pickup: lr.pickup, drop: lr.drop, vehicle: hv || undefined, requested: hs || undefined };
+            again.routeSummary = formatRouteSummary(lr.pickup, lr.drop);
+            return await multiAppHandoff(input, again);
+        }
+    }
+
+    if (starting || bareYeahStartsRide || input.forceStart) {
         // Avoid stealing general "yes" when pharmacy/browser drafts active — caller should
         // check those first. Here: only start if no ride draft.
         draft = {
             phase: "need_slots",
             provider: providerFromText(text),
+            vehicle: hv || undefined,
+            requested: hs || undefined,
         };
         const updated = await maybeCompleteSlots(draft, text);
         draft = updated.draft;

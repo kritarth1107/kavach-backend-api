@@ -17,7 +17,9 @@ export type RidePhase =
     | "awaiting_book_confirm"
     | "booking"
     | "done"
-    | "unavailable";
+    | "unavailable"
+    /** No app serves the area: she was offered "shall I message your family?". */
+    | "offer_caregiver";
 
 export type RidePlace = {
     raw?: string;
@@ -53,6 +55,10 @@ export type RideDraft = {
     };
     lastMessage?: string;
     mode?: "playwright" | "dry_run";
+    /** Cab / auto / bike she asked for (airport trips default to cab). */
+    vehicle?: "cab" | "auto" | "bike";
+    /** App she named ("Ola se"), honoured when it runs there. */
+    requested?: "uber" | "ola" | "rapido" | "namma_yatri";
     unavailableReason?: string;
 };
 

@@ -218,7 +218,7 @@ function liveFlow(d: { phase?: string; savedAt?: string | Date } | undefined | n
 /** Same rule as rideWhatsApp.isStaleRideDraft (kept local: this file imports ride code lazily). */
 function staleRideSlots(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
     // Every pre-booking step goes stale (a 2-hour-old "Got the route… reply yes" must not eat a later "haan").
-    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable"].includes(d.phase)) return false;
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "awaiting_otp", "unavailable", "offer_caregiver"].includes(d.phase)) return false;
     const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
     return !at || Date.now() - at > 30 * 60_000;
 }
@@ -1467,7 +1467,7 @@ async function dispatchRoutedTurn(a: {
     };
     const rideTurn = async (t: string) => {
         const { handleRideWhatsAppTurn } = await import("./rideBooking/rideWhatsApp.service");
-        const r = await handleRideWhatsAppTurn({ ...input, text: t });
+        const r = await handleRideWhatsAppTurn({ ...input, text: t, hintText: text, forceStart: route.intent === "ride" });
         if (r?.text && /hi/i.test(route.language || "")) r.text = hinglishRideCopy(r.text);
         return r;
     };
@@ -1577,7 +1577,7 @@ async function dispatchRoutedTurn(a: {
     {
         const PRE_BD = new Set(["awaiting_address", "awaiting_address_confirm", "awaiting_restaurant_pick", "awaiting_sku_confirm", "awaiting_confirm", "awaiting_mcp_confirm"]);
         const PRE_PD = new Set(["ask_list_or_rx", "pick_partner", "awaiting_rx_photo", "confirm_basket"]);
-        const PRE_RD = new Set(["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "unavailable"]);
+        const PRE_RD = new Set(["need_slots", "need_pickup", "need_drop", "confirming_route", "ask_uber_phone", "awaiting_book_confirm", "unavailable", "offer_caregiver"]);
         const hi = /^hi/i.test(route.language || "");
         const { partnerLabel } = await import("./commerceAutomation/playbooks");
         const dropped: string[] = [];
