@@ -757,6 +757,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             mediaUrl: body.mediaUrl,
             isRxPhoto: body.mediaType === "image" || body.mediaType === "document",
         });
+        if (delegateLead) console.log(`[delegate] reroute ${route.intent}/${route.category || "-"} p=${route.partners.join(",") || "-"} → reply=${(routedOut.reply || "").length} legacy=${routedOut.legacyGates}`);
         if (routedOut.reply) {
             const { recordWhatsAppAiDebug } = await import("./whatsappWebhookLog.service");
             recordWhatsAppAiDebug({
