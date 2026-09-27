@@ -85,7 +85,9 @@ export async function generateDailySnapshot(input: {
         const weekly = await P.learnedThisWeek(w).catch(() => "");
         const unusual = await U.unusualForSnapshot(w, new Date(new Date(`${dayKey}T00:00:00+05:30`).getTime())).catch(() => [] as string[]);
         parsed.highlights = [...(parsed.highlights ?? []).slice(0, 6), ...(weekly ? [weekly] : [])];
-        parsed.concerns = [...(parsed.concerns ?? []), ...unusual];
+        // Fact check-ins / contradictions: "Is Amma still taking X?" (yes pins, no removes — on the card).
+        const questions = await P.questionsForSnapshot(w, dayKey).catch(() => [] as string[]);
+        parsed.concerns = [...questions, ...(parsed.concerns ?? []), ...unusual];
     }
     const set = parsed?.summary
         ? {

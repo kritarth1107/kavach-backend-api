@@ -10,7 +10,9 @@ import ElderProfile, { type CareAction, type ProfileFact } from "../../models/el
 import ElderWellbeingDay from "../../models/elderWellbeingDay.model";
 import { parseJsonLoose, vertexFlashModel, vertexGenerateText, vertexProModel } from "../../clients/vertexGemini.client";
 import { istDayKey } from "../activityLog.service";
-import { applyReflection, detectDeviations, isActive, isUnsafeFact, newActionId, type ReflectionOp } from "./profileCore";
+import { applyReflection, detectDeviations, isActive, isUnsafeFact, newActionId, type FactJudgement, type NewQuestion, type ReflectionOp } from "./profileCore";
+import { DECAY_CLASSES, QUESTION_EXPIRY_DAYS } from "./factPolicy";
+import type { CaregiverQuestion } from "../../models/elderProfile.model";
 import { applyRetention, forgetProfileCache, type Who } from "./elderProfile.service";
 
 const SYSTEM = `You are Saheli's nightly reflection for ONE elderly person in India. Saheli is her caring companion who talks to her like her own child, keeps her daily routine (medicines, meals, walks, sleep, appointments) and helps with whatever she needs. Read the day's timeline and the current profile, then decide what Saheli should REMEMBER and what she should DO tomorrow.
@@ -23,6 +25,14 @@ Facts ("ops"):
 - Short third-person facts ("Knee pain in the mornings; worse after climbing stairs", "Daughter Meena calls on Sundays", "Enjoys old Kishore Kumar songs", "Usually replies to reminders after 9 am").
 - NEVER output anything about payment methods, skipping confirmations/checks, disabling alerts, ordering without asking, tobacco/alcohol, or addresses — safety rules are fixed and not part of the profile.
 - confidence: 0.3 (single passing mention) … 0.8 (clear, repeated today).
+- by: who the evidence came from — "elder" (she said it herself), "caregiver" (a family member said it), "orders" (seen in what she ordered/booked), "inferred" (your guess from indirect signs; keep these at ≤0.4).
+- decayClass (how long it stays true): "health_condition" (diabetes, BP, arthritis, lactose intolerance — lasting conditions), "allergy", "safety" (fall risk, can't climb stairs, hearing/vision limits), "medication" (which medicines she takes / has stopped), "routine" (walks, meal/sleep times, prayer, visits), "preference" (food, brands, songs, topics, tone), "transient_state" (pain this week, a bad night, low mood today, a cold — passes in days), "other".
+- If today shows a known health/medication fact is no longer true (she stopped a medicine, a condition changed), do NOT revise it silently: mark its judgement "contradicts" with her words; the family is asked.
+
+Judgements (REQUIRED, one per current profile fact listed, use its id):
+- verdict "supports" when today shows it's still true; "contradicts" when today clearly shows it is no longer true or was wrong (quote her words in evidence); otherwise "silent". A day that simply doesn't mention it is "silent" — never "contradicts".
+- opportunity (for silent facts): true only if today had a natural occasion where this fact would have shown up if it were still true (she placed grocery orders but her usual milk wasn't in them; she described her evening but not her walk; she talked about medicines but not this one). false if the day simply didn't touch that part of her life.
+- decayClass: give it for facts listed with class "?".
 
 Care actions for tomorrow (0–4, most useful first):
 - follow_up: gently ask about something she mentioned (knee pain, a bad night, a family visit).
@@ -39,7 +49,8 @@ Day signals: mood 1–5 (null if unclear), moodWord, lonely, and whether she men
 Tuning (only if clearly shown): addressAs (how she likes to be called), preferredNudgeHour (6–11, hour she actually replies in the morning), maxOptions (1–3 if she gets confused by choices), language (hi|en|hinglish).
 
 Reply ONLY JSON:
-{"ops":[{"op":"add|reinforce|revise","id":null,"category":"health|wellbeing|mood|medicines|routine|people|cognition|comfort|communication|preferences","text":"…","confidence":0.6,"evidence":"…"}],
+{"ops":[{"op":"add|reinforce|revise","id":null,"category":"health|wellbeing|mood|medicines|routine|people|cognition|comfort|communication|preferences","text":"…","confidence":0.6,"evidence":"…","by":"elder|caregiver|orders|inferred","decayClass":"health_condition|allergy|safety|medication|routine|preference|transient_state|other"}],
+ "judgements":[{"id":"<fact id>","verdict":"supports|contradicts|silent","opportunity":false,"by":"elder|caregiver|orders|inferred","evidence":"…","decayClass":null}],
  "careActions":[{"kind":"follow_up|reminder|company|offer|caregiver_suggestion","text":"…","say":"one short line Saheli can send her, in her language, warm like her own child (null for caregiver_suggestion)","why":"…","audience":"elder|caregiver"}],
  "unusual":[{"category":"repeat_order|bulk_quantity|large_spend|risky_meds|odd_hours|order_change|confusion|mood_drop|meds_missed|scam|other","confidence":0.6,"text":"…","evidence":"…"}],
  "day":{"mood":3,"moodWord":"…","lonely":false,"mentions":{"pain":false,"sleep":false,"appetite":false,"activity":false,"tired":false}},
@@ -51,6 +62,7 @@ function istTime(d: Date): string {
 
 type Raw = {
     ops?: ReflectionOp[];
+    judgements?: FactJudgement[];
     unusual?: Array<{ category?: string; confidence?: number; text?: string; evidence?: string }>;
     careActions?: Array<{ kind?: string; text?: string; say?: string | null; why?: string; audience?: string }>;
     day?: { mood?: number | null; moodWord?: string | null; lonely?: boolean; mentions?: Record<string, boolean> };
@@ -113,7 +125,114 @@ async function dayCounts(w: Who, dayKey: string, rows: Array<{ kind: string; cre
     };
 }
 
-export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.now() - 86_400_000)), opts: { model?: string } = {}) {
+const S = (type: string, extra: Record<string, unknown> = {}) => ({ type, ...extra });
+const N = (type: string, extra: Record<string, unknown> = {}) => ({ type, nullable: true, ...extra });
+/** Structured output for the nightly reflection (Vertex OpenAPI subset). */
+const RESPONSE_SCHEMA = S("object", {
+    properties: {
+        ops: S("array", {
+            items: S("object", {
+                properties: {
+                    op: S("string", { enum: ["add", "reinforce", "revise"] }),
+                    id: N("string"),
+                    category: S("string", { enum: ["health", "wellbeing", "mood", "medicines", "routine", "people", "cognition", "comfort", "communication", "preferences"] }),
+                    text: S("string"),
+                    confidence: S("number"),
+                    evidence: N("string"),
+                    by: S("string", { enum: ["elder", "caregiver", "orders", "inferred"] }),
+                    decayClass: S("string", { enum: [...DECAY_CLASSES] }),
+                },
+                required: ["op", "category", "text", "confidence", "by", "decayClass"],
+            }),
+        }),
+        judgements: S("array", {
+            items: S("object", {
+                properties: {
+                    id: S("string"),
+                    verdict: S("string", { enum: ["supports", "contradicts", "silent"] }),
+                    opportunity: S("boolean"),
+                    by: N("string", { enum: ["elder", "caregiver", "orders", "inferred"] }),
+                    evidence: N("string"),
+                    decayClass: N("string", { enum: [...DECAY_CLASSES] }),
+                },
+                required: ["id", "verdict", "opportunity"],
+            }),
+        }),
+        careActions: S("array", {
+            items: S("object", {
+                properties: {
+                    kind: S("string", { enum: ["follow_up", "reminder", "company", "offer", "caregiver_suggestion"] }),
+                    text: S("string"),
+                    say: N("string"),
+                    why: S("string"),
+                    audience: S("string", { enum: ["elder", "caregiver"] }),
+                },
+                required: ["kind", "text", "why", "audience"],
+            }),
+        }),
+        unusual: S("array", {
+            items: S("object", {
+                properties: {
+                    category: S("string", { enum: ["repeat_order", "bulk_quantity", "large_spend", "risky_meds", "odd_hours", "order_change", "confusion", "mood_drop", "meds_missed", "scam", "other"] }),
+                    confidence: S("number"),
+                    text: S("string"),
+                    evidence: N("string"),
+                },
+                required: ["category", "confidence", "text"],
+            }),
+        }),
+        day: S("object", {
+            properties: {
+                mood: N("integer"),
+                moodWord: N("string"),
+                lonely: S("boolean"),
+                mentions: S("object", { properties: { pain: S("boolean"), sleep: S("boolean"), appetite: S("boolean"), activity: S("boolean"), tired: S("boolean") } }),
+            },
+        }),
+        tuning: S("object", { properties: { addressAs: N("string"), preferredNudgeHour: N("integer"), maxOptions: N("integer"), language: N("string") } }),
+    },
+    required: ["ops", "judgements", "careActions", "unusual", "day"],
+});
+
+async function recipientFirstName(recipientUserId: string): Promise<string> {
+    try {
+        const { default: User } = await import("../../models/users.model");
+        const u = await User.findOne({ userId: recipientUserId }).lean().catch(() => null);
+        return (u as { firstName?: string } | null)?.firstName || "";
+    } catch {
+        return "";
+    }
+}
+
+/** One short caregiver-facing question per fact ("Is Amma still taking her BP tablet?"); template fallback. */
+async function phraseQuestions(qs: NewQuestion[], name: string): Promise<string[]> {
+    const who = name || "she";
+    const fallback = qs.map((q) =>
+        q.trigger === "contradiction" ? `Saheli heard something that doesn't match: "${q.factText}". Is this still true for ${who === "she" ? "her" : who}?` : `Is this still true for ${who === "she" ? "her" : who}: "${q.factText}"?`,
+    );
+    try {
+        const raw = await vertexGenerateText({
+            model: vertexFlashModel(),
+            json: true,
+            timeoutMs: 20_000,
+            maxOutputTokens: 1024,
+            temperature: 0.2,
+            system: `You write ONE short yes/no question per item for an elderly person's family member, in simple English, about ${who}. Yes must mean "the fact is still true", No must mean "no longer true / wrong". Mention the specific thing (medicine name, routine, condition). Max 16 words. No advice, no diagnosis. Reply ONLY JSON {"questions":["…"]} in the same order.`,
+            prompt: qs.map((q, i) => `${i + 1}. fact: "${q.factText}"${q.trigger === "contradiction" ? ` — today she said something that doesn't match: ${q.evidence || "(no quote)"}` : " — not heard about in a while"}`).join("\n"),
+            responseSchema: { type: "object", properties: { questions: { type: "array", items: { type: "string" } } }, required: ["questions"] },
+        });
+        const out = parseJsonLoose<{ questions?: string[] }>(raw)?.questions || [];
+        return qs.map((_, i) => {
+            const t = String(out[i] || "").trim();
+            return t && t.length <= 160 && t.endsWith("?") && !isUnsafeFact(t) ? t : fallback[i]!;
+        });
+    } catch {
+        return fallback;
+    }
+}
+
+export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.now() - 86_400_000)), opts: { model?: string; now?: Date } = {}) {
+    const now = opts.now || new Date();
     const rows = await ActivityLog.find({ familyId: w.familyId, recipientUserId: w.recipientUserId, dayKey }).sort({ createdAt: 1 }).limit(1500).lean();
     const doc =
         (await ElderProfile.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId })) ||
@@ -131,7 +250,11 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     } catch {
         /* none */
     }
-    const current = (doc.facts || []).filter((f) => f.status !== "faded").map((f) => `${f.id} [${f.category}] (${f.status}${f.status === "learned" ? ` ${f.confidence}` : ""}) ${f.text}`);
+    const current = (doc.facts || [])
+        .filter((f) => f.status !== "faded" && f.status !== "rejected")
+        .map((f) => `${f.id} [${f.category}] class=${f.decayClass || "?"} (${f.status}${f.status === "learned" ? ` ${f.confidence}` : ""}) ${f.text}`);
+    const rejected = (doc.facts || []).filter((f) => f.status === "rejected").slice(-30).map((f) => `- ${f.text}`);
+    let judgements: FactJudgement[] = [];
     const memory = await memoryProfileMd(w);
     let ops: ReflectionOp[] = [];
     let actions: CareAction[] = [];
@@ -144,14 +267,15 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             `Day: ${dayKey} (IST)`,
             `Medicines/schedule today: ${counts.medsDone} done, ${counts.medsMissed} missed. Nudges: ${counts.nudgesSent} sent, ${counts.nudgesReplied} replied.`,
             declines ? `Declined options today: ${declines}` : "",
-            `Current profile facts (id [category] (status) text). Caregiver-confirmed/edited facts are fixed; REJECTED ones must never be re-learned:\n${current.join("\n") || "(none yet)"}`,
+            `Current profile facts (id [category] class (status confidence) text). Caregiver-confirmed/edited facts are fixed (still judge them). Give a judgement for EVERY one:\n${current.join("\n") || "(none yet)"}`,
+            rejected.length ? `REJECTED by the family — never re-learn these:\n${rejected.join("\n")}` : "",
             memory ? `Long-term memory notes (from Saheli's memory):\n${memory}` : "",
             `Timeline:\n${lines.join("\n")}`,
         ]
             .filter(Boolean)
             .join("\n\n");
         const tryModel = async (m: string) => {
-            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, prompt, timeoutMs: 90_000, maxOutputTokens: 4096, temperature: 0.2 });
+            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, responseSchema: RESPONSE_SCHEMA, prompt, timeoutMs: 120_000, maxOutputTokens: 8192, temperature: 0.2 });
             return parseJsonLoose<Raw>(raw);
         };
         const pro = opts.model || process.env.VERTEX_REFLECTION_MODEL?.trim() || vertexProModel();
@@ -163,6 +287,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         }
         if (parsed) {
             ops = Array.isArray(parsed.ops) ? parsed.ops : [];
+            judgements = Array.isArray(parsed.judgements) ? parsed.judgements : [];
             day = parsed.day || {};
             tuning = parsed.tuning || {};
             unusual = Array.isArray(parsed.unusual) ? parsed.unusual.slice(0, 3) : [];
@@ -184,8 +309,28 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
                 }));
         } else model = "failed";
     }
-    const merged = applyReflection((doc.facts || []) as ProfileFact[], ops, { now: new Date(), dayKey });
+    // Opportunity-aware decay needs an active day: she chatted, sent a voice note, ordered or rode.
+    // A re-run of an already-reflected day never decays twice.
+    const replay = Boolean(doc.lastReflectedDay && doc.lastReflectedDay >= dayKey);
+    const activeDay = !replay && counts.messagesIn + counts.voiceNotes + counts.orders + counts.cards + counts.rides > 0;
+    // Expire unanswered questions (decay resumes; no second check-in for the same fact).
+    for (const q of doc.questions || []) {
+        if (q.status === "open" && now.getTime() - new Date(q.createdAt).getTime() > QUESTION_EXPIRY_DAYS * 86_400_000) q.status = "expired";
+    }
+    const openIds = new Set((doc.questions || []).filter((q) => q.status === "open").map((q) => q.factId));
+    const merged = applyReflection((doc.facts || []) as ProfileFact[], ops, { now, dayKey, judgements, activeDay, openQuestionFactIds: openIds });
     doc.facts = merged.facts;
+    let newQuestions: CaregiverQuestion[] = [];
+    if (merged.questions.length) {
+        const texts = await phraseQuestions(merged.questions, (await recipientFirstName(w.recipientUserId)) || doc.tuning?.addressAs || "");
+        newQuestions = merged.questions.map((q, i) => ({ ...q, id: newActionId(), text: texts[i]!, createdAt: now, dayKey, status: "open" as const }));
+        const { logActivity } = await import("../activityLog.service");
+        for (const q of newQuestions) {
+            void logActivity({ familyId: w.familyId, recipientUserId: w.recipientUserId, kind: "mood", severity: "info", title: `Question for the family: ${q.text}`, data: { source: "profile_question", trigger: q.trigger, factId: q.factId, watchOnly: true } });
+        }
+    }
+    doc.questions = [...(doc.questions || []), ...newQuestions].slice(-60);
+    doc.markModified("questions");
     doc.careActions = [...(doc.careActions || []).filter((a) => !actions.length || a.dayKey !== actions[0]!.dayKey), ...actions].slice(-40);
     const t = { ...(doc.tuning || {}) };
     if (tuning?.addressAs && !isUnsafeFact(tuning.addressAs)) t.addressAs = String(tuning.addressAs).slice(0, 30);
@@ -206,6 +351,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
                 lonely: Boolean(day?.lonely),
                 mentions,
             },
+            ...(merged.readded ? { $inc: { factsReadded: merged.readded } } : {}),
         },
         { upsert: true },
     );
@@ -222,7 +368,19 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     doc.markModified("careActions");
     doc.markModified("deviations");
     doc.lastReflectedDay = dayKey;
-    doc.lastReflection = { at: new Date(), model, added: merged.added, reinforced: merged.reinforced, faded: merged.faded, actions: actions.length };
+    doc.lastReflection = {
+        at: now,
+        model,
+        added: merged.added,
+        reinforced: merged.reinforced,
+        faded: merged.faded,
+        actions: actions.length,
+        contradicted: merged.contradicted,
+        questions: newQuestions.length,
+        decayed: merged.decayed,
+        classified: merged.classified,
+        readded: merged.readded,
+    };
     await doc.save();
     // (after the save: raiseUnusual writes the same document)
     // Unusual activity: baseline deviations (WhatsApp only when high-confidence AND >= 7 baseline days)
@@ -247,7 +405,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     }
     forgetProfileCache(w);
     await applyRetention(w).catch(() => undefined);
-    return { dayKey, model, rows: rows.length, ...merged, facts: undefined, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
+    return { dayKey, model, rows: rows.length, activeDay, judged: judgements.length, ...merged, facts: undefined, questions: newQuestions, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
 }
 
 /** Nightly: every elder with activity yesterday (or who has a profile). */

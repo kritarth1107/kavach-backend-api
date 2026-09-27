@@ -65,6 +65,11 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
                 await SaheliProactiveNudge.deleteMany({ familyId: id.familyId });
                 await SaheliCompanion.deleteMany({ familyId: id.familyId });
                 await ActivityLog.deleteMany({ familyId: id.familyId });
+                // Evolving profile, wellbeing days, snapshots, usuals written by reflection runs.
+                for (const mod of ["../models/elderProfile.model", "../models/elderWellbeingDay.model", "../models/dailySnapshot.model", "../models/elderUsuals.model"]) {
+                    const M = (await import(mod).catch(() => null))?.default as { deleteMany?: (q: object) => Promise<unknown> } | undefined;
+                    await M?.deleteMany?.({ familyId: id.familyId }).catch(() => undefined);
+                }
                 // Seeded health memories (AI engine) + the tenant link.
                 const AiTenant = (await import("../models/aiTenant.model")).default;
                 const link = await AiTenant.findOne({ familyId: id.familyId }).lean();

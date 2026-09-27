@@ -8,6 +8,7 @@ import {
     getProfileHandler,
     rejectFactHandler,
     retentionHandler,
+    answerQuestionHandler,
 } from "../controllers/elderProfile.controller";
 import { deleteUsualDeclineHandler, deleteUsualItemHandler, getUsualsHandler } from "../controllers/usuals.controller";
 import {
@@ -224,6 +225,7 @@ router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/care-actions
 router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/deviations/:id", protect, dismissDeviationHandler);
 router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/alerts/:id", protect, dismissAlertHandler);
 router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/retention", protect, retentionHandler);
+router.post("/:familyId/recipients/:recipientUserId/saheli/profile/questions/:id/answer", protect, answerQuestionHandler);
 router.get("/:familyId/saheli/order-sessions/:sessionId", protect, getOrderSessionHandler);
 router.patch(
     "/:familyId/saheli/order-sessions/:sessionId/address",

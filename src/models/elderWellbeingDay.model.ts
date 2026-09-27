@@ -22,6 +22,9 @@ export interface IElderWellbeingDay {
     firstCardOrders: number;
     corrections: number;
     caregiverEdits: number;
+    /** Learned facts the caregiver deleted / facts re-learned after they had faded (weekly metrics). */
+    factsDeleted?: number;
+    factsReadded?: number;
     createdAt?: Date;
 }
 export interface IElderWellbeingDayDocument extends IElderWellbeingDay, Document {}
@@ -48,6 +51,8 @@ const schema = new Schema<IElderWellbeingDayDocument>(
         firstCardOrders: Number,
         corrections: Number,
         caregiverEdits: Number,
+        factsDeleted: Number,
+        factsReadded: Number,
     },
     { timestamps: true },
 );

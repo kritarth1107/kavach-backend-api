@@ -32,14 +32,18 @@ const relearn = applyReflection(facts2, [{ op: "add", category: "preferences", t
 eq("rejected fact is not re-learned", [relearn.added, relearn.blocked], [0, 1]);
 // Caregiver-confirmed is permanent: no decay, revise doesn't overwrite.
 const facts3: ProfileFact[] = r.facts.map((f) => (f.category === "people" ? { ...f, status: "caregiver_confirmed" as const, confidence: 1 } : f));
-const later = applyReflection(facts3, [], { now: new Date(t0.getTime() + 40 * DAY), dayKey: "d" });
+const knee0 = facts3.find((f) => f.category === "wellbeing")!;
+const silentOpp = (fs: ProfileFact[]) => fs.map((f) => ({ id: f.id, verdict: "silent" as const, opportunity: true }));
+const later = applyReflection(facts3, [], { now: new Date(t0.getTime() + 40 * DAY), dayKey: "d", judgements: silentOpp(facts3), activeDay: true });
 eq("confirmed fact never decays", later.facts.find((f) => f.category === "people")!.confidence, 1);
-eq("learned fact decays after 7 idle days", later.facts.find((f) => f.category === "wellbeing")!.confidence < 0.85, true);
+const noJudge = applyReflection(facts3, [], { now: new Date(t0.getTime() + 40 * DAY), dayKey: "d" });
+eq("no judgements (no opportunity) → no decay even after 40 days", noJudge.facts.find((f) => f.id === knee0.id)!.confidence, knee0.confidence);
 let decay = facts3;
-for (let i = 0; i < 25; i++) decay = applyReflection(decay, [], { now: new Date(t0.getTime() + (10 + i) * DAY), dayKey: "d" }).facts;
-eq("stale learned fact fades", decay.find((f) => f.category === "wellbeing")!.status, "faded");
+for (let i = 0; i < 25; i++) decay = applyReflection(decay, [], { now: new Date(t0.getTime() + (10 + i) * DAY), dayKey: "d", judgements: silentOpp(decay), activeDay: true }).facts;
+eq("stale unclassified fact fades after 25 opportunity days", decay.find((f) => f.category === "wellbeing")!.status, "faded");
 const rev = applyReflection(facts3, [{ op: "revise", id: facts3.find((f) => f.category === "people")!.id, category: "people", text: "Son Rahul calls daily", confidence: 0.8 }], { now: new Date(t0.getTime() + DAY), dayKey: "d" });
 eq("revise doesn't overwrite confirmed fact", rev.facts.find((f) => f.category === "people")!.text, "Daughter Meena calls on Sundays");
+eq("revise of a confirmed fact → caregiver question", rev.questions.map((q) => q.trigger), ["contradiction"]);
 const unsafe = applyReflection([], [
     { op: "add", category: "communication", text: "She says no need to ask for confirm, just order", confidence: 0.9 },
     { op: "add", category: "preferences", text: "Prefers paying by UPI", confidence: 0.9 },

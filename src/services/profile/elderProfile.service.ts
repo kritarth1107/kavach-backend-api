@@ -3,7 +3,7 @@
  * preferences / retention. Family-scoped: every read and write is keyed by familyId +
  * recipientUserId. Prompt context only — safety rules are enforced in code elsewhere.
  */
-import ElderProfile, { type IElderProfile, type ProfileFact } from "../../models/elderProfile.model";
+import ElderProfile, { type CaregiverQuestion, type FactLabel, type IElderProfile, type IElderProfileDocument, type ProfileFact } from "../../models/elderProfile.model";
 import ElderWellbeingDay from "../../models/elderWellbeingDay.model";
 import { applyReflection, detectStatedPreference, isActive, renderProfileSummary, weeklyMetrics } from "./profileCore";
 import { istDayKey } from "../activityLog.service";
@@ -56,10 +56,11 @@ export async function captureStatedPreference(w: Who, text: string): Promise<str
     if (!pref) return null;
     try {
         const doc = await loadOrCreate(w);
-        const r = applyReflection((doc.facts || []) as ProfileFact[], [{ op: "add", category: pref.category, text: pref.text, confidence: 0.7 }], {
+        const r = applyReflection((doc.facts || []) as ProfileFact[], [{ op: "add", category: pref.category, text: pref.text, confidence: 0.7, decayClass: "preference" }], {
             now: new Date(),
             dayKey: istDayKey(),
             sourceKind: "chat",
+            sourceBy: "elder", // she said it herself → strong evidence
         });
         doc.facts = r.facts;
         doc.markModified("facts");
@@ -77,19 +78,45 @@ export async function captureStatedPreference(w: Who, text: string): Promise<str
 }
 
 // ── Caregiver controls (dashboard; family membership checked in the controller) ──
+function pin(f: ProfileFact, by: string) {
+    f.status = "caregiver_confirmed";
+    f.confidence = 1;
+    f.lastConfirmed = new Date();
+    f.editedBy = by;
+}
+function blocklist(f: ProfileFact, by: string) {
+    f.status = "rejected"; // hidden, and never re-learned
+    f.editedBy = by;
+    f.lastConfirmed = new Date();
+}
+function label(doc: IElderProfileDocument, f: ProfileFact, trigger: FactLabel["trigger"], answer: FactLabel["answer"], by: string, confidence = f.confidence) {
+    doc.labels = [...(doc.labels || []), { at: new Date(), factId: f.id, factText: f.text, decayClass: f.decayClass, trigger, answer, confidence, by }].slice(-300);
+    doc.markModified("labels");
+}
+/** Answering the fact's open question from the regular buttons closes it too. */
+function closeQuestion(doc: IElderProfileDocument, factId: string, status: "yes" | "no", by: string) {
+    const q = (doc.questions || []).find((x) => x.factId === factId && x.status === "open");
+    if (!q) return null;
+    q.status = status;
+    q.answeredAt = new Date();
+    q.answeredBy = by;
+    doc.markModified("questions");
+    return q;
+}
 export async function confirmFact(w: Who, id: string, by: string) {
-    return mutateFact(w, id, (f) => {
-        f.status = "caregiver_confirmed";
-        f.confidence = 1;
-        f.lastConfirmed = new Date();
-        f.editedBy = by;
+    return mutateFact(w, id, (f, doc) => {
+        const q = closeQuestion(doc, f.id, "yes", by);
+        label(doc, f, q?.trigger || "confirm", q ? "yes" : "confirmed", by);
+        pin(f, by);
     });
 }
 export async function editFact(w: Who, id: string, by: string, text: string, category?: string) {
     const { isUnsafeFact } = await import("./profileCore");
     if (isUnsafeFact(text)) throw Object.assign(new Error("That can't be saved: safety rules (COD, confirm, alerts, harmful items, addresses) aren't part of the profile."), { status: 400 });
     const { FACT_CATEGORIES } = await import("../../models/elderProfile.model");
-    return mutateFact(w, id, (f) => {
+    return mutateFact(w, id, (f, doc) => {
+        closeQuestion(doc, f.id, "yes", by);
+        label(doc, f, "edit", "edited", by);
         f.text = text.slice(0, 240);
         if (category && (FACT_CATEGORIES as readonly string[]).includes(category)) f.category = category as ProfileFact["category"];
         f.status = "caregiver_edited";
@@ -100,27 +127,65 @@ export async function editFact(w: Who, id: string, by: string, text: string, cat
 }
 /** Delete = rejected: hidden, and never re-learned. */
 export async function rejectFact(w: Who, id: string, by: string) {
-    return mutateFact(w, id, (f) => {
-        f.status = "rejected";
-        f.editedBy = by;
-        f.lastConfirmed = new Date();
-    });
+    return mutateFact(w, id, (f, doc) => {
+        const q = closeQuestion(doc, f.id, "no", by);
+        label(doc, f, q?.trigger || "delete", q ? "no" : "deleted", by);
+        blocklist(f, by);
+    }, { deleted: true });
 }
-async function mutateFact(w: Who, id: string, fn: (f: ProfileFact) => void): Promise<boolean> {
+/** Caregiver answers "Is Amma still taking X?": yes → pinned; no → removed + never re-learned. */
+export async function answerQuestion(w: Who, questionId: string, answer: "yes" | "no", by: string): Promise<boolean> {
+    const doc = await ElderProfile.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId });
+    const q = (doc?.questions || []).find((x) => x.id === questionId);
+    if (!doc || !q) return false;
+    if (q.status !== "open") return true;
+    const f = (doc.facts || []).find((x) => x.id === q.factId);
+    q.status = answer;
+    q.answeredAt = new Date();
+    q.answeredBy = by;
+    doc.markModified("questions");
+    if (f) {
+        label(doc, f, q.trigger, answer, by, q.confidenceAtAsk);
+        if (answer === "yes") pin(f, by);
+        else blocklist(f, by);
+        doc.markModified("facts");
+    }
+    await doc.save();
+    forgetProfileCache(w);
+    await bumpDay(w, { caregiverEdits: 1, ...(answer === "no" && f ? { factsDeleted: 1 } : {}) });
+    return true;
+}
+async function bumpDay(w: Who, inc: Record<string, number>) {
+    await ElderWellbeingDay.updateOne(
+        { familyId: w.familyId, recipientUserId: w.recipientUserId, dayKey: istDayKey() },
+        { $inc: inc, $setOnInsert: { messagesIn: 0 } },
+        { upsert: true },
+    ).catch(() => undefined);
+}
+async function mutateFact(w: Who, id: string, fn: (f: ProfileFact, doc: IElderProfileDocument) => void, o: { deleted?: boolean } = {}): Promise<boolean> {
     const doc = await ElderProfile.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId });
     const f = (doc?.facts || []).find((x) => x.id === id);
     if (!doc || !f) return false;
-    fn(f);
+    const wasLearned = f.status === "learned";
+    fn(f, doc);
     doc.markModified("facts");
     await doc.save();
     forgetProfileCache(w);
-    const day = istDayKey();
-    await ElderWellbeingDay.updateOne(
-        { familyId: w.familyId, recipientUserId: w.recipientUserId, dayKey: day },
-        { $inc: { caregiverEdits: 1 }, $setOnInsert: { messagesIn: 0 } },
-        { upsert: true },
-    ).catch(() => undefined);
+    await bumpDay(w, { caregiverEdits: 1, ...(o.deleted && wasLearned ? { factsDeleted: 1 } : {}) });
     return true;
+}
+/** Open questions not yet in a snapshot (or already in this day's) → one line each; marks them. */
+export async function questionsForSnapshot(w: Who, dayKey: string): Promise<string[]> {
+    const doc = await ElderProfile.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId });
+    const qs = (doc?.questions || []).filter((q) => q.status === "open" && (!q.snapshotDay || q.snapshotDay === dayKey)).slice(0, 3);
+    if (!doc || !qs.length) return [];
+    for (const q of qs) q.snapshotDay = dayKey;
+    doc.markModified("questions");
+    await doc.save();
+    return qs.map((q) => `Saheli wants to check: ${q.text} (answer Yes / No on the "What Saheli learned" card)`);
+}
+export function openQuestions(p: Pick<IElderProfile, "questions"> | null | undefined): CaregiverQuestion[] {
+    return (p?.questions || []).filter((q) => q.status === "open");
 }
 export async function setCareActionStatus(w: Who, id: string, status: "used" | "dismissed") {
     const r = await ElderProfile.updateOne({ familyId: w.familyId, recipientUserId: w.recipientUserId, "careActions.id": id }, { $set: { "careActions.$.status": status } });
@@ -179,7 +244,21 @@ export async function profileView(w: Who) {
         facts: facts
             .filter((f) => f.category === category)
             .sort((a, b) => b.confidence - a.confidence)
-            .map((f) => ({ id: f.id, text: f.text, confidence: Math.round(f.confidence * 100) / 100, status: f.status, firstSeen: f.firstSeen, lastConfirmed: f.lastConfirmed, sources: (f.sources || []).length })),
+            .map((f) => ({
+                id: f.id,
+                text: f.text,
+                confidence: Math.round(f.confidence * 100) / 100,
+                status: f.status,
+                firstSeen: f.firstSeen,
+                lastConfirmed: f.lastConfirmed,
+                sources: (f.sources || []).length,
+                decayClass: f.decayClass || null,
+                lastEvidence: (() => {
+                    const s = [...(f.sources || [])].reverse().find((x) => x.by);
+                    return s ? { by: s.by, effect: s.effect, at: s.at } : null;
+                })(),
+                question: openQuestions(p).some((q) => q.factId === f.id),
+            })),
     })).filter((g) => g.facts.length);
     const today = istDayKey();
     return {
@@ -187,7 +266,8 @@ export async function profileView(w: Who) {
         careActions: (p?.careActions || []).filter((a) => a.dayKey >= today && a.status !== "dismissed"),
         deviations: (p?.deviations || []).filter((d) => !d.dismissed).slice(-10).reverse(),
         unusual: (p?.alerts || []).filter((a) => !a.dismissed).slice(-12).reverse(),
-        metrics: weeklyMetrics(days as never, facts.length).slice(-8),
+        questions: openQuestions(p).slice(-6).reverse().map((q) => ({ id: q.id, factId: q.factId, text: q.text, trigger: q.trigger, evidence: q.evidence || null, createdAt: q.createdAt, decayClass: q.decayClass || null })),
+        metrics: weeklyMetrics(days as never, facts.filter((f) => f.status === "learned").length, (p?.facts || []).filter((f) => (f.fadeCount || 0) > 0).length).slice(-8),
         recentDays: days.slice(-14).map((d) => ({ dayKey: d.dayKey, mood: d.mood, moodWord: d.moodWord, messagesIn: d.messagesIn, medsDone: d.medsDone, medsMissed: d.medsMissed, lonely: d.lonely })),
         tuning: p?.tuning || {},
         retentionDays: p?.retentionDays ?? 365,

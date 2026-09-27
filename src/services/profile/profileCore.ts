@@ -6,9 +6,28 @@
 import { randomUUID } from "crypto";
 import { FACT_CATEGORIES, type CareAction, type Deviation, type FactCategory, type ProfileFact } from "../../models/elderProfile.model";
 import type { IElderWellbeingDay } from "../../models/elderWellbeingDay.model";
+import {
+    asDecayClass,
+    asEvidenceBy,
+    CHECKIN_AT,
+    CHECKIN_MIN_PEAK,
+    CONTRADICTION_DROP,
+    DECAY,
+    EVIDENCE,
+    FADE_BELOW,
+    MAX_CONFIDENCE,
+    PROVEN_AT,
+    round2,
+    STRENGTH,
+    UNPROVEN_RULE,
+    type DecayClass,
+    type DecayRule,
+    type EvidenceBy,
+} from "./factPolicy";
 
 export const CARE_FIRST_ORDER: FactCategory[] = [...FACT_CATEGORIES];
 const DAY = 86_400_000;
+export { DECAY_CLASSES } from "./factPolicy";
 
 export function normKey(text: string): string {
     return String(text || "")
@@ -53,24 +72,102 @@ export type ReflectionOp = {
     text: string;
     confidence?: number;
     evidence?: string;
+    /** factPolicy decay class (health_condition | allergy | safety | medication | routine | preference | transient_state | other). */
+    decayClass?: string | null;
+    /** Who the evidence came from: elder / caregiver said it (strong), orders (medium), inferred (weak). */
+    by?: string | null;
 };
+
+/** Gemini's nightly label for ONE known fact vs the day. Silent days never count against a fact. */
+export type FactJudgement = {
+    id: string;
+    verdict: "supports" | "contradicts" | "silent";
+    /** Silent only: would it naturally have shown up today if still true? (opportunity for decay) */
+    opportunity?: boolean;
+    by?: string | null;
+    evidence?: string | null;
+    decayClass?: string | null;
+};
+
+export type NewQuestion = { factId: string; factText: string; decayClass?: DecayClass; trigger: "contradiction" | "checkin"; evidence?: string; confidenceAtAsk: number };
 
 export function isActive(f: ProfileFact): boolean {
     return f.status !== "rejected" && f.status !== "faded";
 }
 const permanent = (f: ProfileFact) => f.status === "caregiver_confirmed" || f.status === "caregiver_edited";
 
-/** Merge one night's ops into the facts. Returns counts for the log. */
+/** Decay rule for a fact: its class, but a no-decay class only holds once it has real evidence. */
+export function ruleFor(f: ProfileFact): DecayRule {
+    const rule = f.decayClass ? DECAY[f.decayClass] : DECAY.other;
+    if (rule.perOpportunity < 1) return rule;
+    const proven = (f.peakConfidence ?? f.confidence) >= PROVEN_AT || (f.sources || []).some((s) => s.strength === "strong" && s.effect !== "contradicts");
+    return proven ? rule : UNPROVEN_RULE;
+}
+
+/**
+ * Merge one night's ops + per-fact judgements into the facts. Pure.
+ * - ops: add / reinforce / revise, weighted by evidence source (factPolicy.EVIDENCE).
+ * - judgements: supports (reinforce), contradicts (−0.35, or a caregiver question for health /
+ *   medication / pinned facts — never a silent change), silent (+ opportunity → decay may accrue).
+ * - decay: per class, only on opportunity days; check-in question at ~0.4 before important facts fade.
+ * Without judgements (e.g. a stated preference captured mid-chat) nothing decays.
+ */
 export function applyReflection(
     facts: ProfileFact[],
     ops: ReflectionOp[],
-    ctx: { now: Date; dayKey: string; sourceKind?: string },
-): { facts: ProfileFact[]; added: number; reinforced: number; revised: number; faded: number; blocked: number } {
+    ctx: { now: Date; dayKey: string; sourceKind?: string; sourceBy?: EvidenceBy; judgements?: FactJudgement[]; activeDay?: boolean; openQuestionFactIds?: Set<string> },
+) {
     const now = ctx.now;
     const out = facts.map((f) => ({ ...f, sources: [...(f.sources || [])] }));
     const touched = new Set<string>();
-    let added = 0, reinforced = 0, revised = 0, blocked = 0;
-    const src = { kind: ctx.sourceKind || "reflection", at: now, ref: ctx.dayKey };
+    const opportunity = new Set<string>();
+    const asked = new Set(ctx.openQuestionFactIds || []);
+    const questions: NewQuestion[] = [];
+    let added = 0, reinforced = 0, revised = 0, blocked = 0, contradicted = 0, decayed = 0, classified = 0, readded = 0;
+    const source = (by: EvidenceBy, effect: NonNullable<ProfileFact["sources"][number]["effect"]>, evidence?: string | null) => ({
+        kind: ctx.sourceKind || "reflection",
+        at: now,
+        ref: ctx.dayKey,
+        by,
+        strength: STRENGTH[by],
+        effect,
+        ...(evidence ? { evidence: String(evidence).slice(0, 160) } : {}),
+    });
+    const ask = (f: ProfileFact, trigger: NewQuestion["trigger"], evidence?: string | null) => {
+        if (asked.has(f.id)) return;
+        asked.add(f.id);
+        questions.push({ factId: f.id, factText: f.text, decayClass: f.decayClass, trigger, evidence: evidence ? String(evidence).slice(0, 200) : undefined, confidenceAtAsk: f.confidence });
+    };
+    const classify = (f: ProfileFact, dc: unknown) => {
+        const c = asDecayClass(dc);
+        if (c && !f.decayClass) {
+            f.decayClass = c;
+            classified++;
+        }
+    };
+    const support = (f: ProfileFact, by: EvidenceBy, evidence?: string | null) => {
+        if (!permanent(f)) {
+            const base = f.status === "faded" ? 0.4 : f.confidence;
+            f.confidence = round2(Math.min(MAX_CONFIDENCE, base + EVIDENCE[STRENGTH[by]].reinforce));
+            f.peakConfidence = Math.max(f.peakConfidence ?? 0, f.confidence);
+        }
+        if (f.status === "faded") {
+            f.status = "learned";
+            f.fadedAt = undefined;
+            readded++;
+        }
+        f.idleOpportunities = 0;
+        f.lastConfirmed = now;
+        f.sources = [...f.sources, source(by, "supports", evidence)].slice(-12);
+        reinforced++;
+    };
+    const fade = (f: ProfileFact) => {
+        f.status = "faded";
+        f.fadedAt = now;
+        f.fadeCount = (f.fadeCount || 0) + 1;
+    };
+    const protectedFact = (f: ProfileFact) => permanent(f) || (f.decayClass ? DECAY[f.decayClass].askOnContradiction : false);
+
     for (const raw of ops.slice(0, 40)) {
         const text = String(raw.text || "").trim().slice(0, 240);
         const category = (FACT_CATEGORIES as readonly string[]).includes(raw.category) ? (raw.category as FactCategory) : null;
@@ -84,6 +181,7 @@ export function applyReflection(
             blocked++;
             continue;
         }
+        const by = raw.by ? asEvidenceBy(raw.by) : ctx.sourceBy || "inferred";
         const target =
             (raw.id && out.find((f) => f.id === raw.id && f.status !== "rejected")) ||
             out.find((f) => f.status !== "rejected" && f.category === category && similar(f.text, text)) ||
@@ -91,49 +189,92 @@ export function applyReflection(
         const conf = Math.max(0, Math.min(1, Number(raw.confidence ?? 0.6)));
         if (target) {
             touched.add(target.id);
-            if (raw.op === "revise" && !permanent(target) && !similar(target.text, text)) {
+            classify(target, raw.decayClass);
+            if (raw.op === "revise" && !similar(target.text, text)) {
+                if (protectedFact(target)) {
+                    // Health / medication / pinned: never silently rewritten — ask the family.
+                    target.sources = [...target.sources, source(by, "contradicts", raw.evidence || `now: ${text}`)].slice(-12);
+                    ask(target, "contradiction", raw.evidence ? `${raw.evidence} (Saheli now thinks: ${text})` : `Saheli now thinks: ${text}`);
+                    contradicted++;
+                    continue;
+                }
                 target.text = text;
                 target.key = normKey(text);
-                target.confidence = Math.max(0.5, Math.min(0.85, conf));
+                target.confidence = round2(Math.max(0.5, Math.min(0.85, conf)));
+                target.peakConfidence = Math.max(target.peakConfidence ?? 0, target.confidence);
+                if (target.status === "faded") readded++;
                 target.status = "learned";
+                target.idleOpportunities = 0;
+                target.lastConfirmed = now;
+                target.sources = [...target.sources, source(by, "revised", raw.evidence)].slice(-12);
                 revised++;
-            } else {
-                if (!permanent(target)) target.confidence = Math.min(0.95, (target.status === "faded" ? 0.4 : target.confidence) + 0.15);
-                if (target.status === "faded") target.status = "learned";
-                reinforced++;
-            }
-            target.lastConfirmed = now;
-            target.sources = [...target.sources, src].slice(-8);
+            } else support(target, by, raw.evidence);
             continue;
         }
+        const [lo, hi] = EVIDENCE[STRENGTH[by]].start;
+        const c = round2(Math.max(lo, Math.min(hi, conf)));
         const f: ProfileFact = {
             id: randomUUID(),
             key: normKey(text),
             category,
             text,
-            confidence: Math.max(0.3, Math.min(0.7, conf)),
-            sources: [src],
+            confidence: c,
+            peakConfidence: c,
+            idleOpportunities: 0,
+            sources: [source(by, "added", raw.evidence)],
             firstSeen: now,
             lastConfirmed: now,
             status: "learned",
+            ...(asDecayClass(raw.decayClass) ? { decayClass: asDecayClass(raw.decayClass)! } : {}),
         };
         out.push(f);
         touched.add(f.id);
         added++;
     }
-    // Decay: learned facts not seen for a week lose confidence nightly; very low → faded (hidden).
+
+    for (const j of (ctx.judgements || []).slice(0, 120)) {
+        const f = out.find((x) => x.id === j.id && x.status !== "rejected");
+        if (!f) continue;
+        classify(f, j.decayClass);
+        if (touched.has(f.id)) continue;
+        const by = asEvidenceBy(j.by);
+        if (j.verdict === "supports" && f.status !== "faded") {
+            touched.add(f.id);
+            support(f, by, j.evidence);
+        } else if (j.verdict === "contradicts" && f.status !== "faded") {
+            touched.add(f.id);
+            contradicted++;
+            f.sources = [...f.sources, source(by, "contradicts", j.evidence)].slice(-12);
+            if (protectedFact(f)) ask(f, "contradiction", j.evidence);
+            else {
+                f.confidence = round2(Math.max(0, f.confidence - CONTRADICTION_DROP));
+                if (f.confidence < FADE_BELOW) fade(f);
+            }
+        } else if (j.verdict === "silent" && j.opportunity && ctx.activeDay) opportunity.add(f.id);
+    }
+
+    // Opportunity-aware decay (see factPolicy): no opportunity today → no decay for that fact.
     let faded = 0;
     for (const f of out) {
-        if (touched.has(f.id) || f.status !== "learned") continue;
-        const idle = (now.getTime() - new Date(f.lastConfirmed).getTime()) / DAY;
-        if (idle < 7) continue;
-        f.confidence = Math.round(f.confidence * 0.9 * 100) / 100;
-        if (f.confidence < 0.25) {
-            f.status = "faded";
+        if (touched.has(f.id) || f.status !== "learned" || !opportunity.has(f.id)) continue;
+        if (asked.has(f.id) && !questions.some((q) => q.factId === f.id)) continue; // waiting on the family
+        f.idleOpportunities = (f.idleOpportunities || 0) + 1;
+        const rule = ruleFor(f);
+        if (rule.perOpportunity >= 1 || f.idleOpportunities <= rule.graceOpportunities) continue;
+        f.confidence = round2(f.confidence * rule.perOpportunity);
+        decayed++;
+        const important = f.decayClass ? DECAY[f.decayClass].checkInBeforeFade : false;
+        if (important && rule === DECAY[f.decayClass!] && !f.checkInAskedAt && (f.peakConfidence ?? f.confidence) >= CHECKIN_MIN_PEAK && f.confidence <= CHECKIN_AT) {
+            f.checkInAskedAt = now;
+            ask(f, "checkin");
+            continue;
+        }
+        if (f.confidence < FADE_BELOW) {
+            fade(f);
             faded++;
         }
     }
-    return { facts: out, added, reinforced, revised, faded, blocked };
+    return { facts: out, added, reinforced, revised, faded, blocked, contradicted, decayed, classified, readded, questions };
 }
 
 /** Care-first compact summary for prompts. `short` for the router (≈350 chars). */
@@ -220,8 +361,9 @@ export function detectDeviations(daysAsc: Day[], window = 3): Array<Omit<Deviati
 }
 
 // ── Progress metrics (weekly) ─────────────────────────────────────────────────────
-type MDay = Day & Pick<IElderWellbeingDay, "cards" | "firstCardOrders" | "corrections" | "caregiverEdits" | "orders">;
-export function weeklyMetrics(daysAsc: MDay[], factsCount: number) {
+type MDay = Day & Pick<IElderWellbeingDay, "cards" | "firstCardOrders" | "corrections" | "caregiverEdits" | "orders" | "factsDeleted" | "factsReadded">;
+/** factsCount = active learned facts; fadedEver = facts that have faded at least once (re-add denominator). */
+export function weeklyMetrics(daysAsc: MDay[], factsCount: number, fadedEver = 0) {
     const weeks = new Map<string, MDay[]>();
     for (const d of daysAsc) {
         const dt = new Date(`${d.dayKey}T00:00:00+05:30`);
@@ -238,6 +380,12 @@ export function weeklyMetrics(daysAsc: MDay[], factsCount: number) {
         correctionRate: pct(sum(xs, (d) => d.corrections), sum(xs, (d) => d.cards)),
         caregiverEditRate: pct(sum(xs, (d) => d.caregiverEdits), Math.max(1, factsCount)),
         adherence: pct(sum(xs, (d) => d.medsDone), sum(xs, (d) => d.medsDone + d.medsMissed)),
+        // Learned facts the family deleted this week (vs facts on the card) — "Saheli learned wrong".
+        factDeleteRate: pct(sum(xs, (d) => d.factsDeleted || 0), sum(xs, (d) => d.factsDeleted || 0) + factsCount),
+        // Facts re-learned this week after they had faded — "decay was too eager".
+        readdAfterFadeRate: fadedEver ? pct(sum(xs, (d) => d.factsReadded || 0), fadedEver) : null,
+        factsDeleted: sum(xs, (d) => d.factsDeleted || 0),
+        factsReadded: sum(xs, (d) => d.factsReadded || 0),
         avgMood: nn(xs.map((d) => d.mood)).length ? Math.round((nn(xs.map((d) => d.mood)).reduce((a, b) => a + b, 0) / nn(xs.map((d) => d.mood)).length) * 10) / 10 : null,
     }));
 }

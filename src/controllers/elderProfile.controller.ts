@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { AppError } from "../middleware/error.middleware";
 import { assertFamilyMember } from "../services/family.service";
 import {
+    answerQuestion,
     confirmFact,
     dismissDeviation,
     editFact,
@@ -88,5 +89,14 @@ export const retentionHandler = wrap(async (req, res) => {
     const days = Number(req.body?.days);
     if (!Number.isFinite(days)) throw new AppError("days is required", 400);
     await setRetention(w, days);
+    res.json({ success: true, data: await profileView(w) });
+});
+
+/** POST …/saheli/profile/questions/:id/answer { answer: "yes" | "no" } — yes pins the fact, no removes + never re-learns. */
+export const answerQuestionHandler = wrap(async (req, res) => {
+    const { w, userId } = await member(req);
+    const answer = String(req.body?.answer ?? "");
+    if (answer !== "yes" && answer !== "no") throw new AppError("answer must be yes|no", 400);
+    if (!(await answerQuestion(w, req.params.id, answer, userId))) throw new AppError("Question not found", 404);
     res.json({ success: true, data: await profileView(w) });
 });
