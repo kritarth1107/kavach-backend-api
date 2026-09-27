@@ -28,6 +28,7 @@ Facts ("ops"):
 - confidence: 0.3 (single passing mention) … 0.8 (clear, repeated today).
 - by: who the evidence came from — "elder" (she said it herself), "caregiver" (a family member said it), "orders" (seen in what she ordered/booked), "inferred" (your guess from indirect signs; keep these at ≤0.4).
 - decayClass (how long it stays true): "health_condition" (diabetes, BP, arthritis, lactose intolerance — lasting conditions), "allergy", "safety" (fall risk, can't climb stairs, hearing/vision limits), "medication" (which medicines she takes / has stopped), "routine" (walks, meal/sleep times, prayer, visits), "preference" (food, brands, songs, topics, tone), "transient_state" (pain this week, a bad night, low mood today, a cold — passes in days), "other".
+  A symptom she mentions for today / these days ("aaj ghutne mein dard hai", a cold, a bad night, feeling low) is transient_state even though it's about her body. Use health_condition only when it is lasting or diagnosed (she says for years / always / the doctor said it's arthritis, diabetes, BP).
 - If today shows a known health/medication fact is no longer true (she stopped a medicine, a condition changed), do NOT revise it silently: mark its judgement "contradicts" with her words; the family is asked.
 
 Judgements (REQUIRED, one per current profile fact listed, use its id):
