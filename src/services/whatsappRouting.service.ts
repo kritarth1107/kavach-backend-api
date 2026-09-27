@@ -536,6 +536,8 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             `[saheli-router] ${route ? `${route.intent}/${route.control} cat=${route.category ?? "-"} p=${route.partners.join("+") || "-"} q=${route.productQuery ? "y" : "n"} conf=${route.confidence} ${route.latencyMs}ms` : "null → regex fallback"}`,
         );
     }
+    // The model's category is ride but it filed "Ola se" as an order change: it is a ride turn.
+    if (route && route.category === "ride" && route.intent === "order_modify" && !route.productQuery) route = { ...route, intent: "ride" };
     rememberTurn(phone, "user", text);
     // Unusual-activity backstop, before any order chat / search: risky medicines in bulk (sleeping
     // pills / painkillers) → pause, ask her gently, alert caregivers (tiered + deduped).
