@@ -13,9 +13,10 @@ export function serializeSnapshot(doc: Partial<IDailySnapshot> | null | undefine
     return {
         dayKey: doc.dayKey,
         status: doc.status,
-        summary: doc.summary ?? "",
-        highlights: doc.highlights ?? [],
-        concerns: doc.concerns ?? [],
+        // Older snapshots may carry Saheli's own hiccups ("technical error…"); never show them to the family.
+        summary: String(doc.summary ?? "").split(/(?<=[.!?])\s+/).filter((x) => x && !isInternalTalk(x)).join(" "),
+        highlights: (doc.highlights ?? []).filter((x) => !isInternalTalk(String(x))),
+        concerns: (doc.concerns ?? []).filter((x) => !isInternalTalk(String(x))),
         mood: doc.mood ?? null,
         counts: doc.counts ?? { messages: 0, voiceNotes: 0, orders: 0, rides: 0, reminders: 0, healthFlags: 0, nudges: 0 },
         model: doc.modelName ?? null,

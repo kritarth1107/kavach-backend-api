@@ -585,7 +585,7 @@ export async function executeSaheliTool(input: {
                 ? { familyId: input.familyId, orderId }
                 : { familyId: input.familyId, subjectUserId: input.recipientUserId };
             const order = await Order.findOne(filter).sort({ createdAt: -1 }).lean();
-            if (!order) return { error: "No order found" };
+            if (!order) return { found: false, note: "No order has been placed for her through Kavach yet." };
             return {
                 orderId: order.orderId,
                 partner: order.partner,

@@ -188,6 +188,8 @@ async function mapboxReverse(lat: number, lng: number, token: string): Promise<G
     };
 }
 
+export const GENERIC_PLACE = /^(my\s+|mera\s+|meri\s+|apna\s+|apne\s+|the\s+)?(home|house|ghar|flat|office|work|daftar|place|room|yahan|here)$/i;
+
 /** Geocode a named place (e.g. "ritz Carlton bangalore"). */
 export async function geocodePlace(query: string): Promise<GeoResult> {
     const q = query.trim().slice(0, 200);
@@ -201,10 +203,18 @@ export async function geocodePlace(query: string): Promise<GeoResult> {
     }
     const googleKey = (process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_GEOCODING_API_KEY || "").trim();
     const mapbox = (process.env.MAPBOX_ACCESS_TOKEN || "").trim();
+    // "home" / "ghar" / "office" alone is not a place — never geocode the word (it matched a US county).
+    if (GENERIC_PLACE.test(q)) {
+        return { ok: false, provider: "passthrough", place: { raw: q, shortLabel: q, source: "text" }, error: "generic_place" };
+    }
     try {
-        if (googleKey) return await googleGeocode(q, googleKey);
-        if (mapbox) return await mapboxGeocode(q, mapbox);
-        return await nominatimGeocode(q);
+        const r = googleKey ? await googleGeocode(q, googleKey) : mapbox ? await mapboxGeocode(q, mapbox) : await nominatimGeocode(q);
+        // Rides are India-only: a hit outside India is treated as not found.
+        const { lat, lng } = r.place;
+        if (r.ok && lat != null && lng != null && !(lat > 6 && lat < 37.5 && lng > 68 && lng < 97.5)) {
+            return { ok: false, provider: r.provider, place: { raw: q, shortLabel: q, source: "text" }, error: "outside_india" };
+        }
+        return r;
     } catch (err) {
         return {
             ok: false,

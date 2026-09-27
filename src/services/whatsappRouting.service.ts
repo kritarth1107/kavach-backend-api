@@ -1247,7 +1247,8 @@ async function dispatchRoutedTurn(a: {
     mediaUrl?: string;
     isRxPhoto: boolean;
 }): Promise<{ reply?: string; legacyGates: boolean; allowDashboard: boolean }> {
-    const { route, text } = a;
+    const { text } = a;
+    let { route } = a;
     const doc = (await WhatsappSession.findOne({ phone: a.phone }).lean()) as FlowDoc;
     const bd = doc?.browserTaskDraft;
     const pd = doc?.pharmacyDraft;
@@ -1459,6 +1460,12 @@ async function dispatchRoutedTurn(a: {
     // Places are resolved near THIS elder's own saved address ("station" → "station, Bhopal";
     // "home"/"ghar" → their saved address) — otherwise the geocoder picks another country.
     let rideText = text;
+    if (route.intent === "ride" && !route.ridePickup && !route.rideDrop) {
+        // Model gave no slots: still read "from home to the airport" so saved places are used.
+        const { parseFromTo } = await import("./rideBooking/slotParse");
+        const pf = parseFromTo(text);
+        if (pf.pickup || pf.drop) route = { ...route, ridePickup: pf.pickup ?? null, rideDrop: pf.drop ?? null };
+    }
     if (route.ridePickup || route.rideDrop) {
         // Saved family places first ("clinic se ghar" → Clinic → Home), then "near my city".
         const { listPlaces, matchPlace, pickDefault } = await import("./familyAddressBook.service");

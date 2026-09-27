@@ -9,7 +9,7 @@ import WhatsappSession from "../../models/whatsappSession.model";
 import User from "../../models/users.model";
 import { FamilyRole } from "../../types/family.types";
 import { notifyCaregivers } from "../saheliCaregiverAlert.service";
-import { resolveRidePlace } from "./geoResolve.service";
+import { GENERIC_PLACE, resolveRidePlace } from "./geoResolve.service";
 import {
     confirmRideBook,
     dryRunDriverMessage,
@@ -146,8 +146,25 @@ async function maybeCompleteSlots(
             draft.drop = await enrichPlace(pin);
         }
     } else if (parsed.pickup || parsed.drop) {
+        // "from home" with no saved home: ask for it instead of guessing a place with that name.
+        if (parsed.pickup && GENERIC_PLACE.test(parsed.pickup.trim())) {
+            if (parsed.drop && !GENERIC_PLACE.test(parsed.drop.trim())) draft.drop = await enrichPlace(placeFromText(parsed.drop));
+            draft.phase = draft.drop ? "need_pickup" : "need_slots";
+            return {
+                draft,
+                reply: draft.drop
+                    ? `Drop noted: *${draft.drop.shortLabel || draft.drop.address}*. I don't have your ${parsed.pickup.trim()} address saved yet — share a WhatsApp *location pin* or type the full address for pickup.`
+                    : `I don't have that address saved yet — share a WhatsApp *location pin* or type the full pickup and drop addresses.`,
+            };
+        }
         if (parsed.pickup) draft.pickup = await enrichPlace(placeFromText(parsed.pickup));
-        if (parsed.drop) draft.drop = await enrichPlace(placeFromText(parsed.drop));
+        if (parsed.drop) {
+            if (GENERIC_PLACE.test(parsed.drop.trim())) {
+                draft.phase = "need_drop";
+                return { draft, reply: `Pickup noted: *${draft.pickup?.shortLabel || draft.pickup?.address || "pin"}*. I don't have that drop address saved — share a *location pin* or type the full address.` };
+            }
+            draft.drop = await enrichPlace(placeFromText(parsed.drop));
+        }
     } else if (parsed.bare) {
         const place = await enrichPlace(placeFromText(parsed.bare));
         if (!draft.pickup) draft.pickup = place;
