@@ -32,6 +32,17 @@ export function vertexProModel(): string {
     return process.env.VERTEX_SNAPSHOT_MODEL?.trim() || "gemini-3.1-pro-preview";
 }
 
+/** Where to retry after a capacity error: other endpoint first, then Flash (for Pro). */
+function nextCapacityRoute(model: string, location: string, attempt: number): { model: string; location: string } {
+    const region = process.env.GCP_REGION?.trim() || "asia-south1";
+    if (attempt === 0) {
+        if (/-pro/i.test(model)) return { model: vertexFlashModel(), location: vertexLocationForModel(vertexFlashModel()) };
+        return { model, location: location === "global" ? region : "global" };
+    }
+    const fb = process.env.VERTEX_FALLBACK_MODEL?.trim() || "gemini-3.5-flash";
+    return { model: fb, location: location === "global" ? region : "global" };
+}
+
 /** Last Vertex failure (status + short body) for secret-gated debug. */
 export let lastVertexError = "";
 export function resetVertexError(): void {
@@ -51,8 +62,14 @@ export async function vertexGenerateText(input: {
     timeoutMs?: number;
     /** Gemini 3 thinking level ("minimal" | "low" | …) — lower = faster; dropped automatically if the model rejects it. */
     thinkingLevel?: string;
+    /** Internal: location override for the capacity retry. */
+    location?: string;
+    /** Internal: retry depth. */
+    attempt?: number;
 }): Promise<string | null> {
     if (process.env.NODE_ENV === "test" || process.env.VERTEX_DISABLED === "1") return null;
+    const started = Date.now();
+    const budget = input.timeoutMs ?? 8000;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), input.timeoutMs ?? 8000);
     try {
@@ -60,7 +77,7 @@ export async function vertexGenerateText(input: {
         const client = await auth.getClient();
         const token = (await client.getAccessToken()).token;
         if (!token) return null;
-        const location = vertexLocationForModel(input.model);
+        const location = input.location || vertexLocationForModel(input.model);
         const host =
             location === "global"
                 ? "https://aiplatform.googleapis.com"
@@ -92,7 +109,18 @@ export async function vertexGenerateText(input: {
                 clearTimeout(timer);
                 return vertexGenerateText({ ...input, thinkingLevel: undefined });
             }
-            console.warn(`vertex ${input.model} ${lastVertexError}`);
+            console.warn(`vertex ${input.model}@${location} ${lastVertexError}`);
+            // Capacity / transient (429 RESOURCE_EXHAUSTED, 500, 503): quick retry on the other
+            // endpoint (regional ↔ global) and, for Pro, on Flash — nobody waits on quota.
+            if ([429, 500, 503].includes(res.status) && (input.attempt ?? 0) < 2) {
+                const left = budget - (Date.now() - started);
+                if (left > 1500) {
+                    clearTimeout(timer);
+                    await new Promise((r) => setTimeout(r, Math.min(400 * ((input.attempt ?? 0) + 1), 800)));
+                    const retry = nextCapacityRoute(input.model, location, input.attempt ?? 0);
+                    return vertexGenerateText({ ...input, model: retry.model, location: retry.location, timeoutMs: left - 500, attempt: (input.attempt ?? 0) + 1 });
+                }
+            }
             return null;
         }
         const body = (await res.json()) as {

@@ -11,7 +11,7 @@ import ElderWellbeingDay from "../../models/elderWellbeingDay.model";
 import * as Vertex from "../../clients/vertexGemini.client";
 import { parseJsonLoose, vertexFlashModel, vertexGenerateText, vertexProModel } from "../../clients/vertexGemini.client";
 import { istDayKey } from "../activityLog.service";
-import { applyReflection, detectDeviations, isActive, isUnsafeFact, newActionId, type FactJudgement, type NewQuestion, type ReflectionOp } from "./profileCore";
+import { applyReflection, detectDeviations, isActive, isInternalTalk, isUnsafeFact, timelineDetail, newActionId, type FactJudgement, type NewQuestion, type ReflectionOp } from "./profileCore";
 import { DECAY_CLASSES, QUESTION_EXPIRY_DAYS } from "./factPolicy";
 import type { CaregiverQuestion } from "../../models/elderProfile.model";
 import { applyRetention, forgetProfileCache, type Who } from "./elderProfile.service";
@@ -44,6 +44,7 @@ Care actions for tomorrow (0–4, most useful first):
 - caregiver_suggestion (audience caregiver): something the family may want to do (e.g. "She mentioned knee pain 3 days running — consider a doctor visit").
 Saheli can only send WhatsApp messages (and, when she asks and confirms, place an order or book a ride). She cannot play music, call, or visit — suggest talking about a song, not playing it.
 Red-flag symptoms are handled elsewhere immediately; do not downplay them.
+Never mention Saheli's own technical problems, errors, failed searches or missed replies anywhere (facts, care actions, unusual, evidence) — they are not about her. If Saheli didn't get to answer something she raised, at most plan a warm follow_up about the topic itself (e.g. "Ask how her knee is today").
 
 Unusual activity (0–3, only if the timeline shows it; judge against the profile / her usual pattern): same item ordered repeatedly in a short time (possible forgetting), unusually large quantity or spend, risky medicines in bulk (sleeping pills, painkillers), orders at odd hours vs her routine, sudden change in what she orders (stopped food / medicines), confusion or memory lapses (repeating questions, forgetting she ordered, wrong names/dates), marked mood drop, not taking medicines several days, possible scam/fraud (someone asking her for OTP / money / bank details). confidence 0.9 only when clearly shown; 0.5–0.7 when it could be innocent. Write "text" for the caregiver: calm, specific, what Saheli saw + a suggestion, max 2 sentences.
 
@@ -243,7 +244,12 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     const counts = await dayCounts(w, dayKey, rows as never);
     const lines = rows
         .filter((r) => r.kind !== "diag" && r.kind !== "order_step")
-        .map((r) => `${istTime(new Date(r.createdAt as Date))} [${r.kind}] ${r.title}${r.detail ? ` — ${String(r.detail).replace(/\s+/g, " ").slice(0, 280)}` : ""}`)
+        .map((r) => {
+            // Saheli's own hiccups (a failed search, an apology) are not facts about her: the model
+            // only sees that Saheli didn't get to answer properly — never "technical error".
+            const detail = timelineDetail(r.kind, r.detail, 280);
+            return `${istTime(new Date(r.createdAt as Date))} [${r.kind}] ${r.title}${detail ? ` — ${detail}` : ""}`;
+        })
         .slice(-350);
     let declines = "";
     try {
@@ -312,16 +318,16 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         }
         if (parsed) {
             // Handles → real fact ids (unknown handles dropped / treated as new facts).
-            ops = (Array.isArray(parsed.ops) ? parsed.ops : []).map((o) => ({ ...o, id: o?.id ? idOf.get(String(o.id)) || null : null }));
+            ops = (Array.isArray(parsed.ops) ? parsed.ops : []).filter((o) => !isInternalTalk(o?.text, o?.evidence)).map((o) => ({ ...o, id: o?.id ? idOf.get(String(o.id)) || null : null }));
             judgements = (Array.isArray(parsed.judgements) ? parsed.judgements : [])
                 .map((j) => ({ ...j, id: idOf.get(String(j?.id)) || "" }))
                 .filter((j) => j.id);
             day = parsed.day || {};
             tuning = parsed.tuning || {};
-            unusual = Array.isArray(parsed.unusual) ? parsed.unusual.slice(0, 3) : [];
+            unusual = Array.isArray(parsed.unusual) ? parsed.unusual.filter((u) => !isInternalTalk(u.text, u.evidence)).slice(0, 3) : [];
             const next = istDayKey(new Date(new Date(`${dayKey}T12:00:00+05:30`).getTime() + 86_400_000));
             actions = (parsed.careActions || [])
-                .filter((a) => a.text && !isUnsafeFact(a.text) && ["follow_up", "reminder", "company", "offer", "caregiver_suggestion"].includes(String(a.kind)))
+                .filter((a) => a.text && !isUnsafeFact(a.text) && !isInternalTalk(a.text, a.say, a.why) && ["follow_up", "reminder", "company", "offer", "caregiver_suggestion"].includes(String(a.kind)))
                 // Offers stay offers: never "I ordered / booked".
                 .filter((a) => !/\b(will order|will book|auto[- ]?(order|book|place))\b/i.test(`${a.text} ${a.say || ""}`) && !/\b(i (have )?(ordered|booked|placed)|order kar diya|book kar di|mangwa diya|mangwa di)\b/i.test(String(a.say || "")))
                 .slice(0, 4)

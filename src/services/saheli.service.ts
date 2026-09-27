@@ -2150,7 +2150,7 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
                           : msg.role === "family"
                             ? "Family"
                             : recipientName,
-                detail: msg.content.slice(0, 120),
+                detail: msg.content.length > 120 ? `${msg.content.slice(0, 117).replace(/\s+\S*$/, "")}…` : msg.content,
                 recipientUserId,
                 recipientName,
                 at,

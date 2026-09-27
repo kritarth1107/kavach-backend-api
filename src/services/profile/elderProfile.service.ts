@@ -5,7 +5,7 @@
  */
 import ElderProfile, { type CaregiverQuestion, type FactLabel, type IElderProfile, type IElderProfileDocument, type ProfileFact } from "../../models/elderProfile.model";
 import ElderWellbeingDay from "../../models/elderWellbeingDay.model";
-import { applyReflection, detectStatedPreference, isActive, renderProfileSummary, weeklyMetrics } from "./profileCore";
+import { applyReflection, detectStatedPreference, isActive, isInternalTalk, renderProfileSummary, weeklyMetrics } from "./profileCore";
 import { istDayKey } from "../activityLog.service";
 
 export type Who = { familyId: string; recipientUserId: string };
@@ -239,7 +239,7 @@ export async function profileView(w: Who) {
     const p = await loadProfile(w);
     const days = await ElderWellbeingDay.find({ familyId: w.familyId, recipientUserId: w.recipientUserId }).sort({ dayKey: 1 }).limit(120).lean();
     const { CARE_FIRST_ORDER } = await import("./profileCore");
-    const facts = (p?.facts || []).filter((f) => f.status !== "rejected" && f.status !== "faded");
+    const facts = (p?.facts || []).filter((f) => f.status !== "rejected" && f.status !== "faded" && !isInternalTalk(f.text));
     const groups = CARE_FIRST_ORDER.map((category) => ({
         category,
         facts: facts
@@ -264,9 +264,10 @@ export async function profileView(w: Who) {
     const today = istDayKey();
     return {
         groups,
-        careActions: (p?.careActions || []).filter((a) => a.dayKey >= today && a.status !== "dismissed"),
-        deviations: (p?.deviations || []).filter((d) => !d.dismissed).slice(-10).reverse(),
-        unusual: (p?.alerts || []).filter((a) => !a.dismissed).slice(-12).reverse(),
+        careActions: (p?.careActions || []).filter((a) => a.dayKey >= today && a.status !== "dismissed" && !isInternalTalk(a.text, a.say, a.why)),
+        // Only recent, real days: nothing from the future (simulated runs) or older than two weeks.
+        deviations: (p?.deviations || []).filter((d) => !d.dismissed && d.dayKey <= today && d.dayKey >= istDayKey(new Date(Date.now() - 14 * 86_400_000)) && !isInternalTalk(d.text)).slice(-10).reverse(),
+        unusual: (p?.alerts || []).filter((a) => !a.dismissed && new Date(a.at).getTime() <= Date.now() + 60_000 && new Date(a.at).getTime() >= Date.now() - 30 * 86_400_000 && !isInternalTalk(a.text, (a as { evidence?: string }).evidence)).slice(-12).reverse(),
         questions: openQuestions(p).slice(-6).reverse().map((q) => ({ id: q.id, factId: q.factId, text: q.text, trigger: q.trigger, evidence: q.evidence || null, createdAt: q.createdAt, decayClass: q.decayClass || null })),
         metrics: weeklyMetrics(days as never, facts.filter((f) => f.status === "learned").length, (p?.facts || []).filter((f) => (f.fadeCount || 0) > 0).length).slice(-8),
         recentDays: days.slice(-14).map((d) => ({ dayKey: d.dayKey, mood: d.mood, moodWord: d.moodWord, messagesIn: d.messagesIn, medsDone: d.medsDone, medsMissed: d.medsMissed, lonely: d.lonely })),
@@ -284,7 +285,7 @@ export async function profileView(w: Who) {
 export async function takeCareLine(w: Who): Promise<string> {
     const p = await ElderProfile.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId });
     const today = istDayKey();
-    const a = (p?.careActions || []).find((x) => x.dayKey === today && x.audience === "elder" && x.status === "planned" && x.say);
+    const a = (p?.careActions || []).find((x) => x.dayKey === today && x.audience === "elder" && x.status === "planned" && x.say && !isInternalTalk(x.text, x.say));
     if (!p || !a) return "";
     a.status = "used";
     p.markModified("careActions");

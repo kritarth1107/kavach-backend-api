@@ -5,6 +5,7 @@
 import ActivityLog from "../models/activityLog.model";
 import DailySnapshot, { type IDailySnapshot } from "../models/dailySnapshot.model";
 import { parseJsonLoose, vertexGenerateText, vertexProModel } from "../clients/vertexGemini.client";
+import { isInternalTalk, timelineDetail } from "./profile/profileCore";
 import { istDayKey } from "./activityLog.service";
 
 export function serializeSnapshot(doc: Partial<IDailySnapshot> | null | undefined) {
@@ -60,7 +61,10 @@ export async function generateDailySnapshot(input: {
     // Compact transcript: skip noisy step chatter + diagnostics; keep the story.
     const lines = rows
         .filter((r) => r.kind !== "diag" && r.kind !== "order_step")
-        .map((r) => `${istTime(new Date(r.createdAt as Date))} [${r.kind}] ${r.title}${r.detail ? ` — ${String(r.detail).replace(/\s+/g, " ").slice(0, 300)}` : ""}`)
+        .map((r) => {
+            const detail = timelineDetail(r.kind, r.detail, 300);
+            return `${istTime(new Date(r.createdAt as Date))} [${r.kind}] ${r.title}${detail ? ` — ${detail}` : ""}`;
+        })
         .slice(-400);
     const model = vertexProModel();
     const who = input.elderName?.trim() || "the care recipient";
@@ -73,6 +77,7 @@ export async function generateDailySnapshot(input: {
         system:
             `You write a caregiver's daily snapshot of ${who}'s day with Saheli (their WhatsApp companion). ` +
             "Use ONLY the log. Warm, factual, short. Never diagnose or interpret health; quote what they said. " +
+            "Never mention Saheli's own technical problems, errors or missed replies — they are not part of the family's day. " +
             'Reply ONLY JSON: {"summary":"3-5 sentence overview","highlights":["≤6 short bullets"],"concerns":["health/mood/safety items worth a caregiver\'s attention, else empty"],"mood":"one word or null"}',
         prompt: `Day: ${dayKey} (IST)\nActivity log:\n${lines.join("\n")}`,
     });
@@ -93,9 +98,9 @@ export async function generateDailySnapshot(input: {
         ? {
               ...base,
               status: "ready" as const,
-              summary: String(parsed.summary).slice(0, 3000),
-              highlights: (parsed.highlights ?? []).map(String).slice(0, 8),
-              concerns: (parsed.concerns ?? []).map(String).slice(0, 8),
+              summary: String(parsed.summary).split(/(?<=[.!?])\s+/).filter((x) => !isInternalTalk(x)).join(" ").slice(0, 3000),
+              highlights: (parsed.highlights ?? []).map(String).filter((x) => !isInternalTalk(x)).slice(0, 8),
+              concerns: (parsed.concerns ?? []).map(String).filter((x) => !isInternalTalk(x)).slice(0, 8),
               mood: parsed.mood ? String(parsed.mood).slice(0, 30) : null,
               modelName: model,
               generatedAt: new Date(),

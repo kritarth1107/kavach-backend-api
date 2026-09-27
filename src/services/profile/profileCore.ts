@@ -317,7 +317,7 @@ export function renderProfileSummary(
             .slice(0, opts.short ? 2 : 4);
         if (fs.length) lines.push(`${cat}: ${fs.map((f) => f.text).join("; ")}`);
     }
-    const today = (p.careActions || []).filter((a) => a.status === "planned" && a.audience === "elder" && (!opts.dayKey || a.dayKey === opts.dayKey));
+    const today = (p.careActions || []).filter((a) => a.status === "planned" && a.audience === "elder" && (!opts.dayKey || a.dayKey === opts.dayKey) && !isInternalTalk(a.text, a.say));
     if (today.length && !opts.short) lines.push(`Today's care intentions (weave in gently, one at a time, never pushy): ${today.map((a) => a.text).join("; ")}`);
     let s = lines.join("\n");
     if (s.length > max) s = s.slice(0, max - 1) + "…";
@@ -434,4 +434,23 @@ export function detectStatedPreference(text: string): { text: string; brand?: st
 
 export function newActionId(): string {
     return randomUUID();
+}
+
+/** Internal / system talk that must never reach a care plan, snapshot or learned fact. */
+export const INTERNAL_TALK =
+    /\b(technical|tech) (error|issue|glitch|problem)|\bglitch|\bbug\b|\bsystem (error|issue|failure)|\berror\b|\b(app|store|site|website|search|page|saheli)\b[^.]{0,25}\b(failed|crashed|didn'?t load|failed to load|wasn'?t loading|did not load|stopped working)|\boutage|\bserver\b|\bsaheli\b[^.]{0,40}\b(couldn'?t|didn'?t|failed to|was unable to|could not|did not) (respond|reply|answer|get back)|\bno (response|reply) from saheli|\bsaheli (was|went) (down|offline)/i;
+
+/** Hide anything that talks about Saheli's own failures (older reflections wrote a few). */
+export function isInternalTalk(...parts: Array<string | null | undefined>): boolean {
+    return INTERNAL_TALK.test(parts.filter(Boolean).join(" "));
+}
+
+/** Saheli's failure / apology copy in the timeline (not something she said or did). */
+export const SAHELI_HICCUP =
+    /couldn'?t check that|technical|didn'?t load|isn'?t answering|not answering|timed out|try again in a (minute|bit|while)|something went wrong|I'm still working on that|couldn'?t set .{0,20}location|won'?t invent/i;
+
+/** Timeline detail for LLM digests: Saheli's own hiccups become a neutral note, never "error". */
+export function timelineDetail(kind: string, detail: unknown, max: number): string {
+    const d = detail ? String(detail).replace(/\s+/g, " ").slice(0, max) : "";
+    return kind === "message_out" && SAHELI_HICCUP.test(d) ? "(Saheli didn't get to answer this properly)" : d;
 }

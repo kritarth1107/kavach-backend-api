@@ -18,6 +18,8 @@ export type CommandCenterRecipient = {
     userId: string;
     name: string;
     insightCount: number;
+    /** Health / emergency / unusual-activity alerts raised today (IST) — the card must not say "All clear". */
+    alertsToday: number;
     activeOrderPhase: string | null;
     lastElderSnippet: string | null;
     lastElderAt: string | null;
@@ -78,6 +80,7 @@ export async function getCommandCenter(
             schedules,
             pendingForRecipient,
             swiggyStatus,
+            alertsToday,
         ] = await Promise.all([
             getSaheliInsights(familyId, recipientUserId, actorUserId),
             OrderSession.findOne({
@@ -103,6 +106,11 @@ export async function getCommandCenter(
                 status: { $in: [OrderStatus.AWAITING_APPROVAL, OrderStatus.APPROVED] },
             }),
             getMcpConnectionStatus("swiggy", familyId, actorUserId),
+            import("../models/activityLog.model").then(({ default: AL }) =>
+                import("./activityLog.service").then(({ istDayKey }) =>
+                    AL.countDocuments({ familyId, recipientUserId, kind: "caregiver_alert", dayKey: istDayKey() }),
+                ),
+            ).catch(() => 0),
         ]);
 
         let swiggyAddressCount = 0;
@@ -136,6 +144,7 @@ export async function getCommandCenter(
             userId: recipientUserId,
             name,
             insightCount: insights.length,
+            alertsToday,
             activeOrderPhase: activeOrder?.phase ?? null,
             lastElderSnippet: lastElder?.content?.slice(0, 120) ?? null,
             lastElderAt: lastElder?.createdAt?.toISOString?.() ?? null,
