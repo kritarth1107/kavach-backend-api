@@ -276,8 +276,11 @@ export function handoffMessage(input: {
     pickup?: RidePlace;
     drop?: RidePlace;
     lang?: string | null;
+    tier?: CityTier;
 }): string | null {
     const { choice, vehicle, pickup, drop } = input;
+    // Small towns: Rapido often has only bikes and autos, so don't promise a "cab".
+    const smallTownRapido = vehicle === "cab" && choice.primary === "rapido" && input.tier === "tier3";
     const hi = isHindi(input.lang);
     const primaryLink = choice.primary ? linkFor(choice.primary, pickup, drop) : null;
     if (!choice.primary || !primaryLink) return null;
@@ -299,10 +302,15 @@ export function handoffMessage(input: {
         );
     }
     lines.push(
-        hi ? `*${to}* ke liye ${VEH_HI[vehicle]} ${VEH_EMOJI[vehicle]}` : `Here's your ${VEH_EN[vehicle]} to *${to}* ${VEH_EMOJI[vehicle]}`,
+        smallTownRapido
+            ? hi ? `*${to}* ke liye sawaari 🛺` : `Here's a ride to *${to}* 🛺`
+            : hi ? `*${to}* ke liye ${VEH_HI[vehicle]} ${VEH_EMOJI[vehicle]}` : `Here's your ${VEH_EN[vehicle]} to *${to}* ${VEH_EMOJI[vehicle]}`,
         hi ? `*${P}* kholne ke liye tap kijiye — route pehle se bhara hai:` : `Tap to open *${P}* — the route is already filled in:`,
         primaryLink,
     );
+    if (smallTownRapido) {
+        lines.push(hi ? "Yahan Rapido par auto ya bike mil sakti hai — jo theek lage chun lijiye." : "Here Rapido may show an auto or bike — pick what suits you.");
+    }
     if (choice.alt && altLink) {
         lines.push("", hi ? `Ya *${SERVICE_LABEL[choice.alt]}* try kijiye:` : `Or try *${SERVICE_LABEL[choice.alt]}*:`, altLink);
     }

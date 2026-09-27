@@ -124,5 +124,10 @@ ok("chooseServices honours config", chooseServices({ tier: "tier3", vehicle: "ca
     ok("airport is an airport", isAirport(t3!));
 }
 
+{
+    const m = handoffMessage({ choice: { primary: "rapido", alt: null, nammaYatriNote: false, airportAutoNote: false }, vehicle: "cab", pickup: P("Ghari Chowk, Ambikapur", 23.1, 83.2), drop: P("Bus stand, Ambikapur", 23.12, 83.19), lang: "en", tier: "tier3" })!;
+    ok("small-town Rapido doesn't promise a cab", !/your cab/i.test(m) && /auto or bike/.test(m), m);
+}
+
 console.log(fail ? `\n${fail} failed` : "\nall passed");
 process.exit(fail ? 1 : 0);

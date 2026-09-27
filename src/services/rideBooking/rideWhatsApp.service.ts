@@ -239,7 +239,7 @@ async function multiAppHandoff(input: RideTurnInput, draft: RideDraft): Promise<
         { phone: input.phone },
         { $set: { lastRide: { pickup: draft.pickup, drop: draft.drop, at: new Date() } } },
     ).catch(() => undefined);
-    const msg = handoffMessage({ choice, vehicle, pickup: draft.pickup, drop: draft.drop, lang });
+    const msg = handoffMessage({ choice, vehicle, pickup: draft.pickup, drop: draft.drop, lang, tier });
     if (msg) {
         await saveDraft(input.phone, null);
         void import("../activityLog.service").then(({ logActivity }) =>
