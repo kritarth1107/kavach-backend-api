@@ -126,8 +126,10 @@ export async function preferenceNotes(w: Who): Promise<string> {
     const items = (doc.items || []).slice(0, 8).map((u) => `${u.key} → usually "${u.name}" from ${u.partner}${u.count > 1 ? ` (${u.count}×)` : ""}`);
     const cutoff = Date.now() - 60 * 86_400_000;
     const rej = (doc.rejections || []).filter((r) => new Date(r.at).getTime() > cutoff).slice(-6).map((r) => `declined "${r.item}"${r.partner ? ` on ${r.partner}` : ""}: ${r.reason}${r.replacedWith ? ` → chose ${r.replacedWith}` : ""}`);
-    if (!items.length && !rej.length) return "";
-    return [items.length ? `Her usuals: ${items.join("; ")}` : "", rej.length ? `Past declines (respect these, don't re-offer the same thing for the same reason): ${rej.join("; ")}` : ""].filter(Boolean).join("\n");
+    // Why memory: the reason behind her orders (doctor said continue / stopped, guests, …).
+    const whys = await import("../../delegate/why.service").then((W) => W.whyNotesForPrompt(w)).catch(() => "");
+    if (!items.length && !rej.length && !whys) return "";
+    return [items.length ? `Her usuals: ${items.join("; ")}` : "", rej.length ? `Past declines (respect these, don't re-offer the same thing for the same reason): ${rej.join("; ")}` : "", whys].filter(Boolean).join("\n");
 }
 
 export { recentlyRejected };
@@ -145,7 +147,7 @@ export async function usualsSummary(w: Who) {
     if (!doc) return { items: [], preferredApp: {}, rides: [], rejections: [], typicalHours: [] };
     const hours = (doc.orderHours || []).map((n, h) => ({ h, n })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 3).map((x) => x.h);
     return {
-        items: (doc.items || []).map((u) => ({ key: u.key, name: u.name, partner: u.partner, category: u.category, pricePaise: u.pricePaise ?? null, count: u.count, lastAt: u.lastAt, intervalDays: u.intervalDays ?? null, placeNickname: u.placeNickname ?? null })),
+        items: (doc.items || []).map((u) => ({ key: u.key, name: u.name, partner: u.partner, category: u.category, pricePaise: u.pricePaise ?? null, count: u.count, lastAt: u.lastAt, intervalDays: u.intervalDays ?? null, placeNickname: u.placeNickname ?? null, why: (u as { why?: string }).why ?? null, whyStatus: (u as { whyStatus?: string }).whyStatus ?? null })),
         preferredApp: doc.preferredApp || {},
         rides: doc.rides || [],
         rejections: (doc.rejections || []).slice(-10),
@@ -155,15 +157,17 @@ export async function usualsSummary(w: Who) {
 
 /** One line for the morning message when a usual is due (most overdue first). */
 export async function reorderOfferLine(w: Who, lang?: string | null): Promise<string> {
-    const due = await dueUsuals(w);
+    // A usual the doctor stopped (why memory) is never suggested again.
+    const due = (await dueUsuals(w)).filter((u) => (u as { whyStatus?: string }).whyStatus !== "stopped");
     if (!due.length) return "";
     const u = due.sort((a, b) => +new Date(a.lastAt) + (a.intervalDays || 0) * 86_400_000 - (+new Date(b.lastAt) + (b.intervalDays || 0) * 86_400_000))[0]!;
     const hindi = /hindi|hinglish/i.test(lang || "");
     const ask = u.aliases.find((a) => !a.includes(" ")) || u.key;
     const e = usualEmoji(u.key, u.category);
+    const why = (u as { why?: string }).why;
     return hindi
-        ? `${e} Aapka *${u.name}* khatam hone wala hoga — mangwana ho to bas "${ask} mangwa do" likh dijiye.`
-        : `${e} Your *${u.name}* is probably running low — just say "${ask}" and I'll get your usual.`;
+        ? `${e} Aapka *${u.name}* khatam hone wala hoga${why ? ` (${why})` : ""} — mangwana ho to bas "${ask} mangwa do" likh dijiye.`
+        : `${e} Your *${u.name}* is probably running low${why ? ` (${why})` : ""} — just say "${ask}" and I'll get your usual.`;
 }
 
 /** Caregiver/dashboard: forget one usual (by name + app). */

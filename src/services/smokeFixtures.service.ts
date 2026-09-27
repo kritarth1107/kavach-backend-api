@@ -30,10 +30,13 @@ const FIXTURES = [
     },
 ];
 
+/** Delegate-feature test families (created/deleted by a local fixture script; +999 = unassigned). */
+const DELEGATE_FIXTURE_PHONES = ["+999730000001", "+999730000002", "+999730000003", "+999730000004"];
+
 /** Exactly one of the fixed fixture phones above (never a real or random placeholder number). */
 export function isSmokeFixturePhone(raw: string | undefined | null): boolean {
     const digits = String(raw ?? "").replace(/\D/g, "");
-    return FIXTURES.some((f) => f.phone.replace(/\D/g, "") === digits);
+    return FIXTURES.some((f) => f.phone.replace(/\D/g, "") === digits) || DELEGATE_FIXTURE_PHONES.some((p) => p.replace(/\D/g, "") === digits);
 }
 
 export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<string[]> {

@@ -140,6 +140,11 @@ export function rememberTurn(phone: string, who: "user" | "saheli", text: string
     if (turns.size > 5000) turns.delete(turns.keys().next().value as string);
 }
 
+/** Test hook (time travel): drop this phone's turn buffer. */
+export function forgetTurns(phone: string): void {
+    turns.delete(keyOf(phone));
+}
+
 export function recentTurns(phone: string): string {
     const now = Date.now();
     return (turns.get(keyOf(phone)) || [])

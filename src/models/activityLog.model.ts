@@ -21,6 +21,8 @@ export type ActivityKind =
     | "health"
     | "caregiver_alert"
     | "nudge"
+    /** Saheli-as-delegate: follow-ups, what changed, approvals, resumed / dropped tasks. */
+    | "followup"
     | "diag";
 
 export const ACTIVITY_KINDS: ActivityKind[] = [
@@ -39,6 +41,7 @@ export const ACTIVITY_KINDS: ActivityKind[] = [
     "health",
     "caregiver_alert",
     "nudge",
+    "followup",
     "diag",
 ];
 

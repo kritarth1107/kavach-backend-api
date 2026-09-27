@@ -131,6 +131,14 @@ export async function logActivity(input: LogActivityInput): Promise<void> {
             severity: input.severity ?? "info",
             dayKey: istDayKey(now),
         });
+        // Saheli-as-delegate: every placement path writes this row → follow-up + WHY memory.
+        const placed = input.kind === "order_placed" || (input.kind === "ride" && /booked/i.test(input.title));
+        if (placed || input.kind === "order_failed") {
+            const row = { familyId: input.familyId as string, recipientUserId: input.recipientUserId as string, actorUserId: input.actorUserId || undefined, kind: input.kind, title: input.title, detail: input.detail, data: input.data, createdAt: now };
+            void import("./delegate/followup.service")
+                .then((F) => (placed ? F.onOrderPlaced(row) : F.onOrderFailed(row)))
+                .catch((err) => console.warn("[delegate] order hook failed:", err instanceof Error ? err.message : err));
+        }
     } catch (err) {
         console.warn("activity log write failed:", err instanceof Error ? err.message : err);
     }

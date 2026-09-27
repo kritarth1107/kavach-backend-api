@@ -93,6 +93,11 @@ export async function generateDailySnapshot(input: {
         // Fact check-ins / contradictions: "Is Amma still taking X?" (yes pins, no removes — on the card).
         const questions = await P.questionsForSnapshot(w, dayKey).catch(() => [] as string[]);
         parsed.concerns = [...questions, ...(parsed.concerns ?? []), ...unusual];
+        // Saheli-as-delegate: open items, follow-up results, approvals waiting.
+        const D = await import("./delegate/summary.service");
+        const open = await D.delegateSnapshotLines(input.familyId, input.recipientUserId, dayKey).catch(() => ({ highlights: [] as string[], concerns: [] as string[] }));
+        parsed.highlights = [...(parsed.highlights ?? []), ...open.highlights];
+        parsed.concerns = [...open.concerns, ...(parsed.concerns ?? [])];
     }
     const set = parsed?.summary
         ? {

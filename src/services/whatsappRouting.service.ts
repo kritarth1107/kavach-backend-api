@@ -283,8 +283,19 @@ type WhatsAppInboundBody = {
  * activity feed (inbound is logged inside, after STT, so voice notes carry the transcript).
  */
 export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<OutboundMessage> {
+    // Saheli-as-delegate: note the live flow before this turn so the durable open task can follow it.
+    const dPhone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
+    const dWho = await resolveWhatsAppSender(dPhone).catch(() => null);
+    const dBefore = dWho
+        ? await import("./delegate/turn.service").then((D) => D.beforeTurn(dPhone, dWho.familyId)).catch(() => null)
+        : null;
     const out = await handleWhatsAppInboundCore(body);
     if (out?.content) rememberTurn(String(body.from ?? ""), "saheli", out.content);
+    if (dWho && out?.content) {
+        void import("./delegate/turn.service")
+            .then((D) => D.afterTurn({ phone: dPhone, identity: dWho, before: dBefore, userText: String(body.text ?? ""), saheliText: out.content }))
+            .catch((err) => console.warn("[delegate] after-turn failed:", err instanceof Error ? err.message : err));
+    }
     void (async () => {
         try {
             const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? ""));
@@ -472,6 +483,14 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     // ── Understanding: ONE Gemini structured-output call per turn (message + recent turns +
     // this phone's active flows). Regex gates below run only when this returns null.
     let route: SaheliRoute | null = null;
+    // Saheli-as-delegate: follow-up answers / resume / approvals / why-updates are understood IN
+    // PARALLEL with the router (resolves to null at once when nothing is pending).
+    const delegateEarly =
+        !body.interactiveId && text && !MEDIA_PLACEHOLDER.test(text) && !body.mediaType
+            ? import("./delegate/turn.service")
+                  .then((D) => D.interpretEarly({ phone, text, identity: identity! }))
+                  .catch(() => null)
+            : Promise.resolve(null);
     if (!body.interactiveId && text && !MEDIA_PLACEHOLDER.test(text)) {
         const flowDoc = (await WhatsappSession.findOne({ phone }).lean()) as FlowDoc;
         route = await routeSaheliTurn({
@@ -561,6 +580,24 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             // Elder's own setting (updateCompanionProfile is caregiver-only and threw 403 here).
             await setOwnPreferredLanguage(identity.familyId, identity.userId, langChange);
             return outbound(phone, languageChangeConfirmation(langChange));
+        }
+    }
+
+    // Saheli-as-delegate: apply the follow-through step + the family's permissions on this route.
+    let delegateLead: string | undefined;
+    if (!body.interactiveId && text && !MEDIA_PLACEHOLDER.test(text) && !body.mediaType) {
+        const early = await delegateEarly;
+        const d = await import("./delegate/turn.service")
+            .then((D) => D.preDispatch({ phone, text, identity: identity!, route, early }))
+            .catch((err) => {
+                console.warn("[delegate] pre-dispatch failed:", err instanceof Error ? err.message : err);
+                return null;
+            });
+        if (d && "reply" in d) return outbound(phone, d.reply);
+        if (d && "reroute" in d) {
+            route = d.reroute;
+            text = d.text;
+            delegateLead = d.lead;
         }
     }
 
@@ -701,7 +738,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 replySource: "saheliRouter",
                 fallbackUsed: `router:${route.intent}`,
             });
-            return outbound(phone, routedOut.reply);
+            return outbound(phone, delegateLead && !routedOut.reply.startsWith(delegateLead) ? `${delegateLead}\n\n${routedOut.reply}` : routedOut.reply);
         }
         legacyGates = routedOut.legacyGates;
         allowDashboard = routedOut.allowDashboard;

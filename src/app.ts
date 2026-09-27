@@ -20,6 +20,7 @@ import { startOutreachScheduler } from "./workers/outreachScheduler";
 import { startCareNudgeScheduler } from "./workers/careNudgeScheduler";
 import { startMemoryConsolidationScheduler } from "./workers/memoryConsolidationScheduler";
 import internalRoutes from "./routes/internal.routes";
+import delegateRoutes from "./routes/delegate.routes";
 
 dotenv.config();
 
@@ -53,6 +54,7 @@ app.use("/api/families", familyRoutes);
 app.use("/api/families", careRecordRoutes);
 app.use("/api/families", familyZeptoRouter);
 app.use("/api/families", familyMcpRouter);
+app.use("/api/families", delegateRoutes);
 app.use("/api/webhooks", webhookRoutes);
 app.use("/api/integrations", zeptoPublicRoutes);
 app.use("/api/integrations", mcpPublicRoutes);

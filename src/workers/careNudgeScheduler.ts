@@ -21,6 +21,9 @@ async function runTick() {
         }
         const { flushQueuedUnusualAlerts } = await import("../services/profile/unusualActivity.service");
         void flushQueuedUnusualAlerts().catch((e) => console.warn("unusual alert flush failed:", e));
+        // Saheli-as-delegate: delivery / medicine follow-ups, abandoned-task nudge, approvals, expiry.
+        const { runDelegateTick } = await import("../services/delegate/followup.service");
+        void runDelegateTick().catch((e) => console.warn("delegate tick failed:", e));
         const { runDailySnapshotTick } = await import("../services/dailySnapshot.service");
         void runDailySnapshotTick().catch((e) => console.warn("daily snapshot tick failed:", e));
     } catch (err) {
