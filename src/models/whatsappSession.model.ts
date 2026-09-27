@@ -16,6 +16,8 @@ export interface IWhatsappSession {
     orderSubject?: { userId: string; at: Date };
     /** Last ride route that got app links (30 min) — "Ola se" / "cab chahiye" reuse it. */
     lastRide?: Record<string, unknown>;
+    /** Her language from substantive messages (survives restarts): { lang, at }. */
+    stickyLang?: { lang?: string; at?: Date };
     awaitingRecipientPick?: boolean;
     recipientOptions?: Array<{ userId: string; name: string }>;
     guestTurns?: number;
@@ -75,6 +77,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         pendingOffer: { type: Schema.Types.Mixed },
         orderSubject: { type: Schema.Types.Mixed },
         lastRide: { type: Schema.Types.Mixed },
+        stickyLang: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

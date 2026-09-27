@@ -202,8 +202,8 @@ export async function handleRideWhatsAppTurn(input: RideTurnInput): Promise<{ te
 }
 
 async function rideLang(phone: string): Promise<string | null> {
-    const { preferredLang } = await import("../saheliRouter.service");
-    return preferredLang(phone);
+    const { preferredLangAsync } = await import("../saheliRouter.service");
+    return preferredLangAsync(phone);
 }
 
 /** Route confirmed → the best app link for this city (plus one alternative), or the no-service offer. */

@@ -183,7 +183,28 @@ export function isSubstantiveForLanguage(text: string): boolean {
 export function noteLanguage(phone: string, text: string, lang?: string | null): void {
     if (!lang || !isSubstantiveForLanguage(text)) return;
     stickyLangs.set(keyOf(phone), { lang, at: Date.now() });
+    // Kept on the session too, so a restart doesn't forget it.
+    void import("../models/whatsappSession.model")
+        .then(({ default: WS }) => WS.updateOne({ phone }, { $set: { stickyLang: { lang, at: new Date() } } }))
+        .catch(() => undefined);
     if (stickyLangs.size > 5000) stickyLangs.delete(stickyLangs.keys().next().value as string);
+}
+/** After a restart: load her sticky language from the session (async callers). */
+export async function preferredLangAsync(phone: string): Promise<string | null> {
+    const s = stickyLangs.get(keyOf(phone));
+    if (s && Date.now() - s.at < STICKY_LANG_MS) return s.lang;
+    try {
+        const { default: WS } = await import("../models/whatsappSession.model");
+        const row = (await WS.findOne({ phone }, { stickyLang: 1 }).lean()) as { stickyLang?: { lang?: string; at?: Date } } | null;
+        const at = row?.stickyLang?.at ? new Date(row.stickyLang.at).getTime() : 0;
+        if (row?.stickyLang?.lang && Date.now() - at < STICKY_LANG_MS) {
+            stickyLangs.set(keyOf(phone), { lang: row.stickyLang.lang, at });
+            return row.stickyLang.lang;
+        }
+    } catch {
+        /* fall through */
+    }
+    return preferredLang(phone);
 }
 /** Her language: the sticky one (last 2 h), else the last route's. */
 export function preferredLang(phone: string): string | null {
