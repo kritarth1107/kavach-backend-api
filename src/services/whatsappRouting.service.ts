@@ -1469,7 +1469,14 @@ async function dispatchRoutedTurn(a: {
     };
     const rideTurn = async (t: string) => {
         const { handleRideWhatsAppTurn } = await import("./rideBooking/rideWhatsApp.service");
-        const r = await handleRideWhatsAppTurn({ ...input, text: t, hintText: text, forceStart: route.intent === "ride" });
+        // Places the model filled only from context ("auto on Rapido instead?") are not new places.
+        const low = text.toLowerCase();
+        const typedPlace = (p?: string | null) => {
+            const w = String(p || "").toLowerCase().split(/[\s,]+/).filter((x) => x.length > 2 && !/^(the|near|road|se|to|from)$/.test(x));
+            return w.length > 0 && w.some((x) => low.includes(x));
+        };
+        const newPlacesTyped = typedPlace(route.ridePickup) || typedPlace(route.rideDrop);
+        const r = await handleRideWhatsAppTurn({ ...input, text: t, hintText: text, forceStart: route.intent === "ride", newPlacesTyped });
         if (r?.text && /hi/i.test(route.language || "")) r.text = hinglishRideCopy(r.text);
         return r;
     };

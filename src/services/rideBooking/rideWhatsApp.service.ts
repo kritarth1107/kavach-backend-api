@@ -169,6 +169,8 @@ type RideTurnInput = {
     hintText?: string;
     /** The router decided this is a ride ask — start one even if the words look plain. */
     forceStart?: boolean;
+    /** She typed a place in this message (so it is a new route, not "same ride, other app"). */
+    newPlacesTyped?: boolean;
 };
 
 export async function handleRideWhatsAppTurn(input: RideTurnInput): Promise<{ text: string; draft?: RideDraft } | null> {
@@ -361,12 +363,13 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
 
     // "cab chahiye" / "Ola se" right after a ride link: same route, new app or vehicle.
     if ((starting || input.forceStart) && (hv || hs)) {
-        const pf = parseFromTo(text);
+        // Judge by what she actually typed: the router may have re-filled the old route from context.
+        const pf = parseFromTo(input.hintText || text);
         const row = (await WhatsappSession.findOne({ phone: input.phone }, { lastRide: 1 }).lean().catch(() => null)) as {
             lastRide?: { pickup?: RidePlace; drop?: RidePlace; at?: Date };
         } | null;
         const lr = row?.lastRide;
-        if (!pf.pickup && !pf.drop && lr?.pickup && lr?.drop && lr.at && Date.now() - new Date(lr.at).getTime() < 30 * 60_000) {
+        if (!input.newPlacesTyped && !pf.pickup && !pf.drop && lr?.pickup && lr?.drop && lr.at && Date.now() - new Date(lr.at).getTime() < 30 * 60_000) {
             const again: RideDraft = { phase: "confirming_route", provider: providerFromText(text), pickup: lr.pickup, drop: lr.drop, vehicle: hv || undefined, requested: hs || undefined };
             again.routeSummary = formatRouteSummary(lr.pickup, lr.drop);
             return await multiAppHandoff(input, again);
