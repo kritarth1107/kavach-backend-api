@@ -196,13 +196,20 @@ export function isOlaPhase(phase?: string): boolean {
     return Boolean(phase && phase.startsWith("ola_"));
 }
 
-export async function handleOlaTurn(input: OlaTurnInput, draft: RideDraft, text: string): Promise<{ text: string; draft?: RideDraft | null }> {
+/** While a ride is live, only ride talk belongs to it; "khana kha liya" / a BP reading goes to the normal chat. */
+const RIDE_TALK_RE = /\b(driver|cab|taxi|gaa?di|gadi|car|auto|bike|ola|ride|otp|plate|kahan|kidhar|kitni der|how long|eta|arriv\w*|pahunch\w*|aa raha|aa rahi|status|booking|booked|search|dhoondh\w*)\b/i;
+export function isOlaLiveRideTalk(text: string): boolean {
+    return CANCEL_RE.test(text.trim()) || RIDE_TALK_RE.test(text.trim());
+}
+
+export async function handleOlaTurn(input: OlaTurnInput, draft: RideDraft, text: string): Promise<{ text: string; draft?: RideDraft | null } | null> {
     const t = text.trim();
     const lang = draft.ola?.lang ?? null;
     const token = draft.ola?.token || "";
     const hi = /^hi/i.test(String(lang || ""));
 
     // Booked: search running / driver on the way.
+    if ((draft.phase === "ola_searching" || draft.phase === "ola_booking" || draft.phase === "ola_assigned") && !isOlaLiveRideTalk(t)) return null;
     if (draft.phase === "ola_searching" || draft.phase === "ola_booking") {
         if (CANCEL_RE.test(t)) return await userCancel(input, draft);
         return { text: OlaMsg.stillSearching(lang) };

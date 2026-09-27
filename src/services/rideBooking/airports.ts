@@ -7,7 +7,7 @@ import type { RidePlace } from "./types";
 type Airport = { city: RegExp; alias?: RegExp; name: string; terminals: Record<string, [number, number]>; main: string };
 
 const AIRPORTS: Airport[] = [
-    { city: /\b(new\s+)?delhi\b|दिल्ली/i, alias: /\b(igi|indira\s+gandhi)\b/i, name: "Delhi Airport", main: "3",
+    { city: /\b(new\s+)?delhi\b|दिल्ली|\b(gurugram|gurgaon|ghaziabad|faridabad)\b|गुड़गांव|गुरुग्राम/i, alias: /\b(igi|indira\s+gandhi)\b/i, name: "Delhi Airport", main: "3",
       terminals: { "1": [28.5654, 77.1193], "2": [28.5552, 77.0844], "3": [28.5579, 77.0835] } },
     { city: /\b(mumbai|bombay)\b|मुंबई/i, alias: /\b(csmia|chhatrapati\s+shivaji|sahar|santacruz)\b/i, name: "Mumbai Airport", main: "2",
       terminals: { "1": [19.0896, 72.8532], "2": [19.1014, 72.8726] } },

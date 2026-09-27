@@ -116,6 +116,8 @@ ok("chooseServices honours config", chooseServices({ tier: "tier3", vehicle: "ca
     ok("IGI T3", t3?.shortLabel === "Delhi Airport T3" && Math.abs((t3?.lat || 0) - 28.558) < 0.01, t3);
     ok("delhi airport terminal 1", airportPlace("delhi airport terminal 1")?.shortLabel === "Delhi Airport T1");
     ok("Mumbai T2", airportPlace("Mumbai airport T2")?.shortLabel === "Mumbai Airport T2");
+    ok("Gurugram: airport T3 = Delhi T3", airportPlace("airport T3, Gurugram")?.shortLabel === "Delhi Airport T3");
+    ok("Noida airport not forced to Delhi", airportPlace("Noida airport")?.shortLabel !== "Delhi Airport T3");
     ok("KIA", airportPlace("KIA")?.shortLabel === "Bengaluru Airport T1");
     ok("raipur airport", airportPlace("raipur airport")?.shortLabel === "Raipur Airport");
     ok("Hindi airport", airportPlace("रायपुर एयरपोर्ट")?.shortLabel === "Raipur Airport" && airportPlace("दिल्ली एयरपोर्ट टर्मिनल 3")?.shortLabel === "Delhi Airport T3");

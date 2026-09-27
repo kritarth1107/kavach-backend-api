@@ -26,6 +26,11 @@ ok("lookup: full address first", gc[0]!.startsWith("C504"), gc);
 ok("lookup: drops 'near …' part", gc.every((q) => !/NEAR TULIP/.test(q) || q === gc[0]), gc);
 ok("lookup: never city+state only", !gc.some((q) => /^RAIPUR, CHHATTISGARH/.test(q)), gc);
 ok("lookup: locality + city tried", gc.includes("LABHANDIH, RAIPUR"), gc);
+// Live ride: only ride talk is captured; everything else goes to the normal chat.
+void import("../src/services/rideBooking/ola/olaInChat.service").then(({ isOlaLiveRideTalk: talk }) => {
+    for (const t of ["driver kahan hai?", "cancel", "gaadi kab aayegi", "where is my cab", "OTP kya hai", "ruko"]) ok(`ride talk: ${t}`, talk(t));
+    for (const t of ["maine khana kha liya", "mera BP aaj 130/85 aaya", "good morning", "dawai le li", "dawai kab leni hai?", "beta aaya tha"]) ok(`not ride talk: ${t}`, !talk(t));
+});
 const ordered = orderRideTypes(li, "cab");
 ok("cab ask: cab types first", ordered[0]!.name === "Mini" && ordered.slice(-2).map((t) => t.name).join() === "Auto,Bike", ordered.map((t) => t.name));
 ok("auto ask: auto first", orderRideTypes(li, "auto")[0]!.name === "Auto");

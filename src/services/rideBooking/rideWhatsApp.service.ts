@@ -292,6 +292,7 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
     }
     if (draft && isOlaPhase(draft.phase)) {
         const r = await handleOlaTurn(input, draft, text);
+        if (!r) return null; // not about the ride: the normal chat answers
         return { text: r.text, draft: r.draft === null ? undefined : r.draft || draft };
     }
 
