@@ -601,6 +601,28 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
+    // Something Saheli can't do yet (music, calls, doctor bookings, bills…): one warm honest line
+    // in her language, and the ask is logged so the family / team can see demand.
+    if (route?.intent === "feature_request") {
+        const hindi = route.language === "hi" || route.language === "hinglish";
+        const reply = hindi
+            ? "Main is feature par kaam kar rahi hoon 🙏 Jaise hi yeh shuru hoga, aapko sabse pehle bataungi."
+            : "I'm working on this feature 🙏 I'll tell you as soon as it's live.";
+        void import("./activityLog.service").then(({ logActivity }) =>
+            logActivity({
+                familyId: identity!.familyId,
+                recipientUserId: identity!.userId,
+                kind: "diag",
+                title: `Feature request: ${route!.feature || text.slice(0, 60)}`,
+                detail: text.slice(0, 400),
+                data: { source: "feature_request", feature: route!.feature || null, role: identity!.role },
+            }),
+        ).catch(() => undefined);
+        let out = outbound(phone, reply);
+        if (isVoiceMedia) out = await withVoiceReply(out);
+        return out;
+    }
+
     // "Sun sakte ho?" / "can you hear me" / "hello?" → warm conversational presence reply
     // (never a memory save, never an error). Voice gets a spoken reply too.
     if (route ? route.intent === "presence_check" : messageIsPresenceCheck(text)) {

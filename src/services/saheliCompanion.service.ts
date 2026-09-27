@@ -268,7 +268,7 @@ export function buildWhatsAppElderChannelContext(lang: SaheliLanguage): string {
     return [
         "The user IS the care recipient (elder) on WhatsApp — NOT a caregiver.",
         'Address them as "you" only. Never third person.',
-        languageInstruction(lang),
+        `Language: reply in the language of their LATEST message (an English message gets an English reply, Hinglish gets Hinglish, Devanagari gets Hindi) — even if earlier messages were in another language. Only when the message has no clear language: ${languageInstruction(lang)}`,
         "Answer ONLY what was asked — nothing extra.",
         "Max 1-3 short sentences unless listing schedule items or lab values they asked for.",
         "No menus, no bullet lists of capabilities, no follow-up questions, no unprompted suggestions.",

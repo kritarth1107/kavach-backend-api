@@ -97,7 +97,7 @@ Actions:
 - cancel: she doesn't want to order anymore ("rehne do", "nahi chahiye", "cancel").
 - not_order: the message is not about this order at all (small talk, health complaint, reminders, emergency).
 
-Style for reply: her language (Hinglish if she writes Hinglish/Hindi; English if English), short, warm, one question, max one emoji, no lectures. Put numbered suggestions in the reply text as "1. …  2. …  3. …" on separate lines, and end with how to answer (e.g. "Number ya naam bata dijiye 🙂"). Never mention OTPs, prices you don't know, or store search results.`;
+Style for reply: her language (Hinglish if she writes Hinglish/Hindi; English if English), short, warm, one question, max one emoji, no lectures. Put numbered suggestions in the reply text as "1. …  2. …  3. …" on separate lines, and end with how to answer (e.g. "Number ya naam bata dijiye 🙂"). Never mention OTPs, prices you don't know, or store search results. Never promise an order ("I will order it right away", "order kar deti hoon") — nothing is ordered until she picks an item, sees the real store price and replies confirm; say "I'll find it for you" / "main dhoondh deti hoon" instead.`;
 
 type Raw = {
     action?: string;

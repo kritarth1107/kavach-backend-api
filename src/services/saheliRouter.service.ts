@@ -24,6 +24,7 @@ export const ROUTER_INTENTS = [
     "emergency",
     "order_status_history",
     "account_info",
+    "feature_request",
     "companion_chat",
 ] as const;
 export type RouterIntent = (typeof ROUTER_INTENTS)[number];
@@ -60,6 +61,8 @@ export type SaheliRoute = {
     rideDrop: string | null;
     /** Care guardrail: the user wants tobacco / gutka-pan masala / vapes / alcohol (never ordered). */
     blockedItem: "tobacco" | "gutka" | "vape" | "alcohol" | null;
+    /** feature_request: what she asked for that Saheli can't do yet (short, English). */
+    feature?: string | null;
     confidence: number;
     source: "gemini";
     latencyMs: number;
@@ -89,6 +92,7 @@ const SCHEMA = {
         ridePickup: { type: "STRING", nullable: true },
         rideDrop: { type: "STRING", nullable: true },
         blockedItem: { type: "STRING", enum: ["tobacco", "gutka", "vape", "alcohol"], nullable: true },
+        feature: { type: "STRING", nullable: true },
         confidence: { type: "NUMBER" },
     },
     required: ["intent", "language", "partners", "partnerOnly", "control", "confidence"],
@@ -102,7 +106,7 @@ Intents:
 - order_modify: changes the CURRENT order: different item/quantity, delivery address, or naming a platform for the pending product.
 - order_control: controls the current order: confirm / cancel / status / retry / order again / picking an option number or name.
 - otp_code: pasting a login/verification code (4–8 digits) while a flow is waiting for an OTP.
-- ride: cab/auto booking. reminder_or_meds: medicine reminders, schedules, "did I take my pill". language_change: asks Saheli to speak another language. presence_check: "hello?", "are you there", "sun rahe ho". caregiver_share: asks to tell/inform family. health_concern: symptoms / feeling unwell. emergency: fell, chest pain, can't breathe, needs help now. order_status_history: past orders / bills ("what did I order last week", "how much was my last bill", "where is my order" when NO order draft is active). account_info: Kavach account / family things — connecting a delivery app, caregiver approving/rejecting a pending order ("approve", "reject"), quiet hours / do-not-disturb, family brief/update about the elder, lab reports, today's schedule, who is in my family. companion_chat: everything else (greetings, feelings, stories, questions, advice).
+- ride: cab/auto booking. reminder_or_meds: medicine reminders, schedules, "did I take my pill". language_change: asks Saheli to speak another language. presence_check: "hello?", "are you there", "sun rahe ho". caregiver_share: asks to tell/inform family. health_concern: symptoms / feeling unwell. emergency: fell, chest pain, can't breathe, needs help now. order_status_history: past orders / bills ("what did I order last week", "how much was my last bill", "where is my order" when NO order draft is active). account_info: Kavach account / family things — connecting a delivery app, caregiver approving/rejecting a pending order ("approve", "reject"), quiet hours / do-not-disturb, family brief/update about the elder, lab reports, today's schedule, who is in my family. feature_request: asks Saheli to DO something she can't do yet — play music/songs/bhajans/radio, make or book a phone/video call, book a doctor appointment or lab test, pay a bill / recharge / send money, book trains/flights/movie tickets, control TV/lights/alarms — set feature to a short English label (e.g. "play music", "book doctor appointment"). Talking ABOUT a song or a doctor is companion_chat; ordering groceries/food/medicines and cabs are supported (not feature_request). companion_chat: everything else (greetings, feelings, stories, questions, advice).
 - Nudge replies: when Saheli's last turn was a check-in or medicine nudge, answers like "haan le li", "not yet", "done" are reminder_or_meds.
 
 Slots:
@@ -228,6 +232,7 @@ export async function routeSaheliTurn(input: {
             blockedItem: (["tobacco", "gutka", "vape", "alcohol"] as const).includes(p.blockedItem as "tobacco")
                 ? (p.blockedItem as SaheliRoute["blockedItem"])
                 : null,
+            feature: typeof p.feature === "string" && p.feature.trim() ? p.feature.trim().slice(0, 60) : null,
             confidence: typeof p.confidence === "number" ? p.confidence : 0.5,
             source: "gemini",
             latencyMs: Date.now() - started,
