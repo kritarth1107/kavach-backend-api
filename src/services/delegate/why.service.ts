@@ -71,7 +71,8 @@ export async function upsertWhy(
         return { why: doc.toObject() as ISaheliWhy, events };
     }
     const updates = (existing.updates || []) as WhyUpdate[];
-    if (input.reason && input.reason.trim().toLowerCase() !== existing.reason.trim().toLowerCase()) {
+    // A placed order may refresh the reason; an in-progress request only fills a gap (never overwrites).
+    if (input.reason && input.source !== "request" && input.reason.trim().toLowerCase() !== existing.reason.trim().toLowerCase()) {
         updates.push({ at: now, kind: "note", note: `Earlier reason: ${existing.reason}`.slice(0, 300), source: input.source });
         existing.reason = input.reason.slice(0, 400);
     }
@@ -89,7 +90,8 @@ export async function upsertWhy(
     if (input.pricePaise) existing.lastPricePaise = input.pricePaise;
     if (input.partner) existing.partner = input.partner;
     if (input.importance === "high") existing.importance = "high";
-    if (input.subject.length > existing.subject.length && input.source === "order") existing.subject = input.subject.slice(0, 140);
+    // Keep the short name she used ("Telma 40"); only fill in a missing / 1-word name.
+    if (input.source === "order" && existing.subject.trim().split(/\s+/).length < 2 && input.subject.length > existing.subject.length) existing.subject = input.subject.slice(0, 140);
     existing.updates = updates.slice(-20);
     existing.markModified("updates");
     await existing.save();

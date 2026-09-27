@@ -50,7 +50,7 @@ export async function delegateSummary(familyId: string, recipientUserId: string)
     const openTasks = rows.filter((t) => t.kind === "open_task" && t.status === "open" && t.phase !== "ended_in_chat");
     const followups = rows.filter((t) => t.kind === "followup" && (t.status === "open" || t.status === "asked"));
     const approvals = rows.filter((t) => t.kind === "approval" && t.status === "open");
-    const recent = rows.filter((t) => !openTasks.includes(t) && !followups.includes(t) && !approvals.includes(t) && !(t.kind === "open_task" && t.outcome === "replaced")).slice(0, 20);
+    const recent = rows.filter((t) => !openTasks.includes(t) && !followups.includes(t) && !approvals.includes(t) && !(t.kind === "open_task" && (t.outcome === "replaced" || t.status === "open"))).slice(0, 20);
     const whys = await listWhys({ familyId, recipientUserId }, 20);
     return {
         permissions: {

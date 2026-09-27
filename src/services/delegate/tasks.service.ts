@@ -231,7 +231,23 @@ const PHASE_WORDS: Record<string, string> = {
     failed: "the order didn't go through",
     approved: "the caregiver approved it — waiting for her go-ahead",
     why_check: "asked if she still wants it (doctor had stopped it)",
+    store_alt: "her usual app is switched off; Saheli offered the allowed app",
     reorder: "Saheli offered to order it again",
+    confirm_basket: "medicine options and price were shown, waiting for her *confirm*",
+    review_cart: "the cart was shown, waiting for her *confirm*",
+    select_address: "choosing the delivery address",
+    browse: "was looking through options",
+    running: "search was running",
+    pick_partner: "choosing which app to use",
+    ask_list_or_rx: "asked for her medicine list or prescription",
+    awaiting_rx_photo: "waiting for a prescription photo",
+    ask_uber_phone: "waiting for her Uber number",
+    need_pickup: "waiting for the pickup place",
+    need_drop: "waiting for where to go",
+    need_slots: "waiting for ride details",
+    confirming_route: "the ride route was shown, waiting for her OK",
+    awaiting_book_confirm: "the ride fare was shown, waiting for her *confirm*",
+    post_otp: "signed in, finishing the order",
 };
 export function phaseWords(phase?: string): string {
     if (!phase) return "in progress";

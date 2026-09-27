@@ -598,7 +598,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             route = d.reroute;
             text = d.text;
             delegateLead = d.lead;
-        }
+        } else if (d && "lead" in d) delegateLead = d.lead;
     }
 
     // Something Saheli can't do yet (music, calls, doctor bookings, bills…): one warm honest line

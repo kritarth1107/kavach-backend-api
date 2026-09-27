@@ -134,7 +134,7 @@ export async function onOrderPlaced(row: Row): Promise<void> {
         important: isMedicine || ctx?.importance === "high",
         why,
         whyId,
-        language: open?.language,
+        language: open?.language || ctx?.language || undefined,
         placedAt,
         etaText: ctx?.etaText || undefined,
         totalLabel: typeof row.data?.totalLabel === "string" ? row.data.totalLabel : undefined,
@@ -146,6 +146,13 @@ export async function onOrderPlaced(row: Row): Promise<void> {
     };
     doc.title = isRide ? taskTitle({ kind: "followup", category: "ride", rideTo: String(row.data?.to || "") } as ISaheliTask) : `${item}${partner ? ` (${partner})` : ""}`;
     const created = (await SaheliTask.create(doc)).toObject() as ISaheliTask;
+    // A re-order replaces the earlier delivery check for the same thing.
+    const same: Record<string, unknown>[] = [{ item }];
+    if (whyId) same.push({ whyId });
+    await SaheliTask.updateMany(
+        { phone: who.phone, kind: "followup", taskId: { $ne: created.taskId }, status: { $in: ["open", "asked"] }, $or: same },
+        { $set: { status: "done", outcome: "reordered", resolvedAt: new Date() }, $push: { history: { at: new Date(), event: "reordered", note: `New order placed ${whenIST(placedAt)}` } } } as never,
+    ).catch(() => undefined);
     void log(created, isRide ? `Saheli will check she reached (${whenIST(dueAt)})` : `Saheli will check ${item} arrived (${whenIST(dueAt)})`, why ? `Why: ${why}` : undefined, "info", { dueAt, whyId });
 }
 

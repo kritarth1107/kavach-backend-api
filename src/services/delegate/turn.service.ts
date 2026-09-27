@@ -54,7 +54,18 @@ export async function interpretEarly(input: { phone: string; text: string; ident
     const role = isCaregiverRole(identity.role) ? "caregiver" : "elder";
     const now = Date.now();
     const [followups, allTasks, approvals, subjectUserId, session] = await Promise.all([
-        SaheliTask.find({ phone, kind: "followup", status: "asked", askedAt: { $gte: new Date(now - 36 * 3600_000) } }).sort({ askedAt: -1 }).limit(3).lean() as Promise<ISaheliTask[]>,
+        SaheliTask.find({
+            phone,
+            kind: "followup",
+            $or: [
+                { status: "asked", askedAt: { $gte: new Date(now - 36 * 3600_000) } },
+                // She already said it hadn't come: "pehle wali aa gayi" must still land here.
+                { status: "open", outcome: "not_arrived", askedAt: { $gte: new Date(now - 72 * 3600_000) } },
+            ],
+        })
+            .sort({ askedAt: -1 })
+            .limit(3)
+            .lean() as Promise<ISaheliTask[]>,
         resumableTasks(phone, now),
         role === "caregiver"
             ? (SaheliTask.find({ familyId: identity.familyId, kind: "approval", status: "open", expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }).limit(3).lean() as Promise<ISaheliTask[]>)
@@ -67,7 +78,7 @@ export async function interpretEarly(input: { phone: string; text: string; ident
     const sessionFresh =
         Boolean(snapshotSession(session as Record<string, any> | null, identity.familyId)) &&
         now - new Date((session as { updatedAt?: Date } | null)?.updatedAt || 0).getTime() < STALE_MS();
-    const tasks = sessionFresh ? allTasks.filter((t) => t.flow === "approval" || t.flow === "reorder" || t.flow === "why_check") : allTasks;
+    const tasks = sessionFresh ? allTasks.filter((t) => ["approval", "reorder", "why_check", "store_alt"].includes(String(t.flow))) : allTasks;
     const whys = await whysMentionedIn({ familyId: identity.familyId, recipientUserId: subjectUserId }, text).catch(() => [] as ISaheliWhy[]);
     if (!followups.length && !tasks.length && !approvals.length && !whys.length) return null;
     const chat = await recentChat(phone, subjectUserId, role === "elder", 24).catch(() => "");
@@ -78,7 +89,10 @@ export async function interpretEarly(input: { phone: string; text: string; ident
                   message: text,
                   recentChat: chat,
                   now: nowIST(),
-                  followups: followups.map((t) => `[${t.taskId}] asked ${whenIST(t.askedAt)}: "${(t.lastSaheliLine || "").slice(0, 160)}" — item: ${t.item}; stage=${t.stage}; medicine=${t.isMedicine ? "yes" : "no"}${t.why ? `; WHY: ${t.why}` : ""}`),
+                  followups: followups.map(
+                      (t) =>
+                          `[${t.taskId}] asked ${whenIST(t.askedAt)}: "${(t.lastSaheliLine || "").slice(0, 160)}" — item: ${t.item}; stage=${t.stage}; medicine=${t.isMedicine ? "yes" : "no"}${t.outcome === "not_arrived" ? "; she said earlier it had NOT arrived" : ""}${reorderStarted(t) ? "; a re-order search was started (NOT placed) — if the first one has now arrived, say you won't order the new one" : ""}${t.why ? `; WHY: ${t.why}` : ""}`,
+                  ),
                   openTasks: tasks.map((t) => `[${t.taskId}] ${taskTitle(t)} — left ${whenIST(t.lastActiveAt)}; where it stopped: ${phaseWords(t.phase)}; offered=${t.resumeOfferedAt ? `yes (${whenIST(t.resumeOfferedAt)})` : "no"}${t.why ? `; WHY: ${t.why}` : ""}`),
                   approvals: approvals.map((t) => `[${t.taskId}] ${t.item || "request"}${t.partner ? ` on ${t.partner}` : ""} — ${t.approval?.detail || ""} (asked ${whenIST(t.createdAt)})`),
               }).catch(() => null)
@@ -88,7 +102,7 @@ export async function interpretEarly(input: { phone: string; text: string; ident
     return { decision, followups, tasks, approvals, whyChange, whys, subjectUserId };
 }
 
-export type PreDispatchResult = { reply: string } | { reroute: SaheliRoute; text: string; lead?: string } | null;
+export type PreDispatchResult = { reply: string } | { reroute: SaheliRoute; text: string; lead?: string } | { lead: string } | null;
 
 function baseRoute(r: SaheliRoute | null, language?: string | null): SaheliRoute {
     return {
@@ -126,13 +140,15 @@ async function logFollow(t: Pick<ISaheliTask, "familyId" | "recipientUserId" | "
     void logActivity({ familyId: t.familyId, recipientUserId: t.recipientUserId, actorUserId: t.ownerUserId, kind: "followup", title, detail: detail || undefined, severity, data: { source: "delegate", taskId: t.taskId, ...data } });
 }
 
+const reorderStarted = (t: ISaheliTask) => (t.history || []).some((h) => h.event === "reorder_started");
+
 function nextMorning(hh = 10): Date {
     const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date(Date.now() + 20 * 3600_000));
     return new Date(`${day}T${String(hh).padStart(2, "0")}:00:00+05:30`);
 }
 
 /** A reorder offer she can accept with "haan" (resumable open task, already offered). */
-async function offerReorder(t: ISaheliTask, note: string): Promise<void> {
+async function offerReorder(t: ISaheliTask, note: string, opts: { flow?: string; partner?: string } = {}): Promise<void> {
     await SaheliTask.updateMany({ phone: t.phone, kind: "open_task", status: "open" }, { $set: { status: "cancelled", outcome: "replaced", resolvedAt: new Date() } });
     const { randomUUID } = await import("crypto");
     await SaheliTask.create({
@@ -144,19 +160,19 @@ async function offerReorder(t: ISaheliTask, note: string): Promise<void> {
         actorRole: t.actorRole,
         kind: "open_task",
         status: "open",
-        title: taskTitle({ ...t, kind: "open_task" }),
+        title: taskTitle({ ...t, partner: opts.partner || t.partner, kind: "open_task" }),
         item: t.item,
         productQuery: t.productQuery || t.item,
-        partner: t.partner,
+        partner: opts.partner || t.partner,
         category: t.category,
         isMedicine: t.isMedicine,
         important: t.important,
         why: t.why,
         whyId: t.whyId,
         language: t.language,
-        flow: "reorder",
-        phase: "reorder",
-        orderRef: t.taskId,
+        flow: opts.flow || "reorder",
+        phase: opts.flow || "reorder",
+        orderRef: opts.flow ? undefined : t.taskId,
         lastActiveAt: new Date(Date.now() - STALE_MS() - 60_000),
         resumeOfferedAt: new Date(),
         resumeOfferCount: 1,
@@ -175,6 +191,8 @@ async function applyFollowup(t: ISaheliTask, d: DelegateDecision, route: SaheliR
     const perms = await getPermissions(t.familyId);
     switch (d.outcome) {
         case "arrived": {
+            // The first one came after all: drop the redundant re-order search (never placed).
+            if (reorderStarted(t)) await clearStaleDrafts(t.phone);
             if (t.isMedicine && t.stage === "delivery" && perms.medicineStartCheck) {
                 await SaheliTask.updateOne({ taskId: t.taskId }, { $set: { stage: "started", status: "asked", askedAt: now, askCount: 1, lastSaheliLine: d.reply || "" }, ...hist("arrived") } as never);
             } else {
@@ -271,7 +289,8 @@ export async function preDispatch(input: {
             }
             if (t && d.resumeAction === "resume") {
                 await closeTask(t.taskId, "done", "resumed", `Resumed ${whenIST(new Date())}`);
-                if (t.orderRef) await SaheliTask.updateOne({ taskId: t.orderRef, kind: "followup", status: { $in: ["open", "asked"] } }, { $set: { status: "done", outcome: "reordered", resolvedAt: new Date() } }).catch(() => undefined);
+                // The original delivery check stays open until the new order is actually placed.
+                if (t.orderRef) await SaheliTask.updateOne({ taskId: t.orderRef, kind: "followup", status: { $in: ["open", "asked"] } }, { $push: { history: { at: new Date(), event: "reorder_started", note: text.slice(0, 120) } } } as never).catch(() => undefined);
                 void logFollow(t, `Resumed: ${t.title}`, `Left ${whenIST(t.lastActiveAt)} (${phaseWords(t.phase)}); she said: "${text.slice(0, 120)}"`);
                 const r = await reorderNow(t, route, d.reply);
                 if (r) return r;
@@ -296,6 +315,7 @@ export async function preDispatch(input: {
         }
     }
 
+    let whyLead: string | undefined;
     // 2) New information about a remembered WHY ("doctor ne Telma band kar di").
     const wc = early?.whyChange;
     if (wc && wc.change !== "none" && wc.whyId && early!.whys.some((y) => y.whyId === wc.whyId)) {
@@ -304,9 +324,11 @@ export async function preDispatch(input: {
         if (updated) void logFollow({ ...who, taskId: "" }, `What changed: ${y.subject}`, wc.note, wc.change === "stopped" ? "warn" : "info", { whyId: y.whyId, change: wc.change });
         const commerceTurn = route && ["order_new", "order_modify", "order_control", "restaurant_list", "otp_code", "ride"].includes(route.intent);
         if (!commerceTurn && wc.ack) return { reply: wc.ack };
+        // She's also ordering in the same breath ("Telma band, ab Cilacar mangwa do"): note it as a lead-in.
+        if (commerceTurn && wc.ack && updated) whyLead = wc.ack;
     }
 
-    if (!route || caregiver) return null; // permissions govern what Saheli does on her own for the elder
+    if (!route || caregiver) return whyLead ? { lead: whyLead } : null; // permissions govern what Saheli does on her own for the elder
 
     // 3) Permissions (elder's own asks).
     const perms = await getPermissions(identity.familyId);
@@ -329,7 +351,12 @@ export async function preDispatch(input: {
             const q = route.productQuery || (await currentQuery(phone));
             if (alt && q) {
                 const cat = route.category === "pharmacy" || route.category === "food" || route.category === "grocery" ? route.category : "grocery";
-                await WhatsappSession.updateOne({ phone }, { $set: { pendingOffer: { partner: alt, query: q, category: cat, familyId: identity.familyId, at: new Date() } } }).catch(() => undefined);
+                // A durable offer she can take with "haan" (the resume step reroutes it to the allowed app).
+                await offerReorder(
+                    { taskId: "", phone, familyId: identity.familyId, recipientUserId: who.recipientUserId, ownerUserId: identity.userId, actorRole: "elder", kind: "open_task", item: q, productQuery: q, category: cat, isMedicine: cat === "pharmacy", important: cat === "pharmacy", language: route.language } as unknown as ISaheliTask,
+                    `${offName} is off; offered ${STORE_LABEL[alt]}`,
+                    { flow: "store_alt", partner: alt },
+                );
                 const line = await writeProactiveLine({ purpose: "store_off_offer", facts: `She wants: ${q} on ${offName}. ${offName} is switched off by the family (${await cg()}). Allowed alternative: ${STORE_LABEL[alt]}.`, language: route.language }).catch(() => null);
                 return { reply: line || `${offName} abhi band hai 🙏 ${STORE_LABEL[alt]} se ${q} mangwa doon?` };
             }
@@ -398,7 +425,7 @@ export async function preDispatch(input: {
             return { reply };
         }
     }
-    return null;
+    return whyLead ? { lead: whyLead } : null;
 }
 
 async function currentQuery(phone: string): Promise<string | null> {
@@ -451,10 +478,11 @@ export async function afterTurn(input: { phone: string; identity: Identity; befo
         const y = await extractWhy({ item: String(t.item || t.productQuery), recentChat: chat }).catch(() => null);
         if (y) {
             const set: Record<string, unknown> = { important: t.important || y.importance === "high" || y.isMedicine, isMedicine: t.isMedicine || y.isMedicine };
+            if (!t.language && y.language) set.language = y.language;
             if (y.why) {
                 set.why = y.why;
                 const { upsertWhy } = await import("./why.service");
-                const r = await upsertWhy({ familyId: identity.familyId, recipientUserId: subject }, { subject: String(t.item || t.productQuery), reason: y.why, category: t.category, source: "request", importance: y.importance, ownerUserId: identity.userId }).catch(() => null);
+                const r = await upsertWhy({ familyId: identity.familyId, recipientUserId: subject }, { subject: String(t.productQuery || t.item), reason: y.why, category: t.category, source: "request", importance: y.importance, ownerUserId: identity.userId }).catch(() => null);
                 if (r?.why) set.whyId = r.why.whyId;
             }
             await SaheliTask.updateOne({ taskId: t.taskId, why: { $exists: false } }, { $set: set }).catch(() => undefined);
