@@ -1259,7 +1259,14 @@ async function grocerySearchCore(
             };
         }
         if (catalog.unavailableReason) rememberGuestFailure(input.phone, String(playbook.partner), catalog.unavailableReason);
-        return { text: catalog.unavailableReason || `I couldn't find "${query}" near you. Try another name.` };
+        if (catalog.unavailableReason) return { text: catalog.unavailableReason };
+        const { lastRouteFor } = await import("../saheliRouter.service");
+        const lang = lastRouteFor(input.phone)?.route?.language || "";
+        return {
+            text: /hi/i.test(lang)
+                ? `${partnerLabel(String(playbook.partner))} par "${query}" abhi aapke paas nahi mila 🙏 Koi aur naam bataiye, ya doosri app try karoon?`
+                : `${partnerLabel(String(playbook.partner))} didn't show "${query}" near you just now 🙏 Want to try another name, or another app?`,
+        };
     }
     await saveIfCurrent(input.phone, draft, token);
     return { text: shaped.header ? `${shaped.header}\n${skuConfirmCopy(draft)}` : skuConfirmCopy(draft), draft };
@@ -1341,14 +1348,22 @@ const SEARCH_INSTANCE = `${process.env.K_REVISION || "local"}:${process.pid}:${D
 type Inflight = { token: number; input: { phone: string; familyId: string; recipientUserId: string }; retry?: SearchOffer; startedAt: number };
 const inflight = new Map<string, Inflight>();
 
-async function markSearch(input: { phone: string; familyId: string; recipientUserId: string }, token: number, ack: string, retry?: SearchOffer): Promise<void> {
-    await WhatsappSession.updateOne(
+async function markSearch(input: { phone: string; familyId: string; recipientUserId: string }, token: number, ack: string, retry?: SearchOffer): Promise<boolean> {
+    const r = await WhatsappSession.updateOne(
         { phone: input.phone },
         { $set: { pendingSearch: { token, instance: SEARCH_INSTANCE, at: new Date(), familyId: input.familyId, recipientUserId: input.recipientUserId, ack: ack.slice(0, 160), retry: retry || null } } },
-    ).catch(() => undefined);
+    ).catch(() => null);
+    return Boolean(r && r.matchedCount);
 }
-async function unmarkSearch(phone: string, token: number): Promise<void> {
-    await WhatsappSession.updateOne({ phone, "pendingSearch.token": token, "pendingSearch.instance": SEARCH_INSTANCE }, { $unset: { pendingSearch: 1 } }).catch(() => undefined);
+async function unmarkSearch(phone: string, token: number): Promise<boolean> {
+    const r = await WhatsappSession.updateOne({ phone, "pendingSearch.token": token, "pendingSearch.instance": SEARCH_INSTANCE }, { $unset: { pendingSearch: 1 } }).catch(() => null);
+    return Boolean(r && r.modifiedCount);
+}
+
+/** "cancel" from any path: a search still running must never answer afterwards (on any instance). */
+export async function cancelGuestSearch(phone: string): Promise<void> {
+    bumpGuestWork(phone);
+    await WhatsappSession.updateOne({ phone }, { $unset: { pendingSearch: 1 } }).catch(() => undefined);
 }
 
 async function pushFollowUp(input: { phone: string; familyId: string; recipientUserId: string }, text: string): Promise<boolean> {
@@ -1376,7 +1391,7 @@ function deferGuestWork(
     const token = bumpGuestWork(input.phone);
     const deadline = guestDeadlineMs(opts.slow);
     inflight.set(input.phone, { token, input, retry: opts.retry, startedAt: Date.now() });
-    void markSearch(input, token, ack, opts.retry);
+    const marked = markSearch(input, token, ack, opts.retry);
     void (async () => {
         let res: WorkResult;
         let timedOut = false;
@@ -1419,7 +1434,12 @@ function deferGuestWork(
             text = opts.retry ? `I couldn't finish the search for "${opts.retry.query}" 🙏 Want me to try again?` : "I couldn't finish that search 🙏 Please ask me again.";
             if (opts.retry) res.offer = opts.retry;
         }
-        await unmarkSearch(input.phone, token);
+        // Cleared meanwhile (she said cancel — maybe on another instance — or the lost-search sweep
+        // already answered): stay quiet.
+        if (!(await unmarkSearch(input.phone, token)) && (await marked)) {
+            console.warn(`[guest-browse] result dropped for …${input.phone.slice(-4)} (search was cancelled or already answered)`);
+            return;
+        }
         if (res.offer && !res.draft) await setOffer(input.phone, input.familyId, res.offer);
         await pushFollowUp(input, text);
     })();

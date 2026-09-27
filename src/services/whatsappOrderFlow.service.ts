@@ -470,6 +470,14 @@ function formatOrderStatusReply(order: {
     return `Your latest ${order.partner} order (${total}): ${items}. Status: ${order.status.replace(/_/g, " ")}. Ref: ${order.orderId.slice(0, 8)}.`;
 }
 
+/** Cancel confirmation in the language she wrote in. */
+async function cancelCopy(phone: string, basketRemoved: boolean): Promise<string> {
+    const { lastRouteFor } = await import("./saheliRouter.service");
+    const hi = /hi/i.test(lastRouteFor(phone)?.route?.language || "");
+    if (hi) return basketRemoved ? "Theek hai, order cancel kar diya ✅ Basket hata di. Kuch nahi mangwaya gaya." : "Theek hai, cancel kar diya ✅ Kuch nahi mangwaya gaya. Jab chahein, phir bata dijiye.";
+    return basketRemoved ? "Okay, cancelled ✅ Your basket was removed — nothing was ordered or paid." : "Okay, cancelled ✅ Nothing was ordered or paid. Tell me anytime if you'd like to order again.";
+}
+
 function orderTurn(text: string, orderFlow?: OrderFlowPayload): WhatsAppOrderTurnResult {
     return { text, orderFlow };
 }
@@ -497,11 +505,7 @@ async function handleActiveOrderTurn(input: {
             actorUserId: input.actorUserId,
             orderSessionId: input.orderSessionId,
         });
-        return orderTurn(
-            cancelledPendingOrder
-                ? "Order cancelled — your basket was removed."
-                : "Order cancelled. Tell me anytime if you'd like to order again.",
-        );
+        return orderTurn(await cancelCopy(input.phone, cancelledPendingOrder));
     }
 
     if (pendingSwitch) {
@@ -812,11 +816,7 @@ export async function tryHandleWhatsAppOrderTurn(input: {
             actorUserId: input.actorUserId,
             orderSessionId: waSession?.orderSessionId,
         });
-        return orderTurn(
-            cancelledPendingOrder
-                ? "Order cancelled — your basket was removed."
-                : "Order cancelled. Tell me anytime if you'd like to order again.",
-        );
+        return orderTurn(await cancelCopy(input.phone, cancelledPendingOrder));
     }
 
     const orderSessionId = waSession?.orderSessionId;

@@ -114,6 +114,11 @@ const SCAM =
     /\b(otp|o\.t\.p|pin|cvv|atm (card )?number|card number|bank (details|account)|account number|kyc|aadhaar (number|otp)|pan (card )?number|upi pin|lottery|prize|refund (bhej|call)|paise? bhej|money (send|transfer)|transfer (the )?money|anydesk|teamviewer|remote app|account (band|block)|sim (band|block)|electricity (bill|connection) (cut|band)|bijli (kat|band)|police (case|arrest)|parcel (mein )?drugs|customs)\b/i;
 const SCAM_ASK = /\b(kisi ne|someone|a man|ek aadmi|ek aurat|phone (aaya|call)|call (aaya|came)|bola|bol rahe|keh rahe|maang|asked|asking|message aaya|link)\b/i;
 
+const HINGLISH_WORD = /\b(hai|hain|nahi|nahin|kya|mujhe|mera|meri|mere|aap|aapka|kisi|bola|boli|keh|raha|rahi|aaya|aayi|maang|bata|karo|kar|ko|se|ka|ki|ke|ne|yeh|woh|bhai|beta|ji)\b/i;
+function looksEnglish(t: string): boolean {
+    return !/[\u0900-\u097F]/.test(t) && !HINGLISH_WORD.test(t);
+}
+
 /** Someone asking her for OTP / money / bank details (from her own words). */
 export function detectScamCue(text: string): UnusualFinding | null {
     const t = String(text || "");
@@ -126,8 +131,10 @@ export function detectScamCue(text: string): UnusualFinding | null {
         confidence,
         text: `Possible scam: she told Saheli "${t.replace(/\s+/g, " ").slice(0, 120)}". Saheli reminded her never to share OTP/bank details. Please check in with her.`,
         evidence: t.slice(0, 200),
-        elderLine:
-            "Ruko ek minute 🙏 Koi bhi OTP, PIN, bank ya card ki details maange — kabhi mat batana, aur paise mat bhejna. Bank ya sarkar kabhi phone pe yeh nahi maangte. Phone kaat dijiye. Main ghar walon ko bata rahi hoon, woh aapse baat kar lenge.",
+        // Her own words decide the language: an English message gets the English warning.
+        elderLine: looksEnglish(t)
+            ? "Wait a minute 🙏 Never share an OTP, PIN, bank or card details with anyone who calls or messages, and don't send money. Banks and the government never ask for these on the phone. Please hang up. I'm letting your family know — they'll talk to you."
+            : "Ruko ek minute 🙏 Koi bhi OTP, PIN, bank ya card ki details maange — kabhi mat batana, aur paise mat bhejna. Bank ya sarkar kabhi phone pe yeh nahi maangte. Phone kaat dijiye. Main ghar walon ko bata rahi hoon, woh aapse baat kar lenge.",
     };
 }
 

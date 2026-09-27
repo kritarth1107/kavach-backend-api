@@ -1249,6 +1249,10 @@ async function dispatchRoutedTurn(a: {
 }): Promise<{ reply?: string; legacyGates: boolean; allowDashboard: boolean }> {
     const { text } = a;
     let { route } = a;
+    if (route.control === "cancel") {
+        const { cancelGuestSearch } = await import("./commerceAutomation/browserTaskWhatsApp.service");
+        await cancelGuestSearch(a.phone);
+    }
     const doc = (await WhatsappSession.findOne({ phone: a.phone }).lean()) as FlowDoc;
     const bd = doc?.browserTaskDraft;
     const pd = doc?.pharmacyDraft;
