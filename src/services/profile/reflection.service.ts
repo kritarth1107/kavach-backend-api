@@ -138,9 +138,9 @@ const responseSchema = (handles: string[]) => S("object", {
                     op: S("string", { enum: ["add", "reinforce", "revise"] }),
                     id: handles.length ? N("string", { enum: handles }) : N("string"),
                     category: S("string", { enum: ["health", "wellbeing", "mood", "medicines", "routine", "people", "cognition", "comfort", "communication", "preferences"] }),
-                    text: S("string"),
+                    text: S("string", { maxLength: 240 }),
                     confidence: S("number"),
-                    evidence: N("string"),
+                    evidence: N("string", { maxLength: 200 }),
                     by: S("string", { enum: ["elder", "caregiver", "orders", "inferred"] }),
                     decayClass: S("string", { enum: [...DECAY_CLASSES] }),
                 },
@@ -154,7 +154,7 @@ const responseSchema = (handles: string[]) => S("object", {
                     verdict: S("string", { enum: ["supports", "contradicts", "silent"] }),
                     opportunity: S("boolean"),
                     by: N("string", { enum: ["elder", "caregiver", "orders", "inferred"] }),
-                    evidence: N("string"),
+                    evidence: N("string", { maxLength: 200 }),
                     decayClass: N("string", { enum: [...DECAY_CLASSES] }),
                 },
                 required: ["id", "verdict", "opportunity"],
@@ -164,9 +164,9 @@ const responseSchema = (handles: string[]) => S("object", {
             items: S("object", {
                 properties: {
                     kind: S("string", { enum: ["follow_up", "reminder", "company", "offer", "caregiver_suggestion"] }),
-                    text: S("string"),
-                    say: N("string"),
-                    why: S("string"),
+                    text: S("string", { maxLength: 200 }),
+                    say: N("string", { maxLength: 220 }),
+                    why: S("string", { maxLength: 200 }),
                     audience: S("string", { enum: ["elder", "caregiver"] }),
                 },
                 required: ["kind", "text", "why", "audience"],
@@ -177,8 +177,8 @@ const responseSchema = (handles: string[]) => S("object", {
                 properties: {
                     category: S("string", { enum: ["repeat_order", "bulk_quantity", "large_spend", "risky_meds", "odd_hours", "order_change", "confusion", "mood_drop", "meds_missed", "scam", "other"] }),
                     confidence: S("number"),
-                    text: S("string"),
-                    evidence: N("string"),
+                    text: S("string", { maxLength: 300 }),
+                    evidence: N("string", { maxLength: 200 }),
                 },
                 required: ["category", "confidence", "text"],
             }),
@@ -186,12 +186,12 @@ const responseSchema = (handles: string[]) => S("object", {
         day: S("object", {
             properties: {
                 mood: N("integer"),
-                moodWord: N("string"),
+                moodWord: N("string", { maxLength: 24 }),
                 lonely: S("boolean"),
                 mentions: S("object", { properties: { pain: S("boolean"), sleep: S("boolean"), appetite: S("boolean"), activity: S("boolean"), tired: S("boolean") } }),
             },
         }),
-        tuning: S("object", { properties: { addressAs: N("string"), preferredNudgeHour: N("integer"), maxOptions: N("integer"), language: N("string") } }),
+        tuning: S("object", { properties: { addressAs: N("string", { maxLength: 30 }), preferredNudgeHour: N("integer"), maxOptions: N("integer"), language: N("string") } }),
     },
     required: ["ops", "judgements", "careActions", "unusual", "day"],
 });
@@ -284,7 +284,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             Vertex.resetVertexError?.();
             const useSchema = schema ?? opts.schema ?? process.env.REFLECTION_RESPONSE_SCHEMA !== "0";
             const thinkingLevel = opts.thinkingLevel || process.env.REFLECTION_THINKING_LEVEL?.trim() || undefined;
-            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, ...(useSchema ? { responseSchema: responseSchema([...idOf.keys()]) } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), prompt, timeoutMs: 120_000, maxOutputTokens: 16_384, temperature: 0.2 });
+            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, ...(useSchema ? { responseSchema: responseSchema([...idOf.keys()]) } : {}), ...(thinkingLevel ? { thinkingLevel } : {}), prompt, timeoutMs: 120_000, maxOutputTokens: 16_384, temperature: useSchema ? 1.0 : 0.2 });
             const out = parseJsonLoose<Raw>(raw);
             if (!out && raw) rawDiag.push(`${m}: ${raw.length} chars … ${raw.slice(Math.max(0, raw.length - 240)).replace(/\s+/g, " ")}`);
             return out;
