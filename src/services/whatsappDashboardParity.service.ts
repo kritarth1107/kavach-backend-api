@@ -191,7 +191,12 @@ export async function tryHandlePendingOrderAction(input: {
         if (isPendingQuery || isConfirmIntent || isRejectIntent) {
             return {
                 handled: true,
-                reply: "No pending orders waiting for approval right now.",
+                // A bare "cancel"/"haan" with nothing open shouldn't sound like an approvals console.
+                reply: isPendingQuery
+                    ? "No orders are waiting for your approval right now 👍"
+                    : isRejectIntent
+                      ? "Nothing is open right now, so there's nothing to cancel 👍"
+                      : "There's nothing waiting for a yes right now 🙂 Tell me what you'd like and I'll start.",
             };
         }
         return { handled: false };

@@ -569,7 +569,8 @@ export async function searchGuestCatalog(input: {
                 return { hits: [], searched: false, unavailableReason: "I need your delivery address first.", partner, query };
             }
             const { instamartSearch } = await import("./swiggyGuest.service");
-            const res = await instamartSearch({ query, address: input.address });
+            // One retry: a remote Chrome under load occasionally times out on the first locator.
+            const res = await guestRetryOnce("instamart", () => instamartSearch({ query, address: input.address! }));
             if (!res.location.ok || !res.location.pincodeMatch) {
                 return {
                     hits: [],
@@ -609,7 +610,7 @@ export async function searchGuestCatalog(input: {
                 return { hits: [], searched: false, unavailableReason: "I need your delivery address first.", partner, query };
             }
             const { blinkitSearch } = await import("./blinkitGuest.service");
-            const res = await blinkitSearch({ query, address: input.address });
+            const res = await guestRetryOnce("blinkit", () => blinkitSearch({ query, address: input.address! }));
             if (!res.location.ok) {
                 return {
                     hits: [],
@@ -722,11 +723,29 @@ export async function searchGuestCatalog(input: {
     }
 }
 
+/** One retry: a remote Chrome under load sometimes times out or misses the location box once. */
+async function guestRetryOnce<T extends { location: { ok: boolean } }>(label: string, run: () => Promise<T>): Promise<T> {
+    const t0 = Date.now();
+    try {
+        const r = await run();
+        if (r.location.ok || Date.now() - t0 > 60_000) return r;
+        console.warn(`[guest-search] ${label} location not set — retrying once`);
+    } catch (err) {
+        if (Date.now() - t0 > 60_000) throw err;
+        console.warn(`[guest-search] ${label} retry after:`, err instanceof Error ? err.message.slice(0, 120) : err);
+    }
+    return run();
+}
+
 const GROCERY_OFFTOPIC_RE = /\b(chocolate|choco|biscuits?|bikis|cookies?|bar|chips|whitener|creamer|shampoo|soap|lotion|cream|candy|toffee|ice\s*cream|cake)\b/i;
 
 /** Relevance for grocery items: every query word must appear; snacks/sweets demoted unless asked. */
-export function rankGroceryItems<T extends { name: string }>(query: string, items: T[]): T[] {
-    const q = query.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((t) => t.length >= 2);
+export function rankGroceryItems<T extends { name: string; pack?: string }>(query: string, items: T[]): T[] {
+    // Pack sizes ("5kg", "1 ltr") rank but never exclude — the store may list 5 kg as "(5 kg)" or in the pack field.
+    const all = query.toLowerCase().replace(/(\d)\s+(kg|g|gm|gms|l|ltr|litre|liter|ml|pcs?|pack)\b/g, "$1$2").replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((t) => t.length >= 2);
+    const QTY = /^(\d+(\.\d+)?(kg|g|gm|gms|l|ltr|litre|liter|ml|pcs?|pack)?|kg|gm|ml|ltr|litre|pack)$/;
+    const qty = all.filter((t) => QTY.test(t));
+    const q = all.filter((t) => !QTY.test(t));
     if (!q.length) return items.slice(0, 5);
     const scored = items
         .map((it, idx) => {
@@ -743,7 +762,9 @@ export function rankGroceryItems<T extends { name: string }>(query: string, item
             const off = n.match(GROCERY_OFFTOPIC_RE)?.[0];
             // "milk" shouldn't pick milk chocolate — but a query that itself names a snack ("protein bar") may.
             if (off && !q.some((t) => off.startsWith(t.replace(/s$/, ""))) && !GROCERY_OFFTOPIC_RE.test(q.join(" "))) s -= 0.8;
-            return { it, s, idx };
+            const packFlat = `${n} ${String(it.pack || "").toLowerCase()}`.replace(/\s+/g, "").replace(/ltr|litre|liter/g, "l");
+            const qtyHit = qty.length && qty.some((t) => packFlat.includes(t.replace(/ltr|litre|liter/g, "l")));
+            return { it, s: s + (qtyHit ? 0.01 : 0), idx };
         })
         .filter((x) => x.s >= 0.99)
         .sort((a, b) => b.s - a.s || a.idx - b.idx);
