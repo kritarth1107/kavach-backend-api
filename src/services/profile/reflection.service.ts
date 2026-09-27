@@ -322,7 +322,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     doc.facts = merged.facts;
     let newQuestions: CaregiverQuestion[] = [];
     if (merged.questions.length) {
-        const texts = await phraseQuestions(merged.questions, (await recipientFirstName(w.recipientUserId)) || doc.tuning?.addressAs || "");
+        const texts = await phraseQuestions(merged.questions, doc.tuning?.addressAs || (await recipientFirstName(w.recipientUserId)) || "");
         newQuestions = merged.questions.map((q, i) => ({ ...q, id: newActionId(), text: texts[i]!, createdAt: now, dayKey, status: "open" as const }));
         const { logActivity } = await import("../activityLog.service");
         for (const q of newQuestions) {
