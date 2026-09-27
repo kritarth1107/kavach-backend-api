@@ -226,7 +226,8 @@ export async function learnedThisWeek(w: Who): Promise<string> {
     const p = await loadProfile(w);
     if (!p) return "";
     const since = Date.now() - 7 * 86_400_000;
-    const fresh = p.facts.filter((f) => isActive(f) && new Date(f.firstSeen).getTime() >= since && f.confidence >= 0.4);
+    const asking = new Set(openQuestions(p).map((q) => q.factId)); // being checked with the family
+    const fresh = p.facts.filter((f) => isActive(f) && !asking.has(f.id) && new Date(f.firstSeen).getTime() >= since && f.confidence >= 0.4);
     if (!fresh.length) return "";
     const { CARE_FIRST_ORDER } = await import("./profileCore");
     fresh.sort((a, b) => CARE_FIRST_ORDER.indexOf(a.category) - CARE_FIRST_ORDER.indexOf(b.category));

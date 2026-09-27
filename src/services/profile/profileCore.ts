@@ -115,7 +115,17 @@ export function ruleFor(f: ProfileFact): DecayRule {
 export function applyReflection(
     facts: ProfileFact[],
     ops: ReflectionOp[],
-    ctx: { now: Date; dayKey: string; sourceKind?: string; sourceBy?: EvidenceBy; judgements?: FactJudgement[]; activeDay?: boolean; openQuestionFactIds?: Set<string> },
+    ctx: {
+        now: Date;
+        dayKey: string;
+        sourceKind?: string;
+        sourceBy?: EvidenceBy;
+        judgements?: FactJudgement[];
+        activeDay?: boolean;
+        openQuestionFactIds?: Set<string>;
+        /** What the day had (only pass when Gemini's judgements succeeded): facts it didn't label count as silent. */
+        day?: { chat: boolean; orders: boolean };
+    },
 ) {
     const now = ctx.now;
     const out = facts.map((f) => ({ ...f, sources: [...(f.sources || [])] }));
@@ -168,6 +178,12 @@ export function applyReflection(
     };
     // Pinned facts, and believed health/medication facts, are never silently changed. A lone Gemini
     // guess (never above ~0.4, no strong evidence) just drops — no point asking the family about it.
+    const dayOpportunity = (f: ProfileFact) => {
+        if (!ctx.day) return false;
+        const on = ruleFor(f).opportunityOn;
+        // Orders only speak to food & shopping preferences (not songs / tone).
+        return (on.includes("chat") && ctx.day.chat) || (on.includes("orders") && ctx.day.orders && f.category === "preferences");
+    };
     const protectedFact = (f: ProfileFact) => permanent(f) || (f.decayClass ? DECAY[f.decayClass].askOnContradiction && ruleFor(f) === DECAY[f.decayClass] : false);
 
     for (const raw of ops.slice(0, 40)) {
@@ -252,7 +268,12 @@ export function applyReflection(
                 f.confidence = round2(Math.max(0, f.confidence - CONTRADICTION_DROP));
                 if (f.confidence < FADE_BELOW) fade(f);
             }
-        } else if (j.verdict === "silent" && j.opportunity && ctx.activeDay) opportunity.add(f.id);
+        } else if (j.verdict === "silent" && ctx.activeDay && (j.opportunity || dayOpportunity(f))) opportunity.add(f.id);
+    }
+    // Facts Gemini didn't label at all are silent for the day (only when it did judge the day).
+    if (ctx.day && ctx.activeDay && ctx.judgements) {
+        const judged = new Set(ctx.judgements.map((j) => j.id));
+        for (const f of out) if (f.status === "learned" && !judged.has(f.id) && !touched.has(f.id) && dayOpportunity(f)) opportunity.add(f.id);
     }
 
     // Opportunity-aware decay (see factPolicy): no opportunity today → no decay for that fact.

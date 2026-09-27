@@ -12,9 +12,11 @@
  *   transient_state   fast (a few days)               −0.35
  *   other             medium                          −0.35
  *
- * Decay only accrues on an "opportunity" day: the day had activity AND Gemini judged that the
- * fact would naturally have shown up if it were still true (grocery orders happened but her usual
- * milk wasn't in them; she chatted about her day but not her evening walk). No activity = no decay.
+ * Decay only accrues on an "opportunity" day, and only when Gemini judged the fact "silent" that
+ * day (never on supports / contradicts): she chatted but never mentioned her walk / medicine /
+ * knee (opportunityOn "chat"); grocery orders happened but her usual milk wasn't in them
+ * (food & shopping preferences: "orders"); or Gemini flagged a natural occasion it would have come
+ * up. No activity, or no Gemini judgement that night (model failure) = no decay.
  */
 export const DECAY_CLASSES = ["health_condition", "allergy", "safety", "medication", "routine", "preference", "transient_state", "other"] as const;
 export type DecayClass = (typeof DECAY_CLASSES)[number];
@@ -28,24 +30,28 @@ export type DecayRule = {
     askOnContradiction: boolean;
     /** Ask the caregiver once when the fact drops to CHECKIN_AT (instead of letting it quietly fade). */
     checkInBeforeFade: boolean;
+    /** Which day activity counts as an opportunity for a silent fact (besides Gemini's own flag). */
+    opportunityOn: Array<"chat" | "orders">;
 };
 
 export const DECAY: Record<DecayClass, DecayRule> = {
-    health_condition: { perOpportunity: 1, graceOpportunities: 0, askOnContradiction: true, checkInBeforeFade: true },
-    allergy: { perOpportunity: 1, graceOpportunities: 0, askOnContradiction: true, checkInBeforeFade: true },
-    safety: { perOpportunity: 1, graceOpportunities: 0, askOnContradiction: true, checkInBeforeFade: true },
+    // ("chat" only matters while one of these is an unproven guess — proven ones never time-decay.)
+    health_condition: { perOpportunity: 1, graceOpportunities: 0, askOnContradiction: true, checkInBeforeFade: true, opportunityOn: ["chat"] },
+    allergy: { perOpportunity: 1, graceOpportunities: 0, askOnContradiction: true, checkInBeforeFade: true, opportunityOn: ["chat"] },
+    safety: { perOpportunity: 1, graceOpportunities: 0, askOnContradiction: true, checkInBeforeFade: true, opportunityOn: ["chat"] },
     // 0.8 → 0.25 after 7 grace + 23 decaying opportunity days ≈ 30; check-in (0.4) around day 21.
-    medication: { perOpportunity: 0.95, graceOpportunities: 7, askOnContradiction: true, checkInBeforeFade: true },
-    routine: { perOpportunity: 0.95, graceOpportunities: 7, askOnContradiction: false, checkInBeforeFade: true },
+    medication: { perOpportunity: 0.95, graceOpportunities: 7, askOnContradiction: true, checkInBeforeFade: true, opportunityOn: ["chat"] },
+    routine: { perOpportunity: 0.95, graceOpportunities: 7, askOnContradiction: false, checkInBeforeFade: true, opportunityOn: ["chat"] },
     // 0.7 → 0.25 after 3 grace + 10 decaying opportunity days.
-    preference: { perOpportunity: 0.9, graceOpportunities: 3, askOnContradiction: false, checkInBeforeFade: false },
+    // Food & shopping preferences: order days; other preferences (songs, tone): Gemini's flag only.
+    preference: { perOpportunity: 0.9, graceOpportunities: 3, askOnContradiction: false, checkInBeforeFade: false, opportunityOn: ["orders"] },
     // 0.6 → 0.42 → 0.29 → 0.21 (faded) in 3 days.
-    transient_state: { perOpportunity: 0.7, graceOpportunities: 0, askOnContradiction: false, checkInBeforeFade: false },
-    other: { perOpportunity: 0.9, graceOpportunities: 3, askOnContradiction: false, checkInBeforeFade: false },
+    transient_state: { perOpportunity: 0.7, graceOpportunities: 0, askOnContradiction: false, checkInBeforeFade: false, opportunityOn: ["chat"] },
+    other: { perOpportunity: 0.9, graceOpportunities: 3, askOnContradiction: false, checkInBeforeFade: false, opportunityOn: ["chat"] },
 };
 
 /** A no-time-decay class only holds once it has real evidence; a lone Gemini guess decays like this. */
-export const UNPROVEN_RULE: DecayRule = DECAY.preference;
+export const UNPROVEN_RULE: DecayRule = { ...DECAY.preference, opportunityOn: ["chat"] };
 export const PROVEN_AT = 0.6;
 
 export const FADE_BELOW = 0.25;

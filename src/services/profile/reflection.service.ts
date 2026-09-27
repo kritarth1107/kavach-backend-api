@@ -33,7 +33,7 @@ Facts ("ops"):
 
 Judgements (REQUIRED, one per current profile fact listed, use its id):
 - verdict "supports" when today shows it's still true; "contradicts" when today clearly shows it is no longer true or was wrong (quote her words in evidence); otherwise "silent". A day that simply doesn't mention it is "silent" — never "contradicts".
-- opportunity (for silent facts): true only if today had a natural occasion where this fact would have shown up if it were still true (she placed grocery orders but her usual milk wasn't in them; she described her evening but not her walk; she talked about medicines but not this one). false if the day simply didn't touch that part of her life.
+- opportunity (for silent facts): true if today had a natural occasion where this fact would have shown up if it were still true (she placed grocery orders but her usual milk wasn't in them; she described her evening but not her walk; she talked about medicines but not this one). false if the day simply didn't touch that part of her life. (Chat days already count for routine / medicines / passing states; this flag matters most for preferences.)
 - decayClass: give it for facts listed with class "?".
 
 Care actions for tomorrow (0–4, most useful first):
@@ -342,7 +342,15 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         if (q.status === "open" && now.getTime() - new Date(q.createdAt).getTime() > QUESTION_EXPIRY_DAYS * 86_400_000) q.status = "expired";
     }
     const openIds = new Set((doc.questions || []).filter((q) => q.status === "open").map((q) => q.factId));
-    const merged = applyReflection((doc.facts || []) as ProfileFact[], ops, { now, dayKey, judgements, activeDay, openQuestionFactIds: openIds });
+    const judgedOk = model !== "none" && model !== "failed";
+    const merged = applyReflection((doc.facts || []) as ProfileFact[], ops, {
+        now,
+        dayKey,
+        judgements,
+        activeDay,
+        openQuestionFactIds: openIds,
+        ...(judgedOk ? { day: { chat: counts.messagesIn + counts.voiceNotes > 0, orders: counts.orders + counts.cards > 0 } } : {}),
+    });
     doc.facts = merged.facts;
     let newQuestions: CaregiverQuestion[] = [];
     if (merged.questions.length) {

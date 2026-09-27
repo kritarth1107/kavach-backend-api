@@ -65,6 +65,22 @@ const prefDay = trace["Prefers Amul T"]!.findIndex((c) => c === 0) + 1;
 eq("preference fades on a medium schedule (8–20 days)", prefDay >= 8 && prefDay <= 20, true);
 console.log("  trace days-to-fade: transient", tDay, "· guess", gDay, "· preference", prefDay, "· med check-in", medQ, "· routine check-in", qs.find((q) => q.includes("Walks")));
 
+// 2b) Day-activity opportunities: Gemini says silent (no flag) but she chatted → routine/medication count; orders → food prefs.
+const noFlag = (fs: ProfileFact[]): FactJudgement[] => fs.map((f) => ({ id: f.id, verdict: "silent", opportunity: false }));
+let chatty = r.facts;
+for (let d = 1; d <= 25; d++) chatty = applyReflection(chatty, [], { ...at(d), judgements: noFlag(chatty), activeDay: true, day: { chat: true, orders: false } }).facts;
+eq("chat days: routine decays (walk < 0.75)", F(chatty, "Walks").confidence < 0.75, true);
+eq("chat days: diabetic still 0.75", F(chatty, "Has type 2").confidence, 0.75);
+eq("chat days only: Amul preference untouched (no orders)", F(chatty, "Prefers Amul").confidence, 0.55);
+let shop = r.facts;
+for (let d = 1; d <= 20; d++) shop = applyReflection(shop, [], { ...at(d), judgements: noFlag(shop), activeDay: true, day: { chat: false, orders: true } }).facts;
+eq("order days without her milk: Amul preference fades", F(shop, "Prefers Amul").status, "faded");
+eq("order days: medication untouched", F(shop, "Takes Telma").confidence, 0.75);
+const unlabeled = applyReflection(r.facts, [], { ...at(1), judgements: [], activeDay: true, day: { chat: true, orders: false } });
+eq("fact Gemini didn't label on a chat day counts as silent (transient decays)", F(unlabeled.facts, "Knee pain").confidence < 0.6, true);
+const failed = applyReflection(r.facts, [], { ...at(1), activeDay: true });
+eq("no judgement (model failed) → nothing decays", failed.facts.map((f) => f.confidence), r.facts.map((f) => f.confidence));
+
 // 3) Contradiction: medication → caregiver question, no silent change; preference → −0.35.
 const med = F(r.facts, "Takes Telma");
 const c1 = applyReflection(r.facts, [], { ...at(1), activeDay: true, judgements: [{ id: med.id, verdict: "contradicts", by: "elder", evidence: "doctor ne BP ki goli band kar di" }] });
