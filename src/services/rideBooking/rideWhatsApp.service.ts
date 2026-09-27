@@ -92,6 +92,14 @@ function routeConfirmMessage(draft: RideDraft): string {
     return `${summary}\n\nReply *yes* if that looks right, or send a new from/to. Reply *cancel* to stop.`;
 }
 
+/** Replies that are never a place ("confirm", "haan", "1"): "confirm" once became "Confirm Inn". */
+const CONTROL_WORD = /^(confirm|confirmed|haan|han|ha|haa|ji|yes|y|ok|okay|theek hai|thik hai|no|nahi|nahin|na|cancel|stop|\d{1,2})[.!\s]*$/i;
+
+/** A location she shared in the last 15 minutes is her pickup for a new drop-only ask. */
+const recentPins = new Map<string, { place: RidePlace; at: number }>();
+const PIN_REUSE_MS = 15 * 60_000;
+const pinKey = (phone: string) => phone.replace(/\D/g, "");
+
 async function maybeCompleteSlots(
     draft: RideDraft,
     text: string,
@@ -122,7 +130,7 @@ async function maybeCompleteSlots(
             }
             draft.drop = await enrichPlace(placeFromText(parsed.drop));
         }
-    } else if (parsed.bare) {
+    } else if (parsed.bare && !CONTROL_WORD.test(parsed.bare.trim())) {
         const place = await enrichPlace(placeFromText(parsed.bare));
         if (!draft.pickup) draft.pickup = place;
         else if (!draft.drop) draft.drop = place;
@@ -172,6 +180,17 @@ type RideTurnInput = {
 
 export async function handleRideWhatsAppTurn(input: RideTurnInput): Promise<{ text: string; draft?: RideDraft } | null> {
     const r = await handleRideWhatsAppTurnInner(input);
+    // "Airport jaana hai" right after sharing her location: that location is the pickup.
+    if (r?.draft?.phase === "need_pickup" && r.draft.drop && !r.draft.pickup) {
+        const rp = recentPins.get(pinKey(input.phone));
+        if (rp && Date.now() - rp.at < PIN_REUSE_MS) {
+            const d: RideDraft = { ...r.draft, pickup: rp.place, phase: "confirming_route" };
+            d.routeSummary = formatRouteSummary(rp.place, d.drop!);
+            await saveDraft(input.phone, d);
+            console.log(JSON.stringify({ evt: "ride_pin_reused", phone: input.phone.slice(-4) }));
+            return { text: routeConfirmMessage(d), draft: d };
+        }
+    }
     // Route shown → check Ola / Rapido for this city in the background, so "yes" is instant.
     const d = r?.draft;
     if (d?.phase === "confirming_route" && d.pickup && d.drop) {
@@ -290,6 +309,7 @@ async function rideFromPin(
     // Never lose the point, whatever the lookup returned.
     pickup.lat = pin.lat;
     pickup.lng = pin.lng;
+    recentPins.set(pinKey(input.phone), { place: pickup, at: Date.now() });
     console.log(JSON.stringify({ evt: "ride_pin_pickup", phone: input.phone.slice(-4), hadDraft: Boolean(draft), draftPhase: draft?.phase || null, drop: Boolean(drop) }));
     const next: RideDraft = {
         phase: drop ? "confirming_route" : "need_drop",

@@ -3,6 +3,7 @@ import { CURRENT_LOCATION, coordsFromText, displayLabel, hasCoords } from "../sr
 import { formatRouteSummary, parseLocationPin, placeFromText } from "../src/services/rideBooking/slotParse";
 import { nameFor, olaLink, rapidoLink, uberLink } from "../src/services/rideBooking/rideServices";
 import { pinPlan } from "../src/services/rideBooking/pinPlan";
+import { airportPlace } from "../src/services/rideBooking/airports";
 import { pinTipFor } from "../src/services/rideBooking/ola/olaCopy";
 import { isSubstantiveForLanguage, noteLanguage, preferredLang } from "../src/services/saheliRouter.service";
 import { OLA_PRE_BOOKING_PHASES } from "../src/services/rideBooking/types";
@@ -59,6 +60,11 @@ ok("route summary, map point only", formatRouteSummary({ lat: 21.2, lng: 81.6 },
     ok("no 'share location' tip after a pin", pinTipFor("hinglish", false, p.pickup) === "" && pinTipFor("en", false, pinB) === "");
     ok("tip only when there is no map point", pinTipFor("hinglish", false, home) !== "" && pinTipFor("hinglish", true, home) === "");
 }
+// ── The airport she names wins over her home city ──
+ok("'raipur airport' from a Mumbai family → Raipur", airportPlace("raipur airport, Mumbai")?.shortLabel === "Raipur Airport", airportPlace("raipur airport, Mumbai"));
+ok("'raipur airport' → Raipur", airportPlace("raipur airport")?.shortLabel === "Raipur Airport");
+ok("'airport T3' from Gurugram → Delhi T3", /T3/.test(airportPlace("airport T3, Gurugram")?.shortLabel || ""), airportPlace("airport T3, Gurugram"));
+ok("'airport' from Mumbai → Mumbai", /Mumbai/.test(airportPlace("airport, Mumbai")?.shortLabel || ""), airportPlace("airport, Mumbai"));
 // ── Her language sticks: short replies don't flip it ──
 {
     const ph = "+919997000999";

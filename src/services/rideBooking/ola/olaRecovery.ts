@@ -305,13 +305,19 @@ export const geminiScreenClassifier: ScreenClassifier = async (snap, ctx) => {
     if (process.env.OLA_AI_RECOVERY === "0") return null;
     const g = await import("../../commerceAutomation/geminiComputerUse.service");
     const token = await g.getAccessToken();
-    if (!token) return null;
+    if (!token) {
+        console.log(JSON.stringify({ evt: "ola_screen_model", result: "no_token" }));
+        return null;
+    }
     const project = g.gcpProjectId();
     const location = g.visionLocation();
     const host = location === "global" ? "https://aiplatform.googleapis.com" : `https://${location}-aiplatform.googleapis.com`;
     const url = `${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${g.browserModel()}:generateContent`;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12_000);
+    const timer = setTimeout(() => ctrl.abort(), 15_000);
+    const started = Date.now();
+    const note = (result: string, extra: Record<string, unknown> = {}) =>
+        console.log(JSON.stringify({ evt: "ola_screen_model", goal: ctx.goal, step: ctx.step, result, ms: Date.now() - started, shot: Boolean(snap.screenshotB64), ...extra }));
     try {
         const parts: Array<Record<string, unknown>> = [{ text: PROMPT(snap, ctx) }];
         if (snap.screenshotB64) parts.push({ inlineData: { mimeType: "image/jpeg", data: snap.screenshotB64 } });
@@ -319,13 +325,20 @@ export const geminiScreenClassifier: ScreenClassifier = async (snap, ctx) => {
             signal: ctrl.signal,
             method: "POST",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "x-goog-user-project": project },
-            body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 300, responseMimeType: "application/json" } }),
+            // Thinking models spend output tokens before the JSON: leave room.
+            body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { temperature: 0, maxOutputTokens: 2048, responseMimeType: "application/json" } }),
         });
-        if (!res.ok) return null;
-        const j = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
-        const raw = j.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("") || "";
-        return parseModelVerdict(g.parseJsonObject(raw));
-    } catch {
+        if (!res.ok) {
+            note(`http_${res.status}`, { body: (await res.text().catch(() => "")).slice(0, 200) });
+            return null;
+        }
+        const j = (await res.json()) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> };
+        const raw = j.candidates?.[0]?.content?.parts?.filter((p) => !p.thought).map((p) => p.text || "").join("") || "";
+        const v = parseModelVerdict(g.parseJsonObject(raw));
+        note(v ? "ok" : "unparsed", v ? { screen: v.screen, action: v.action } : { raw: raw.slice(0, 200) });
+        return v;
+    } catch (err) {
+        note("error", { error: err instanceof Error ? err.message.slice(0, 120) : String(err) });
         return null;
     } finally {
         clearTimeout(timer);

@@ -1477,7 +1477,7 @@ async function dispatchRoutedTurn(a: {
         };
         const newPlacesTyped = typedPlace(route.ridePickup) || typedPlace(route.rideDrop);
         const r = await handleRideWhatsAppTurn({ ...input, text: t, hintText: text, forceStart: route.intent === "ride", newPlacesTyped });
-        if (r?.text && /hi/i.test(route.language || "")) r.text = hinglishRideCopy(r.text);
+        if (r?.text && /hi/i.test(preferredLang(input.phone) || route.language || "")) r.text = hinglishRideCopy(r.text);
         return r;
     };
     /** Canonical control text for flows that parse short replies. Money guardrail: confirm stays verbatim. */
@@ -1561,6 +1561,7 @@ async function dispatchRoutedTurn(a: {
         // Saved family places first ("clinic se ghar" → Clinic → Home), then "near my city".
         const { listPlaces, matchPlace, pickDefault } = await import("./familyAddressBook.service");
         const { cityOf } = await import("./commerceAutomation/kavachAddress");
+        const { airportPlace } = await import("./rideBooking/airports");
         const places = await listPlaces(a.familyId, { memberUserId: a.recipientUserId }).catch(() => []);
         const home = pickDefault(places, a.recipientUserId);
         const city = home ? home.city || cityOf(home.full) || "" : "";
@@ -1569,6 +1570,8 @@ async function dispatchRoutedTurn(a: {
             if (saved) return saved.full;
             // "home"/"ghar" with no saved home: leave it for the ride flow to ask — never geocode the word.
             if (/^(my\s+)?(home|house|ghar|mera\s+ghar|apna\s+ghar)$/i.test(p.trim())) return home ? home.full : "";
+            // "Raipur airport" from a Mumbai family is Raipur's airport: never append the home city to it.
+            if (airportPlace(p)) return p;
             return city && !new RegExp(`\\b${city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(p) ? `${p}, ${city}` : p;
         };
         const pu = route.ridePickup ? place(route.ridePickup) : "";

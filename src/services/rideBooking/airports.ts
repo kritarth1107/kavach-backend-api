@@ -31,7 +31,9 @@ const TERMINAL = /\b(?:t|terminal)\s*-?\s*([123])\b|टर्मिनल\s*([12
 export function airportPlace(query: string): RidePlace | null {
     const q = query.trim();
     if (!q || !AIRPORT_WORD.test(q)) return null;
-    const a = AIRPORTS.find((x) => x.alias?.test(q)) || AIRPORTS.find((x) => x.city.test(q));
+    // The city she named first wins ("raipur airport, Mumbai" = Raipur: the city was appended later).
+    const byCity = AIRPORTS.map((x) => ({ x, i: q.search(x.city) })).filter((c) => c.i >= 0).sort((m, n) => m.i - n.i)[0]?.x;
+    const a = AIRPORTS.find((x) => x.alias?.test(q)) || byCity;
     if (!a) return null;
     const m = q.match(TERMINAL);
     const t = (m?.[1] || m?.[2] || "") in a.terminals ? (m?.[1] || m?.[2])! : a.main;
