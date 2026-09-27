@@ -9,7 +9,7 @@
  */
 import { remoteBudgetMs } from "./remoteBrowser";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { cityAlternation, cityOf, localityQueryFor, locationQueryFor, pincodeOf } from "./kavachAddress";
+import { cityAlternation, cityOf, localityQueryFor, locationQueryFor, sameArea } from "./kavachAddress";
 
 const UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -119,11 +119,10 @@ export function fitLocationQuery(q: string, max: number): string {
  * in the right city). Cached per address for 12h (lat/lng cookie).
  */
 export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address: string): Promise<GuestLocation> {
-    const pin = pincodeOf(address);
     const cached = locCache.get(address);
     if (cached && Date.now() - cached.at < LOC_TTL_MS) {
         await applyCachedLocation(ctx, cached);
-        return { ok: true, shownAddress: cached.address, pincodeMatch: !pin || cached.address.includes(pin) };
+        return { ok: true, shownAddress: cached.address, pincodeMatch: sameArea(cached.address, address) };
     }
     await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded", timeout: 25_000 });
     await waitForContent(page);
@@ -167,7 +166,7 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
     const loc = await readLocationCookie(ctx);
     if (!loc) return { ok: false, shownAddress: "", pincodeMatch: false };
     locCache.set(address, loc);
-    return { ok: true, shownAddress: loc.address, pincodeMatch: !pin || loc.address.includes(pin) };
+    return { ok: true, shownAddress: loc.address, pincodeMatch: sameArea(loc.address, address) };
 }
 
 function parseEtaMax(eta?: string): number | undefined {

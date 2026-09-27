@@ -3302,12 +3302,17 @@ async function notFoundAlternatives(
 ): Promise<{ text: string; searchQuery?: string }> {
     try {
         const { orderChatTurn, loadOrderChat } = await import("./orderChat/orderChat.service");
+        // Only the item name is passed as text, so the model can't tell her language from it —
+        // use the language of her last real message (English stays English).
+        const { lastRouteFor } = await import("../saheliRouter.service");
+        const lang = lastRouteFor(input.phone)?.route?.language || null;
         const d = await orderChatTurn({
             phone: input.phone,
             familyId: input.familyId,
             recipientUserId: input.recipientUserId || input.actorUserId,
             actorUserId: input.actorUserId,
             text: q,
+            language: lang,
             routeHint: { category },
             state: await loadOrderChat(input.phone),
             notFound: { query: q, category, partner },

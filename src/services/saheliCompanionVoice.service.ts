@@ -44,6 +44,11 @@ export async function stampCompanionVoice(
 ): Promise<string> {
     const text = (reply ?? "").trim();
     if (!text) return reply;
+    // A "Saheli here…" / "Priya bol rahi hoon…" line on top of every canned reply read like a
+    // bot announcing itself on WhatsApp. Only a real memory hook is added (at the end).
+    if (!opts.memoryHook?.trim()) return reply;
+    if (text.includes(opts.memoryHook.trim())) return reply;
+    return `${text}\n\n${opts.memoryHook.trim()}`;
     if (opts.skipIfAlreadyWarm !== false && looksAlreadyWarm(text)) return reply;
 
     try {

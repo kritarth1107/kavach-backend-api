@@ -3,8 +3,45 @@
  * current care recipient's own saved address (recipientAddress.service), passed in explicitly.
  */
 
+const KNOWN_CITIES = [
+    "bangalore", "bengaluru", "mumbai", "bombay", "navi mumbai", "thane", "pune", "delhi", "new delhi", "noida", "greater noida", "gurgaon", "gurugram",
+    "ghaziabad", "faridabad", "hyderabad", "secunderabad", "chennai", "madras", "kolkata", "calcutta", "ahmedabad", "surat", "vadodara", "baroda",
+    "jaipur", "lucknow", "kanpur", "nagpur", "indore", "bhopal", "raipur", "bilaspur", "bhilai", "durg", "patna", "ranchi", "bhubaneswar", "chandigarh",
+    "mohali", "ludhiana", "amritsar", "dehradun", "coimbatore", "madurai", "mysore", "mysuru", "mangalore", "mangaluru", "kochi", "cochin",
+    "trivandrum", "thiruvananthapuram", "visakhapatnam", "vizag", "vijayawada", "guwahati", "varanasi", "agra", "meerut", "jodhpur", "udaipur",
+    "gwalior", "jabalpur", "nashik", "aurangabad", "hubli", "hubballi", "belgaum", "belagavi", "allahabad", "prayagraj", "goa", "panaji",
+];
+const STATE_WORDS =
+    /\b(andhra pradesh|arunachal pradesh|assam|bihar|chhattisgarh|gujarat|haryana|himachal pradesh|jharkhand|karnataka|kerala|madhya pradesh|maharashtra|manipur|meghalaya|mizoram|nagaland|odisha|punjab|rajasthan|sikkim|tamil nadu|telangana|tripura|uttar pradesh|uttarakhand|west bengal|jammu and kashmir|ladakh)\b/gi;
+
+/**
+ * Typed addresses often have no commas ("74 4th cross amrutnagar byatarayanapura bangalore
+ * karnataka india 560092"): split them around a known city into street, locality, city, state
+ * so the helpers below see the same shape as a comma address.
+ */
+function commaShape(address: string): string {
+    const bare = address.replace(/\b\d{6}\b/g, " ").replace(/\bindia\b/gi, " ").replace(/\s+/g, " ").trim().replace(/[,\s]+$/, "");
+    const parts = bare.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 2 || !parts[0] || parts[0].split(/\s+/).length < 5) return address;
+    const text = parts.join(" ");
+    const lower = text.toLowerCase();
+    let best: { i: number; name: string } | null = null;
+    for (const c of KNOWN_CITIES) {
+        const m = [...lower.matchAll(new RegExp(`\\b${c.replace(/\s+/g, "\\s+")}\\b`, "g"))].pop();
+        if (m && m.index != null && (!best || m.index > best.i || (m.index === best.i && c.length > best.name.length))) best = { i: m.index, name: text.slice(m.index, m.index + m[0].length) };
+    }
+    if (!best) return address;
+    const before = text.slice(0, best.i).trim().split(/\s+/).filter(Boolean);
+    const state = (text.slice(best.i + best.name.length).match(STATE_WORDS) || [])[0] || "";
+    const pin = pincodeOf(address);
+    const street = before.slice(0, Math.max(0, before.length - 2)).join(" ");
+    const locality = before.slice(-2).join(" ");
+    return [street, locality, best.name, state ? `${state}${pin ? ` ${pin}` : ""}` : pin || ""].filter(Boolean).join(", ");
+}
+
 /** Area query used to set a site's location (no flat number / landmark / pincode / state). */
 export function locationQueryFor(address: string): string {
+    address = commaShape(address);
     const parts = address
         .split(",")
         .map((p) => p.trim())
@@ -20,6 +57,7 @@ export function locationQueryFor(address: string): string {
 
 /** City guess for picking the right location suggestion (token before state / pincode). */
 export function cityOf(address: string): string | undefined {
+    address = commaShape(address);
     const parts = address
         .split(",")
         .map((p) => p.replace(/\b\d{6}\b/, "").trim())
@@ -69,6 +107,7 @@ export function sameCity(text: string | null | undefined, city: string | null | 
 
 /** Short fallback location query: the locality right before the city + the city. */
 export function localityQueryFor(address: string): string {
+    address = commaShape(address);
     const parts = address
         .split(",")
         .map((p) => p.replace(/\s*-?\s*\b\d{6}\b/, "").trim())
@@ -78,6 +117,25 @@ export function localityQueryFor(address: string): string {
     const i = city ? parts.findIndex((p) => p.toLowerCase() === city.toLowerCase()) : -1;
     if (i > 0) return `${parts[i - 1]} ${parts[i]}`.replace(/\s+/g, " ").trim();
     return parts.slice(-3, -1).join(" ").trim();
+}
+
+/**
+ * Did the store set a location in the same neighbourhood as the saved address? Store location
+ * strings (Google places) rarely carry a pincode, so: same pincode when shown, else same city
+ * AND a distinctive locality word ("HBR", "Shankar", "Koramangala") in common.
+ */
+export function sameArea(shown: string | null | undefined, saved: string): boolean {
+    const s = String(shown || "");
+    const pin = pincodeOf(saved);
+    const shownPin = pincodeOf(s);
+    if (pin && shownPin) return pin === shownPin;
+    if (!sameCity(s, cityOf(saved))) return false;
+    const STOP = new Set(["layout", "road", "main", "cross", "block", "stage", "phase", "sector", "nagar", "colony", "street", "near", "flat", "house", "floor", "apartment", "apartments", "society", "the", "and", "india", "extension", "west", "east", "north", "south", "new", "old"]);
+    const words = (x: string) => new Set((x.toLowerCase().match(/[a-z]{3,}/g) || []).filter((w) => !STOP.has(w)));
+    const city = (cityOf(saved) || "").toLowerCase();
+    const savedWords = [...words(localityQueryFor(saved) + " " + locationQueryFor(saved))].filter((w) => !city.includes(w) && !sameCity(w, city));
+    const shownWords = words(s);
+    return savedWords.some((w) => shownWords.has(w));
 }
 
 /** First ~4 parts + pincode, for chat copy. */
