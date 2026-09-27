@@ -8,6 +8,7 @@
 import ActivityLog from "../../models/activityLog.model";
 import ElderProfile, { type CareAction, type ProfileFact } from "../../models/elderProfile.model";
 import ElderWellbeingDay from "../../models/elderWellbeingDay.model";
+import * as Vertex from "../../clients/vertexGemini.client";
 import { parseJsonLoose, vertexFlashModel, vertexGenerateText, vertexProModel } from "../../clients/vertexGemini.client";
 import { istDayKey } from "../activityLog.service";
 import { applyReflection, detectDeviations, isActive, isUnsafeFact, newActionId, type FactJudgement, type NewQuestion, type ReflectionOp } from "./profileCore";
@@ -255,6 +256,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         .map((f) => `${f.id} [${f.category}] class=${f.decayClass || "?"} (${f.status}${f.status === "learned" ? ` ${f.confidence}` : ""}) ${f.text}`);
     const rejected = (doc.facts || []).filter((f) => f.status === "rejected").slice(-30).map((f) => `- ${f.text}`);
     let judgements: FactJudgement[] = [];
+    let fallbackReason: string | undefined;
     const memory = await memoryProfileMd(w);
     let ops: ReflectionOp[] = [];
     let actions: CareAction[] = [];
@@ -275,13 +277,15 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             .filter(Boolean)
             .join("\n\n");
         const tryModel = async (m: string) => {
-            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, responseSchema: RESPONSE_SCHEMA, prompt, timeoutMs: 120_000, maxOutputTokens: 8192, temperature: 0.2 });
+            const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, responseSchema: RESPONSE_SCHEMA, prompt, timeoutMs: 150_000, maxOutputTokens: 24_576, temperature: 0.2 });
             return parseJsonLoose<Raw>(raw);
         };
         const pro = opts.model || process.env.VERTEX_REFLECTION_MODEL?.trim() || vertexProModel();
         let parsed = await tryModel(pro).catch(() => null);
         model = pro;
         if (!parsed?.ops && !parsed?.day) {
+            fallbackReason = String(Vertex.lastVertexError || "unparseable").slice(0, 160);
+            console.warn(`[reflection] ${pro} unusable (${fallbackReason}); falling back to flash`);
             model = vertexFlashModel();
             parsed = await tryModel(model).catch(() => null);
         }
@@ -380,6 +384,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
         decayed: merged.decayed,
         classified: merged.classified,
         readded: merged.readded,
+        ...(fallbackReason ? { fallbackReason } : {}),
     };
     await doc.save();
     // (after the save: raiseUnusual writes the same document)

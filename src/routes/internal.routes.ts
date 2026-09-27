@@ -7,6 +7,7 @@ import {
     postOutreachJob,
     postNudgeSimJob,
     postReflectionJob,
+    postDailySnapshotJob,
     getSaheliMemoryContextHandler,
 } from "../controllers/jobs.controller";
 
@@ -19,6 +20,7 @@ router.post("/v1/jobs/nudge-sim", postNudgeSimJob);
 router.post("/v1/jobs/memory-consolidation", postMemoryConsolidationJob);
 router.post("/v1/jobs/memory-dream", postMemoryDreamJob);
 router.post("/v1/jobs/elder-reflection", postReflectionJob);
+router.post("/v1/jobs/daily-snapshot", postDailySnapshotJob);
 router.get("/v1/saheli/memory-context/:familyId/:recipientUserId", getSaheliMemoryContextHandler);
 router.get("/v1/saheli/memory-context", getSaheliMemoryContextHandler);
 

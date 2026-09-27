@@ -168,3 +168,26 @@ export async function postReflectionJob(req: Request, res: Response, next: NextF
         next(err);
     }
 }
+
+/**
+ * On-demand daily snapshot for a smoke-fixture elder (verification of what caregivers will see).
+ * Auth: X-Kavach-Job-Secret or X-Kavach-Secret. Body: { phone (smoke fixtures only), dayKey }.
+ * Real families get theirs from the ~21:00 IST tick or the dashboard.
+ */
+export async function postDailySnapshotJob(req: Request, res: Response, next: NextFunction) {
+    try {
+        const alt = req.header("X-Kavach-Secret");
+        if (!(alt && alt === config.aiEngine.apiSecret)) assertJobAuth(req);
+        const dayKey = String(req.body?.dayKey || "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) throw new AppError("dayKey must be YYYY-MM-DD", 400);
+        const phone = String(req.body?.phone || "");
+        const { isSmokeFixturePhone } = await import("../services/smokeFixtures.service");
+        if (!isSmokeFixturePhone(phone)) throw new AppError("phone is limited to smoke fixture phones", 403);
+        const { resolveWhatsAppSender } = await import("../services/identityResolver.service");
+        const r = await resolveWhatsAppSender(phone);
+        const { generateDailySnapshot } = await import("../services/dailySnapshot.service");
+        res.json({ success: true, job: "daily-snapshot", result: await generateDailySnapshot({ familyId: r.familyId, recipientUserId: r.userId, dayKey, source: "on_demand" }) });
+    } catch (err) {
+        next(err);
+    }
+}

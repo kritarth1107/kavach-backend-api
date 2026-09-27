@@ -93,8 +93,10 @@ export async function vertexGenerateText(input: {
             return null;
         }
         const body = (await res.json()) as {
-            candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
+            candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> }; finishReason?: string }>;
         };
+        const finish = body.candidates?.[0]?.finishReason;
+        if (finish && finish !== "STOP") lastVertexError = `finish ${finish}`;
         const text = (body.candidates?.[0]?.content?.parts ?? [])
             .filter((p) => !p.thought)
             .map((p) => p.text ?? "")
