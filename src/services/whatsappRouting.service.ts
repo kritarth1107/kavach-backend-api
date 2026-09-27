@@ -426,7 +426,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             message: text,
             channel: "whatsapp",
         });
-        return outbound(phone, elderEmergencyReply(displayName));
+        return outbound(phone, elderEmergencyReply(displayName, text));
     }
 
     // ── Evolving profile + unusual-activity backstops (elder only). Scam cue with high confidence
@@ -534,7 +534,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             message: text,
             channel: "whatsapp",
         });
-        return outbound(phone, elderEmergencyReply(displayName));
+        return outbound(phone, elderEmergencyReply(displayName, text, route.language));
     }
 
     const {

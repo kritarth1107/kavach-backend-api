@@ -32,6 +32,54 @@ export function cityOf(address: string): string | undefined {
     return STATE.test(last) && parts.length >= 2 ? parts[parts.length - 2] : last;
 }
 
+/** Official / old names a store may show for the same city (Bangalore ↔ Bengaluru …). */
+const CITY_ALIASES: string[][] = [
+    ["bangalore", "bengaluru", "bangaluru"],
+    ["gurgaon", "gurugram"],
+    ["bombay", "mumbai"],
+    ["calcutta", "kolkata"],
+    ["madras", "chennai"],
+    ["mysore", "mysuru"],
+    ["poona", "pune"],
+    ["mangalore", "mangaluru"],
+    ["belgaum", "belagavi"],
+    ["hubli", "hubballi"],
+    ["trivandrum", "thiruvananthapuram"],
+    ["cochin", "kochi"],
+    ["vizag", "visakhapatnam"],
+    ["baroda", "vadodara"],
+    ["pondicherry", "puducherry"],
+    ["new delhi", "delhi"],
+    ["allahabad", "prayagraj"],
+];
+
+/** Regex alternation (escaped) matching a city under any of its names; "" when unknown. */
+export function cityAlternation(city: string | null | undefined): string {
+    const c = String(city || "").trim().toLowerCase();
+    if (!c) return "";
+    const names = CITY_ALIASES.find((g) => g.includes(c)) || [c];
+    return names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+")).join("|");
+}
+
+/** True when `text` names the same city as `city` (alias-aware). */
+export function sameCity(text: string | null | undefined, city: string | null | undefined): boolean {
+    const alt = cityAlternation(city);
+    return !alt || new RegExp(`\\b(?:${alt})\\b`, "i").test(String(text || ""));
+}
+
+/** Short fallback location query: the locality right before the city + the city. */
+export function localityQueryFor(address: string): string {
+    const parts = address
+        .split(",")
+        .map((p) => p.replace(/\s*-?\s*\b\d{6}\b/, "").trim())
+        .filter(Boolean)
+        .filter((p) => !/^india$/i.test(p));
+    const city = cityOf(address);
+    const i = city ? parts.findIndex((p) => p.toLowerCase() === city.toLowerCase()) : -1;
+    if (i > 0) return `${parts[i - 1]} ${parts[i]}`.replace(/\s+/g, " ").trim();
+    return parts.slice(-3, -1).join(" ").trim();
+}
+
 /** First ~4 parts + pincode, for chat copy. */
 export function shortAddress(address: string): string {
     const pin = pincodeOf(address);

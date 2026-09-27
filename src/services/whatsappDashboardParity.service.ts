@@ -859,6 +859,45 @@ export async function tryHandlePendingApprovalsList(input: {
     }
 }
 
+/** "21:00" → "9 pm", "07:30" → "7:30 am". */
+function fmtClock12(hhmm: string): string {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+    if (!m) return hhmm;
+    const h = Number(m[1]);
+    const mm = m[2];
+    const ap = h >= 12 ? "pm" : "am";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return mm === "00" ? `${h12} ${ap}` : `${h12}:${mm} ${ap}`;
+}
+
+/** Short reminder title + warm confirmation (sender's language). Null on model failure. */
+async function reminderWording(text: string, forSomeoneElse: boolean): Promise<{ title: string; reply: string } | null> {
+    const { vertexGenerateText, parseJsonLoose, vertexFlashModel } = await import("../clients/vertexGemini.client");
+    const raw = await vertexGenerateText({
+        model: vertexFlashModel(),
+        system:
+            "You word WhatsApp reminders for Saheli, a warm elder-care companion. From the message return JSON: " +
+            'title = what to do, 2-6 words, imperative, no time/day words (e.g. "Take BP tablet", "Drink water", "Call Priya"); ' +
+            "reply = ONE short warm confirmation (max 20 words) in the SAME language/script as the message (English, Hindi or Hinglish), " +
+            "one tasteful emoji max, containing the literal placeholder {time} where the time goes, no questions, no 'anything else'." +
+            (forSomeoneElse ? " The sender is setting it for their parent: say you'll remind her/him (not 'you')." : ""),
+        responseSchema: {
+            type: "OBJECT",
+            properties: { title: { type: "STRING" }, reply: { type: "STRING" } },
+            required: ["title", "reply"],
+        },
+        prompt: text.slice(0, 400),
+        timeoutMs: 5000,
+        maxOutputTokens: 512,
+        thinkingLevel: "low",
+    });
+    const p = parseJsonLoose<{ title?: string; reply?: string }>(raw);
+    const title = p?.title?.trim().slice(0, 80) || "";
+    const reply = p?.reply?.trim().slice(0, 300) || "";
+    if (!title || !reply.includes("{time}")) return title ? { title, reply: "" } : null;
+    return { title, reply };
+}
+
 /**
  * Wave 2 parity: simple set reminder via care schedule API
  */
@@ -885,11 +924,14 @@ export async function tryHandleSetReminder(input: {
     try {
         const window = parseHourlyWindow(text);
         const times = extractTimesFromText(text);
+        // Gemini turns "Can you remind me to take my BP tablet at 9 pm every day?" into a short
+        // title ("Take BP tablet") + a warm one-line confirmation in the sender's language.
+        const nice = await reminderWording(text, input.actorUserId !== input.recipientUserId).catch(() => null);
         const result = await createSaheliReminder({
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
             actorUserId: input.actorUserId,
-            text,
+            text: nice?.title || text,
             times: times.length ? times : undefined,
             kind: window.start != null || /\bevery\s+hour|hourly\b/i.test(text)
                 ? "hourly_window"
@@ -914,10 +956,13 @@ export async function tryHandleSetReminder(input: {
                 reply: `I'll remind you every hour from ${fmt(rem.windowStartMinutes)} to ${fmt(rem.windowEndMinutes)}: *${rem.text}*${rem.stopConditionPhrase ? ` (until you say you ${rem.stopConditionPhrase})` : ""}.`,
             };
         }
-        const when = (rem.times || []).join(" and ") || "the times you said";
+        const when = (rem.times || []).map(fmtClock12).join(" and ") || "the time you said";
+        if (nice?.reply && (rem.times || []).length) {
+            return { handled: true, reply: nice.reply.replace(/\{time\}/g, when) };
+        }
         return {
             handled: true,
-            reply: `Reminder set: *${rem.text}* at ${when}. I'll nudge when it's time${rem.stopConditionPhrase ? ` — say when you've ${rem.stopConditionPhrase} and I'll stop` : ""}.`,
+            reply: `Done ✅ I'll remind you to *${rem.text}* at ${when}${rem.stopConditionPhrase ? ` — tell me once you've ${rem.stopConditionPhrase} and I'll stop` : ""}.`,
         };
     } catch (err) {
         console.warn("Set reminder WA failed:", err);

@@ -5,7 +5,7 @@
  * name / pack / price. Add-to-cart + checkout need login (browser order flow after confirm).
  */
 import type { BrowserContext, Page } from "playwright";
-import { cityOf, locationQueryFor } from "./kavachAddress";
+import { cityAlternation, cityOf, localityQueryFor, locationQueryFor, sameCity } from "./kavachAddress";
 
 const UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -43,12 +43,22 @@ async function setBlinkitLocation(ctx: BrowserContext, page: Page, address: stri
             .slice(0, 160);
         throw new Error(`blinkit_no_location_box (${snip})`);
     }
-    await input.fill(locationQueryFor(address));
-    await page.waitForTimeout(2800);
-    const city = (cityOf(address) || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Suggestions read "<Place>" + "<area>, <City>, <State>, India" — pick one in the right city.
-    const pick = city ? page.getByText(new RegExp(`\\b${city}\\b.*\\bIndia\\b|\\b${city}\\s*,`, "i")).first() : page.getByText(/, India$/).first();
-    await pick.waitFor({ state: "visible", timeout: 12_000 });
+    const cityName = cityOf(address) || "";
+    const alt = cityAlternation(cityName);
+    // Suggestions read "<Place>" + "<area>, <City>, <State>, India" — pick one in the right city
+    // (under any of its names: Bangalore ↔ Bengaluru). Full query first, then "<locality> <city>".
+    const pickFor = () => (alt ? page.getByText(new RegExp(`\\b(?:${alt})\\b.*\\bIndia\\b|\\b(?:${alt})\\s*,`, "i")).first() : page.getByText(/, India$/).first());
+    const queries = [locationQueryFor(address), localityQueryFor(address)].filter((q, i, a) => q && a.indexOf(q) === i);
+    let pick: ReturnType<typeof pickFor> | null = null;
+    for (const q of queries) {
+        await input.fill(q, { timeout: 8000 }).catch(() => undefined);
+        const cand = pickFor();
+        if (await cand.waitFor({ state: "visible", timeout: 12_000 }).then(() => true).catch(() => false)) {
+            pick = cand;
+            break;
+        }
+    }
+    if (!pick) throw new Error("blinkit_location_no_suggestion");
     await pick.click({ timeout: 6000 });
     await page.waitForTimeout(3000);
     // The location cookies can land a moment after the click (slower on the remote Chrome), and
@@ -62,7 +72,7 @@ async function setBlinkitLocation(ctx: BrowserContext, page: Page, address: stri
         return { all, lat: val("gr_1_lat"), lon: val("gr_1_lon"), locality: [val("gr_1_landmark"), val("gr_1_locality")].filter(Boolean).join(", ") };
     };
     let c = await read();
-    const cityOk = (l: string) => !city || new RegExp(city, "i").test(l);
+    const cityOk = (l: string) => sameCity(l, cityName);
     if (!c.lat || !c.lon || !cityOk(c.locality)) {
         await page.waitForTimeout(3000);
         c = await read();

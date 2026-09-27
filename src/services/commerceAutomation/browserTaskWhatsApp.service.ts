@@ -3161,7 +3161,17 @@ async function noLinkNote(input: RoutedInput, missing: McpStore[]): Promise<stri
     // Once per family+accounts per 6h — not a banner on every message.
     const key = `${input.familyId}|${accounts.join("+")}`;
     if (Date.now() - (linkNudged.get(key) || 0) < 6 * 3600_000) return "";
-    linkNudged.set(key, Date.now());
+    // Durable across deploys / restarts: the activity row below is the record of the last tip.
+    {
+        const ActivityLogM = (await import("../../models/activityLog.model")).default;
+        const recent = await ActivityLogM.exists({
+            familyId: input.familyId,
+            "data.needsLink": { $all: missing },
+            createdAt: { $gte: new Date(Date.now() - 6 * 3600_000) },
+        }).catch(() => null);
+        linkNudged.set(key, Date.now());
+        if (recent) return "";
+    }
     void logActivity({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,

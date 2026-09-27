@@ -74,90 +74,9 @@ export async function resolveElderWhatsappReply(input: {
         };
     }
 
-    if (messageIsGreeting(input.message) && !messageAsksMemory(input.message)) {
-        let memoryHook: string | null = null;
-        try {
-            const { ensureAiContext } = await import("./aiTenant.service");
-            const { aiGrepMemory } = await import("../clients/aiEngine.client");
-            const ctx = await ensureAiContext(
-                input.familyId,
-                input.recipientUserId,
-                input.displayName,
-            );
-            const grep = await aiGrepMemory({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-                query: "family hobby food mood memories",
-                limit: 1,
-            });
-            const hit = grep.hits[0];
-            if (hit?.title) {
-                memoryHook = `By the way — how is ${hit.title} these days?`;
-            }
-        } catch {
-            memoryHook = null;
-        }
-        return {
-            reply: buildGreetingReply(input.displayName, memoryHook),
-            replySource: "scheduleFacts",
-            conversationId,
-            order: null,
-            orderFlow: null,
-            orderPreview: null,
-            skippedAi: true,
-            guardAction: "greeting",
-        };
-    }
-
+    // WhatsApp: greetings, thanks, "..." and small talk go to the companion model (warm, in her
+    // language, remembers her) — no canned "Anytime! I'm here whenever you need me." shortcuts.
     const wantsMemoryAi = messageAsksMemory(input.message);
-
-    if (!wantsMemoryAi && messageIsCasualOffer(input.message)) {
-        return {
-            reply: await stampCompanionVoice(buildCasualOfferReply(input.displayName), {
-                familyId: input.familyId,
-                recipientUserId: input.recipientUserId,
-            }),
-            replySource: "scheduleFacts",
-            conversationId,
-            order: null,
-            orderFlow: null,
-            orderPreview: null,
-            skippedAi: true,
-            guardAction: "casual_offer",
-        };
-    }
-
-    if (/^(\.{2,}|…+|\?+)$/u.test(input.message.trim())) {
-        return {
-            reply: await stampCompanionVoice("I'm here — tell me more whenever you're ready.", {
-                familyId: input.familyId,
-                recipientUserId: input.recipientUserId,
-            }),
-            replySource: "scheduleFacts",
-            conversationId,
-            order: null,
-            orderFlow: null,
-            orderPreview: null,
-            skippedAi: true,
-            guardAction: "ellipsis_ping",
-        };
-    }
-
-    if (!wantsMemoryAi && messageIsAcknowledgment(input.message)) {
-        return {
-            reply: await stampCompanionVoice("Anytime! I'm here whenever you need me.", {
-                familyId: input.familyId,
-                recipientUserId: input.recipientUserId,
-            }),
-            replySource: "scheduleFacts",
-            conversationId,
-            order: null,
-            orderFlow: null,
-            orderPreview: null,
-            skippedAi: true,
-            guardAction: "acknowledgment",
-        };
-    }
 
     if (!wantsMemoryAi) {
         const scheduleReply = tryHandleElderScheduleQuery({
@@ -178,21 +97,6 @@ export async function resolveElderWhatsappReply(input: {
                 skippedAi: true,
             };
         }
-    }
-
-    if (!wantsMemoryAi && messageAsksHelp(input.message)) {
-        return {
-            reply: await stampCompanionVoice(buildElderHelpReply(input.displayName), {
-                familyId: input.familyId,
-                recipientUserId: input.recipientUserId,
-            }),
-            replySource: "scheduleFacts",
-            conversationId,
-            order: null,
-            orderFlow: null,
-            orderPreview: null,
-            skippedAi: true,
-        };
     }
 
     // Pharmacy OTC / medicine path before Playwright browser (WhatsApp SLA).

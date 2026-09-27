@@ -9,7 +9,7 @@
  */
 import { remoteBudgetMs } from "./remoteBrowser";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { cityOf, locationQueryFor, pincodeOf } from "./kavachAddress";
+import { cityAlternation, cityOf, localityQueryFor, locationQueryFor, pincodeOf } from "./kavachAddress";
 
 const UA =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -139,24 +139,29 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
         else await page.getByText(/^(Other|Setup your location)$/).first().click({ timeout: 6000 }).catch(() => undefined);
         await input.waitFor({ state: "visible", timeout: 12_000 });
     }
-    const query = fitLocationQuery(locationQueryFor(address), 30);
-    await input.fill(query);
-    await page.waitForTimeout(2200);
-    const city = (cityOf(address) || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&").trim();
     // Suggestions read "<Place>" + "<street>, <Area>, <City>, <State>, India"; the page heading
-    // "…delivery in <City>" has no comma after the city, so it never matches.
-    const pick = city
-        ? page.getByText(new RegExp(`\\b${city}\\s*,`, "i")).first()
-        : page.locator('[data-testid*="location" i] >> text=/,/').first();
-    // Cloud Run is slower than a laptop: give the suggestions time, re-type once if none.
-    if (!(await pick.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false))) {
-        await input.fill("");
-        await input.pressSequentially(query, { delay: 40 });
-        await pick.waitFor({ state: "visible", timeout: 10_000 }).catch(async () => {
-            const snip = ((await page.evaluate(() => document.body?.innerText || "").catch(() => "")) as string).replace(/\s+/g, " ").slice(0, 160);
-            throw new Error(`swiggy_location_no_suggestion (${snip})`);
-        });
+    // "…delivery in <City>" has no comma after the city, so it never matches. The city can be
+    // shown under another name (Bangalore ↔ Bengaluru), so match any of its names.
+    const alt = cityAlternation(cityOf(address));
+    const pickFor = () =>
+        alt ? page.getByText(new RegExp(`\\b(?:${alt})\\s*,`, "i")).first() : page.getByText(/,\s*India$/).first();
+    // Full street query first; if no suggestion in the right city, the shorter "<locality> <city>".
+    const queries = [fitLocationQuery(locationQueryFor(address), 30), fitLocationQuery(localityQueryFor(address), 30)].filter(
+        (q, i, a) => q && a.indexOf(q) === i,
+    );
+    let pick: ReturnType<typeof pickFor> | null = null;
+    let snip = "";
+    for (const q of queries) {
+        await input.fill(q, { timeout: 8000 }).catch(() => undefined);
+        const cand = pickFor();
+        // Cloud Run + the remote Chrome are slower than a laptop: give the suggestions time.
+        if (await cand.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false)) {
+            pick = cand;
+            break;
+        }
+        snip = ((await page.evaluate(() => document.body?.innerText || "").catch(() => "")) as string).replace(/\s+/g, " ").slice(0, 160);
     }
+    if (!pick) throw new Error(`swiggy_location_no_suggestion (${snip})`);
     await pick.click({ timeout: 5000 });
     await page.waitForTimeout(2500);
     const loc = await readLocationCookie(ctx);

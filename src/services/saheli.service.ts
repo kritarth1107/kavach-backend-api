@@ -1070,9 +1070,12 @@ export async function sendSaheliMessage(
     }
 
     const { tryApplyElderCareActionFromMessage } = await import("./saheliCareAction.service");
+    // WhatsApp: the companion model answers (and logs symptoms / check-ins with its tools) —
+    // the keyword care-action shortcuts gave canned replies ("Glad to hear that." to "Good
+    // morning") and a hidden "tell your family?" consent a later "yes" could trigger.
     const careActionReply =
         reminderCompleteReply ??
-        (await tryApplyElderCareActionFromMessage({
+        (waChannel ? null : await tryApplyElderCareActionFromMessage({
             familyId,
             recipientUserId,
             actorUserId,
