@@ -35,6 +35,16 @@ export async function createApproval(
     };
     doc.title = `Approve: ${taskTitle({ ...doc, kind: "open_task" } as ISaheliTask).replace(/^Order /, "")}`;
     const created = (await SaheliTask.create(doc)).toObject() as ISaheliTask;
+    // WHY for the caregiver deciding ("didn't feel like cooking today"), in the background.
+    if (!a.why && created.item) {
+        void (async () => {
+            const { extractWhy } = await import("./delegateGemini");
+            const { recentChat } = await import("./tasks.service");
+            const chat = await recentChat(who.phone, who.recipientUserId, true, 3).catch(() => "");
+            const y = await extractWhy({ item: String(created.item), recentChat: `${chat}\nUser: ${a.requestedText || ""}`.trim() }).catch(() => null);
+            if (y?.why) await SaheliTask.updateOne({ taskId: created.taskId, why: { $exists: false } }, { $set: { why: y.why } });
+        })().catch(() => undefined);
+    }
     const { logActivity } = await import("../activityLog.service");
     void logActivity({
         familyId: who.familyId,

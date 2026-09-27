@@ -22,6 +22,7 @@ const isCaregiverRole = (r: string) => r === "PRIMARY_CAREGIVER" || r === "CO_CA
 
 export type EarlyCtx = {
     decision: DelegateDecision | null;
+    sessionFresh?: boolean;
     followups: ISaheliTask[];
     tasks: ISaheliTask[];
     approvals: ISaheliTask[];
@@ -91,15 +92,15 @@ export async function interpretEarly(input: { phone: string; text: string; ident
                   now: nowIST(),
                   followups: followups.map(
                       (t) =>
-                          `[${t.taskId}] asked ${whenIST(t.askedAt)}: "${(t.lastSaheliLine || "").slice(0, 160)}" — item: ${t.item}; stage=${t.stage}; medicine=${t.isMedicine ? "yes" : "no"}${t.outcome === "not_arrived" ? "; she said earlier it had NOT arrived" : ""}${reorderStarted(t) ? "; a re-order search was started (NOT placed) — if the first one has now arrived, say you won't order the new one" : ""}${t.why ? `; WHY: ${t.why}` : ""}`,
+                          `[${t.taskId}] asked ${whenIST(t.askedAt)}: "${(t.lastSaheliLine || "").slice(0, 160)}" — item: ${t.item}; stage=${t.stage}; medicine=${t.isMedicine ? "yes" : "no"}${t.actorRole === "caregiver" ? "; the caregiver's OWN order for themselves (not the elder's)" : ""}${t.outcome === "not_arrived" ? "; she said earlier it had NOT arrived" : ""}${reorderStarted(t) ? "; a re-order search was started (NOT placed) — if the first one has now arrived, say you won't order the new one" : ""}${t.why ? `; WHY: ${t.why}` : ""}`,
                   ),
-                  openTasks: tasks.map((t) => `[${t.taskId}] ${taskTitle(t)} — left ${whenIST(t.lastActiveAt)}; where it stopped: ${phaseWords(t.phase)}; offered=${t.resumeOfferedAt ? `yes (${whenIST(t.resumeOfferedAt)})` : "no"}${t.why ? `; WHY: ${t.why}` : ""}`),
+                  openTasks: tasks.map((t) => `[${t.taskId}] ${taskTitle(t)} — left ${whenIST(t.lastActiveAt)}; where it stopped: ${phaseWords(t.phase)}; offered=${t.resumeOfferedAt ? `yes (${whenIST(t.resumeOfferedAt)})` : "no"}${t.actorRole === "caregiver" ? "; the caregiver's own request" : ""}${t.language ? `; they wrote in ${t.language}` : ""}${t.why ? `; WHY: ${t.why}` : ""}`),
                   approvals: approvals.map((t) => `[${t.taskId}] ${t.item || "request"}${t.partner ? ` on ${t.partner}` : ""} — ${t.approval?.detail || ""} (asked ${whenIST(t.createdAt)})`),
               }).catch(() => null)
             : Promise.resolve(null),
         whys.length ? connectWhy({ message: text, role, whys: whys.map((y) => ({ id: y.whyId, subject: y.subject, reason: y.reason, status: y.status })), recentChat: chat }).catch(() => null) : Promise.resolve(null),
     ]);
-    return { decision, followups, tasks, approvals, whyChange, whys, subjectUserId };
+    return { decision, followups, tasks, approvals, whyChange, whys, subjectUserId, sessionFresh };
 }
 
 export type PreDispatchResult = { reply: string } | { reroute: SaheliRoute; text: string; lead?: string } | { lead: string } | null;
@@ -287,6 +288,8 @@ export async function preDispatch(input: {
         if (d.target === "resume") {
             const t = early!.tasks.find((x) => x.taskId === d.taskId) || (early!.tasks.length === 1 ? early!.tasks[0] : undefined);
             if (t && d.resumeAction === "offer" && d.reply) {
+                // The old card / options from hours ago are superseded by this offer (a "haan" re-runs it fresh).
+                if (!early!.sessionFresh) await clearStaleDrafts(phone);
                 await SaheliTask.updateOne({ taskId: t.taskId }, { $set: { resumeOfferedAt: new Date() }, $inc: { resumeOfferCount: 1 }, $push: { history: { at: new Date(), event: "offered", note: d.reply.slice(0, 200) } } } as never);
                 return { reply: d.reply };
             }

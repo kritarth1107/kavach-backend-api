@@ -8,7 +8,7 @@ import { parseJsonLoose, vertexFlashModel, vertexGenerateText } from "../../clie
 const model = () => process.env.VERTEX_DELEGATE_MODEL?.trim() || process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel();
 
 export const PERSONA = `You are Saheli, a WhatsApp companion for an Indian family. With an elder you talk like their own caring son or daughter: warm, respectful ("aap"), simple everyday words. With a caregiver you are a warm, practical helper.
-Style: 1–2 short lines, at most ONE tasteful emoji. Reply in the SAME language and script the person uses (Hindi in Devanagari → Devanagari; Hinglish in Latin letters → Hinglish; English → English). Address an elder the way their own child would — follow the form the recent chat uses ("Maa", "Amma", "Papa", "Babuji"); if none, "Maa" for a woman / "Papa" for a man; never "Aunty", "Uncle", "Ma'am", "Sir" or their first name. Never say "Anything else I can help with?", never list menus, never mention being an AI.
+Style: 1–2 short lines, at most ONE tasteful emoji. Reply in the SAME language and script the person uses (Hindi in Devanagari → Devanagari; Hinglish in Latin letters → Hinglish; English → English). With a caregiver: first name or neutral, never "Maa"/"Papa"/"beta". Address an elder the way their own child would — follow the form the recent chat uses ("Maa", "Amma", "Papa", "Babuji"); if none, "Maa" for a woman / "Papa" for a man; never "Aunty", "Uncle", "Ma'am", "Sir" or their first name. Never say "Anything else I can help with?", never list menus, never mention being an AI.
 What you can really do: search and order again (groceries / food / medicines on the family's allowed apps — always cash on delivery and only after she types *confirm*), book rides, remind, and tell her family on the dashboard. You CANNOT track a courier live, call a store, or process a refund yourself — never promise that.`;
 
 async function call<T>(system: string, prompt: string, schema: Record<string, unknown>, timeoutMs = 9000): Promise<T | null> {
@@ -47,7 +47,7 @@ export async function extractOrderContext(input: { orderLog: string; openTask?: 
 - partner: store key (instamart, zepto, blinkit, swiggy, zomato, apollo, pharmeasy, tata_1mg, uber) or null.
 - isMedicine: true for medicines/tablets/syrups/insulin (not vitamins-only snacks).
 - etaMinutes / etaText: only if the log or chat states a delivery time ("arriving in 25 mins", "delivery by tomorrow").
-- why: the REASON / CONTEXT in one short line of plain English (translate Hindi/Hinglish to English, third person), from what the person said ("ran out of BP medicine; doctor said continue", "grandchildren visiting on Sunday", "fever since yesterday"). Only reasons the PERSON (User lines) actually said or clearly implied — never Saheli's own words or guesses; null if none. If an earlier known reason is given and nothing new was said, reuse it.
+- why: the REASON / CONTEXT in one short line of plain English (translate Hindi/Hinglish to English; no names or pronouns — e.g. 'bad headache since morning', 'ran out of BP medicine; doctor said continue'), from what the person said ("ran out of BP medicine; doctor said continue", "grandchildren visiting on Sunday", "fever since yesterday"). Only reasons the PERSON (User lines) actually said or clearly implied — never Saheli's own words or guesses; null if none. If an earlier known reason is given and nothing new was said, reuse it.
 - importance: high for regular/critical medicines, health needs, or anything she said is urgent; else normal.
 ${LANGUAGE_RULE}`,
         [`Order log:\n${input.orderLog.slice(0, 1200)}`, input.openTask ? `What she was doing: ${input.openTask.slice(0, 400)}` : "", input.knownWhy ? `Known earlier reason: ${input.knownWhy}` : "", `Recent chat:\n${input.recentChat.slice(0, 2500) || "(none)"}`].filter(Boolean).join("\n\n"),
@@ -84,7 +84,7 @@ ${LANGUAGE_RULE}`,
 /** The reason behind an important request still in progress (open task). */
 export async function extractWhy(input: { item: string; recentChat: string }): Promise<{ why: string | null; importance: "high" | "normal"; isMedicine: boolean; language: string | null } | null> {
     const p = await call<{ why?: string | null; importance?: string; isMedicine?: boolean; language?: string | null }>(
-        `From the chat, extract WHY the person wants this item: one short plain-English line (translate Hindi/Hinglish to English, third person) of the reason/context the PERSON (User lines) actually said or clearly implied ("ran out of BP medicine; doctor said continue", "guests coming tonight") — never Saheli's own words or guesses. null if the person gave no reason. importance=high for regular/critical medicines or health needs or stated urgency. isMedicine=true for medicines.\n${LANGUAGE_RULE}`,
+        `From the chat, extract WHY the person wants this item: one short plain-English line (translate Hindi/Hinglish to English; no names or pronouns — e.g. 'bad headache since morning', 'ran out of BP medicine; doctor said continue') of the reason/context the PERSON (User lines) actually said or clearly implied ("ran out of BP medicine; doctor said continue", "guests coming tonight") — never Saheli's own words or guesses. null if the person gave no reason. importance=high for regular/critical medicines or health needs or stated urgency. isMedicine=true for medicines.\n${LANGUAGE_RULE}`,
         `Item: ${input.item}\n\nRecent chat:\n${input.recentChat.slice(0, 2500) || "(none)"}`,
         {
             type: "OBJECT",
@@ -200,7 +200,7 @@ export async function writeProactiveLine(input: {
         delivery_check: "Ask, like her own child, whether the order arrived (name the item). One short question.",
         med_start_check: "Ask gently whether she has started taking the medicine (name it). One short question.",
         ride_check: "Ask whether she reached safely. One short question.",
-        resume_nudge: "Gently mention the unfinished task (name it and when) and ask if you should finish it. One short question; no pressure.",
+        resume_nudge: "Gently mention the unfinished task (name it and when) and ask if you should pick it up again (show it again). Never offer to confirm or place it yourself — she always confirms. One short question; no pressure.",
         approval_approved: "Tell her the caregiver said yes, naming them (e.g. 'Rahul ne haan bol diya 🙂'), name what she asked for, and ask if you should go ahead now.",
         approval_denied: "Tell her softly that the caregiver (name them) said not right now for this item, and suggest she talks to them. No blame.",
         outside_permission: "Tell her kindly that for this you first check with the caregiver (named), that you've asked them on the family dashboard, and you'll tell her as soon as they reply. No jargon like 'permission settings'.",

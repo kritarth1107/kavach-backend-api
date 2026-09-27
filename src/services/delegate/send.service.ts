@@ -118,8 +118,11 @@ export async function sendDelegateMessage(
     const name = await personName(task.familyId, task.ownerUserId);
     const chat = await recentChat(task.phone, task.recipientUserId, isElder, 24).catch(() => "");
     const item = task.item || task.productQuery || "order";
+    const audience = isElder
+        ? facts
+        : `You are writing to a CAREGIVER (an adult family member${name ? `, ${name}` : ""}) about their OWN order/request for themselves — address them by first name or neutrally, never as Maa/Papa/beta, and don't talk about the elder. ${facts}`;
     const text =
-        (await writeProactiveLine({ purpose, facts, language, name, previous, recentChat: chat }).catch(() => null)) ||
+        (await writeProactiveLine({ purpose, facts: audience, language, name, previous, recentChat: chat }).catch(() => null)) ||
         (FALLBACK[purpose] || FALLBACK.delivery_check)(item);
     const { deliverOutboundMessage } = await import("../channelOutbound.service");
     const delivery = await deliverOutboundMessage({
