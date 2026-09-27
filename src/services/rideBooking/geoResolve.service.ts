@@ -5,6 +5,7 @@
  */
 import type { RidePlace } from "./types";
 
+import { airportPlace } from "./airports";
 const NOMINATIM = "https://nominatim.openstreetmap.org";
 const UA = "KavachCare-SaheliRides/1.0 (elder-care; contact=support@kavach.care)";
 
@@ -207,6 +208,8 @@ export async function geocodePlace(query: string): Promise<GeoResult> {
     if (GENERIC_PLACE.test(q)) {
         return { ok: false, provider: "passthrough", place: { raw: q, shortLabel: q, source: "text" }, error: "generic_place" };
     }
+    const airport = airportPlace(q);
+    if (airport) return { ok: true, provider: "passthrough", place: airport };
     try {
         const r = googleKey ? await googleGeocode(q, googleKey) : mapbox ? await mapboxGeocode(q, mapbox) : await nominatimGeocode(q);
         // Rides are India-only: a hit outside India is treated as not found.

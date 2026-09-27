@@ -109,5 +109,20 @@ const uberTown = mergeRideConfig({ uberExtraCities: ["ambikapur"] });
 ok("config uber extra town", uberCovers("tier3", "Ambikapur, Chhattisgarh", uberTown) && !uberCovers("tier3", "Ambikapur, Chhattisgarh"));
 ok("chooseServices honours config", chooseServices({ tier: "tier3", vehicle: "cab", status: () => "yes", airport: false, cfg }).primary === "ola");
 
+// ── Airports: clean names + terminal pins ──
+{
+    const { airportPlace } = require("../src/services/rideBooking/airports") as typeof import("../src/services/rideBooking/airports");
+    const t3 = airportPlace("IGI Airport T3");
+    ok("IGI T3", t3?.shortLabel === "Delhi Airport T3" && Math.abs((t3?.lat || 0) - 28.558) < 0.01, t3);
+    ok("delhi airport terminal 1", airportPlace("delhi airport terminal 1")?.shortLabel === "Delhi Airport T1");
+    ok("Mumbai T2", airportPlace("Mumbai airport T2")?.shortLabel === "Mumbai Airport T2");
+    ok("KIA", airportPlace("KIA")?.shortLabel === "Bengaluru Airport T1");
+    ok("raipur airport", airportPlace("raipur airport")?.shortLabel === "Raipur Airport");
+    ok("Hindi airport", airportPlace("रायपुर एयरपोर्ट")?.shortLabel === "Raipur Airport" && airportPlace("दिल्ली एयरपोर्ट टर्मिनल 3")?.shortLabel === "Delhi Airport T3");
+    ok("not an airport", airportPlace("Connaught Place, Delhi") === null);
+    ok("unknown-city airport falls through", airportPlace("airport") === null);
+    ok("airport is an airport", isAirport(t3!));
+}
+
 console.log(fail ? `\n${fail} failed` : "\nall passed");
 process.exit(fail ? 1 : 0);
