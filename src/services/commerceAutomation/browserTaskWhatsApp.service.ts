@@ -1866,11 +1866,17 @@ async function showRestaurantMenuCore(
         menu = await swiggyRestaurantMenu({ restaurant, dishQuery, address });
     } catch (err) {
         console.warn("[swiggy-guest] menu failed:", err instanceof Error ? err.message : err);
-        return { text: `Swiggy didn't load *${restaurant}*'s menu just now 🙏 Pick again or try another.`, draft };
+        // Only point at "the list" when she actually saw one; a restaurant she named gets a retry offer.
+        if (draft.restaurantOptions?.length) return { text: `Swiggy didn't load *${restaurant}*'s menu just now 🙏 Pick again or try another.`, draft };
+        await setOffer(input.phone, input.familyId, { partner: "swiggy", query: dishQuery || restaurant, category: "food", restaurantName: restaurant });
+        return { text: `Swiggy didn't load *${restaurant}*'s menu just now 🙏 Want me to try again?` };
     }
     if (menu.open === false) {
+        if (!draft.restaurantOptions?.length) await setOffer(input.phone, input.familyId, { partner: "swiggy", query: dishQuery || "food", category: "food" });
         return {
-            text: `*${restaurant}* is ${menu.closedNote || "not taking orders right now"} 🙏\nPick another from the list, or *cancel*.`,
+            text: draft.restaurantOptions?.length
+                ? `*${restaurant}* is ${menu.closedNote || "not taking orders right now"} 🙏\nPick another from the list, or *cancel*.`
+                : `*${restaurant}* is ${menu.closedNote || "not taking orders right now"} 🙏 Want me to show other places open near you?`,
             draft,
         };
     }

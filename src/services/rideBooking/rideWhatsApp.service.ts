@@ -59,7 +59,15 @@ function parseDriverFromMessage(message: string): RideDraft["driver"] | undefine
 async function loadDraft(phone: string): Promise<RideDraft | null> {
     const row = await WhatsappSession.findOne({ phone }).lean();
     const raw = (row as { rideDraft?: RideDraft } | null)?.rideDraft;
-    return raw ?? null;
+    return raw && !isStaleRideDraft(raw) ? raw : null;
+}
+
+/** A ride still collecting pickup/drop that nobody touched for 30 min is abandoned — a later
+ *  "haan" / "ok" must never resume it ("Where from, and where to?" out of nowhere). */
+export function isStaleRideDraft(d: { phase?: string; savedAt?: string | Date } | null | undefined): boolean {
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop"].includes(d.phase)) return false;
+    const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
+    return !at || Date.now() - at > 30 * 60_000;
 }
 
 async function saveDraft(phone: string, draft: RideDraft | null): Promise<void> {
@@ -72,7 +80,7 @@ async function saveDraft(phone: string, draft: RideDraft | null): Promise<void> 
     }
     await WhatsappSession.findOneAndUpdate(
         { phone },
-        { $set: { rideDraft: draft, updatedAt: new Date() } },
+        { $set: { rideDraft: { ...draft, savedAt: new Date() }, updatedAt: new Date() } },
         { upsert: true },
     );
 }

@@ -193,8 +193,14 @@ type FlowDoc = {
     orderChat?: { updatedAt?: number; turns?: Array<{ who: string; text: string }> } & Record<string, unknown>;
 } | null;
 
-function liveFlow(d: { phase?: string } | undefined | null): boolean {
-    return Boolean(d?.phase) && d!.phase !== "idle" && d!.phase !== "done";
+function liveFlow(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
+    return Boolean(d?.phase) && d!.phase !== "idle" && d!.phase !== "done" && !staleRideSlots(d);
+}
+/** Same rule as rideWhatsApp.isStaleRideDraft (kept local: this file imports ride code lazily). */
+function staleRideSlots(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
+    if (!d?.phase || !["need_slots", "need_pickup", "need_drop"].includes(d.phase)) return false;
+    const at = d.savedAt ? new Date(d.savedAt).getTime() : 0;
+    return !at || Date.now() - at > 30 * 60_000;
 }
 
 /** One-line summaries of this phone's active flows for the router (never another phone's). */
@@ -884,11 +890,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         } = await import("./rideBooking/rideWhatsApp.service");
         const waForRide = await WhatsappSession.findOne({ phone }).lean();
         const rideDraft = (waForRide as { rideDraft?: { phase?: string } } | null)?.rideDraft;
-        const rideActive =
-            rideDraft &&
-            rideDraft.phase &&
-            rideDraft.phase !== "idle" &&
-            rideDraft.phase !== "done";
+        const rideActive = liveFlow(rideDraft);
         if (
             rideActive ||
             messageLooksLikeRideIntent(text) ||
@@ -1472,7 +1474,9 @@ async function dispatchRoutedTurn(a: {
             .filter(Boolean)
             .join(" ");
     }
-    if (liveFlow(rd) && (route.intent === "ride" || (flowReply && !newOrder && !liveFlow(bd) && !liveFlow(pd)))) {
+    // A store search running right now owns short replies ("haan", "ok") — not an older ride.
+    const searchRunning = Boolean(doc?.pendingSearch?.at && Date.now() - new Date(doc.pendingSearch.at).getTime() < 5 * 60_000);
+    if (liveFlow(rd) && (route.intent === "ride" || (flowReply && !newOrder && !liveFlow(bd) && !liveFlow(pd) && !searchRunning))) {
         const t = route.intent === "otp_code" || route.intent === "order_control" ? canonical() ?? text : rideText;
         const r = await rideTurn(t);
         if (r) return { reply: r.text, legacyGates: false, allowDashboard: false };

@@ -154,7 +154,15 @@ export async function setSwiggyLocation(ctx: BrowserContext, page: Page, address
         await input.fill(q, { timeout: 8000 }).catch(() => undefined);
         const cand = pickFor();
         // Cloud Run + the remote Chrome are slower than a laptop: give the suggestions time.
-        if (await cand.waitFor({ state: "visible", timeout: 10_000 }).then(() => true).catch(() => false)) {
+        if (await cand.waitFor({ state: "visible", timeout: 7000 }).then(() => true).catch(() => false)) {
+            pick = cand;
+            break;
+        }
+        // The landing-page box can take a fill before React hydrates (value set, no suggestion
+        // fetch): type it again with real key events.
+        await input.fill("", { timeout: 4000 }).catch(() => undefined);
+        await input.pressSequentially(q, { delay: 35, timeout: 9000 }).catch(() => undefined);
+        if (await cand.waitFor({ state: "visible", timeout: 8000 }).then(() => true).catch(() => false)) {
             pick = cand;
             break;
         }

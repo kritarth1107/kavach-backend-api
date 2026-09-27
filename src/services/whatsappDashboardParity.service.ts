@@ -871,7 +871,7 @@ function fmtClock12(hhmm: string): string {
 }
 
 /** Short reminder title + warm confirmation (sender's language). Null on model failure. */
-async function reminderWording(text: string, forSomeoneElse: boolean): Promise<{ title: string; reply: string } | null> {
+async function reminderWording(text: string, fromCaregiver: boolean): Promise<{ title: string; reply: string; forSelf: boolean } | null> {
     const { vertexGenerateText, parseJsonLoose, vertexFlashModel } = await import("../clients/vertexGemini.client");
     const raw = await vertexGenerateText({
         model: vertexFlashModel(),
@@ -880,22 +880,25 @@ async function reminderWording(text: string, forSomeoneElse: boolean): Promise<{
             'title = what to do, 2-6 words, imperative, no time/day words (e.g. "Take BP tablet", "Drink water", "Call Priya"); ' +
             "reply = ONE short warm confirmation (max 20 words) in the SAME language/script as the message (English, Hindi or Hinglish), " +
             "one tasteful emoji max, containing the literal placeholder {time} where the time goes, no questions, no 'anything else'." +
-            (forSomeoneElse ? " The sender is setting it for their parent: say you'll remind her/him (not 'you')." : ""),
+            (fromCaregiver
+                ? " The sender is a family caregiver. forSelf = true when the reminder is for the SENDER themself (\"remind me to call the plumber\", \"mujhe yaad dilana\"), false when it is for their parent (\"remind Maa to take her tablet\", \"papa ko yaad dilana\"). If forSelf, say you'll remind YOU; otherwise say you'll remind her/him."
+                : " forSelf = true."),
         responseSchema: {
             type: "OBJECT",
-            properties: { title: { type: "STRING" }, reply: { type: "STRING" } },
-            required: ["title", "reply"],
+            properties: { title: { type: "STRING" }, reply: { type: "STRING" }, forSelf: { type: "BOOLEAN" } },
+            required: ["title", "reply", "forSelf"],
         },
         prompt: text.slice(0, 400),
         timeoutMs: 5000,
         maxOutputTokens: 512,
         thinkingLevel: "low",
     });
-    const p = parseJsonLoose<{ title?: string; reply?: string }>(raw);
+    const p = parseJsonLoose<{ title?: string; reply?: string; forSelf?: boolean }>(raw);
     const title = p?.title?.trim().slice(0, 80) || "";
     const reply = p?.reply?.trim().slice(0, 300) || "";
-    if (!title || !reply.includes("{time}")) return title ? { title, reply: "" } : null;
-    return { title, reply };
+    const forSelf = fromCaregiver ? p?.forSelf === true : true;
+    if (!title || !reply.includes("{time}")) return title ? { title, reply: "", forSelf } : null;
+    return { title, reply, forSelf };
 }
 
 /**
@@ -927,9 +930,11 @@ export async function tryHandleSetReminder(input: {
         // Gemini turns "Can you remind me to take my BP tablet at 9 pm every day?" into a short
         // title ("Take BP tablet") + a warm one-line confirmation in the sender's language.
         const nice = await reminderWording(text, input.actorUserId !== input.recipientUserId).catch(() => null);
+        // Caregiver self-care: "remind me to call the plumber" is THEIR reminder, sent to their WhatsApp.
+        const forUserId = nice?.forSelf ? input.actorUserId : input.recipientUserId;
         const result = await createSaheliReminder({
             familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
+            recipientUserId: forUserId,
             actorUserId: input.actorUserId,
             text: nice?.title || text,
             times: times.length ? times : undefined,
