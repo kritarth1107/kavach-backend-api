@@ -277,6 +277,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             .filter(Boolean)
             .join("\n\n");
         const tryModel = async (m: string) => {
+            Vertex.resetVertexError?.();
             const raw = await vertexGenerateText({ model: m, system: SYSTEM, json: true, responseSchema: RESPONSE_SCHEMA, prompt, timeoutMs: 150_000, maxOutputTokens: 24_576, temperature: 0.2 });
             return parseJsonLoose<Raw>(raw);
         };
@@ -288,6 +289,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             console.warn(`[reflection] ${pro} unusable (${fallbackReason}); falling back to flash`);
             model = vertexFlashModel();
             parsed = await tryModel(model).catch(() => null);
+            if (!parsed?.ops && !parsed?.day) fallbackReason += ` | flash: ${String(Vertex.lastVertexError || "unparseable").slice(0, 160)}`;
         }
         if (parsed) {
             ops = Array.isArray(parsed.ops) ? parsed.ops : [];
@@ -410,7 +412,7 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
     }
     forgetProfileCache(w);
     await applyRetention(w).catch(() => undefined);
-    return { dayKey, model, rows: rows.length, activeDay, judged: judgements.length, ...merged, facts: undefined, questions: newQuestions, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
+    return { dayKey, model, fallbackReason, rows: rows.length, activeDay, judged: judgements.length, ...merged, facts: undefined, questions: newQuestions, activeFacts: merged.facts.filter(isActive).length, actions, deviations: devs, unusual: raised };
 }
 
 /** Nightly: every elder with activity yesterday (or who has a profile). */

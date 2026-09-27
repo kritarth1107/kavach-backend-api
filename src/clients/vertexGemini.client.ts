@@ -34,6 +34,9 @@ export function vertexProModel(): string {
 
 /** Last Vertex failure (status + short body) for secret-gated debug. */
 export let lastVertexError = "";
+export function resetVertexError(): void {
+    lastVertexError = "";
+}
 const thinkingRejected = new Set<string>();
 
 export async function vertexGenerateText(input: {
