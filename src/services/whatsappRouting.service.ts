@@ -47,6 +47,16 @@ function isCaregiver(role: FamilyRole): boolean {
     return role === FamilyRole.PRIMARY_CAREGIVER || role === FamilyRole.CO_CAREGIVER;
 }
 
+/** The ride flow's fixed lines, in Hinglish when she writes Hindi/Hinglish. */
+export function hinglishRideCopy(t: string): string {
+    return t
+        .replace(/^Got the route: from ([\s\S]+?) to ([\s\S]+?)\.\n\nReply \*yes\* if that looks right, or send a new from\/to\. Reply \*cancel\* to stop\.$/, "Raasta: *$1* se *$2* tak.\n\nSahi hai to *haan* likhiye, ya naya from/to bhejiye. Rokna ho to *cancel*.")
+        .replace(/^Okay — cancelled\. Nothing was booked or paid\.$/, "Theek hai, cancel kar diya ✅ Kuch book nahi hua, koi paisa nahi gaya.")
+        .replace(/^Pickup noted: \*([^*]+)\*\. Where to\?$/, "Pickup: *$1*. Kahan jaana hai?")
+        .replace(/^Drop noted: \*([^*]+)\*\. Where from\? Share a pin or type the place\.$/, "Drop: *$1*. Kahan se? WhatsApp *location pin* bhejiye ya jagah ka naam likhiye.")
+        .replace(/^Where from, and where to\?[\s\S]*$/, "Kahan se kahan jaana hai? WhatsApp *location pin* bhejiye, ya jagah ka naam likhiye.");
+}
+
 function outbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
     // WhatsApp bold is *one* star; model markdown (**Rohan**, "## ") would show raw.
     text = String(text ?? "").replace(/\*\*([^*\n]+?)\*\*/g, "*$1*").replace(/^#{1,6}\s+/gm, "");
@@ -1404,9 +1414,12 @@ async function dispatchRoutedTurn(a: {
     };
     const rideTurn = async (t: string) => {
         const { handleRideWhatsAppTurn } = await import("./rideBooking/rideWhatsApp.service");
-        return handleRideWhatsAppTurn({ ...input, text: t });
+        const r = await handleRideWhatsAppTurn({ ...input, text: t });
+        if (r?.text && /hi/i.test(route.language || "")) r.text = hinglishRideCopy(r.text);
+        return r;
     };
     /** Canonical control text for flows that parse short replies. Money guardrail: confirm stays verbatim. */
+    const literalConfirmMod = await import("./commerceAutomation/literalConfirm");
     const canonical = (): string | null => {
         if (route.intent === "otp_code") {
             const code = (route.otpCode || text).replace(/\D/g, "");
@@ -1423,8 +1436,15 @@ async function dispatchRoutedTurn(a: {
                 return "retry";
             case "order_again":
                 return "order again";
+            case "confirm": {
+                // The model heard a yes ("haan wahi wala order kar do"): the flows understand a plain
+                // "haan"; only the literal word "confirm" ever places/signs in.
+                const { isLiteralConfirm, isSoftYes } = literalConfirmMod;
+                if (isLiteralConfirm(text) || isSoftYes(text) || route.addressNickname || route.addressText || route.pickIndex) return text;
+                return "haan";
+            }
             default:
-                return text; // confirm + everything else verbatim
+                return text; // everything else verbatim
         }
     };
 
