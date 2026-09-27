@@ -15,6 +15,7 @@ import type { RideDraft, RidePlace } from "../types";
 import { isLiteralConfirm, isSoftYes } from "../../commerceAutomation/literalConfirm";
 import { isTestPhone } from "../../smokeFixtures.service";
 import { loadRideConfig } from "../rideConfig";
+import { geocodePlace } from "../geoResolve.service";
 import { olaLink, rapidoLink, serviceChain, uberLink, type CityTier, type RideConfig, type Vehicle } from "../rideServices";
 import { OlaMsg, orderRideTypes, pickRideType, type OlaConfirmInfo, type OlaDriverInfo } from "./olaCopy";
 import { FakeOlaDriver, PlaywrightOlaDriver, type OlaDriver } from "./olaDriver";
@@ -109,7 +110,7 @@ function phone10(phone: string): string | null {
 }
 
 function fallbackText(lang: string | null | undefined, p?: RidePlace, d?: RidePlace): string {
-    return OlaMsg.failed(lang, olaLink(p, d), uberLink(p, d));
+    return OlaMsg.failed(lang, olaLink(p, d), uberLink(p, d), rapidoLink(p, d));
 }
 
 /** Run background work after the reply has gone out (acks always arrive first). */
@@ -136,6 +137,16 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
     await saveDraft(input.phone, d);
     log("ola_start", { phone: input.phone.slice(-4), vehicle: draft.vehicle || "cab" });
     later(async () => {
+        // Ola needs map points for both ends; a saved address without them is looked up first.
+        for (const k of ["pickup", "drop"] as const) {
+            const pl = draft[k];
+            if (pl && (pl.lat == null || pl.lng == null)) {
+                const q = pl.address || pl.raw || pl.shortLabel || "";
+                const g = q ? await geocodePlace(q).catch(() => null) : null;
+                if (g?.ok && g.place.lat != null && g.place.lng != null) draft[k] = { ...pl, lat: g.place.lat, lng: g.place.lng };
+                else log("ola_no_point", { end: k, phone: input.phone.slice(-4) });
+            }
+        }
         const url = olaLink(draft.pickup, draft.drop);
         let types: Awaited<ReturnType<OlaDriver["rideTypes"]>> = [];
         try {
@@ -148,12 +159,15 @@ export async function startOlaInChat(input: OlaTurnInput, draft: RideDraft, lang
         const cur = await current(input.phone, token, ["ola_loading"]);
         if (!cur) return;
         if (!types.length) {
+            log("ola_types_empty", { phone: input.phone.slice(-4), hadUrl: Boolean(url) });
             await saveDraft(input.phone, null);
             await dropDriver(input.phone);
             await send(input, fallbackText(lang, draft.pickup, draft.drop));
             return;
         }
         cur.phase = "ola_pick_type";
+        cur.pickup = draft.pickup;
+        cur.drop = draft.drop;
         cur.ola = { ...cur.ola!, types };
         await saveDraft(input.phone, cur);
         const dropName = draft.drop?.shortLabel || draft.drop?.address?.split(",")[0] || (lang && /^hi/i.test(lang) ? "aapki jagah" : "your drop");
@@ -614,9 +628,11 @@ async function onAssigned(doc: IOlaRide, driver: OlaDriverInfo): Promise<void> {
     await send(doc, OlaMsg.assigned(lang, driver, doc.fare));
     log("ola_assigned", { rideId: doc.rideId, hasPlate: Boolean(driver.plate), hasOtp: Boolean(driver.otp) });
     const info: OlaConfirmInfo = { vehicle: doc.vehicle, fare: doc.fare, pickup: doc.pickupLabel, drop: doc.dropLabel };
-    const User = (await import("../../../models/users.model")).default;
-    const u = (await User.findById(doc.recipientUserId).lean().catch(() => null)) as { firstName?: string } | null;
-    const who = u?.firstName || "Your family member";
+    const { getFamilyMembersList } = await import("../../familyMember.service");
+    const elderName = await getFamilyMembersList(doc.familyId, doc.recipientUserId)
+        .then((p) => p.members.find((m) => m.userId === doc.recipientUserId)?.name)
+        .catch(() => undefined);
+    const who = elderName?.trim() || "Your family member";
     const { logActivity } = await import("../../activityLog.service");
     void logActivity({
         familyId: doc.familyId,

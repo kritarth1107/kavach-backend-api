@@ -239,12 +239,13 @@ export const OlaMsg = {
             ? `Aapki Ola ride chalu hai${d.plate ? ` — *${d.plate}*` : ""}${d.otp ? `, OTP *${d.otp}*` : ""}. Cancel karna ho to *cancel* likhiye.`
             : `Your Ola ride is on${d.plate ? ` — *${d.plate}*` : ""}${d.otp ? `, OTP *${d.otp}*` : ""}. Say *cancel* to cancel it.`,
 
-    failed(lang: string | null | undefined, olaLink: string | null, uberLink: string | null): string {
+    failed(lang: string | null | undefined, olaLink: string | null, uberLink: string | null, rapidoLink: string | null = null): string {
         const hi = hiOf(lang);
         return [
             hi ? "Ola par yeh abhi nahi ho paaya 🙏" : "I couldn't get this done on Ola right now 🙏",
             olaLink ? (hi ? `Ola app mein seedha: ${olaLink}` : `Book directly in the Ola app: ${olaLink}`) : "",
             uberLink ? (hi ? `Ya Uber: ${uberLink}` : `Or Uber: ${uberLink}`) : "",
+            rapidoLink ? (hi ? `Ya Rapido: ${rapidoLink}` : `Or Rapido: ${rapidoLink}`) : "",
             hi ? "Jab tak aap app mein confirm nahi karte, kuch book nahi hota." : "Nothing is booked until you confirm in the app.",
         ].filter(Boolean).join("\n");
     },
