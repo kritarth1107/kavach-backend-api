@@ -34,18 +34,33 @@ export function rideDeepLink(draft: RideDraft): string | null {
     return null;
 }
 
-export function rideAppHandoffMessage(draft: RideDraft): string {
+export function rideAppHandoffMessage(draft: RideDraft, lang?: string | null): string {
     const label = providerLabel(draft.provider);
     const link = rideDeepLink(draft);
+    const from = short(placeText(draft.pickup)) || "your pickup";
+    const to = short(placeText(draft.drop)) || "your drop";
+    if (/^hi/i.test(String(lang || ""))) {
+        return [
+            link ? `Aapki ${label} ride tayyar hai — is link par tap kijiye, route pehle se bhara hai:\n${link}` : `${label} app kholkar yeh route daaliye:`,
+            ``,
+            `*${from}* → *${to}*`,
+            ``,
+            `Gaadi chunkar ${label} app mein hi book kijiye — fare wahin booking se pehle dikhega.`,
+            `Main aapke liye ${label} mein sign in nahi kar sakti — woh automatic sign-in ko security puzzle se rok deta hai, isliye koi login code nahi aayega. Abhi kuch book nahi hua hai.`,
+        ].join("\n");
+    }
     return [
-        link
-            ? `Your ${label} ride is ready — tap this link and the route is already filled in:\n${link}`
-            : `Please open the ${label} app and enter this route:`,
+        link ? `Your ${label} ride is ready — tap this link and the route is already filled in:\n${link}` : `Please open the ${label} app and enter this route:`,
         ``,
-        draft.routeSummary || `From ${placeText(draft.pickup) || "your pickup"} to ${placeText(draft.drop) || "your drop"}`,
+        `*${from}* → *${to}*`,
         ``,
         `Pick the car and book it in the ${label} app — you'll see the fare there before booking.`,
         `I can't sign in to ${label} for you: it blocks automated sign-in with a security puzzle, so no login code is sent. Nothing has been booked.`,
     ].join("\n");
 }
 
+function short(s: string): string {
+    const parts = s.split(",").map((x) => x.trim()).filter(Boolean);
+    const v = parts.slice(0, 2).join(", ");
+    return v.length > 60 ? `${v.slice(0, 59)}…` : v;
+}

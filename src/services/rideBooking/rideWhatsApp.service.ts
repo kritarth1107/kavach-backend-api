@@ -424,7 +424,16 @@ export async function handleRideWhatsAppTurn(input: {
         // SMS is ever sent; we never solve captchas. Claiming "Uber may text a code" was false.
         // The live web-login path stays behind RIDE_WEB_LOGIN=on for a future partner API.
         if (draft.phase === "confirming_route" && RIDE_CONFIRM_RE.test(text) && process.env.RIDE_WEB_LOGIN !== "on") {
-            const msg = rideAppHandoffMessage(draft);
+            // Uber's link needs coordinates for the pickup; a saved address without them is geocoded.
+            for (const k of ["pickup", "drop"] as const) {
+                const pl = draft[k];
+                if (pl && (pl.lat == null || pl.lng == null) && (pl.address || pl.raw)) {
+                    const r = await resolveRidePlace({ raw: pl.address || pl.raw }).catch(() => null);
+                    if (r?.lat != null && r?.lng != null) draft[k] = { ...pl, lat: r.lat, lng: r.lng };
+                }
+            }
+            const { lastRouteFor } = await import("../saheliRouter.service");
+            const msg = rideAppHandoffMessage(draft, lastRouteFor(input.phone)?.route?.language);
             await saveDraft(input.phone, null);
             return { text: msg, draft: { ...draft, phase: "done", lastMessage: msg } };
         }
