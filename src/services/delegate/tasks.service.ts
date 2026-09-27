@@ -126,6 +126,8 @@ export async function syncOpenTask(
         const pq = after.productQuery || lines.productQuery || undefined;
         const item = after.item || pq;
         if (cur && sameThing(cur as ISaheliTask, { ...after, productQuery: pq, item })) {
+            // The turn that just offered to finish it didn't move the order on — keep the offer open.
+            if (cur.resumeOfferedAt && now.getTime() - new Date(cur.resumeOfferedAt).getTime() < 5 * 60_000 && after.phase === cur.phase) return cur as ISaheliTask;
             const set: Record<string, unknown> = {
                 flow: after.flow,
                 phase: after.phase,
@@ -204,7 +206,10 @@ export async function resumableTasks(phone: string, now = Date.now()): Promise<I
         .limit(3)
         .lean()
         .catch(() => [])) as ISaheliTask[];
-    return rows.filter((t) => t.phase === "ended_in_chat" ? false : t.lastActiveAt && now - new Date(t.lastActiveAt).getTime() >= STALE_MS());
+    // Stale (left a while ago) — or offered to finish in the last 30 min (her "yes" answers that offer,
+    // even though the offer turn itself touched the task).
+    const justOffered = (t: ISaheliTask) => Boolean(t.resumeOfferedAt) && now - new Date(t.resumeOfferedAt!).getTime() < 30 * 60_000;
+    return rows.filter((t) => t.phase === "ended_in_chat" ? false : justOffered(t) || (t.lastActiveAt && now - new Date(t.lastActiveAt).getTime() >= STALE_MS()));
 }
 
 export function whenIST(d: Date | string | undefined, now = new Date()): string {
