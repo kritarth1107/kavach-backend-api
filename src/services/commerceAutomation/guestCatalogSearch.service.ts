@@ -731,13 +731,18 @@ export function rankGroceryItems<T extends { name: string }>(query: string, item
     const scored = items
         .map((it, idx) => {
             const n = it.name.toLowerCase();
-            const hit = q.filter((t) => new RegExp(`\\b${t.replace(/s$/, "")}`).test(n)).length;
+            // A token matches as a word start, or glued to its neighbour ("rite bite" ↔ "Ritebite Max Protein").
+            const glued = (i: number) =>
+                (i + 1 < q.length && new RegExp(`\\b${q[i]}${q[i + 1].replace(/s$/, "")}`).test(n)) ||
+                (i > 0 && new RegExp(`\\b${q[i - 1]}${q[i].replace(/s$/, "")}`).test(n));
+            const hit = q.filter((t, i) => new RegExp(`\\b${t.replace(/s$/, "")}`).test(n) || glued(i)).length;
             let s = hit / q.length;
             // "rite bite" ↔ "RiteBite": compare with spaces removed too.
             const flat = n.replace(/[^a-z0-9]/g, "");
             if (flat.includes(q.join("").replace(/s$/, ""))) s = Math.max(s, 1);
             const off = n.match(GROCERY_OFFTOPIC_RE)?.[0];
-            if (off && !q.some((t) => off.startsWith(t.replace(/s$/, "")))) s -= 0.8;
+            // "milk" shouldn't pick milk chocolate — but a query that itself names a snack ("protein bar") may.
+            if (off && !q.some((t) => off.startsWith(t.replace(/s$/, ""))) && !GROCERY_OFFTOPIC_RE.test(q.join(" "))) s -= 0.8;
             return { it, s, idx };
         })
         .filter((x) => x.s >= 0.99)
