@@ -560,6 +560,14 @@ async function buildProviderFromConnection(
                     .exec()
                     .catch((err) => console.warn(`[mcp] token persist failed ${partner}:`, err instanceof Error ? err.message : err));
             },
+            onClientInfo: (info) => {
+                void McpConnection.updateOne(
+                    { partner: row.partner, familyId: row.familyId, userId: row.userId },
+                    { $set: { clientInfoEnc: encryptJson(info) } },
+                )
+                    .exec()
+                    .catch((err) => console.warn(`[mcp] client persist failed ${partner}:`, err instanceof Error ? err.message : err));
+            },
         }),
         hasTokens: true,
     };

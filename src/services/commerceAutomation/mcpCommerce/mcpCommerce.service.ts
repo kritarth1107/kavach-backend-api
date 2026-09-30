@@ -213,10 +213,19 @@ async function coordsForPlace(familyId: string, place: Place): Promise<{ lat: nu
 export async function ensureStoreAddress(
     client: Client,
     input: { familyId: string; store: McpStore; place: Place; contact: OrderContact; connectionUserId: string },
+    opts: { fresh?: boolean } = {},
 ): Promise<{ storeAddressId: string; via: "mapping" | "matched" | "created" }> {
     const { familyId, store, place, contact } = input;
     const fp = placeFingerprint(place);
     const key = { familyId, partner: store, placeAddressId: place.addressId, placeFingerprint: fp, connectionUserId: input.connectionUserId };
+    // A saved Home id is enough to search. Listing addresses first was failing the handshake
+    // and the product search never ran.
+    if (!opts.fresh) {
+        const mapped = await McpStoreAddress.findOne(key).lean();
+        if (mapped?.storeAddressId) return { storeAddressId: mapped.storeAddressId, via: "mapping" };
+    } else {
+        await McpStoreAddress.deleteOne(key);
+    }
     const listed = await listStoreAddresses(client, store);
     const mapped = await McpStoreAddress.findOne(key).lean();
     if (mapped) {
@@ -320,55 +329,93 @@ async function contactFor(ctx: McpCtx, userId: string) {
     return resolveOrderContact({ familyId: ctx.familyId, recipientUserId: ctx.recipientUserId, recipientPhone: ctx.recipientPhone, connectionUserId: userId, place: ctx.place });
 }
 
+/** Why a linked-store call failed, without the response body. */
+export function storeFailureKind(message: string): "session" | "auth" | "decrypt" | "no_token" | "network" | "other" {
+    if (isMcpSessionGlitch(message)) return "session";
+    if (isMcpAuthError(message)) return "auth";
+    if (/invalid encrypted payload|unable to authenticate data|AES_SECRET is not configured/i.test(message)) return "decrypt";
+    if (/account not connected/i.test(message)) return "no_token";
+    if (/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|socket hang up|\bnetwork\b/i.test(message)) return "network";
+    return "other";
+}
+
+/** A 401 handshake or a dropped connection is tried again. A rejected token is not. */
+export function storeSearchTries(message: string): number {
+    const kind = storeFailureKind(message);
+    return kind === "session" || kind === "network" ? 3 : 1;
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function searchStore(ctx: McpCtx, store: McpStore, query: string, opts: { restaurantName?: string | null; attempt?: number } = {}): Promise<StoreSearch> {
     let calledSearch = false;
     try {
         return await withFamilyStore(ctx.familyId, store, async (client, userId) => {
             const contact = await contactFor(ctx, userId);
-            const addr = await ensureStoreAddress(client, { familyId: ctx.familyId, store, place: ctx.place, contact, connectionUserId: userId });
-            if (store === "zepto") {
-                await zeptoSelect(client, addr.storeAddressId);
+            const addressInput = { familyId: ctx.familyId, store, place: ctx.place, contact, connectionUserId: userId };
+            const run = async (addr: { storeAddressId: string; via: string }): Promise<StoreSearch> => {
+                if (store === "zepto") {
+                    await zeptoSelect(client, addr.storeAddressId);
+                    calledSearch = true;
+                    const r = await call(client, "search_products", { query });
+                    if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
+                    return { store, hits: parseZeptoSearch(r.text), addressVia: addr.via, calledSearch: true };
+                }
+                if (store === "instamart") {
+                    calledSearch = true;
+                    const r = await call(client, "search_products", { query, addressId: addr.storeAddressId });
+                    if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
+                    return { store, hits: parseInstamartSearch(r.text), addressVia: addr.via, calledSearch: true };
+                }
+                const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+                const want = norm(opts.restaurantName || "");
+                const fromRestaurant = (h: McpPick) => {
+                    const r = norm(h.restaurantName || "");
+                    return Boolean(want && r && (r.includes(want) || want.includes(r.slice(0, 8))));
+                };
+                const menu = async (q: string) => {
+                    const r = await call(client, "search_menu", { query: q, addressId: addr.storeAddressId });
+                    if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
+                    return parseFoodMenu(r.text, 10);
+                };
                 calledSearch = true;
-                const r = await call(client, "search_products", { query });
-                if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
-                return { store, hits: parseZeptoSearch(r.text), addressVia: addr.via, calledSearch: true };
-            }
-            if (store === "instamart") {
-                calledSearch = true;
-                const r = await call(client, "search_products", { query, addressId: addr.storeAddressId });
-                if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
-                return { store, hits: parseInstamartSearch(r.text), addressVia: addr.via, calledSearch: true };
-            }
-            const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
-            const want = norm(opts.restaurantName || "");
-            const fromRestaurant = (h: McpPick) => {
-                const r = norm(h.restaurantName || "");
-                return Boolean(want && r && (r.includes(want) || want.includes(r.slice(0, 8))));
+                let hits = await menu(query || opts.restaurantName || "");
+                if (want) {
+                    let same = hits.filter(fromRestaurant);
+                    if (!same.length && query) same = (await menu(`${opts.restaurantName} ${query}`)).filter(fromRestaurant);
+                    if (same.length) hits = same;
+                }
+                return { store, hits: hits.slice(0, 5), addressVia: addr.via, calledSearch: true };
             };
-            const menu = async (query: string) => {
-                const r = await call(client, "search_menu", { query, addressId: addr.storeAddressId });
-                if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
-                return parseFoodMenu(r.text, 10);
-            };
-            calledSearch = true;
-            let hits = await menu(query || opts.restaurantName || "");
-            if (want) {
-                let same = hits.filter(fromRestaurant);
-                if (!same.length && query) same = (await menu(`${opts.restaurantName} ${query}`)).filter(fromRestaurant);
-                if (same.length) hits = same;
+            let addr = await ensureStoreAddress(client, addressInput);
+            try {
+                return await run(addr);
+            } catch (err) {
+                if (err instanceof McpStoreError && err.code === "address_failed") {
+                    addr = await ensureStoreAddress(client, addressInput, { fresh: true });
+                    return await run(addr);
+                }
+                throw err;
             }
-            return { store, hits: hits.slice(0, 5), addressVia: addr.via, calledSearch: true };
         });
     } catch (err) {
         const message = describeMcpError(err);
-        // MCP session handshake 401 is not a revoked store token. Retry the connected account once.
-        const session = isMcpSessionGlitch(message);
+        const attempt = opts.attempt ?? 0;
+        const transient = storeSearchTries(message) > 1;
         const wrappedSearch = err instanceof McpStoreError && err.code === "search_failed";
-        if (session && (opts.attempt ?? 0) < 1 && (!(err instanceof McpStoreError) || wrappedSearch)) {
-            return searchStore(ctx, store, query, { ...opts, attempt: 1 });
+        // A 401 handshake or a dropped socket is not a dead token. Try the connected account again.
+        if (transient && attempt + 1 < storeSearchTries(message) && (!(err instanceof McpStoreError) || wrappedSearch)) {
+            await sleep(400 * (attempt + 1));
+            const again = await searchStore(ctx, store, query, { ...opts, attempt: attempt + 1 });
+            return { ...again, calledSearch: Boolean(again.calledSearch || calledSearch) };
         }
         let code = err instanceof McpStoreError ? err.code : "search_failed";
-        if (isMcpAuthError(message) && code !== "not_connected" && code !== "unserviceable") code = "auth_expired";
+        const kind = storeFailureKind(message);
+        if (kind === "decrypt") code = "auth_expired";
+        else if (kind === "no_token") code = "not_connected";
+        else if (isMcpAuthError(message) && code !== "not_connected" && code !== "unserviceable") code = "auth_expired";
         return { store, hits: [], error: code, message, calledSearch };
     }
 }

@@ -5,7 +5,7 @@
  * 3. "retry" after a stuck Instamart order stays on that order.
  */
 import assert from "node:assert/strict";
-import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
@@ -169,6 +169,16 @@ t("Hindi protein bar is searched in English, then RiteBite, before a failure lin
     assert.match(skipped, /didn't search/);
     assert.doesNotMatch(skipped, /didn't answer/);
     assert.doesNotMatch(skipped, /I checked/);
+    assert.equal(catalogRetryNeeded([
+        { store: "instamart", error: "search_failed", hits: 0, calledSearch: false },
+        { store: "zepto", error: "search_failed", hits: 0, calledSearch: false },
+    ]), false);
+    assert.equal(storeFailureKind(SESSION), "session");
+    assert.equal(storeSearchTries(SESSION), 3);
+    assert.equal(storeFailureKind("fetch failed"), "network");
+    assert.equal(storeSearchTries("invalid_grant: refresh token revoked"), 1);
+    assert.equal(storeFailureKind("Instamart account not connected. Connect in Integrations first."), "no_token");
+    assert.equal(storeFailureKind("Invalid encrypted payload"), "decrypt");
 });
 
 t("retry after the stores didn't answer reruns that search", () => {

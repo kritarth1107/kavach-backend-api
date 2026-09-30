@@ -40,6 +40,8 @@ export function catalogRetryNeeded(results: StoreOutcome[]): boolean {
     if (!results.length || results.some((r) => r.hits > 0)) return false;
     if (results.every((r) => r.error === "auth_expired" || r.error === "not_connected")) return false;
     if (results.every((r) => r.error === "unserviceable" || r.error === "no_address_coords")) return false;
+    // Another product name cannot help when the account was never searched.
+    if (results.every((r) => r.error && r.calledSearch === false)) return false;
     return true;
 }
 

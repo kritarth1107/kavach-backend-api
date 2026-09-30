@@ -3386,7 +3386,7 @@ async function mcpSearchCore(
     hop = 0,
     lead = "",
 ): Promise<WorkResult> {
-    const { searchStore, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
+    const { searchStore, MCP_STORE_LABEL, storeFailureKind } = await import("./mcpCommerce/mcpCommerce.service");
     const ctx = { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place };
     const queries = catalogSearchQueries(q);
     const t0 = Date.now();
@@ -3426,7 +3426,7 @@ async function mcpSearchCore(
             lead,
         );
         if (failure) {
-            console.warn(`[mcp-order] linked search failed (no guest website):`, results.map((r) => `${r.store}:${r.error}:searched=${Boolean(r.calledSearch)}`).join(" | "));
+            console.warn(`[mcp-order] linked search failed (no guest website):`, results.map((r) => `${r.store}:${r.error}:searched=${Boolean(r.calledSearch)}:kind=${storeFailureKind(r.message || "")}`).join(" | "));
             await saveIfCurrent(input.phone, null, token);
             return {
                 text: failure,
