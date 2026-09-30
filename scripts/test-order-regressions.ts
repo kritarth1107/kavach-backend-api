@@ -6,9 +6,10 @@
  */
 import assert from "node:assert/strict";
 import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
-import { applyFaithfulHits, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
-import { bindLatestQuestion, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
-import { formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
+import { applyFaithfulHits, catalogSearchQueries, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
+import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
+import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
+import { isLiteralConfirm } from "../src/services/commerceAutomation/literalConfirm";
 
 let n = 0;
 const t = (name: string, fn: () => void) => {
@@ -43,11 +44,12 @@ t("Instamart and Zepto are both searched when both are connected", () => {
 
 t("session failure on both linked stores stays on those accounts", () => {
     const results = [
-        { store: "instamart", error: "search_failed", hits: 0 },
-        { store: "zepto", error: "search_failed", hits: 0 },
+        { store: "instamart", error: "search_failed", hits: 0, calledSearch: true },
+        { store: "zepto", error: "search_failed", hits: 0, calledSearch: true },
     ];
     assert.equal(linkedFailurePlan(results).kind, "retry_linked");
     const text = formatLinkedFailure(results, (s) => (s === "zepto" ? "Zepto" : "Instamart"), "")!;
+    assert.match(text, /didn't answer/);
     assert.match(text, /Instamart/);
     assert.match(text, /Zepto/);
     assert.match(text, /retry/i);
@@ -131,6 +133,56 @@ t("retry after a stuck Instamart order resumes that order", () => {
     const pick = bindLatestQuestion("1", { browserPhase: "awaiting_sku_confirm", browserAt: 5 });
     assert.equal(pick?.control, "pick");
     assert.equal(pick?.pickIndex, 1);
+});
+
+t("Hindi protein bar is searched in English, then RiteBite, before a failure line", () => {
+    assert.deepEqual(catalogSearchQueries("प्रोटीन बार"), ["protein bar", "RiteBite Max Protein"]);
+    assert.equal(catalogRetryNeeded([
+        { store: "instamart", error: "search_failed", hits: 0, calledSearch: true },
+        { store: "zepto", error: "search_failed", hits: 0, calledSearch: true },
+    ]), true);
+    assert.equal(catalogRetryNeeded([
+        { store: "instamart", error: null, hits: 0, calledSearch: true },
+        { store: "zepto", error: null, hits: 0, calledSearch: true },
+    ]), true);
+    assert.equal(catalogRetryNeeded([
+        { store: "instamart", error: "auth_expired", hits: 0 },
+        { store: "zepto", error: "auth_expired", hits: 0 },
+    ]), false);
+    const empty = formatLinkedFailure(
+        [
+            { store: "instamart", error: null, hits: 0, calledSearch: true },
+            { store: "zepto", error: null, hits: 0, calledSearch: true },
+        ],
+        (s) => s,
+        "",
+    );
+    assert.equal(empty, null);
+    const skipped = formatLinkedFailure(
+        [
+            { store: "instamart", error: "search_failed", hits: 0, calledSearch: false },
+            { store: "zepto", error: "search_failed", hits: 0, calledSearch: false },
+        ],
+        (s) => (s === "zepto" ? "Zepto" : "Instamart"),
+        "",
+    )!;
+    assert.match(skipped, /didn't search/);
+    assert.doesNotMatch(skipped, /didn't answer/);
+    assert.doesNotMatch(skipped, /I checked/);
+});
+
+t("retry after the stores didn't answer reruns that search", () => {
+    assert.equal(bindLatestQuestion("retry", {}), null);
+    assert.equal(bindOfferReply("retry", "protein bar"), "retry");
+    assert.equal(bindOfferReply("yes", "protein bar"), "confirm");
+    assert.equal(bindOfferReply("retry", null), null);
+    assert.equal(bindOfferReply("what was my TSH", "protein bar"), null);
+});
+
+t("Ha does not place an order; only confirm does", () => {
+    assert.equal(isLiteralConfirm("Ha"), false);
+    assert.equal(isLiteralConfirm("yes"), false);
+    assert.equal(isLiteralConfirm("confirm"), true);
 });
 
 console.log(`all ${n} passed`);

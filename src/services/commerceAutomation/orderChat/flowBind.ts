@@ -59,3 +59,12 @@ export function bindLatestQuestion(
     if (!phaseAcceptsShortReply(newest.phase, parsed.control)) return null;
     return { control: parsed.control, pickIndex: parsed.pickIndex, owner: newest.owner };
 }
+
+/** "retry" / "yes" / "cancel" after "the stores didn't answer" reruns that search, not the care record. */
+export function bindOfferReply(text: string, offerQuery: string | null | undefined): ShortControl | null {
+    if (!offerQuery) return null;
+    const parsed = parseShortReply(text);
+    if (!parsed) return null;
+    if (parsed.control === "retry" || parsed.control === "cancel" || parsed.control === "confirm") return parsed.control;
+    return null;
+}

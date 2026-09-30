@@ -304,7 +304,15 @@ async function zeptoSelect(client: Client, storeAddressId: string): Promise<void
 
 // ── Search ──────────────────────────────────────────────────────────────────
 
-export type StoreSearch = { store: McpStore; hits: McpPick[]; addressVia?: string; error?: McpStoreError["code"]; message?: string };
+export type StoreSearch = {
+    store: McpStore;
+    hits: McpPick[];
+    addressVia?: string;
+    error?: McpStoreError["code"];
+    message?: string;
+    /** True only after search_products / search_menu was called. A failed handshake is not a search. */
+    calledSearch?: boolean;
+};
 
 export type McpCtx = { familyId: string; recipientUserId: string; recipientPhone: string; place: Place };
 
@@ -313,20 +321,23 @@ async function contactFor(ctx: McpCtx, userId: string) {
 }
 
 export async function searchStore(ctx: McpCtx, store: McpStore, query: string, opts: { restaurantName?: string | null; attempt?: number } = {}): Promise<StoreSearch> {
+    let calledSearch = false;
     try {
         return await withFamilyStore(ctx.familyId, store, async (client, userId) => {
             const contact = await contactFor(ctx, userId);
             const addr = await ensureStoreAddress(client, { familyId: ctx.familyId, store, place: ctx.place, contact, connectionUserId: userId });
             if (store === "zepto") {
                 await zeptoSelect(client, addr.storeAddressId);
+                calledSearch = true;
                 const r = await call(client, "search_products", { query });
                 if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
-                return { store, hits: parseZeptoSearch(r.text), addressVia: addr.via };
+                return { store, hits: parseZeptoSearch(r.text), addressVia: addr.via, calledSearch: true };
             }
             if (store === "instamart") {
+                calledSearch = true;
                 const r = await call(client, "search_products", { query, addressId: addr.storeAddressId });
                 if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
-                return { store, hits: parseInstamartSearch(r.text), addressVia: addr.via };
+                return { store, hits: parseInstamartSearch(r.text), addressVia: addr.via, calledSearch: true };
             }
             const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
             const want = norm(opts.restaurantName || "");
@@ -339,13 +350,14 @@ export async function searchStore(ctx: McpCtx, store: McpStore, query: string, o
                 if (r.isError) throw new McpStoreError("search_failed", r.text.slice(0, 160));
                 return parseFoodMenu(r.text, 10);
             };
+            calledSearch = true;
             let hits = await menu(query || opts.restaurantName || "");
             if (want) {
                 let same = hits.filter(fromRestaurant);
                 if (!same.length && query) same = (await menu(`${opts.restaurantName} ${query}`)).filter(fromRestaurant);
                 if (same.length) hits = same;
             }
-            return { store, hits: hits.slice(0, 5), addressVia: addr.via };
+            return { store, hits: hits.slice(0, 5), addressVia: addr.via, calledSearch: true };
         });
     } catch (err) {
         const message = describeMcpError(err);
@@ -357,7 +369,7 @@ export async function searchStore(ctx: McpCtx, store: McpStore, query: string, o
         }
         let code = err instanceof McpStoreError ? err.code : "search_failed";
         if (isMcpAuthError(message) && code !== "not_connected" && code !== "unserviceable") code = "auth_expired";
-        return { store, hits: [], error: code, message };
+        return { store, hits: [], error: code, message, calledSearch };
     }
 }
 

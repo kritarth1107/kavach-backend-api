@@ -7,8 +7,8 @@
  */
 import { isLiteralConfirm, isSoftYes, signInConfirmNudge } from "./literalConfirm";
 import { browserPhaseResumesOnRetry } from "./orderChat/flowBind";
-import { applyFaithfulHits, brandLineOf, rewriteProductQuery } from "./orderChat/queryRewrite";
-import { formatLinkedFailure, linkedGroceryTargets } from "./orderChat/searchPolicy";
+import { applyFaithfulHits, brandLineOf, catalogSearchQueries, rewriteProductQuery } from "./orderChat/queryRewrite";
+import { catalogRetryNeeded, formatLinkedFailure, linkedGroceryTargets } from "./orderChat/searchPolicy";
 import WhatsappSession from "../../models/whatsappSession.model";
 import type { SaheliRoute } from "../saheliRouter.service";
 import { FamilyRole } from "../../types/family.types";
@@ -2898,10 +2898,11 @@ async function startRoutedSearchCore(
     route: Pick<SaheliRoute, "addressNickname" | "addressKind" | "addressText"> | null | undefined,
     out: { lead: string },
 ): Promise<RoutedCommerceResult> {
-    const q = rewriteProductQuery(query, rawText, {
+    const rewritten = rewriteProductQuery(query, rawText, {
         priorQuery: draft?.productQuery || draft?.dishQuery || null,
         shownNames: (draft?.catalogOptions || []).map((o) => o.name),
-    }).trim().slice(0, 80) || query.trim().slice(0, 80);
+    }).trim();
+    const q = (catalogSearchQueries(rewritten)[0] || rewritten || query).trim().slice(0, 80);
     if (q) rememberAsk(input.phone, { query: q, category, partner: partner || undefined });
     {
         const hit = detectBlockedItem(q) || detectBlockedItem(restaurantName);
@@ -3387,18 +3388,30 @@ async function mcpSearchCore(
 ): Promise<WorkResult> {
     const { searchStore, MCP_STORE_LABEL } = await import("./mcpCommerce/mcpCommerce.service");
     const ctx = { familyId: input.familyId, recipientUserId: input.recipientUserId, recipientPhone: input.phone, place };
+    const queries = catalogSearchQueries(q);
     const t0 = Date.now();
-    const results = await Promise.all(stores.map((s) => searchStore(ctx, s, q, { restaurantName })));
+    let results = await Promise.all(stores.map((s) => searchStore(ctx, s, queries[0] || q, { restaurantName })));
+    for (let i = 1; i < queries.length && catalogRetryNeeded(results.map((r) => ({ store: r.store, error: r.error || null, hits: r.hits.length, calledSearch: r.calledSearch }))); i++) {
+        const more = await Promise.all(stores.map((s) => searchStore(ctx, s, queries[i]!, { restaurantName })));
+        if (more.some((r) => r.hits.length)) {
+            results = more;
+            break;
+        }
+        const prevReached = results.some((r) => r.calledSearch && !r.error);
+        if (!prevReached && more.some((r) => r.calledSearch)) results = more;
+    }
     void logActivity({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
         kind: "order_step",
+        severity: results.some((r) => r.hits.length) ? "info" : "warn",
         title: `Linked-account search: ${stores.map((s) => MCP_STORE_LABEL[s]).join(" + ")} — "${q}"`,
         data: {
             source: "mcp",
             ms: Date.now() - t0,
-            results: results.map((r) => ({ store: r.store, hits: r.hits.length, error: r.error || null, addressVia: r.addressVia || null, message: r.message || null })),
+            queries,
+            results: results.map((r) => ({ store: r.store, hits: r.hits.length, error: r.error || null, calledSearch: Boolean(r.calledSearch), addressVia: r.addressVia || null, message: r.message || null })),
         },
     });
     // Reconnect only when a live call rejected the token. Other stores' hits still show.
@@ -3408,14 +3421,17 @@ async function mcpSearchCore(
     const rawCount = hits.length;
     if (!rawCount) {
         const failure = formatLinkedFailure(
-            results.map((r) => ({ store: r.store, error: r.error || null, hits: r.hits.length })),
+            results.map((r) => ({ store: r.store, error: r.error || null, hits: r.hits.length, calledSearch: r.calledSearch })),
             (s) => MCP_STORE_LABEL[s as McpStore] || s,
             lead,
         );
         if (failure) {
-            console.warn(`[mcp-order] linked search failed (no guest website):`, results.map((r) => `${r.store}:${r.error}:${r.message}`).join(" | "));
+            console.warn(`[mcp-order] linked search failed (no guest website):`, results.map((r) => `${r.store}:${r.error}:searched=${Boolean(r.calledSearch)}`).join(" | "));
             await saveIfCurrent(input.phone, null, token);
-            return { text: failure };
+            return {
+                text: failure,
+                offer: { query: queries[0] || q, category: isFood ? "food" : "grocery", restaurantName: restaurantName || undefined },
+            };
         }
     }
     if (!isFood) {
@@ -3643,8 +3659,8 @@ async function handleMcpConfirmTurn(
         });
         return { text: "Okay, cancelled ✅ Nothing was ordered." };
     }
-    // Money guardrail: only the literal word places the order.
-    if (!/^confirm[.!]*$/i.test(t)) {
+    // Money guardrail: only the literal word places the order. Cash on delivery is the only payment.
+    if (!isLiteralConfirm(t)) {
         if (t.split(/\s+/).length > 4) return null;
         return { text: `To place it, reply exactly *confirm* — or *cancel*.\n\n${mcpCardCopy(card)}`, draft };
     }

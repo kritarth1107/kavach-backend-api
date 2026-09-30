@@ -102,6 +102,34 @@ function contextBrand(priorQuery: string | null | undefined, shownNames: string[
  * Search string: brand + line + flavour + size.
  * The router query is kept when this message is a new product (amul milk stays amul milk).
  */
+/** Hindi catalog words the stores don't search. Everything else in Devanagari is dropped, not guessed. */
+export function latinCatalogQuery(query: string): string {
+    let t = String(query || "");
+    t = t.replace(/प्रोटीन\s*बार/gi, "protein bar");
+    t = t.replace(/प्रोटीन/gi, "protein");
+    t = t.replace(/[\u0900-\u097F]+/g, " ");
+    return fixOrderTypos(t).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Queries to send a linked store, in order.
+ * A Hindi protein ask is searched as "protein bar", then once as "RiteBite Max Protein"
+ * if that first search does not come back with items.
+ */
+export function catalogSearchQueries(query: string): string[] {
+    const raw = String(query || "").trim();
+    if (!raw) return [];
+    const latin = latinCatalogQuery(raw);
+    const first = (latin || raw).slice(0, 80);
+    const out = [first];
+    if (/protein|प्रोटीन/i.test(`${raw} ${first}`)) {
+        for (const extra of ["protein bar", "RiteBite Max Protein"]) {
+            if (!out.some((x) => x.toLowerCase() === extra.toLowerCase())) out.push(extra);
+        }
+    }
+    return out;
+}
+
 export function rewriteProductQuery(
     routerQuery: string,
     utterance: string,

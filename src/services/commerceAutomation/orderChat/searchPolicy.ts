@@ -16,7 +16,7 @@ export function linkedGroceryTargets(
     return wanted.filter((s) => enabled.includes(s));
 }
 
-export type StoreOutcome = { store: string; error?: string | null; hits: number };
+export type StoreOutcome = { store: string; error?: string | null; hits: number; calledSearch?: boolean };
 
 export type LinkedFailurePlan =
     | { kind: "show" }
@@ -35,6 +35,14 @@ export function linkedFailurePlan(results: StoreOutcome[]): LinkedFailurePlan {
     return { kind: "mixed", revoked, failed, empty };
 }
 
+/** Another catalog query is worth it when the stores failed or came back empty — not when the token or the address is the problem. */
+export function catalogRetryNeeded(results: StoreOutcome[]): boolean {
+    if (!results.length || results.some((r) => r.hits > 0)) return false;
+    if (results.every((r) => r.error === "auth_expired" || r.error === "not_connected")) return false;
+    if (results.every((r) => r.error === "unserviceable" || r.error === "no_address_coords")) return false;
+    return true;
+}
+
 /** Chat line when every linked store failed. Null means show hits or a genuine not-found. */
 export function formatLinkedFailure(
     results: StoreOutcome[],
@@ -45,6 +53,10 @@ export function formatLinkedFailure(
     if (plan.kind === "show") return null;
     if (plan.kind === "retry_linked") {
         const names = results.map((r) => label(r.store)).join(" and ");
+        const searched = results.some((r) => r.calledSearch);
+        if (!searched) {
+            return `I couldn't reach the linked ${names} accounts, so I didn't search them — nothing was ordered.\nReply *retry* to search the linked accounts, or *cancel*.`;
+        }
         return `I checked ${names} on the linked accounts. They didn't answer just now — nothing was ordered.\nReply *retry* to try the linked accounts again, or *cancel*.`;
     }
     if (plan.kind === "reconnect") return reconnectLine;

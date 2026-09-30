@@ -1320,7 +1320,7 @@ async function dispatchRoutedTurn(a: {
     // yes / confirm / 1 / retry / cancel bind to the newest open order question, even when the
     // model files them as chat. A stuck Instamart order must not fall through to the care record.
     {
-        const { bindLatestQuestion } = await import("./commerceAutomation/orderChat/flowBind");
+        const { bindLatestQuestion, bindOfferReply } = await import("./commerceAutomation/orderChat/flowBind");
         const stamp = (x: unknown) =>
             new Date(((x as { savedAt?: string | Date; at?: string | Date } | null)?.savedAt ?? (x as { at?: string | Date } | null)?.at ?? 0) as string).getTime() || 0;
         const bound = bindLatestQuestion(text, {
@@ -1333,6 +1333,13 @@ async function dispatchRoutedTurn(a: {
         });
         if (bound && (bound.owner === "browser" || !liveFlow(bd))) {
             route = { ...route, intent: "order_control", control: bound.control, pickIndex: bound.pickIndex, productQuery: null };
+        } else if (doc?.pendingOffer?.query) {
+            const offerAt = stamp(doc.pendingOffer);
+            const rideAt = stamp(rd);
+            if (!liveFlow(rd) || offerAt >= rideAt) {
+                const control = bindOfferReply(text, doc.pendingOffer.query);
+                if (control) route = { ...route, intent: "order_control", control, pickIndex: null, productQuery: null };
+            }
         }
     }
     const commerce = COMMERCE_INTENTS.has(route.intent);
