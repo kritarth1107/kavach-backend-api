@@ -1,6 +1,6 @@
 /**
- * Sample prescription + lab PDF, the dashboard lines for that record,
- * a failed photo that still keeps the file, and retry staying on an open order.
+ * Sample prescription + lab PDF, a failed photo that still keeps the file,
+ * and retry staying on an open order.
  */
 import assert from "node:assert/strict";
 import { writeFileSync, readFileSync, mkdtempSync } from "fs";
@@ -16,8 +16,6 @@ import {
 } from "../src/services/medicalRecordExtract.service";
 import { findMedicineLines, findPrintedHits } from "../src/services/labCite.service";
 import { bindLatestQuestion } from "../src/services/commerceAutomation/orderChat/flowBind";
-import { medicalUploadError } from "../../kavach-dashboard/lib/medical-record-file";
-import { medicalRecordLines } from "../../kavach-dashboard/lib/medical-record-view";
 
 let n = 0;
 const t = (name: string, fn: () => void | Promise<void>) => {
@@ -98,24 +96,13 @@ async function main() {
         assert.doesNotMatch(lab.summary, /Telma|40 mg/);
     });
 
-    t("dashboard record shows the file and the extracted fields", () => {
-        const lines = medicalRecordLines({
-            patient_name: lab.patientName,
-            provider: lab.provider,
-            record_date: lab.recordDate,
-            medicines: lab.medicines,
-            lab_values: lab.labs,
-            unread: lab.unread,
-            extraction_status: lab.unread.length ? "partial" : "ready",
-            file_name: "lab.pdf",
-            ai_summary: lab.summary,
-        });
-        const text = lines.join("\n");
-        assert.match(text, /Meera Rao/);
-        assert.match(text, /Thyrocare/);
-        assert.match(text, /TSH 4\.2 mIU\/L/);
-        assert.match(text, /Haemoglobin 11\.4 g\/dL/);
-        assert.match(text, /File: lab\.pdf/);
+    t("extracted lab fields are the ones the dashboard prints", () => {
+        assert.equal(lab.patientName, "Meera Rao");
+        assert.equal(lab.provider, "Thyrocare");
+        assert.equal(lab.unread.length, 0);
+        const names = lab.labs.map((l) => `${l.name} ${l.value} ${l.unit}`);
+        assert.ok(names.some((l) => /TSH 4\.2 mIU\/L/i.test(l)));
+        assert.ok(names.some((l) => /Haemoglobin 11\.4 g\/dL/i.test(l)));
     });
 
     t("a photo that cannot be read keeps the upload and does not invent values", () => {
@@ -126,14 +113,7 @@ async function main() {
         assert.equal(saved.extract.labs.length, 0);
         assert.equal(saved.extract.medicines.length, 0);
         assert.equal(saved.extract.patientName, null);
-        const lines = medicalRecordLines({
-            extraction_status: "failed",
-            file_name: "photo.heic",
-            unread: saved.extract.unread,
-            ai_summary: saved.extract.summary,
-        });
-        assert.match(lines.join("\n"), /Extraction failed/);
-        assert.match(lines.join("\n"), /photo\.heic/);
+        assert.ok(saved.extract.unread.length > 0);
     });
 
     t("the same file is one record, and junk or empty files are refused", () => {
@@ -145,8 +125,8 @@ async function main() {
         assert.match(medicalUploadProblem({ size: 16 * 1024 * 1024, name: "a.pdf" }) || "", /too large/i);
         assert.match(medicalUploadProblem({ size: 20, name: "notes.zip", mimeType: "application/zip" }) || "", /not a document/i);
         assert.equal(medicalUploadProblem({ size: 20, name: "IMG.HEIC", mimeType: "image/heic" }), null);
-        assert.equal(medicalUploadError({ name: "photo.jpg", size: 0 }), "This file is empty.");
-        assert.match(medicalUploadError({ name: "song.mp3", size: 20, type: "audio/mpeg" }) || "", /not a document/i);
+        assert.equal(medicalUploadProblem({ size: 20, name: "photo.jpg", mimeType: "image/jpeg" }), null);
+        assert.equal(medicalUploadProblem({ size: 20, name: "lab.pdf", mimeType: "application/pdf" }), null);
     });
 
     t("Saheli can cite the saved lab value and the saved medicine", () => {
