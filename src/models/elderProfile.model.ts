@@ -111,7 +111,7 @@ export interface IElderProfile {
     alerts?: UnusualAlert[];
     questions?: CaregiverQuestion[];
     labels?: FactLabel[];
-    tuning: { maxOptions?: number; preferredNudgeHour?: number; addressAs?: string; language?: string };
+    tuning: { maxOptions?: number; preferredNudgeHour?: number; addressAs?: string; language?: string; avoidMaa?: boolean };
     retentionDays: number;
     lastReflectedDay?: string;
     lastReflection?: { at: Date; model: string; added: number; reinforced: number; faded: number; actions: number; contradicted?: number; questions?: number; decayed?: number; classified?: number; readded?: number; fallbackReason?: string };

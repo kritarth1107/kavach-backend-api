@@ -83,8 +83,8 @@ export function parseFromTo(text: string): { pickup?: string; drop?: string; bar
     }
 
     // Bare place name (e.g. "ritz Carlton bangalore") when mid-slot.
-    // A time ("kal subah", "chahiye abhi") or "confirm" is not a place.
-    if (cleaned.length >= 2 && !/^(yeah|yes|haan|ha|ok|okay|sure|yep)$/i.test(cleaned) && !isClockPhrase(cleaned)) {
+    // A time ("kal subah", "chahiye abhi"), "confirm", or a chat reply is not a place.
+    if (cleaned.length >= 2 && !/^(yeah|yes|haan|ha|ok|okay|sure|yep)$/i.test(cleaned) && !isClockPhrase(cleaned) && !isChatNotAPlace(cleaned)) {
         return { bare: cleaned };
     }
     return {};
@@ -101,6 +101,11 @@ export function isBareAffirmation(text: string): boolean {
  */
 const CLOCK_WORD =
     /^(?:kal|aaj|parson|parso|subah|shaam|dopahar|raat|morning|evening|afternoon|night|tomorrow|today|tonight|abhi|now|early|late|chahiye|chahie|chaahiye|mujhe|mere|mera|meri|liye|ek|ka|ki|ke|ko|wala|wali|please|pls|for|me|a|an|the|want|need|i|my|confirm|confirmed|cancel|stop|haan|ha|yes|ok|okay|yep|yeah|sure)$/i;
+
+/** A name request, a check-in, or a medicine complaint is not a pickup or a drop. */
+export function isChatNotAPlace(s: string): boolean {
+    return /don'?t call me maa|dont call me maa|how are you|kaisi ho|kaise ho|kaisa hai|khana kha|kha liya|remind(?:ed)? me|why did (?:you|u) not remind/i.test(s || "");
+}
 
 export function isClockPhrase(s: string): boolean {
     const words = String(s || "")

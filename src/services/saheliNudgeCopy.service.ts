@@ -20,6 +20,11 @@ export function buildCareNudgeText(input: {
     const hindi = isHindiFamily(input.preferredLanguage ?? "english");
     const who = input.addressAs?.trim() || input.displayName;
 
+    if (input.nudgeKind === "dose_due") {
+        return hindi
+            ? `${who}, abhi ${input.title} ka time hai (${input.time}). Kripya abhi le lijiye.`
+            : `${who}, it's time for ${input.title} (${input.time}). Please take it now.`;
+    }
     if (input.nudgeKind === "pre_reminder") {
         return hindi
             ? `${who}, thodi der mein ${input.title} ka time ho jayega (${input.time}) 🙂`

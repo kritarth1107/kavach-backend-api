@@ -246,6 +246,8 @@ export async function deliverSaheliOutreach(payload: {
             );
         }
         reply = result.reply.trim();
+        const { groundOutreachReply } = await import("./saheliFactGuard.service");
+        reply = groundOutreachReply(reply, [learned, careContextBase, memoryHint || ""].filter(Boolean).join("\n"));
         topicBucket = result.topic_bucket ?? topicBucket;
         topicHint = followUp ? topicHint : result.topic_hint;
     } catch (err) {

@@ -7,7 +7,7 @@
 export type ShortControl = "retry" | "cancel" | "confirm" | "pick";
 
 const RETRY_PHASES = new Set(["running", "awaiting_otp", "awaiting_confirm", "awaiting_sku_confirm", "awaiting_mcp_confirm"]);
-const CONFIRM_PHASES = new Set(["awaiting_confirm", "awaiting_mcp_confirm", "awaiting_sku_confirm", "awaiting_address_confirm", "running"]);
+const CONFIRM_PHASES = new Set(["awaiting_confirm", "awaiting_mcp_confirm", "awaiting_sku_confirm", "awaiting_address_confirm", "running", "confirm_basket"]);
 const PICK_PHASES = new Set(["awaiting_sku_confirm", "awaiting_mcp_confirm", "awaiting_restaurant_pick", "awaiting_address_confirm"]);
 
 export function parseShortReply(text: string): { control: ShortControl; pickIndex: number | null } | null {

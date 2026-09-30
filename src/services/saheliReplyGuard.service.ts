@@ -5,6 +5,7 @@ import {
     messageIsCasualOffer,
 } from "./saheliElderFacts.service";
 import type { SaheliReplySource } from "./whatsappWebhookLog.service";
+import { finishElderReply } from "./saheliFactGuard.service";
 
 const GENERIC_ORDER_PATTERNS = [
     /tell me what to order/i,
@@ -177,5 +178,19 @@ export async function guardElderReply(
         }
     }
 
+    const { profileTuning, rememberDoNotCallMaa } = await import("./profile/elderProfile.service");
+    const { refusesMaa } = await import("./saheliFactGuard.service");
+    if (refusesMaa(input.message)) {
+        await rememberDoNotCallMaa({ familyId: input.familyId, recipientUserId: input.recipientUserId }).catch(() => undefined);
+    }
+    const tuning = await profileTuning({ familyId: input.familyId, recipientUserId: input.recipientUserId }).catch(() => undefined);
+    const grounded = finishElderReply({
+        inbound: input.message,
+        draft: reply,
+        refusedMaa: Boolean(tuning?.avoidMaa) || refusesMaa(input.message),
+    });
+    if (grounded !== reply) {
+        return { reply: grounded, replySource: "scheduleFacts", orderFlow: orderFlow ?? null, guardAction: "fact_guard" };
+    }
     return { reply, replySource, orderFlow: orderFlow ?? null };
 }

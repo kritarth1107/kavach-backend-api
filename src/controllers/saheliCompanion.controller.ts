@@ -273,6 +273,8 @@ export async function getCompanionActivity(
                     messagePreview: n.messagePreview,
                     delivered: n.delivered,
                     channel: n.channel,
+                    reason: n.reason ?? null,
+                    doseStatus: n.delivered ? "sent" : n.terminal || n.reason === "no_valid_recipient" ? "skipped" : "failed",
                     createdAt: n.createdAt?.toISOString?.() ?? null,
                 })),
                 escalations: escalations.map((e) => ({

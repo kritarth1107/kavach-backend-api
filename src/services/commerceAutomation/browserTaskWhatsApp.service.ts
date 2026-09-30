@@ -556,7 +556,8 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
         }
     }
 
-    if (!input.routed && draft && ACTIVE_ORDER_PHASES.has(draft.phase)) {
+    const retryNow = Boolean(draft && browserPhaseResumesOnRetry(draft.phase) && /^(retry|try\s*again|again)$/i.test(text));
+    if (!retryNow && !input.routed && draft && ACTIVE_ORDER_PHASES.has(draft.phase)) {
         const label = partnerLabel(String(draft.partner || "the site"));
         // Address / delivery messages modify THIS order (never a product search or partner switch).
         const addrMention = classifyAddressMention(text, home?.full ?? draft.addressLabel);
@@ -591,10 +592,11 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
             data: { phase: draft.phase, intent: intr.intent, source: intr.source },
         });
         if (startsOtherOrder && draft.phase !== "awaiting_sku_confirm" && draft.phase !== "awaiting_restaurant_pick") {
-            return {
-                text: `Your *${label}* order is still in progress 🛒 — reply *cancel* first if you'd like to start a new one.`,
-                draft,
-            };
+            await saveDraft(input.phone, null);
+            const next = await handleBrowserTaskWhatsAppTurn({ ...input, text });
+            const note = `(I've dropped the ${label} order — nothing was ordered.)`;
+            if (next?.text) return { text: `${note}\n\n${next.text}`, draft: next.draft };
+            return { text: note };
         }
         if (intr.intent === "unrelated" && !startsOtherOrder) return null;
         if (intr.intent === "status") {
@@ -2860,7 +2862,22 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
         case "order_new":
         case "restaurant_list": {
             if (busy && draft) {
-                return { text: `Your *${label}* order is still in progress 🛒 — reply *cancel* first if you'd like to start a new one.`, draft };
+                const dropped = partnerLabel(String(draft.partner || "order"));
+                await saveDraft(input.phone, null);
+                const started = await startRoutedSearch(
+                    input,
+                    home,
+                    route.intent === "restaurant_list" ? "food" : categoryFor(route, route.partners[0]),
+                    route.productQuery || "",
+                    route.partners[0],
+                    null,
+                    rawText,
+                    route.restaurantName,
+                    route,
+                );
+                const note = `(I've dropped the ${dropped} order — nothing was ordered.)`;
+                if (started?.text) return { ...started, text: `${note}\n\n${started.text}` };
+                return { text: note };
             }
             const partner = route.partners.find((p) => p !== "swiggy" || !route.partners.includes("instamart")) || route.partners[0];
             const cat = route.intent === "restaurant_list" ? "food" : categoryFor(route, partner === "swiggy" && route.partners.includes("instamart") ? "instamart" : partner);
@@ -3450,7 +3467,7 @@ async function mcpSearchCore(
     const rawCount = hits.length;
     if (!rawCount) {
         const failure = formatLinkedFailure(
-            results.map((r) => ({ store: r.store, error: r.error || null, hits: r.hits.length, calledSearch: r.calledSearch })),
+            results.map((r) => ({ store: r.store, error: r.error || null, hits: r.hits.length, calledSearch: r.calledSearch, message: r.message || null })),
             (s) => MCP_STORE_LABEL[s as McpStore] || s,
             lead,
         );
@@ -3648,6 +3665,16 @@ async function handleMcpPickTurn(
         }
         if (pick.mcp.store === "zepto") {
             return { text: `Zepto didn't answer just now 🙏 Pick another option, or *cancel*.`, draft };
+        }
+        const { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy } = await import("./mcpCommerce/mcpCommerce.service");
+        if (isMcpSessionGlitch(msg)) {
+            return {
+                text: `The linked ${storeLabel} account dropped the connection. I tried it again on that same account. Nothing was ordered.\nReply *retry* to try again, or *cancel*.`,
+                draft,
+            };
+        }
+        if (isMcpAuthError(msg)) {
+            return { text: reconnectAccountCopy([storeLabel], input.actorRole === FamilyRole.CARE_RECIPIENT), draft };
         }
         // MCP failed → the website (browser) as today; that path needs a one-time OTP.
         const next: BrowserTaskDraft = {

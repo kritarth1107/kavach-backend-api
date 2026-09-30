@@ -153,10 +153,16 @@ export function rewriteProductQuery(
     return base.slice(0, 80);
 }
 
+/** A berry miss must not offer choco, fruit and nut, or another brand in its place. */
+function notASubstitute(name: string): boolean {
+    return /yoga\s*bar|\bchoco\b|fruit\s*(?:&|and)\s*nut/i.test(name);
+}
+
 function missText(query: string, brand: string, sameLine: { name: string }[]): string {
     const head = `I couldn't find ${query}.`;
-    if (!sameLine.length) return `${head}\nI won't substitute a different brand.`;
-    const lines = sameLine.slice(0, 3).map((h, i) => `${i + 1}. ${h.name} — not an exact match`);
+    const listed = sameLine.filter((h) => !notASubstitute(h.name));
+    if (!listed.length) return `${head}\nI won't substitute a different brand.`;
+    const lines = listed.slice(0, 3).map((h, i) => `${i + 1}. ${h.name} — not an exact match`);
     return `${head}\nThese are other ${brand} options, not an exact match:\n${lines.join("\n")}`;
 }
 

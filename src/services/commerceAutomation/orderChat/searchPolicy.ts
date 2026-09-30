@@ -16,7 +16,18 @@ export function linkedGroceryTargets(
     return wanted.filter((s) => enabled.includes(s));
 }
 
-export type StoreOutcome = { store: string; error?: string | null; hits: number; calledSearch?: boolean };
+export type StoreOutcome = {
+    store: string;
+    error?: string | null;
+    hits: number;
+    calledSearch?: boolean;
+    /** Live error text, so a 401 handshake is not reported as "didn't answer". */
+    message?: string | null;
+};
+
+function sessionGlitch(message?: string | null): boolean {
+    return /401 after successful authentication|streamable http error|server returned 401|MCP error -32001/i.test(message || "");
+}
 
 export type LinkedFailurePlan =
     | { kind: "show" }
@@ -38,8 +49,8 @@ export function linkedFailurePlan(results: StoreOutcome[]): LinkedFailurePlan {
 /** Another catalog query is worth it when the stores failed or came back empty — not when the token or the address is the problem. */
 export function catalogRetryNeeded(results: StoreOutcome[]): boolean {
     if (!results.length || results.some((r) => r.hits > 0)) return false;
-    if (results.every((r) => r.error === "auth_expired" || r.error === "not_connected")) return false;
-    if (results.every((r) => r.error === "unserviceable" || r.error === "no_address_coords")) return false;
+    if (results.every((r) => r.error === "auth_expired" || r.error === "not_connected" || sessionGlitch(r.message))) return false;
+    if (results.every((r) => r.error === "unserviceable" || r.error === "no_address_coords" || sessionGlitch(r.message))) return false;
     // Another product name cannot help when the account was never searched.
     if (results.every((r) => r.error && r.calledSearch === false)) return false;
     return true;
@@ -51,22 +62,34 @@ export function formatLinkedFailure(
     label: (store: string) => string,
     reconnectLine: string,
 ): string | null {
-    const plan = linkedFailurePlan(results);
-    if (plan.kind === "show") return null;
-    if (plan.kind === "retry_linked") {
-        const names = results.map((r) => label(r.store)).join(" and ");
-        const searched = results.some((r) => r.calledSearch);
-        if (!searched) {
-            return `I couldn't reach the linked ${names} accounts, so I didn't search them — nothing was ordered.\nReply *retry* to search the linked accounts, or *cancel*.`;
-        }
-        return `I checked ${names} on the linked accounts. They didn't answer just now — nothing was ordered.\nReply *retry* to try the linked accounts again, or *cancel*.`;
+    if (results.some((r) => r.hits > 0)) return null;
+    const lines: string[] = [];
+    const session = results.filter((r) => r.error === "search_failed" && sessionGlitch(r.message));
+    const auth = results.filter((r) => r.error === "auth_expired");
+    const unserviceable = results.filter((r) => r.error === "unserviceable");
+    const failed = results.filter((r) => r.error === "search_failed" && !sessionGlitch(r.message) && r.calledSearch !== false);
+    const never = results.filter(
+        (r) => r.error === "search_failed" && !sessionGlitch(r.message) && r.calledSearch === false,
+    );
+    const empty = results.filter((r) => !r.error && r.hits === 0);
+    if (auth.length && reconnectLine) lines.push(reconnectLine);
+    for (const r of session) {
+        lines.push(`The linked ${label(r.store)} account dropped the connection. I tried it again on that same account. Nothing was ordered.`);
     }
-    if (plan.kind === "reconnect") return reconnectLine;
-    const lines = [
-        plan.revoked.length ? reconnectLine : "",
-        ...plan.failed.map((s) => `• ${label(s)} didn't answer on the linked account.`),
-        ...plan.empty.map((s) => `• ${label(s)}: nothing matching right now.`),
-        `Reply *retry* to try the linked accounts again, or *cancel*.`,
-    ].filter(Boolean);
+    for (const r of unserviceable) {
+        lines.push(`${label(r.store)} doesn't deliver to this address right now.`);
+    }
+    for (const r of failed) {
+        lines.push(`I checked ${label(r.store)} on the linked account. It didn't answer just now.`);
+    }
+    if (never.length) {
+        const names = never.map((r) => label(r.store)).join(" and ");
+        lines.push(`I couldn't reach the linked ${names} accounts, so I didn't search them — nothing was ordered.`);
+    }
+    if (!session.length && !auth.length && !unserviceable.length && !failed.length && !never.length && empty.length) {
+        return null;
+    }
+    if (!lines.length) return null;
+    lines.push("Reply *retry* to try the linked accounts again, or *cancel*.");
     return lines.join("\n");
 }

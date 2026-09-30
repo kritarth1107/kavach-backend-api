@@ -35,6 +35,7 @@ import {
     resolveElderWhatsappReply,
 } from "./saheliElderPipeline.service";
 import { buildGreetingReply, buildWarmNeutralReply, messageIsGreeting } from "./saheliElderFacts.service";
+import { finishElderReply, missedMedicineReply } from "./saheliFactGuard.service";
 import { messageAsksForMemberPhone } from "./saheliCaregiverFacts.service";
 import {
     refreshRecipientMemoryToAiEngine,
@@ -417,6 +418,9 @@ function buildElderSmartReply(opts: {
     const q = opts.question.trim();
     const qLower = q.toLowerCase();
 
+    const missedReminder = missedMedicineReply(q, "");
+    if (missedReminder) return missedReminder;
+
     if (messageLooksLikeOrder(q)) {
         return (
             opts.orderHint ??
@@ -702,13 +706,17 @@ async function elderReplyWithAi(
                 labs: opts?.labs,
                 elderLines: opts?.elderLines,
             });
-            const reply = offlineFallback.includes("missed today")
-                ? offlineFallback
-                : messageIsGreeting(message)
-                  ? buildGreetingReply(displayName)
-                  : waChannel
-                    ? buildWarmNeutralReply({ offline: true })
-                    : offlineSaheliMessage();
+            const answered = finishElderReply({
+                inbound: message,
+                draft: offlineFallback.includes("missed today")
+                    ? offlineFallback
+                    : messageIsGreeting(message)
+                      ? buildGreetingReply(displayName)
+                      : offlineFallback || "I'm here. How are you?",
+            });
+            const reply = /phir bhej|connection thoda dheema/i.test(answered)
+                ? "I'm here. How are you?"
+                : answered;
             if (waChannel) {
                 recordWhatsAppAiDebug({
                     familyId,
@@ -775,6 +783,12 @@ function buildCaregiverSmartReply(opts: {
 }): string {
     const q = opts.question.trim();
     const qLower = q.toLowerCase();
+
+    if (/^(retry|try again|again|cancel|yes|haan|ha|ok|okay|confirm|1)$/i.test(q)) {
+        return qLower === "retry" || qLower === "try again" || qLower === "again"
+            ? "I'll try that order again. Nothing was ordered yet."
+            : "That stays with the order we were on.";
+    }
 
     if (messageLooksLikeOrder(q)) {
         return `Tell me what to order and from where — Swiggy (food), Instamart (groceries), or Zepto. Example: "2 dal makhani from Swiggy" or "1L milk and bread from Instamart". I'll search live prices, build a cart, and you approve in chat.`;

@@ -10,6 +10,8 @@ import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewritePro
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
 import { isLiteralConfirm } from "../src/services/commerceAutomation/literalConfirm";
+import { classifyOrderInterruptRules } from "../src/services/commerceAutomation/orderInterrupt.service";
+import { isChatNotAPlace, isClockPhrase, parseFromTo } from "../src/services/rideBooking/slotParse";
 
 let n = 0;
 const t = (name: string, fn: () => void) => {
@@ -28,6 +30,8 @@ t("connected accounts: session 401 is not a reconnect", () => {
     assert.equal(isMcpSessionGlitch(SESSION), true);
     assert.equal(isMcpAuthError(SESSION), false);
     assert.equal(isMcpAuthError("invalid_grant: refresh token revoked"), true);
+    assert.equal(isMcpAuthError("zepto:search_failed:InvalidGrantError"), true);
+    assert.equal(isMcpAuthError(SESSION), false);
     assert.equal(isMcpAuthError("Unauthorized"), true);
     const copy = reconnectAccountCopy(["Instamart"], false);
     assert.match(copy, /Dashboard → Integrations/);
@@ -44,17 +48,31 @@ t("Instamart and Zepto are both searched when both are connected", () => {
 
 t("session failure on both linked stores stays on those accounts", () => {
     const results = [
-        { store: "instamart", error: "search_failed", hits: 0, calledSearch: true },
-        { store: "zepto", error: "search_failed", hits: 0, calledSearch: true },
+        { store: "instamart", error: "search_failed", hits: 0, calledSearch: true, message: SESSION },
+        { store: "zepto", error: "search_failed", hits: 0, calledSearch: true, message: SESSION },
     ];
     assert.equal(linkedFailurePlan(results).kind, "retry_linked");
     const text = formatLinkedFailure(results, (s) => (s === "zepto" ? "Zepto" : "Instamart"), "")!;
-    assert.match(text, /didn't answer/);
+    assert.match(text, /dropped the connection/);
     assert.match(text, /Instamart/);
     assert.match(text, /Zepto/);
     assert.match(text, /retry/i);
+    assert.doesNotMatch(text, /didn't answer/);
     assert.doesNotMatch(text, /reconnect/i);
     assert.doesNotMatch(text, /website/i);
+});
+
+t("Raipur 401 plus Zepto unserviceable is not 'didn't answer'", () => {
+    const results = [
+        { store: "instamart", error: "search_failed", hits: 0, calledSearch: true, message: SESSION },
+        { store: "zepto", error: "unserviceable", hits: 0, calledSearch: false, message: "Zepto doesn't deliver to this address right now." },
+    ];
+    const text = formatLinkedFailure(results, (s) => (s === "zepto" ? "Zepto" : "Instamart"), "")!;
+    assert.match(text, /dropped the connection/);
+    assert.match(text, /doesn't deliver/);
+    assert.doesNotMatch(text, /didn't answer/);
+    assert.doesNotMatch(text, /website/i);
+    assert.equal(catalogRetryNeeded(results), false);
 });
 
 t("Zepto hits are kept when only Instamart rejected the token", () => {
@@ -106,6 +124,8 @@ t("berry 10g does not offer Yoga Bar, choco, or fruit and nut", () => {
     assert.match(judged.miss!, /couldn't find RiteBite Max Protein berry 10g/);
     assert.match(judged.miss!, /not an exact match/);
     assert.doesNotMatch(judged.miss!, /Yoga Bar/);
+    assert.doesNotMatch(judged.miss!, /choco/i);
+    assert.doesNotMatch(judged.miss!, /fruit and nut/i);
     assert.match(judged.miss!, /RiteBite Max Protein/);
     const exact = applyFaithfulHits("RiteBite Max Protein berry 10g", [
         { name: "RiteBite Max Protein Berry 10g protein bar" },
@@ -174,7 +194,7 @@ t("Hindi protein bar is searched in English, then RiteBite, before a failure lin
         { store: "zepto", error: "search_failed", hits: 0, calledSearch: false },
     ]), false);
     assert.equal(storeFailureKind(SESSION), "session");
-    assert.equal(storeSearchTries(SESSION), 3);
+    assert.equal(storeSearchTries(SESSION), 2);
     assert.equal(storeFailureKind("fetch failed"), "network");
     assert.equal(storeSearchTries("invalid_grant: refresh token revoked"), 1);
     assert.equal(storeFailureKind("Instamart account not connected. Connect in Integrations first."), "no_token");
@@ -205,6 +225,27 @@ t("10g berry while the address is still unconfirmed keeps RiteBite", () => {
     const judged = applyFaithfulHits(kept, hits);
     assert.deepEqual(judged.hits.map((h) => h.name), ["RiteBite Max Protein Daily Bar Berry 10g Protein"]);
     assert.equal(judged.miss, null);
+});
+
+t("confirm is not a place, and yes answers the newest open question", () => {
+    assert.equal(isClockPhrase("confirm"), true);
+    assert.deepEqual(parseFromTo("confirm"), {});
+    assert.equal(isChatNotAPlace("Dont call me maa"), true);
+    assert.deepEqual(parseFromTo("Dont call me maa"), {});
+    assert.equal(isChatNotAPlace("how are you"), true);
+    const latest = bindLatestQuestion("yes", {
+        browserPhase: "awaiting_sku_confirm",
+        browserAt: 10,
+        pharmacyPhase: "confirm_basket",
+        pharmacyAt: 20,
+    });
+    assert.equal(latest?.owner, "pharmacy");
+    assert.equal(latest?.control, "confirm");
+});
+
+t("off-topic chat during an order is normal chat", () => {
+    const hit = classifyOrderInterruptRules("maine khana kha liya", "running");
+    assert.equal(hit?.intent, "unrelated");
 });
 
 t("Ha does not place an order; only confirm does", () => {

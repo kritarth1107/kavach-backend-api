@@ -34,6 +34,15 @@ export async function profileSummary(w: Who, short = false): Promise<string> {
 export async function profileTuning(w: Who): Promise<IElderProfile["tuning"]> {
     return (await cachedProfile(w)).tuning || {};
 }
+
+/** She said not to call her Maa. The next reply must not use that name. */
+export async function rememberDoNotCallMaa(w: Who): Promise<void> {
+    const doc = await loadOrCreate(w);
+    doc.tuning = { ...(doc.tuning || {}), addressAs: "", avoidMaa: true } as IElderProfile["tuning"];
+    doc.markModified("tuning");
+    await doc.save();
+    forgetProfileCache(w);
+}
 async function cachedProfile(w: Who) {
     const k = `${w.familyId}|${w.recipientUserId}`;
     const hit = cache.get(k);

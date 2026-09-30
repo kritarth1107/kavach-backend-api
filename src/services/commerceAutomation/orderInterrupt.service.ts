@@ -68,6 +68,9 @@ export function classifyOrderInterruptRules(
             address: addr?.trim(),
         };
     }
+    if (/\b(khana kha|kha liya|kha liye|already ate|i ate|had lunch|had dinner|had food)\b/i.test(t)) {
+        return { intent: "unrelated", source: "rules" };
+    }
     if (CHATTY_RE.test(t) || QUESTIONY_RE.test(t)) return { intent: "unrelated", source: "rules" };
     // SKU list open: a short noun phrase ("dolo 650", "limcee") is a new product search.
     if (phase === "awaiting_sku_confirm" && t.split(/\s+/).length <= 4 && t.length >= 3) {

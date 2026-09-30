@@ -5,7 +5,8 @@ export type SaheliNudgeKind =
     | "missed_followup"
     | "completion_praise"
     | "appointment_prep"
-    | "daily_schedule";
+    | "daily_schedule"
+    | "dose_due";
 
 export interface ISaheliNudgeLog {
     nudgeId: string;

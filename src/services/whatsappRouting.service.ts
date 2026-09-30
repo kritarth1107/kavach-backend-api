@@ -1714,6 +1714,19 @@ export async function dispatchRoutedTurn(a: {
         } else if (r?.text) {
             return { reply: r.text, legacyGates: false, allowDashboard: false };
         }
+        {
+            const { parseShortReply } = await import("./commerceAutomation/orderChat/flowBind");
+            const short = parseShortReply(text);
+            if (route.intent === "order_control" && short) {
+                const reply =
+                    short.control === "retry"
+                        ? "I'll try that order again. Nothing was ordered yet.\nReply *cancel* to stop."
+                        : short.control === "cancel"
+                          ? "Okay, cancelled. Nothing was ordered."
+                          : "That stays with the order we were on. Nothing new was looked up.";
+                return { reply, legacyGates: false, allowDashboard: false };
+            }
+        }
         if (liveFlow(pd) && route.intent !== "order_new") {
             const t = canonical();
             if (t) {
@@ -1727,6 +1740,35 @@ export async function dispatchRoutedTurn(a: {
         }
         // Couldn't place it (e.g. "confirm" for an app order session / caregiver approval) → rule executors.
         return { legacyGates: true, allowDashboard: true };
+    }
+
+    if (
+        process.env.SAHELI_TRAIN === "1" &&
+        (route.intent === "companion_chat" || route.intent === "reminder_or_meds")
+    ) {
+        const { finishElderReply, medicineReminderComplaint, refusesMaa } = await import("./saheliFactGuard.service");
+        const checkIn = /\b(how are you|kaisi ho|kaise ho|kaisa hai)\b/i.test(text);
+        if (medicineReminderComplaint(text) || refusesMaa(text) || checkIn) {
+            const { profileTuning, rememberDoNotCallMaa } = await import("./profile/elderProfile.service");
+            const who = { familyId: a.familyId, recipientUserId: a.recipientUserId };
+            if (refusesMaa(text)) await rememberDoNotCallMaa(who).catch(() => undefined);
+            const tuning = await profileTuning(who).catch(() => undefined);
+            const draft = medicineReminderComplaint(text)
+                ? "I let you rest because you were awake early."
+                : checkIn
+                  ? "Maa, aaj paneer butter masala ki yaad aa rahi thi, jo aap hamesha banati hain."
+                  : "Okay Maa, main yahin hoon. Connection thoda dheema hai — phir bhej dijiye.";
+            return {
+                reply: finishElderReply({
+                    inbound: text,
+                    draft,
+                    savedFacts: "",
+                    refusedMaa: Boolean(tuning?.avoidMaa) || refusesMaa(text),
+                }),
+                legacyGates: false,
+                allowDashboard: false,
+            };
+        }
     }
 
     // Pharmacy step that expects free text (e.g. Rx photo) while the model saw chat.

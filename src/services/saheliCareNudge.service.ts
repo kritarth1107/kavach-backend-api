@@ -12,6 +12,7 @@ import { buildCareNudgeText } from "./saheliNudgeCopy.service";
 import { checkCaregiverAlertsForMissedTasks } from "./saheliCaregiverAlert.service";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
 import { formatScheduleSection } from "./saheliContext.service";
+import { medicineDueWindow } from "./saheliFactGuard.service";
 
 function resolveRecipientName(
     members: Awaited<ReturnType<typeof getFamilyMembersList>>["members"],
@@ -39,14 +40,19 @@ export async function deliverCareNudge(input: {
     const P = await import("./profile/elderProfile.service").catch(() => null);
     const w = { familyId: input.familyId, recipientUserId: input.recipientUserId };
     const tuning = P ? await P.profileTuning(w).catch(() => undefined) : undefined;
+    const avoidMaa = Boolean((tuning as { avoidMaa?: boolean } | undefined)?.avoidMaa);
     let text = buildCareNudgeText({
         nudgeKind: input.nudgeKind,
         title: input.title,
         time: input.time,
         displayName: input.displayName,
         preferredLanguage: input.preferredLanguage,
-        addressAs: tuning?.addressAs,
+        addressAs: avoidMaa ? undefined : tuning?.addressAs,
     });
+    if (avoidMaa) {
+        const { stripMaa } = await import("./saheliFactGuard.service");
+        text = stripMaa(text);
+    }
     // Evolving profile: ONE care line from today's care actions (follow up on her knee, ask about
     // her walk, a sip of water) — like her own child remembering yesterday. Offers stay offers.
     if (input.nudgeKind === "daily_schedule" && P) {
@@ -65,7 +71,7 @@ export async function deliverCareNudge(input: {
     const payloads = buildCareNudgeMessages({
         text,
         nudgeKind:
-            input.nudgeKind === "daily_schedule"
+            input.nudgeKind === "daily_schedule" || input.nudgeKind === "dose_due"
                 ? "pre_reminder"
                 : input.nudgeKind,
         scheduleId: input.scheduleId,
@@ -177,6 +183,27 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
         if (isWithinQuietHours(companion, now)) continue;
 
         scanned += 1;
+        try {
+            const one = await nudgeOneCompanion(companion, now, dateKey, nowMinutes);
+            sent += one;
+        } catch (err) {
+            console.warn(
+                `Care nudge skipped for ${companion.recipientUserId}:`,
+                err instanceof Error ? err.message : err,
+            );
+        }
+    }
+
+    return { sent, scanned };
+}
+
+async function nudgeOneCompanion(
+    companion: Awaited<ReturnType<typeof listEnabledCompanions>>[number],
+    _now: Date,
+    dateKey: string,
+    nowMinutes: number,
+): Promise<number> {
+    let sent = 0;
         const day = await getScheduleDayStatuses(
             companion.familyId,
             companion.recipientUserId,
@@ -232,6 +259,23 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
 
             const minutesUntil = scheduleMinutes - nowMinutes;
             const minutesSince = nowMinutes - scheduleMinutes;
+            const due = medicineDueWindow(minutesSince, item.status);
+
+            if (due === "dose_due" && item.type === "MEDICINE") {
+                const ok = await deliverCareNudge({
+                    familyId: companion.familyId,
+                    recipientUserId: companion.recipientUserId,
+                    displayName,
+                    scheduleId: item.scheduleId,
+                    title: item.title,
+                    time: item.time,
+                    nudgeKind: "dose_due",
+                    dateKey,
+                    preferredChannel: companion.preferredChannel,
+                    preferredLanguage,
+                });
+                if (ok) sent += 1;
+            }
 
             if (item.status === "upcoming" && inWindow(minutesUntil, 5, 20)) {
                 const ok = await deliverCareNudge({
@@ -339,7 +383,5 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
                 missedTitles: missed.map((m) => m.title),
             });
         }
-    }
-
-    return { sent, scanned };
+    return sent;
 }

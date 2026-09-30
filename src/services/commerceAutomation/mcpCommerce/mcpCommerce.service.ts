@@ -339,10 +339,10 @@ export function storeFailureKind(message: string): "session" | "auth" | "decrypt
     return "other";
 }
 
-/** A 401 handshake or a dropped connection is tried again. A rejected token is not. */
+/** A 401 handshake is tried once more on the same account. A rejected token is not. */
 export function storeSearchTries(message: string): number {
     const kind = storeFailureKind(message);
-    return kind === "session" || kind === "network" ? 3 : 1;
+    return kind === "session" || kind === "network" ? 2 : 1;
 }
 
 function sleep(ms: number) {
@@ -464,7 +464,7 @@ export function isMcpSessionGlitch(message: string): boolean {
 /** The live call rejected the linked account (revoked refresh / unauthorized tool). Not a session glitch. */
 export function isMcpAuthError(message: string): boolean {
     if (isMcpSessionGlitch(message)) return false;
-    return /invalid_grant|invalid_token|\bunauthori[sz]ed\b|token (?:has )?expired|refresh token.{0,24}(?:revoked|expired)|re-?authori[sz]/i.test(message || "");
+    return /invalid_grant|invalidgrant|invalid_token|\bunauthori[sz]ed\b|token (?:has )?expired|refresh token.{0,24}(?:revoked|expired)|re-?authori[sz]/i.test(message || "");
 }
 
 /** Shown only after a live auth rejection. Steps are Dashboard → Integrations. */

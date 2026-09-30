@@ -416,6 +416,8 @@ async function handleRideWhatsAppTurnInner(input: RideTurnInput): Promise<{ text
             draft.phase === "need_pickup" ||
             draft.phase === "need_drop"
         ) {
+            const { isChatNotAPlace } = await import("./slotParse");
+            if (isChatNotAPlace(text)) return null;
             const updated = await maybeCompleteSlots(draft, text);
             draft = updated.draft;
             await saveDraft(input.phone, draft);
