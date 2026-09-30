@@ -312,7 +312,7 @@ async function contactFor(ctx: McpCtx, userId: string) {
     return resolveOrderContact({ familyId: ctx.familyId, recipientUserId: ctx.recipientUserId, recipientPhone: ctx.recipientPhone, connectionUserId: userId, place: ctx.place });
 }
 
-export async function searchStore(ctx: McpCtx, store: McpStore, query: string, opts: { restaurantName?: string | null } = {}): Promise<StoreSearch> {
+export async function searchStore(ctx: McpCtx, store: McpStore, query: string, opts: { restaurantName?: string | null; attempt?: number } = {}): Promise<StoreSearch> {
     try {
         return await withFamilyStore(ctx.familyId, store, async (client, userId) => {
             const contact = await contactFor(ctx, userId);
@@ -349,7 +349,14 @@ export async function searchStore(ctx: McpCtx, store: McpStore, query: string, o
         });
     } catch (err) {
         const message = describeMcpError(err);
-        const code = err instanceof McpStoreError ? err.code : isMcpAuthError(message) ? "auth_expired" : "search_failed";
+        // MCP session handshake 401 is not a revoked store token. Retry the connected account once.
+        const session = isMcpSessionGlitch(message);
+        const wrappedSearch = err instanceof McpStoreError && err.code === "search_failed";
+        if (session && (opts.attempt ?? 0) < 1 && (!(err instanceof McpStoreError) || wrappedSearch)) {
+            return searchStore(ctx, store, query, { ...opts, attempt: 1 });
+        }
+        let code = err instanceof McpStoreError ? err.code : "search_failed";
+        if (isMcpAuthError(message) && code !== "not_connected" && code !== "unserviceable") code = "auth_expired";
         return { store, hits: [], error: code, message };
     }
 }
@@ -362,9 +369,27 @@ export function describeMcpError(err: unknown): string {
     return [e.message || e.name || "Error", e.code != null ? `code=${String(e.code)}` : "", cause ? `cause=${cause}` : ""].filter(Boolean).join(" ").slice(0, 200);
 }
 
-/** The store rejected the linked account (401 / invalid or revoked token) — needs a re-link, not a retry. */
+/**
+ * MCP SDK session noise ("401 after successful authentication") while tokens still exist.
+ * The account stays connected — retry, do not ask for a reconnect, do not open the guest site.
+ */
+export function isMcpSessionGlitch(message: string): boolean {
+    return /401 after successful authentication|streamable http error|server returned 401|MCP error -32001/i.test(message || "");
+}
+
+/** The live call rejected the linked account (revoked refresh / unauthorized tool). Not a session glitch. */
 export function isMcpAuthError(message: string): boolean {
-    return /\b401\b|unauthori[sz]ed|invalid_grant|invalid_token|token (?:has )?expired|re-?authori[sz]/i.test(message || "");
+    if (isMcpSessionGlitch(message)) return false;
+    return /invalid_grant|invalid_token|\bunauthori[sz]ed\b|token (?:has )?expired|refresh token.{0,24}(?:revoked|expired)|re-?authori[sz]/i.test(message || "");
+}
+
+/** Shown only after a live auth rejection. Steps are Dashboard → Integrations. */
+export function reconnectAccountCopy(labels: string[], elder: boolean): string {
+    const names = [...new Set(labels.filter(Boolean))].join(" and ") || "store";
+    const steps = `Dashboard → Integrations: open the Kavach dashboard, go to Integrations, disconnect ${names}, then connect ${names} again.`;
+    return elder
+        ? `The linked ${names} account rejected the sign-in. Ask your caregiver to reconnect it — ${steps}`
+        : `The linked ${names} account rejected the sign-in. Reconnect it: ${steps}`;
 }
 
 // ── Cart build (shared by prepare + place) ──────────────────────────────────

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { formatFull, splitAddress } from "../src/services/familyAddressBook.service";
 import { composeAddress } from "../src/services/addressUnderstanding.service";
-import { isMcpAuthError, describeMcpError } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { isMcpAuthError, isMcpSessionGlitch, describeMcpError } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { offerSummary } from "../src/services/commerceAutomation/browserTaskWhatsApp.service";
 
 let n = 0;
@@ -39,8 +39,9 @@ t("AI parts compose without repeats", () => {
     assert.equal(s, "74 4th cross 4c sector, amrutnagar byatarayanapura, bangalore, karnataka 560092");
     assert.equal(composeAddress({ line1: "12 MG road bangalore", locality: null, city: "bangalore", state: null, pincode: "560001" }), "12 MG road bangalore, 560001");
 });
-t("MCP 401 after refresh = auth_expired (re-link), not 'didn't load'", () => {
-    assert.ok(isMcpAuthError("Streamable HTTP error: Server returned 401 after successful authentication"));
+t("MCP session 401 is not a revoked store token; invalid_grant still is", () => {
+    assert.ok(isMcpSessionGlitch("Streamable HTTP error: Server returned 401 after successful authentication"));
+    assert.ok(!isMcpAuthError("Streamable HTTP error: Server returned 401 after successful authentication"));
     assert.ok(isMcpAuthError("invalid_grant: refresh token revoked"));
     assert.ok(!isMcpAuthError("Zepto doesn't deliver to this address right now."));
 });

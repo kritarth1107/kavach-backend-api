@@ -11,6 +11,7 @@ import WhatsappSession from "../../../models/whatsappSession.model";
 import { logActivity } from "../../activityLog.service";
 import { recentTurns } from "../../saheliRouter.service";
 import { loadHealthProfile, healthProfileText } from "./healthProfile";
+import { rewriteProductQuery } from "./queryRewrite";
 
 export type OrderChatState = {
     startedAt: number;
@@ -46,6 +47,15 @@ export type OrderChatDecision =
     | { action: "pass" };
 
 const TTL_MS = 25 * 60_000;
+
+function catalogQuery(routerQuery: string, utterance: string, st: OrderChatState): string {
+    const prior = [...st.turns].reverse().map((t) => t.text).find((t) => brandish(t)) || st.alternativesFor || null;
+    return rewriteProductQuery(routerQuery, utterance, { priorQuery: prior, shownNames: st.suggestions || [] }).slice(0, 80);
+}
+
+function brandish(text: string): boolean {
+    return /rite\s*bite|ritebite|yoga\s*bar|max\s+protein/i.test(text);
+}
 
 export function orderChatActive(s: unknown): s is OrderChatState {
     const st = s as OrderChatState | undefined;
@@ -170,7 +180,8 @@ export async function orderChatTurn(input: {
         if (input.routeHint.productQuery && !input.notFound && !/^(something|anything|kuch|food|khana)\b/i.test(input.routeHint.productQuery)) {
             await saveOrderChat(input.phone, null);
             const category = (st.category as "food" | "grocery" | "pharmacy") || "grocery";
-            return { action: "search", query: input.routeHint.productQuery, category, partner: st.partner || null, restaurantName: input.routeHint.restaurantName || null, addressNickname: st.addressNickname || null, intent: input.routeHint.productQuery };
+            const query = catalogQuery(input.routeHint.productQuery, input.text, st);
+            return { action: "search", query, category, partner: st.partner || null, restaurantName: input.routeHint.restaurantName || null, addressNickname: st.addressNickname || null, intent: query };
         }
         st.updatedAt = now;
         await saveOrderChat(input.phone, st);
@@ -207,7 +218,7 @@ export async function orderChatTurn(input: {
             return { action: "reply", text };
         }
         case "search": {
-            const query = (p.query || input.routeHint.productQuery || "").trim().slice(0, 80);
+            const query = catalogQuery(p.query || input.routeHint.productQuery || "", input.text, st);
             if (!query) {
                 st.updatedAt = now;
                 await saveOrderChat(input.phone, st);

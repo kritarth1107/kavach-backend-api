@@ -6,6 +6,9 @@
  * Soft health tips on confirm when care context matches cart (never diagnose / never block).
  */
 import { isLiteralConfirm, isSoftYes, signInConfirmNudge } from "./literalConfirm";
+import { browserPhaseResumesOnRetry } from "./orderChat/flowBind";
+import { applyFaithfulHits, brandLineOf, rewriteProductQuery } from "./orderChat/queryRewrite";
+import { formatLinkedFailure, linkedGroceryTargets } from "./orderChat/searchPolicy";
 import WhatsappSession from "../../models/whatsappSession.model";
 import type { SaheliRoute } from "../saheliRouter.service";
 import { FamilyRole } from "../../types/family.types";
@@ -34,7 +37,7 @@ import {
     releaseCheckoutInFlight,
 } from "./parkedOtpSession.service";
 import { resolvePlaybook, partnerLabel } from "./playbooks";
-import type { McpCard, McpPick, McpStore } from "./mcpCommerce/mcpCommerce.service";
+import { reconnectAccountCopy, type McpCard, type McpPick, type McpStore } from "./mcpCommerce/mcpCommerce.service";
 import type { CommercePartnerKey } from "./types";
 import { beginOtpLogin } from "./sessionStore.service";
 import {
@@ -646,8 +649,8 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
         if (restarted) return restarted;
     }
 
-    // Re-kick browser after pharmacy/commerce soft failure (CAPTCHA / timeout / no OTP page)
-    if (draft && (draft.phase === "awaiting_otp" || draft.phase === "awaiting_confirm") && /^(retry|try\s*again|again)$/i.test(text)) {
+    // Re-kick browser after a stall (phase running) or OTP / confirm soft failure.
+    if (draft && browserPhaseResumesOnRetry(draft.phase) && /^(retry|try\s*again|again)$/i.test(text)) {
         const { notifyPharmacyBrowserBackgroundResult } = await import("./browserProgressNotify.service");
         const retryGoal = draft.goal;
         const retryPartner = draft.partner;
@@ -727,6 +730,14 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
             text:
                 `Retrying *${partnerLabel(String(retryPartner || "the site"))}* — I'll message you when I need the OTP. ` +
                 `Reply *cancel* to stop.`,
+            draft,
+        };
+    }
+
+    // Stuck order asked for retry or cancel. Other short replies stay on that order.
+    if (draft && draft.phase === "running" && /^(yes|haan|ha|ok|okay|okk|k|confirm|place|place\s*order|[1-9])$/i.test(text)) {
+        return {
+            text: `Your *${partnerLabel(String(draft.partner || "order"))}* order is still open — nothing new was searched.\nReply *retry* to try again, or *cancel*.`,
             draft,
         };
     }
@@ -2887,7 +2898,11 @@ async function startRoutedSearchCore(
     route: Pick<SaheliRoute, "addressNickname" | "addressKind" | "addressText"> | null | undefined,
     out: { lead: string },
 ): Promise<RoutedCommerceResult> {
-    const q = query.trim().slice(0, 80);
+    const q = rewriteProductQuery(query, rawText, {
+        priorQuery: draft?.productQuery || draft?.dishQuery || null,
+        shownNames: (draft?.catalogOptions || []).map((o) => o.name),
+    }).trim().slice(0, 80) || query.trim().slice(0, 80);
+    if (q) rememberAsk(input.phone, { query: q, category, partner: partner || undefined });
     {
         const hit = detectBlockedItem(q) || detectBlockedItem(restaurantName);
         if (hit) {
@@ -3235,10 +3250,8 @@ async function tryMcpRoute(
     if (!enabled.length) return {};
     const isFood = category === "food" || partner === "swiggy";
     let wanted: McpStore[] = [];
-    if (isFood) wanted = ["swiggy"];
-    else if (partner === "instamart" || partner === "zepto") wanted = [partner];
-    else if (!partner || partner === "generic") wanted = ["instamart", "zepto"];
-    wanted = wanted.filter((s) => enabled.includes(s));
+    if (isFood) wanted = enabled.includes("swiggy") ? ["swiggy"] : [];
+    else wanted = linkedGroceryTargets(partner, enabled);
     if (!wanted.length) return {};
     const conns = await familyStoreConnections(input.familyId).catch(() => new Map());
     const linked = wanted.filter((s) => conns.has(s));
@@ -3274,14 +3287,12 @@ function relinkNote(input: RoutedInput, labels: string[]): string {
             actorUserId: input.actorUserId,
             kind: "order_step",
             severity: "warn",
-            title: `${names} link expired — reconnect it in Integrations`,
-            detail: `The store rejected the linked ${names} account (401 even after a token refresh). Disconnect and connect ${names} again in the Kavach dashboard → Integrations.`,
+            title: `${names} rejected the sign-in — reconnect it in Integrations`,
+            detail: `The linked ${names} account rejected the live call. Dashboard → Integrations: disconnect ${names}, then connect ${names} again.`,
             data: { source: "mcp", needsRelink: labels },
         });
     }
-    return input.actorRole === FamilyRole.CARE_RECIPIENT
-        ? `💡 The linked ${names} account needs reconnecting — ask your caregiver to reconnect it in the Kavach app. I'm checking the ${names} website instead.`
-        : `💡 Your linked ${names} account needs reconnecting (Kavach app → Integrations). I'm checking the ${names} website instead.`;
+    return reconnectAccountCopy(labels, input.actorRole === FamilyRole.CARE_RECIPIENT);
 }
 
 function mcpOptionsCopy(draft: BrowserTaskDraft): string {
@@ -3390,12 +3401,31 @@ async function mcpSearchCore(
             results: results.map((r) => ({ store: r.store, hits: r.hits.length, error: r.error || null, addressVia: r.addressVia || null, message: r.message || null })),
         },
     });
-    // A linked account the store no longer accepts (token rejected even after a refresh) needs a
-    // re-link by the caregiver — say so honestly instead of "didn't load", then use the website.
+    // Reconnect only when a live call rejected the token. Other stores' hits still show.
     const authDead = results.filter((r) => r.error === "auth_expired").map((r) => r.store);
     if (authDead.length && hop === 0) lead = [lead, relinkNote(input, authDead.map((s) => MCP_STORE_LABEL[s]))].filter(Boolean).join("\n\n");
     let hits = results.flatMap((r) => r.hits);
     const rawCount = hits.length;
+    if (!rawCount) {
+        const failure = formatLinkedFailure(
+            results.map((r) => ({ store: r.store, error: r.error || null, hits: r.hits.length })),
+            (s) => MCP_STORE_LABEL[s as McpStore] || s,
+            lead,
+        );
+        if (failure) {
+            console.warn(`[mcp-order] linked search failed (no guest website):`, results.map((r) => `${r.store}:${r.error}:${r.message}`).join(" | "));
+            await saveIfCurrent(input.phone, null, token);
+            return { text: failure };
+        }
+    }
+    if (!isFood) {
+        const judged = applyFaithfulHits(q, hits);
+        if (judged.miss) {
+            await saveIfCurrent(input.phone, null, token);
+            return { text: [lead, judged.miss].filter(Boolean).join("\n\n") };
+        }
+        hits = judged.hits;
+    }
     if (hits.length) {
         // Relevance: drop ketchup sachets / add-ons / mismatches before anything is listed.
         const kept = await relevantOnly(input.phone, q, hits, isFood);
@@ -3404,21 +3434,9 @@ async function mcpSearchCore(
         if (rawCount !== kept.length) console.log(`[order-chat] relevance "${q}": ${rawCount} → ${kept.length}`);
     }
     if (!hits.length) {
-        const broken = results.filter((r) => r.error && r.error !== "unserviceable");
-        if (!rawCount && broken.length === results.length) {
-            // MCP down for every linked store → the website (browser) as today.
-            console.warn(`[mcp-order] search failed, browser fallback:`, results.map((r) => `${r.store}:${r.error}:${r.message}`).join(" | "));
-            const withLead = (r: WorkResult): WorkResult => (lead && r.text ? { ...r, text: `${lead}\n\n${r.text}` } : r);
-            if (isFood) return withLead(await startFoodFlow(input, q, home));
-            if (stores.includes("instamart")) {
-                const pb = resolvePlaybook("instamart", `order ${q} from instamart`);
-                return withLead(await grocerySearchCore(input, `Order ${q} from Instamart`, q, pb, home, token));
-            }
-            return { text: `${lead ? `${lead}\n\n` : ""}Zepto isn't answering just now 🙏 Want me to try *Instamart* instead?`, offer: { partner: "instamart", query: q, category: "grocery" } };
-        }
         await saveIfCurrent(input.phone, null, token);
         const reachable = results.some((r) => r.error !== "unserviceable" && r.error !== "no_address_coords");
-        if (reachable) {
+        if (reachable && !brandLineOf(q)) {
             const alt = await notFoundAlternatives(input, q, isFood ? "food" : "grocery", stores.length === 1 ? stores[0]! : null);
             if (alt.searchQuery && hop === 0) {
                 return mcpSearchCore(input, stores, alt.searchQuery, place, home, isFood, null, token, 1, `"${q}" nahi mila — "${alt.searchQuery}" dikha rahi hoon 🙂`);

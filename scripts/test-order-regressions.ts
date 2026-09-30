@@ -1,0 +1,137 @@
+/**
+ * Replays the 30 Sep Saheli chats (Bangalore, Max RiteBite):
+ * 1. Connected Instamart + Zepto must not say reconnect, and must not drop Zepto.
+ * 2. "10g berry" after a RiteBite result searches RiteBite berry, not Yoga Bar.
+ * 3. "retry" after a stuck Instamart order stays on that order.
+ */
+import assert from "node:assert/strict";
+import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { applyFaithfulHits, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
+import { bindLatestQuestion, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
+import { formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
+
+let n = 0;
+const t = (name: string, fn: () => void) => {
+    fn();
+    n++;
+    console.log(`  ✓ ${name}`);
+};
+
+const SESSION = "Streamable HTTP error: Server returned 401 after successful authentication";
+const SHOWN = [
+    "RiteBite Max Protein Assorted 5g Mini Bytes (pack of 10)",
+    "RiteBite Max Protein Roots Ghee Jaggery Cocoa Brownie 10g protein (45 g)",
+];
+
+t("connected accounts: session 401 is not a reconnect", () => {
+    assert.equal(isMcpSessionGlitch(SESSION), true);
+    assert.equal(isMcpAuthError(SESSION), false);
+    assert.equal(isMcpAuthError("invalid_grant: refresh token revoked"), true);
+    assert.equal(isMcpAuthError("Unauthorized"), true);
+    const copy = reconnectAccountCopy(["Instamart"], false);
+    assert.match(copy, /Dashboard → Integrations/);
+    assert.match(copy, /disconnect Instamart/);
+    assert.match(copy, /connect Instamart again/);
+    assert.doesNotMatch(copy, /Kavach app → Integrations/);
+    assert.doesNotMatch(copy, /checking the .+ website/i);
+});
+
+t("Instamart and Zepto are both searched when both are connected", () => {
+    assert.deepEqual(linkedGroceryTargets(undefined, ["instamart", "zepto"]), ["instamart", "zepto"]);
+    assert.deepEqual(linkedGroceryTargets("generic", ["instamart", "zepto"]), ["instamart", "zepto"]);
+});
+
+t("session failure on both linked stores stays on those accounts", () => {
+    const results = [
+        { store: "instamart", error: "search_failed", hits: 0 },
+        { store: "zepto", error: "search_failed", hits: 0 },
+    ];
+    assert.equal(linkedFailurePlan(results).kind, "retry_linked");
+    const text = formatLinkedFailure(results, (s) => (s === "zepto" ? "Zepto" : "Instamart"), "")!;
+    assert.match(text, /Instamart/);
+    assert.match(text, /Zepto/);
+    assert.match(text, /retry/i);
+    assert.doesNotMatch(text, /reconnect/i);
+    assert.doesNotMatch(text, /website/i);
+});
+
+t("Zepto hits are kept when only Instamart rejected the token", () => {
+    const results = [
+        { store: "instamart", error: "auth_expired", hits: 0 },
+        { store: "zepto", error: null, hits: 2 },
+    ];
+    assert.equal(linkedFailurePlan(results).kind, "show");
+});
+
+t("a real token rejection names Dashboard steps and does not open the website", () => {
+    const results = [
+        { store: "instamart", error: "auth_expired", hits: 0 },
+        { store: "zepto", error: "search_failed", hits: 0 },
+    ];
+    const reconnect = reconnectAccountCopy(["Instamart"], false);
+    const text = formatLinkedFailure(results, (s) => (s === "zepto" ? "Zepto" : "Instamart"), reconnect)!;
+    assert.match(text, /Dashboard → Integrations/);
+    assert.match(text, /Zepto/);
+    assert.match(text, /retry/i);
+    assert.doesNotMatch(text, /checking the .+ website/i);
+});
+
+t("10g berry after RiteBite searches RiteBite berry, not 10g berry", () => {
+    const q = rewriteProductQuery("10g berry", "I want the 10g berry one", {
+        priorQuery: "max protein rite bite",
+        shownNames: SHOWN,
+    });
+    assert.equal(q, "RiteBite Max Protein berry 10g");
+    const typed = rewriteProductQuery("10g berry", "Max rite bite berry flavor 10g protien", {
+        priorQuery: "max protein rite bite",
+        shownNames: SHOWN,
+    });
+    assert.equal(typed, "RiteBite Max Protein berry 10g");
+    assert.equal(rewriteProductQuery("amul milk", "order amul milk", { priorQuery: "max protein rite bite", shownNames: SHOWN }), "amul milk");
+});
+
+t("berry 10g does not offer Yoga Bar, choco, or fruit and nut", () => {
+    const hits = [
+        { name: "RiteBite Max Protein Choco Almond" },
+        { name: "Yoga Bar Blueberry 10g protein" },
+        { name: "RiteBite Max Protein Fruit and Nut" },
+        { name: SHOWN[0]! },
+        { name: SHOWN[1]! },
+    ];
+    const judged = applyFaithfulHits("RiteBite Max Protein berry 10g", hits);
+    assert.equal(judged.hits.length, 0);
+    assert.ok(judged.miss);
+    assert.match(judged.miss!, /couldn't find RiteBite Max Protein berry 10g/);
+    assert.match(judged.miss!, /not an exact match/);
+    assert.doesNotMatch(judged.miss!, /Yoga Bar/);
+    assert.match(judged.miss!, /RiteBite Max Protein/);
+    const exact = applyFaithfulHits("RiteBite Max Protein berry 10g", [
+        { name: "RiteBite Max Protein Berry 10g protein bar" },
+        { name: "Yoga Bar Blueberry" },
+    ]);
+    assert.equal(exact.hits.length, 1);
+    assert.equal(exact.miss, null);
+    assert.match(exact.hits[0]!.name, /RiteBite/);
+});
+
+t("retry after a stuck Instamart order resumes that order", () => {
+    assert.equal(browserPhaseResumesOnRetry("running"), true);
+    const bound = bindLatestQuestion("Retry", { browserPhase: "running", browserAt: 1_700_000_000_000 });
+    assert.ok(bound);
+    assert.equal(bound!.owner, "browser");
+    assert.equal(bound!.control, "retry");
+    assert.equal(bindLatestQuestion("retry", {}), null);
+    assert.equal(
+        bindLatestQuestion("yes", { browserPhase: "running", browserAt: 10, ridePhase: "need_pickup", rideAt: 20 }),
+        null,
+    );
+    const confirm = bindLatestQuestion("confirm", { browserPhase: "awaiting_confirm", browserAt: 5 });
+    assert.equal(confirm?.control, "confirm");
+    assert.equal(confirm?.owner, "browser");
+    const pick = bindLatestQuestion("1", { browserPhase: "awaiting_sku_confirm", browserAt: 5 });
+    assert.equal(pick?.control, "pick");
+    assert.equal(pick?.pickIndex, 1);
+});
+
+console.log(`all ${n} passed`);
+process.exit(0);

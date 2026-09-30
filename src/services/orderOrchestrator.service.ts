@@ -19,6 +19,7 @@ import {
 import type { McpPartnerKey } from "../partners/mcp/types";
 import { OrderPartner } from "../types/careRecord.types";
 import { listFamilyConnectedPartners, resolveFamilyMcpUserId } from "./commerceConnection.service";
+import { isMcpAuthError, isMcpSessionGlitch } from "./commerceAutomation/mcpCommerce/mcpCommerce.service";
 import {
     getFamilyForActor,
     getMemberRole,
@@ -226,9 +227,8 @@ function pickCheapestSpinId(session: IOrderSessionDocument): string | undefined 
 
 function looksLikeAuthSearchError(err: unknown): boolean {
     const msg = err instanceof AppError ? err.message : err instanceof Error ? err.message : String(err);
-    return /401|unauthori[sz]ed|re-?auth|reconnect|token.*(expired|invalid)|not authenticated|login required|session expired/i.test(
-        msg,
-    );
+    if (isMcpSessionGlitch(msg)) return false;
+    return isMcpAuthError(msg) || /re-?auth|reconnect|not authenticated|login required/i.test(msg);
 }
 
 async function zeptoAltHintIfConnected(familyId: string, actorUserId: string, failedPartner: McpPartnerKey): Promise<string> {

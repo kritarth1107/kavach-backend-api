@@ -839,7 +839,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 bd!.phase === "awaiting_otp" ||
                 bd!.phase === "awaiting_confirm");
         const shortCtrl =
-            /^(status|order\s*status|ok|okay|okk|k|confirm|place|place\s*order|yes|haan|[1-9]|cancel|stop|order\s*again|re-?order)$/i.test(
+            /^(status|order\s*status|ok|okay|okk|k|confirm|place|place\s*order|yes|haan|[1-9]|cancel|stop|order\s*again|re-?order|retry|try\s*again)$/i.test(
                 text.trim(),
             );
         if (pharmActive && shortCtrl) {
@@ -1317,6 +1317,24 @@ async function dispatchRoutedTurn(a: {
         recipientUserId: a.recipientUserId,
         actorRole: a.actorRole,
     };
+    // yes / confirm / 1 / retry / cancel bind to the newest open order question, even when the
+    // model files them as chat. A stuck Instamart order must not fall through to the care record.
+    {
+        const { bindLatestQuestion } = await import("./commerceAutomation/orderChat/flowBind");
+        const stamp = (x: unknown) =>
+            new Date(((x as { savedAt?: string | Date; at?: string | Date } | null)?.savedAt ?? (x as { at?: string | Date } | null)?.at ?? 0) as string).getTime() || 0;
+        const bound = bindLatestQuestion(text, {
+            browserPhase: bd?.phase,
+            browserAt: stamp(bd),
+            pharmacyPhase: pd?.phase,
+            pharmacyAt: stamp(pd),
+            ridePhase: rd?.phase,
+            rideAt: stamp(rd),
+        });
+        if (bound && (bound.owner === "browser" || !liveFlow(bd))) {
+            route = { ...route, intent: "order_control", control: bound.control, pickIndex: bound.pickIndex, productQuery: null };
+        }
+    }
     const commerce = COMMERCE_INTENTS.has(route.intent);
     const flowReply = !NOT_A_FLOW_REPLY.has(route.intent);
     // Care guardrail: tobacco / gutka / vapes / alcohol are refused BEFORE any search, on every
