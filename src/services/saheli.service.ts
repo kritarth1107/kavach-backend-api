@@ -64,6 +64,7 @@ import {
 } from "./saheliCompanion.service";
 import {
     excerptReport,
+    findMedicineLines,
     findNamedReports,
     findPrintedHits,
     formatPrintedHit,
@@ -258,6 +259,9 @@ function caregiverReplyFromCosmos(opts: {
             parts.push(`${name} has not sent a message yet.`);
         }
     }
+
+    const savedMeds = findMedicineLines(opts.labs, q);
+    if (savedMeds.length) parts.push(savedMeds.join("\n"));
 
     if (hits.length) {
         parts.push(hits.map(formatPrintedHit).join("\n\n"));
@@ -455,6 +459,10 @@ function buildElderSmartReply(opts: {
             parts.push(formatScheduleSection(opts.context.upcoming, "Upcoming"));
         }
         if (!parts.length) {
+            const saved = /\b(medicine|meds|dose|tablet|prescription|rx)\b/i.test(qLower)
+                ? findMedicineLines(opts.labs ?? [], q)
+                : [];
+            if (saved.length) return `${saved.join("\n")}\n\nReported only — nothing invented.`;
             return "Nothing scheduled for today.";
         }
         return parts.filter(Boolean).join("\n\n");
@@ -794,8 +802,17 @@ function buildCaregiverSmartReply(opts: {
             .filter((line) => /schedule|dose|medicine|check.?in|vitals/i.test(line))
             .slice(-8)
             .join("\n");
-        if (scheduleHint) {
-            return `From today's care record:\n${scheduleHint}\n\nOpen Family → schedule for full details.`;
+        const savedMeds = /\b(medicine|meds|dose|tablet|prescription|rx)\b/i.test(qLower)
+            ? findMedicineLines(opts.labs, q)
+            : [];
+        if (scheduleHint || savedMeds.length) {
+            const bits = [
+                scheduleHint
+                    ? `From today's care record:\n${scheduleHint}\n\nOpen Family → schedule for full details.`
+                    : "",
+                savedMeds.join("\n"),
+            ].filter(Boolean);
+            return bits.join("\n\n");
         }
     }
 

@@ -38,6 +38,18 @@ const TEST_ALIASES: Array<{ intent: RegExp; aliases: string[] }> = [
     { intent: /\b(calcium)\b/i, aliases: ["Calcium"] },
 ];
 
+function parsePlainRows(rawText: string): Array<{ test: string; value: string; unit: string }> {
+    const rows: Array<{ test: string; value: string; unit: string }> = [];
+    for (const line of rawText.split("\n")) {
+        const m = line
+            .trim()
+            .match(/^([A-Za-z][A-Za-z0-9 \-]{1,40}?)\s+(\d+(?:\.\d+)?)\s+([A-Za-zµμ/%][\w/µμ.^%-]{0,16})$/);
+        if (!m) continue;
+        rows.push({ test: m[1], value: m[2], unit: m[3] });
+    }
+    return rows;
+}
+
 function parseTableRows(rawText: string): Array<{ test: string; value: string; unit: string }> {
     const rows: Array<{ test: string; value: string; unit: string }> = [];
     for (const line of rawText.split("\n")) {
@@ -83,7 +95,7 @@ export function findPrintedHits(labs: LabSource[], question: string): LabHit[] {
 
     for (const group of wanted) {
         for (const lab of newestFirst) {
-            const rows = parseTableRows(lab.rawText);
+            const rows = [...parseTableRows(lab.rawText), ...parsePlainRows(lab.rawText)];
             const row = rows.find((r) => group.aliases.some((alias) => rowMatches(r.test, alias)));
             if (!row) continue;
             hits.push({
@@ -97,6 +109,26 @@ export function findPrintedHits(labs: LabSource[], question: string): LabHit[] {
         }
     }
     return hits;
+}
+
+/** Lines written as `Medicine: Telma 40 mg` on a saved upload. */
+export function findMedicineLines(labs: LabSource[], question: string): string[] {
+    const q = question.toLowerCase();
+    const asks = /\b(medicine|medication|medicines|meds|dose|tablet|capsule|prescription|rx|drug)\b/i.test(q);
+    const out: string[] = [];
+    for (const lab of [...labs].reverse()) {
+        for (const line of lab.rawText.split("\n")) {
+            const m = line.match(/^Medicine:\s*(.+)$/i);
+            if (!m) continue;
+            const body = m[1].trim();
+            const first = body.split(/\s+/)[0]?.toLowerCase() ?? "";
+            if (asks || (first.length > 2 && q.includes(first))) {
+                const when = lab.recordDate ? ` (${lab.recordDate})` : "";
+                out.push(`Medicine: ${body}${when}`);
+            }
+        }
+    }
+    return out.slice(0, 8);
 }
 
 export function findNamedReports(labs: LabSource[], question: string): LabSource[] {

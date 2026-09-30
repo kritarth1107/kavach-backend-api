@@ -26,6 +26,8 @@ const EXTENSION_MIME: Record<string, string> = {
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
 };
 
 function getR2Client(): S3Client {
@@ -148,7 +150,12 @@ export async function extractTextFromUpload(
             const parser = new PDFParse({ data: buffer });
             const textResult = await parser.getText();
             await parser.destroy();
-            return (textResult.text ?? "").replace(/\s+/g, " ").trim();
+            return (textResult.text ?? "")
+                .replace(/\r/g, "")
+                .replace(/[ \t]+\n/g, "\n")
+                .replace(/[ \t]{2,}/g, " ")
+                .replace(/\n{3,}/g, "\n\n")
+                .trim();
         } catch {
             return "";
         }
@@ -205,6 +212,8 @@ export const ALLOWED_UPLOAD_MIME_TYPES = new Set([
     "image/jpeg",
     "image/png",
     "image/webp",
+    "image/heic",
+    "image/heif",
 ]);
 
 export const ALLOWED_UPLOAD_EXTENSIONS = new Set(Object.keys(EXTENSION_MIME));

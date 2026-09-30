@@ -94,7 +94,7 @@ import {
     postNotificationsReadAllHandler,
 } from "../controllers/dashboard.controller";
 import { postSaheliMemoryRefreshHandler } from "../controllers/saheliCompanion.controller";
-import { familyDocumentUpload } from "../middleware/upload.middleware";
+import { familyDocumentUpload, rejectOversizedUpload } from "../middleware/upload.middleware";
 import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
@@ -269,6 +269,7 @@ router.post(
         { name: "files", maxCount: 25 },
         { name: "file", maxCount: 1 },
     ]),
+    rejectOversizedUpload,
     postRecipientLabUpload,
 );
 router.get(

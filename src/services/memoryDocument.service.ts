@@ -24,6 +24,14 @@ import {
     ChannelType,
 } from "../types/careRecord.types";
 import { getFamilyForActor, requirePermission, requireCareRecipient } from "./careRecordAuth.service";
+import {
+    applyExtraction,
+    contentHash,
+    extractMedicalRecord,
+    isSameSavedFile,
+    medicalUploadProblem,
+    type SavedExtraction,
+} from "./medicalRecordExtract.service";
 
 async function assertRecipientAccess(
     familyId: string,
@@ -84,6 +92,12 @@ function serializeDocument(doc: {
     tags?: string[];
     highlights?: string[];
     analysisStatus?: string;
+    patientName?: string;
+    provider?: string;
+    medicines?: Array<{ name: string; dose?: string }>;
+    unreadParts?: string[];
+    extractionStatus?: string;
+    structuredValues?: Array<{ name: string; value: string; unit?: string }>;
 }) {
     const text = doc.rawText?.replace(/\s+/g, " ").trim() ?? "";
     const snippet =
@@ -108,6 +122,16 @@ function serializeDocument(doc: {
         tags: doc.tags ?? [],
         highlights: doc.highlights ?? [],
         analysis_status: doc.analysisStatus ?? "pending",
+        patient_name: doc.patientName ?? null,
+        provider: doc.provider ?? null,
+        medicines: (doc.medicines ?? []).map((m) => ({ name: m.name, dose: m.dose ?? null })),
+        lab_values: (doc.structuredValues ?? []).map((v) => ({
+            name: v.name,
+            value: v.value,
+            unit: v.unit ?? null,
+        })),
+        unread: doc.unreadParts ?? [],
+        extraction_status: doc.extractionStatus ?? null,
     };
 }
 
@@ -207,77 +231,124 @@ export async function ingestRecipientFile(
     if (!isR2Configured()) {
         throw new AppError("File storage is not configured", 503);
     }
-    if (!file?.buffer?.length) {
-        throw new AppError("File is required", 400);
+    const mimeType = file?.mimetype || "application/octet-stream";
+    const originalName = file?.originalname || "document";
+    const problem = medicalUploadProblem({
+        size: file?.buffer?.length || file?.size || 0,
+        mimeType,
+        name: originalName,
+    });
+    if (problem) throw new AppError(problem, 400);
+    if (!isAllowedUpload(mimeType, originalName) && problem === null) {
+        throw new AppError("This is not a document we can read. Use a photo (JPG, PNG, HEIC) or a PDF.", 400);
     }
 
-    const mimeType = file.mimetype || "application/octet-stream";
-    const originalName = file.originalname || "document";
-    if (!isAllowedUpload(mimeType, originalName)) {
-        throw new AppError(
-            "Unsupported file type. Use PDF, Word, Excel, Markdown, text, CSV, or images.",
-            400,
-        );
+    const hash = contentHash(file.buffer);
+    const existing = await LabDocument.findOne({ familyId, recipientUserId, contentHash: hash }).lean();
+    if (existing && isSameSavedFile(hash, existing.contentHash)) {
+        return { ...serializeDocument(existing), already_on_file: true };
     }
 
-    const title = (payload.title?.trim() || path.basename(originalName, path.extname(originalName))).slice(0, 200);
-    if (!title) throw new AppError("Title is required", 400);
+    const fallbackTitle = (payload.title?.trim() || path.basename(originalName, path.extname(originalName))).slice(0, 200);
+    if (!fallbackTitle) throw new AppError("Title is required", 400);
 
     const storageKey = buildFamilyObjectKey(familyId, originalName);
     const fileUrl = await uploadFamilyFile(storageKey, file.buffer, mimeType);
-    const extractedText = await extractTextFromUpload(file.buffer, mimeType, originalName);
-    const rawText =
-        extractedText ||
-        `[Uploaded file: ${originalName}. View at ${fileUrl}]`;
+    const saved = await readUpload(file.buffer, mimeType, originalName);
 
-    const doc = await LabDocument.create({
+    const title = (saved.status === "failed" ? fallbackTitle : titleFromExtract(saved, fallbackTitle)).slice(0, 200);
+    const fields = {
         documentId: randomUUID(),
         familyId,
         recipientUserId,
         title,
-        rawText,
-        kind: payload.kind || "lab",
-        recordDate: payload.recordDate,
+        rawText: saved.rawText.slice(0, 48_000),
+        kind: payload.kind || saved.extract.kind || "lab",
+        recordDate: payload.recordDate || saved.extract.recordDate || undefined,
         createdBy: actorUserId,
-        source: "file",
+        source: "file" as const,
         storageKey,
         fileUrl,
         fileName: originalName,
         mimeType,
         fileSize: file.size,
-        analysisStatus: "pending",
-    });
+        contentHash: hash,
+        patientName: saved.extract.patientName || undefined,
+        provider: saved.extract.provider || undefined,
+        medicines: saved.extract.medicines.map((m) => ({ name: m.name, dose: m.dose || undefined })),
+        unreadParts: saved.extract.unread,
+        extractionStatus: saved.status,
+        structuredValues: saved.extract.labs.map((l) => ({
+            name: l.name,
+            value: l.value,
+            unit: l.unit || undefined,
+            date: saved.extract.recordDate || undefined,
+        })),
+        aiSummary: saved.extract.summary.slice(0, 500),
+        analysisStatus: saved.status === "failed" ? ("failed" as const) : ("ready" as const),
+    };
 
-    const analysis = await finalizeDocumentMemory({
+    let doc;
+    try {
+        doc = await LabDocument.create(fields);
+    } catch (err) {
+        const code = err && typeof err === "object" && "code" in err ? (err as { code?: number }).code : 0;
+        if (code === 11000) {
+            const again = await LabDocument.findOne({ familyId, recipientUserId, contentHash: hash }).lean();
+            if (again) return { ...serializeDocument(again), already_on_file: true };
+        }
+        throw err;
+    }
+
+    // Memory sync can take a long time. The file and the printed fields are already saved.
+    void syncDocumentToFamilyMemory({
         familyId,
         recipientUserId,
         documentId: doc.documentId,
         title,
-        rawText,
+        rawText: saved.rawText,
         fileName: originalName,
-        kind: payload.kind,
-        recordDate: payload.recordDate,
-    });
-
-    const updated = await LabDocument.findOne({ documentId: doc.documentId }).lean();
+        kind: doc.kind,
+        recordDate: doc.recordDate,
+        keepExtracted: true,
+    }).catch(() => null);
 
     await recordDocumentEvent(familyId, recipientUserId, actorUserId, {
         documentId: doc.documentId,
-        title: updated?.title ?? title,
-        kind: analysis?.kind ?? doc.kind,
-        rawText,
+        title,
+        kind: doc.kind,
+        rawText: saved.rawText,
     });
 
-    return {
-        document_id: doc.documentId,
-        title: updated?.title ?? title,
-        kind: analysis?.kind ?? updated?.kind ?? doc.kind,
-        file_url: doc.fileUrl,
-        storage_key: doc.storageKey,
-        ai_summary: analysis?.summary ?? null,
-        tags: analysis?.tags ?? [],
-        analysis_status: analysis ? "ready" : "pending",
-    };
+    return { ...serializeDocument(doc.toObject()), already_on_file: false };
+}
+
+async function readUpload(buffer: Buffer, mimeType: string, originalName: string): Promise<SavedExtraction> {
+    let text = "";
+    try {
+        text = await extractTextFromUpload(buffer, mimeType, originalName);
+    } catch {
+        text = "";
+    }
+    const printed = extractMedicalRecord(text);
+    const useful = Boolean(
+        printed.patientName || printed.recordDate || printed.provider || printed.medicines.length || printed.labs.length,
+    );
+    const image = mimeType.startsWith("image/");
+    let vision = null;
+    if (!useful && (image || mimeType === "application/pdf" || originalName.toLowerCase().endsWith(".pdf"))) {
+        const { readMedicalPage } = await import("./medicalRecordVision.service");
+        vision = await readMedicalPage(buffer, image ? mimeType : "application/pdf");
+    }
+    return applyExtraction({ text, vision, pageWasImage: image || !text.trim() });
+}
+
+function titleFromExtract(saved: SavedExtraction, fallback: string): string {
+    const ex = saved.extract;
+    if (ex.kind === "prescription" && ex.medicines[0]) return `Prescription — ${ex.medicines[0].name}`;
+    if (ex.kind === "lab" && ex.provider) return `Lab — ${ex.provider}`;
+    if (ex.kind === "discharge") return ex.patientName ? `Discharge — ${ex.patientName}` : "Discharge summary";
+    return fallback;
 }
 
 export async function ingestRecipientFiles(

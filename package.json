@@ -26,7 +26,8 @@
     "test:rides": "tsx scripts/test-ride-chain.ts && tsx scripts/test-ride-availability.ts",
     "test:ola": "tsx scripts/test-ola-inchat.ts && tsx scripts/test-place-label.ts && tsx scripts/test-ola-recovery.ts",
     "test:order-bugs": "tsx scripts/test-order-regressions.ts",
-    "test:ci": "tsc --noEmit -p . && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs"
+    "test:records": "tsx scripts/test-medical-records.ts",
+    "test:ci": "tsc --noEmit -p . && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

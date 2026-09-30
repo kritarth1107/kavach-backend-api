@@ -21,6 +21,12 @@ export interface ILabDocument {
     highlights?: string[];
     aiMemoryDocumentId?: string;
     analysisStatus?: "pending" | "ready" | "failed";
+    contentHash?: string;
+    patientName?: string;
+    provider?: string;
+    medicines?: Array<{ name: string; dose?: string }>;
+    unreadParts?: string[];
+    extractionStatus?: "ready" | "partial" | "failed";
     structuredValues?: Array<{
         name: string;
         value: string;
@@ -58,6 +64,18 @@ const labDocumentSchema = new Schema<ILabDocumentRecord>(
             enum: ["pending", "ready", "failed"],
             default: "pending",
         },
+        contentHash: { type: String, trim: true },
+        patientName: { type: String, trim: true, maxlength: 80 },
+        provider: { type: String, trim: true, maxlength: 80 },
+        medicines: {
+            type: [{ name: { type: String, trim: true }, dose: { type: String, trim: true } }],
+            default: [],
+        },
+        unreadParts: { type: [String], default: [] },
+        extractionStatus: {
+            type: String,
+            enum: ["ready", "partial", "failed"],
+        },
         structuredValues: {
             type: [
                 {
@@ -88,6 +106,10 @@ labDocumentSchema.pre("save", function (next) {
 });
 
 labDocumentSchema.index({ familyId: 1, recipientUserId: 1, createdAt: -1 });
+labDocumentSchema.index(
+    { familyId: 1, recipientUserId: 1, contentHash: 1 },
+    { unique: true, sparse: true },
+);
 
 const LabDocument: Model<ILabDocumentRecord> =
     (mongoose.models.LabDocument as Model<ILabDocumentRecord>) ||

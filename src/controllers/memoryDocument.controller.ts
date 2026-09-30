@@ -85,7 +85,7 @@ export const postRecipientLabUpload = async (
                 files[0],
                 {
                     title: req.body?.title ? String(req.body.title) : undefined,
-                    kind: req.body?.kind ? String(req.body.kind) : "lab",
+                    kind: req.body?.kind ? String(req.body.kind) : undefined,
                     recordDate: req.body?.recordDate
                         ? String(req.body.recordDate)
                         : undefined,
@@ -101,7 +101,7 @@ export const postRecipientLabUpload = async (
             req.user.userId,
             files,
             {
-                kind: req.body?.kind ? String(req.body.kind) : "lab",
+                kind: req.body?.kind ? String(req.body.kind) : undefined,
                 recordDate: req.body?.recordDate
                     ? String(req.body.recordDate)
                     : undefined,

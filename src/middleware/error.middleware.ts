@@ -24,6 +24,17 @@ export const errorHandler = (
     typeof err === "object" &&
     err !== null &&
     "code" in err &&
+    (err as { code?: string }).code === "LIMIT_FILE_SIZE"
+  ) {
+    statusCode = 400;
+    message = "This file is too large. The maximum is 15 MB.";
+  }
+
+  if (
+    !(err instanceof AppError) &&
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
     (err as { code?: number }).code === 11000
   ) {
     statusCode = 409;

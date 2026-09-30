@@ -72,6 +72,8 @@ export async function syncDocumentToFamilyMemory(payload: {
     fileName?: string;
     kind?: string;
     recordDate?: string;
+    /** File upload already stored the printed fields. Do not let a later summary replace them. */
+    keepExtracted?: boolean;
 }): Promise<{
     analysis: AnalysisResult;
     aiMemoryDocumentId?: string;
@@ -123,17 +125,23 @@ export async function syncDocumentToFamilyMemory(payload: {
     await LabDocument.updateOne(
         { documentId: payload.documentId },
         {
-            $set: {
-                title: resolvedTitle.slice(0, 200),
-                kind: resolvedKind,
-                ...(resolvedDate ? { recordDate: resolvedDate } : {}),
-                aiSummary: analysis.summary,
-                tags: analysis.tags,
-                highlights: analysis.highlights,
-                structuredValues,
-                aiMemoryDocumentId,
-                analysisStatus: aiMemoryDocumentId ? "ready" : "failed",
-            },
+            $set: payload.keepExtracted
+                ? {
+                      tags: analysis.tags,
+                      highlights: analysis.highlights,
+                      ...(aiMemoryDocumentId ? { aiMemoryDocumentId } : {}),
+                  }
+                : {
+                      title: resolvedTitle.slice(0, 200),
+                      kind: resolvedKind,
+                      ...(resolvedDate ? { recordDate: resolvedDate } : {}),
+                      aiSummary: analysis.summary,
+                      tags: analysis.tags,
+                      highlights: analysis.highlights,
+                      structuredValues,
+                      aiMemoryDocumentId,
+                      analysisStatus: aiMemoryDocumentId ? "ready" : "failed",
+                  },
         },
     );
 
