@@ -349,7 +349,32 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Fixture catalog for a training pass. Never calls a store and never places an order. */
+function trainSearch(store: McpStore, query: string): StoreSearch {
+    const q = String(query || "");
+    // A Hindi-only query comes back empty so the caller can search once more in English.
+    if (/[\u0900-\u097F]/.test(q) && !/[a-z]/i.test(q)) {
+        return { store, hits: [], calledSearch: true, addressVia: "train" };
+    }
+    const hits: McpPick[] = [];
+    if (/protein|ritebite|rite bite|protien/i.test(q)) {
+        hits.push(
+            { store, name: "RiteBite Max Protein Daily Bar Berry 10g Protein", pricePaise: 4000, spinId: "train-rb-berry", skuId: "train-rb-berry", pvid: "train-rb-berry", spid: "train-rb-berry" },
+            { store, name: "Yoga Bar Protein Bar Chocolate 10g Protein", pricePaise: 4500, spinId: "train-yb", skuId: "train-yb", pvid: "train-yb", spid: "train-yb" },
+            { store, name: "RiteBite Max Protein Daily Bar Choco Fudge 10g Protein", pricePaise: 4000, spinId: "train-rb-choco", skuId: "train-rb-choco", pvid: "train-rb-choco", spid: "train-rb-choco" },
+        );
+    } else if (/medicine|dawai|dolo|crocin|tablet|paracetamol/i.test(q)) {
+        hits.push({ store, name: "Dolo 650 Tablet", pricePaise: 3200, spinId: "train-dolo", skuId: "train-dolo", pvid: "train-dolo", spid: "train-dolo" });
+    } else if (/milk|doodh|bread|atta|biscuit/i.test(q)) {
+        hits.push({ store, name: "Amul Taaza Toned Milk 1L", pricePaise: 6800, spinId: "train-milk", skuId: "train-milk", pvid: "train-milk", spid: "train-milk" });
+    } else if (q.trim()) {
+        hits.push({ store, name: "Amul Taaza Toned Milk 1L", pricePaise: 6800, spinId: "train-milk", skuId: "train-milk", pvid: "train-milk", spid: "train-milk" });
+    }
+    return { store, hits, calledSearch: true, addressVia: "train" };
+}
+
 export async function searchStore(ctx: McpCtx, store: McpStore, query: string, opts: { restaurantName?: string | null; attempt?: number } = {}): Promise<StoreSearch> {
+    if (process.env.SAHELI_TRAIN === "1") return trainSearch(store, query);
     let calledSearch = false;
     try {
         return await withFamilyStore(ctx.familyId, store, async (client, userId) => {
@@ -541,6 +566,21 @@ export const MCP_CARD_TTL_MS = 15 * 60_000;
 
 /** Build the real cart for exactly this pick → confirm card (then empty the cart again). */
 export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1): Promise<McpCard> {
+    if (process.env.SAHELI_TRAIN === "1") {
+        return {
+            cardId: "train-card",
+            store: pick.store,
+            pick,
+            qty,
+            itemLine: `${qty} × ${pick.name}`,
+            totalPaise: pick.pricePaise || 4000,
+            storeAddressId: "train-store-addr",
+            placeAddressId: ctx.place.addressId,
+            addressFull: ctx.place.full,
+            addressNickname: ctx.place.nickname,
+            createdAt: Date.now(),
+        };
+    }
     if (!mcpOrderStores().includes(pick.store)) throw new McpStoreError("not_connected", `${MCP_STORE_LABEL[pick.store]} ordering is off.`);
     return withFamilyStore(ctx.familyId, pick.store, async (client, userId) => {
         try {
@@ -578,6 +618,7 @@ export type PlaceResult =
  * single place-order call (Cash). Never retried.
  */
 export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: string): Promise<PlaceResult> {
+    if (process.env.SAHELI_TRAIN === "1") return { status: "refused", detail: "Training run: nothing was ordered." };
     if (confirmText.trim().toLowerCase() !== "confirm") return { status: "refused", detail: "Needs the word confirm." };
     if (Date.now() - card.createdAt > MCP_CARD_TTL_MS) return { status: "expired", detail: "The confirm card expired." };
     if (card.placeAddressId !== ctx.place.addressId) return { status: "refused", detail: "Delivery address changed since the card." };

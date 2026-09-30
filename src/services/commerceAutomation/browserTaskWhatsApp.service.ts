@@ -7,7 +7,7 @@
  */
 import { isLiteralConfirm, isSoftYes, signInConfirmNudge } from "./literalConfirm";
 import { browserPhaseResumesOnRetry } from "./orderChat/flowBind";
-import { applyFaithfulHits, brandLineOf, catalogSearchQueries, rewriteProductQuery } from "./orderChat/queryRewrite";
+import { applyFaithfulHits, brandLineOf, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "./orderChat/queryRewrite";
 import { catalogRetryNeeded, formatLinkedFailure, linkedGroceryTargets } from "./orderChat/searchPolicy";
 import WhatsappSession from "../../models/whatsappSession.model";
 import type { SaheliRoute } from "../saheliRouter.service";
@@ -1377,7 +1377,26 @@ export async function cancelGuestSearch(phone: string): Promise<void> {
     await WhatsappSession.updateOne({ phone }, { $unset: { pendingSearch: 1 } }).catch(() => undefined);
 }
 
+const trainFollowUps = new Map<string, string[]>();
+
+/** Training pass only: the search reply that would have been sent on WhatsApp. */
+export function takeTrainFollowUps(phone: string): string[] {
+    const rows = trainFollowUps.get(phone) || [];
+    trainFollowUps.delete(phone);
+    return rows;
+}
+
+function noteTrainFollowUp(phone: string, text: string): void {
+    const rows = trainFollowUps.get(phone) || [];
+    rows.push(text);
+    trainFollowUps.set(phone, rows);
+}
+
 async function pushFollowUp(input: { phone: string; familyId: string; recipientUserId: string }, text: string): Promise<boolean> {
+    if (process.env.SAHELI_TRAIN === "1") {
+        noteTrainFollowUp(input.phone, text);
+        return false;
+    }
     const { pushWhatsAppBrowserFollowUp } = await import("./browserProgressNotify.service");
     const send = (resend: boolean) => pushWhatsAppBrowserFollowUp({ phone: input.phone, familyId: input.familyId, recipientUserId: input.recipientUserId, text, resend }).catch(() => false);
     if (await send(false)) return true;
@@ -1452,6 +1471,10 @@ function deferGuestWork(
             return;
         }
         if (res.offer && !res.draft) await setOffer(input.phone, input.familyId, res.offer);
+        if (process.env.SAHELI_TRAIN === "1") {
+            noteTrainFollowUp(input.phone, text);
+            return;
+        }
         await pushFollowUp(input, text);
     })();
     return { text: ack, draft: currentDraft ?? undefined, deferred: true };
@@ -1712,9 +1735,12 @@ async function handleAddressConfirm(
     }
     if (!chosenId && route && (route.productQuery || route.partners[0]) && draft.pendingRoute && (route.intent === "order_modify" || route.intent === "order_new")) {
         const partner = route.partners[0];
+        const query = route.productQuery
+            ? refinePendingQuery(draft.pendingRoute.query, route.productQuery, raw)
+            : draft.pendingRoute.query;
         draft.pendingRoute = {
             ...draft.pendingRoute,
-            ...(route.productQuery ? { query: route.productQuery } : {}),
+            ...(query ? { query } : {}),
             ...(partner ? { partner, category: categoryFor(route, partner) } : {}),
         };
         draft.productQuery = draft.pendingRoute.query;
@@ -2652,9 +2678,12 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
         const adjust = !route.addressKind && (route.partners[0] || route.productQuery) && (route.intent === "order_modify" || route.intent === "order_new");
         if (adjust && draft.pendingRoute) {
             const partner = route.partners[0];
+            const query = route.productQuery
+                ? refinePendingQuery(draft.pendingRoute.query, route.productQuery, rawText)
+                : draft.pendingRoute.query;
             draft.pendingRoute = {
                 ...draft.pendingRoute,
-                ...(route.productQuery ? { query: route.productQuery } : {}),
+                ...(query ? { query } : {}),
                 ...(partner ? { partner, category: categoryFor(route, partner) } : {}),
             };
             await saveDraft(input.phone, draft);

@@ -131,5 +131,14 @@ ok("chooseServices honours config", chooseServices({ tier: "tier3", vehicle: "ca
     ok("small-town Rapido doesn't promise a cab", !/your cab/i.test(m) && /auto or bike/.test(m), m);
 }
 
+{
+    const { parseFromTo, isClockPhrase } = require("../src/services/rideBooking/slotParse") as typeof import("../src/services/rideBooking/slotParse");
+    eq("tomorrow-morning cab is not a pickup", parseFromTo("kal subah ka cab chahiye"), {});
+    eq("cab chahiye abhi is not a pickup", parseFromTo("cab chahiye abhi"), {});
+    ok("confirm is not a place", !parseFromTo("confirm").bare && isClockPhrase("confirm"));
+    const trip = parseFromTo("from home to the airport");
+    ok("from home to the airport still parses", trip.pickup === "home" && /airport/i.test(trip.drop || ""), trip);
+}
+
 console.log(fail ? `\n${fail} failed` : "\nall passed");
 process.exit(fail ? 1 : 0);

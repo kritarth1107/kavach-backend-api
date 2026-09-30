@@ -750,6 +750,9 @@ export async function confirmAndPlaceOrder(input: {
     message: string;
     orderFlow?: OrderFlowPayload;
 }> {
+    if (process.env.SAHELI_TRAIN === "1") {
+        return { status: "error", message: "Training run: nothing was ordered." };
+    }
     try {
         const { flow, order } = await submitOrderFlowCart({
             sessionId: input.sessionId,

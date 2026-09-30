@@ -212,6 +212,13 @@ type FlowDoc = {
 /** One-line "I dropped your older list/ride" notes, prepended to the next routed reply. */
 const supersedeNotes = new Map<string, string>();
 
+/** The one-line "I dropped the open order" note, if this turn started a new task. */
+export function takeSupersedeNote(phone: string): string | undefined {
+    const note = supersedeNotes.get(phone);
+    supersedeNotes.delete(phone);
+    return note;
+}
+
 function liveFlow(d: { phase?: string; savedAt?: string | Date } | undefined | null): boolean {
     return Boolean(d?.phase) && d!.phase !== "idle" && d!.phase !== "done" && !staleRideSlots(d);
 }
@@ -1280,7 +1287,7 @@ function conceptKeyDiffers(q: string, u: { name: string }): boolean {
  * Executes a Gemini route. Returns a reply, or tells the caller whether the regex gates
  * may still run (only for commerce intents the executors couldn't place).
  */
-async function dispatchRoutedTurn(a: {
+export async function dispatchRoutedTurn(a: {
     route: SaheliRoute;
     text: string;
     phone: string;

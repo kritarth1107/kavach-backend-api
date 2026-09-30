@@ -465,6 +465,19 @@ export async function searchGuestCatalog(input: {
             query,
         };
     }
+    if (process.env.SAHELI_TRAIN === "1") {
+        const name = /protein|ritebite|protien/i.test(query)
+            ? "RiteBite Max Protein Daily Bar Berry 10g Protein"
+            : /dolo|medicine|dawai|tablet/i.test(query)
+              ? "Dolo 650 Tablet"
+              : "Amul Taaza Toned Milk 1L";
+        return {
+            hits: [{ id: "train-1", name, pricePaise: 4000, source: "none", inStock: true }],
+            searched: true,
+            partner,
+            query,
+        };
+    }
 
     try {
         if (partner === "apollo") {

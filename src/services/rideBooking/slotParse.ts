@@ -82,8 +82,9 @@ export function parseFromTo(text: string): { pickup?: string; drop?: string; bar
         if (drop) return { drop };
     }
 
-    // Bare place name (e.g. "ritz Carlton bangalore") when mid-slot
-    if (cleaned.length >= 2 && !/^(yeah|yes|haan|ha|ok|okay|sure|yep)$/i.test(cleaned)) {
+    // Bare place name (e.g. "ritz Carlton bangalore") when mid-slot.
+    // A time ("kal subah", "chahiye abhi") or "confirm" is not a place.
+    if (cleaned.length >= 2 && !/^(yeah|yes|haan|ha|ok|okay|sure|yep)$/i.test(cleaned) && !isClockPhrase(cleaned)) {
         return { bare: cleaned };
     }
     return {};
@@ -91,6 +92,23 @@ export function parseFromTo(text: string): { pickup?: string; drop?: string; bar
 
 export function isBareAffirmation(text: string): boolean {
     return /^(yeah|yes|yep|haan|ha|ok|okay|sure|book|ride|cab|taxi)$/i.test(text.trim());
+}
+
+/**
+ * "kal subah ka cab chahiye" / "cab chahiye abhi" is when, not where.
+ * After the ride words are stripped, only clock and filler words are left.
+ * "confirm" is a reply, never a place ("Confirm Inn").
+ */
+const CLOCK_WORD =
+    /^(?:kal|aaj|parson|parso|subah|shaam|dopahar|raat|morning|evening|afternoon|night|tomorrow|today|tonight|abhi|now|early|late|chahiye|chahie|chaahiye|mujhe|mere|mera|meri|liye|ek|ka|ki|ke|ko|wala|wali|please|pls|for|me|a|an|the|want|need|i|my|confirm|confirmed|cancel|stop|haan|ha|yes|ok|okay|yep|yeah|sure)$/i;
+
+export function isClockPhrase(s: string): boolean {
+    const words = String(s || "")
+        .toLowerCase()
+        .replace(/[^a-z\u0900-\u097F\s]/g, " ")
+        .split(/\s+/)
+        .filter(Boolean);
+    return words.length > 0 && words.every((w) => CLOCK_WORD.test(w));
 }
 
 export function formatRouteSummary(pickup: RidePlace, drop: RidePlace): string {

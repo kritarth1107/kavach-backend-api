@@ -130,6 +130,12 @@ export function catalogSearchQueries(query: string): string[] {
     return out;
 }
 
+/** A follow-up while she is still confirming the address keeps the brand already on the table. */
+export function refinePendingQuery(prior: string, routerQuery: string, utterance: string): string {
+    const next = rewriteProductQuery(routerQuery, utterance, { priorQuery: prior });
+    return (next || prior || routerQuery).slice(0, 80);
+}
+
 export function rewriteProductQuery(
     routerQuery: string,
     utterance: string,

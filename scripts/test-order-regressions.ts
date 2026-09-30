@@ -6,7 +6,7 @@
  */
 import assert from "node:assert/strict";
 import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
-import { applyFaithfulHits, catalogSearchQueries, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
+import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
 import { isLiteralConfirm } from "../src/services/commerceAutomation/literalConfirm";
@@ -187,6 +187,24 @@ t("retry after the stores didn't answer reruns that search", () => {
     assert.equal(bindOfferReply("yes", "protein bar"), "confirm");
     assert.equal(bindOfferReply("retry", null), null);
     assert.equal(bindOfferReply("what was my TSH", "protein bar"), null);
+});
+
+t("10g berry while the address is still unconfirmed keeps RiteBite", () => {
+    const prior = rewriteProductQuery("max rite bite berry flavor 10g protien", "max rite bite berry flavor 10g protien");
+    assert.match(prior, /RiteBite Max Protein/);
+    assert.match(prior, /berry/);
+    assert.match(prior, /10g/);
+    const kept = refinePendingQuery(prior, "10g berry", "I want the 10g berry one");
+    assert.equal(kept, "RiteBite Max Protein berry 10g");
+    assert.notEqual(kept.toLowerCase(), "10g berry");
+    const hits = [
+        { name: "RiteBite Max Protein Daily Bar Berry 10g Protein" },
+        { name: "Yoga Bar Protein Bar Chocolate 10g Protein" },
+        { name: "RiteBite Max Protein Daily Bar Choco Fudge 10g Protein" },
+    ];
+    const judged = applyFaithfulHits(kept, hits);
+    assert.deepEqual(judged.hits.map((h) => h.name), ["RiteBite Max Protein Daily Bar Berry 10g Protein"]);
+    assert.equal(judged.miss, null);
 });
 
 t("Ha does not place an order; only confirm does", () => {

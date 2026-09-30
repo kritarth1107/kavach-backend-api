@@ -1849,6 +1849,16 @@ function progressNeedOtpResult(input: RunBrowserTaskInput, reason: string): Brow
 
 /** Public API — per-user profile + run. Always respects a hard WhatsApp-facing deadline. */
 export async function runBrowserTask(input: RunBrowserTaskInput): Promise<BrowserTaskResult> {
+    if (process.env.SAHELI_TRAIN === "1") {
+        return {
+            status: "error",
+            mode: "dry_run",
+            partner: String(input.partner || "generic"),
+            steps: 0,
+            failureReason: "disabled",
+            message: "Training run: the browser was not opened and nothing was ordered.",
+        };
+    }
     // HARD allowlist — refuse before Chromium ever opens.
     const allowPartner = resolvePlaybook(input.partner, input.goal, input.startUrl).partner;
     if (!isAllowedOrderSite(String(allowPartner))) {
