@@ -4,6 +4,7 @@
  * Do NOT switch to Claude/OpenAI computer-use.
  */
 import { GoogleAuth } from "google-auth-library";
+import { preferPro, vertexLocationForModel } from "../../clients/vertexGemini.client";
 
 export type BrowserActionType =
     | "click"
@@ -59,27 +60,12 @@ export function gcpProjectId(): string {
     );
 }
 
-export function visionLocation(): string {
-    if (process.env.VERTEX_VISION_LOCATION?.trim()) {
-        return process.env.VERTEX_VISION_LOCATION.trim();
-    }
-    const model = (
-        process.env.VERTEX_BROWSER_MODEL?.trim() ||
-        process.env.VERTEX_VISION_MODEL?.trim() ||
-        "gemini-3.5-flash"
-    ).toLowerCase();
-    if (model.includes("flash")) {
-        return process.env.GCP_REGION?.trim() || "asia-south1";
-    }
-    return process.env.VERTEX_LOCATION?.trim() || process.env.GCP_REGION?.trim() || "asia-south1";
+export function browserModel(): string {
+    return preferPro(process.env.VERTEX_BROWSER_MODEL || process.env.VERTEX_VISION_MODEL);
 }
 
-export function browserModel(): string {
-    return (
-        process.env.VERTEX_BROWSER_MODEL?.trim() ||
-        process.env.VERTEX_VISION_MODEL?.trim() ||
-        "gemini-3.5-flash"
-    );
+export function visionLocation(): string {
+    return vertexLocationForModel(browserModel());
 }
 
 export async function getAccessToken(): Promise<string | null> {

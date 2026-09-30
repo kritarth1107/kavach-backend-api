@@ -89,12 +89,16 @@ export async function captureStatedPreference(w: Who, text: string): Promise<str
 // ── Caregiver controls (dashboard; family membership checked in the controller) ──
 function pin(f: ProfileFact, by: string) {
     f.status = "caregiver_confirmed";
+    f.pinned = true;
+    f.blocked = false;
     f.confidence = 1;
     f.lastConfirmed = new Date();
     f.editedBy = by;
 }
 function blocklist(f: ProfileFact, by: string) {
     f.status = "rejected"; // hidden, and never re-learned
+    f.blocked = true;
+    f.pinned = false;
     f.editedBy = by;
     f.lastConfirmed = new Date();
 }

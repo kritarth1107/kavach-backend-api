@@ -88,8 +88,10 @@ export function matchUsual(
 const toks = (s: string) => words(s).filter((w) => !/^(the|and|with|pack|of)$/.test(w));
 
 /**
- * How many choices to show: the usual → just it; a clear ask where exactly one result has every
- * word she said → 1; otherwise at most 3 (never 5). Past declines are dropped unless she named them.
+ * How many choices to keep: the usual → just it; a clear ask where exactly one result has every
+ * word she said → 1; a broad ask (milk, protein bar, ice cream) keeps every priced option
+ * (up to 24) so the chat can show a page and then the next prices. Past declines are dropped
+ * unless she named them.
  */
 export function shapeChoices<T extends { name: string }>(query: string, opts: T[], ctx: { usual?: { name: string } | null; rejections?: UsualRejection[] } = {}): { shown: T[]; usualHit: boolean } {
     let list = opts;
@@ -110,7 +112,7 @@ export function shapeChoices<T extends { name: string }>(query: string, opts: T[
         const full = list.filter((o) => q.every((w) => o.name.toLowerCase().includes(w.replace(/s$/, ""))));
         if (full.length === 1) return { shown: full, usualHit: false };
     }
-    return { shown: list.slice(0, 3), usualHit: false };
+    return { shown: list.slice(0, 24), usualHit: false };
 }
 
 const EMOJI: Record<string, string> = { milk: "🥛", eggs: "🥚", curd: "🥣", bread: "🍞", tea: "🍵", fruits: "🍎", vegetables: "🥬", paneer: "🧀", water: "💧" };

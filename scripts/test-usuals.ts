@@ -50,9 +50,9 @@ const opts = [
 ];
 eq("usual → 1 option", shapeChoices("Amul Lactose Free Milk 250 ml", opts, { usual: milk }).shown.map((o) => o.name), [milk.name]);
 eq("usual hit flag", shapeChoices("Amul Lactose Free Milk 250 ml", opts, { usual: milk }).usualHit, true);
-eq("vague → max 3", shapeChoices("milk", opts).shown.length, 3);
+eq("vague keeps every priced option", shapeChoices("milk", opts).shown.length, 5);
 eq("clear single match → 1", shapeChoices("mother dairy full cream", opts).shown.map((o) => o.name), ["Mother Dairy Full Cream Milk 500 ml"]);
-eq("never 5", shapeChoices("milk", opts).shown.length <= 3, true);
+eq("broad list is not cut to 3", shapeChoices("milk", opts).shown.length > 3, true);
 eq("declined option dropped", shapeChoices("milk", [opts[1]!, ...opts], { rejections: rej }).shown.some((o) => o.name === milk.name), false);
 eq("declined option kept if she names it", shapeChoices("amul lactose free milk", opts, { rejections: rej }).shown.some((o) => o.name === milk.name), true);
 

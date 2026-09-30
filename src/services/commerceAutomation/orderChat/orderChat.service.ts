@@ -6,7 +6,7 @@
  * blocked items excepted). Code keeps every guardrail (blocked list, confirm card, COD, address
  * book, one placement) — this step only decides WHAT to search.
  */
-import { vertexGenerateText, parseJsonLoose, vertexFlashModel } from "../../../clients/vertexGemini.client";
+import { vertexGenerateText, parseJsonLoose, preferPro } from "../../../clients/vertexGemini.client";
 import WhatsappSession from "../../../models/whatsappSession.model";
 import { logActivity } from "../../activityLog.service";
 import { recentTurns } from "../../saheliRouter.service";
@@ -166,7 +166,7 @@ export async function orderChatTurn(input: {
     ].join("\n\n");
 
     const raw = await vertexGenerateText({
-        model: process.env.VERTEX_ORDER_CHAT_MODEL?.trim() || vertexFlashModel(),
+        model: preferPro(process.env.VERTEX_ORDER_CHAT_MODEL),
         system: SYSTEM,
         responseSchema: SCHEMA,
         prompt,

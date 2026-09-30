@@ -3,9 +3,35 @@
  * Used by the order-interrupt classifier, health red-flag classifier and daily snapshot.
  * Never throws: returns null on any failure / timeout so callers fall back to rules.
  */
+import { execFile } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 
 let auth: GoogleAuth | null = null;
+
+/** ADC refresh on this machine returns invalid_grant. The gcloud user login still works. */
+function gcloudAccessToken(): Promise<string | null> {
+    return new Promise((resolve) => {
+        execFile("gcloud", ["auth", "print-access-token"], { timeout: 15000 }, (err, stdout) => {
+            if (err) return resolve(null);
+            const token = String(stdout || "").trim();
+            resolve(token || null);
+        });
+    });
+}
+
+async function accessToken(): Promise<string | null> {
+    try {
+        auth ??= new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+        const client = await auth.getClient();
+        const token = (await client.getAccessToken()).token;
+        if (token) return token;
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        lastVertexError = `auth ${msg.replace(/\s+/g, " ").slice(0, 180)}`;
+        auth = null;
+    }
+    return gcloudAccessToken();
+}
 
 function projectId(): string {
     return (
@@ -13,34 +39,39 @@ function projectId(): string {
     );
 }
 
-/** Pro-class Gemini 3.x serves from global; Flash works regionally (matches ai-engine). */
+/** Gemini 3.1 Pro is global-only. A regional location returns 404. */
+export const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
+
+/** Flash and Gemini 2.5 are refused. An empty or forbidden name becomes 3.1 Pro. */
+export function preferPro(raw?: string | null): string {
+    const m = (raw || "").trim();
+    if (!m || /flash|2\.5/i.test(m)) return GEMINI_PRO_MODEL;
+    return m;
+}
+
+/** Pro-class Gemini 3.x serves from global only. */
 export function vertexLocationForModel(model: string): string {
     const m = model.toLowerCase();
-    if (m.includes("-pro")) return process.env.VERTEX_LOCATION?.trim() || "global";
-    // Newer Flash releases (3.6, -lite, -latest, previews) serve from global only in our project
-    // (asia-south1 → 404, checked 2026-09-26). VERTEX_GLOBAL_MODELS adds more ids.
+    if (m.includes("-pro")) return "global";
     const extra = (process.env.VERTEX_GLOBAL_MODELS || "").toLowerCase().split(/[\s,]+/).filter(Boolean);
     if (/gemini-3\.6|-lite|-latest|-preview/.test(m) || extra.includes(m)) return "global";
     return process.env.GCP_REGION?.trim() || "asia-south1";
 }
 
-export function vertexFlashModel(): string {
-    return process.env.VERTEX_CLASSIFIER_MODEL?.trim() || process.env.VERTEX_BROWSER_MODEL?.trim() || "gemini-3.5-flash";
-}
-
 export function vertexProModel(): string {
-    return process.env.VERTEX_SNAPSHOT_MODEL?.trim() || "gemini-3.1-pro-preview";
+    return preferPro(process.env.VERTEX_SNAPSHOT_MODEL);
 }
 
-/** Where to retry after a capacity error: other endpoint first, then Flash (for Pro). */
-function nextCapacityRoute(model: string, location: string, attempt: number): { model: string; location: string } {
-    const region = process.env.GCP_REGION?.trim() || "asia-south1";
-    if (attempt === 0) {
-        if (/-pro/i.test(model)) return { model: vertexFlashModel(), location: vertexLocationForModel(vertexFlashModel()) };
-        return { model, location: location === "global" ? region : "global" };
-    }
-    const fb = process.env.VERTEX_FALLBACK_MODEL?.trim() || "gemini-3.5-flash";
-    return { model: fb, location: location === "global" ? region : "global" };
+/** Kept so older call sites compile. It is 3.1 Pro, not Flash. */
+export function vertexFlashModel(): string {
+    return vertexProModel();
+}
+
+/** A full reply stays on Pro. A 429 retry must not drop to Flash or a 2.5 model. */
+function nextCapacityRoute(model: string, _location: string, _attempt: number): { model: string; location: string } {
+    const pro = vertexProModel();
+    const stay = /pro/i.test(model) && !/2\.5|flash/i.test(model) ? model : pro;
+    return { model: stay, location: "global" };
 }
 
 /** Last Vertex failure (status + short body) for secret-gated debug. */
@@ -68,14 +99,14 @@ export async function vertexGenerateText(input: {
     attempt?: number;
 }): Promise<string | null> {
     if (process.env.NODE_ENV === "test" || process.env.VERTEX_DISABLED === "1") return null;
+    const forced = preferPro(input.model);
+    if (forced !== input.model) return vertexGenerateText({ ...input, model: forced });
     const started = Date.now();
     const budget = input.timeoutMs ?? 8000;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), input.timeoutMs ?? 8000);
     try {
-        auth ??= new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
-        const client = await auth.getClient();
-        const token = (await client.getAccessToken()).token;
+        const token = await accessToken();
         if (!token) return null;
         const location = input.location || vertexLocationForModel(input.model);
         const host =
@@ -110,15 +141,16 @@ export async function vertexGenerateText(input: {
                 return vertexGenerateText({ ...input, thinkingLevel: undefined });
             }
             console.warn(`vertex ${input.model}@${location} ${lastVertexError}`);
-            // Capacity / transient (429 RESOURCE_EXHAUSTED, 500, 503): quick retry on the other
-            // endpoint (regional ↔ global) and, for Pro, on Flash — nobody waits on quota.
+            // 429 / 500 / 503: one retry, still on 3.1 Pro at global, after a jittered pause.
+            // A short fixed pause makes every waiter hit the pool again together.
             if ([429, 500, 503].includes(res.status) && (input.attempt ?? 0) < 2) {
                 const left = budget - (Date.now() - started);
-                if (left > 1500) {
+                const wait = 1000 + Math.floor(Math.random() * 3000);
+                if (left > wait + 1500) {
                     clearTimeout(timer);
-                    await new Promise((r) => setTimeout(r, Math.min(400 * ((input.attempt ?? 0) + 1), 800)));
+                    await new Promise((r) => setTimeout(r, wait));
                     const retry = nextCapacityRoute(input.model, location, input.attempt ?? 0);
-                    return vertexGenerateText({ ...input, model: retry.model, location: retry.location, timeoutMs: left - 500, attempt: (input.attempt ?? 0) + 1 });
+                    return vertexGenerateText({ ...input, model: retry.model, location: retry.location, timeoutMs: left - wait, attempt: (input.attempt ?? 0) + 1 });
                 }
             }
             return null;

@@ -28,7 +28,8 @@
     "test:order-bugs": "tsx scripts/test-order-regressions.ts",
     "test:records": "tsx scripts/test-medical-records.ts",
     "test:facts": "tsx scripts/test-saheli-facts.ts",
-    "test:ci": "tsc --noEmit -p . && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records && npm run test:facts"
+    "test:agent-loop": "tsx scripts/test-agent-loop.ts",
+    "test:ci": "tsc --noEmit -p . && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records && npm run test:facts && npm run test:agent-loop"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

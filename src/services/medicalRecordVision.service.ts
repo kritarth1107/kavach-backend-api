@@ -4,6 +4,7 @@
  */
 import { medicalRecordFromModelJson, type MedicalRecordExtract } from "./medicalRecordExtract.service";
 import { GoogleAuth } from "google-auth-library";
+import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
 
 const PROMPT = `You read medical documents for a family caregiving app.
 The page may be a photo that is slightly tilted or dim, a prescription, a lab report, or a discharge summary.
@@ -23,13 +24,11 @@ unread may only contain: "patient name", "date", "doctor or lab", "medicines", "
 Do not add a medicine or lab value that you cannot see.`;
 
 function visionModel(): string {
-    return process.env.VERTEX_VISION_MODEL?.trim() || process.env.VERTEX_STT_MODEL?.trim() || "gemini-3.5-flash";
+    return preferPro(process.env.VERTEX_VISION_MODEL || process.env.VERTEX_STT_MODEL);
 }
 
 function visionLocation(): string {
-    const model = visionModel().toLowerCase();
-    if (model.includes("flash")) return process.env.GCP_REGION?.trim() || "asia-south1";
-    return process.env.VERTEX_LOCATION?.trim() || process.env.GCP_REGION?.trim() || "asia-south1";
+    return vertexLocationForModel(visionModel());
 }
 
 export async function readMedicalPage(buffer: Buffer, mimeType: string): Promise<MedicalRecordExtract | null> {

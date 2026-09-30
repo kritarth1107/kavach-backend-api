@@ -3,6 +3,7 @@
  * Skips live TTS when ELEVENLABS_API_KEY / ELEVEN_LABS_API_KEY is absent.
  */
 import { GoogleAuth } from "google-auth-library";
+import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
 
 export type SttInput = {
     audioBase64?: string;
@@ -32,12 +33,12 @@ function speechLocation(): string {
     return process.env.SPEECH_LOCATION?.trim() || process.env.GCP_SPEECH_LOCATION?.trim() || "us";
 }
 
-function vertexLocation(): string {
-    return process.env.VERTEX_LOCATION?.trim() || process.env.GCP_REGION?.trim() || "global";
+function vertexSttModel(): string {
+    return preferPro(process.env.VERTEX_STT_MODEL);
 }
 
-function vertexSttModel(): string {
-    return process.env.VERTEX_STT_MODEL?.trim() || "gemini-3.5-flash";
+function vertexLocation(): string {
+    return vertexLocationForModel(vertexSttModel());
 }
 
 async function getAccessToken(): Promise<string | null> {

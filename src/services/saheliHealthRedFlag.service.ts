@@ -4,7 +4,7 @@
  *   2. Gemini flash classifier for everything else (async, bias: alert when unsure).
  * Deduped per recipient+category for a short window. Copy never diagnoses.
  */
-import { parseJsonLoose, vertexFlashModel, vertexGenerateText } from "../clients/vertexGemini.client";
+import { parseJsonLoose, vertexProModel, vertexGenerateText } from "../clients/vertexGemini.client";
 import { claimCaregiverAlert, notifyCaregivers } from "./saheliCaregiverAlert.service";
 import { logActivity } from "./activityLog.service";
 
@@ -152,7 +152,7 @@ export async function screenElderMessageForRedFlags(input: {
     if (/^(ok|okay|yes|no|haan|confirm|cancel|thanks?|\d+|[123])$/i.test(text)) return null;
     void (async () => {
         const raw = await vertexGenerateText({
-            model: vertexFlashModel(),
+            model: vertexProModel(),
             json: true,
             timeoutMs: 6000,
             maxOutputTokens: 120,

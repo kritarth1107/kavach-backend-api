@@ -303,6 +303,7 @@ async function withVoiceReply(out: OutboundMessage): Promise<OutboundMessage> {
 type WhatsAppInboundBody = {
     from?: string;
     text?: string;
+    messageId?: string;
     interactiveId?: string;
     modality?: "text" | "voice";
     audioBase64?: string;
@@ -418,6 +419,23 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         // generic error copy: ask warmly (text only — no TTS of a fallback).
         if (!voiceTranscript && isVoicePlaceholder(text)) {
             return outbound(phone, VOICE_NOT_CAUGHT_REPLY);
+        }
+    }
+
+    // Phrase routes stay the decider for real numbers. The agent loop runs only for
+    // a flagged +9997 phone, and it does not fall through into those routes.
+    if (identity.role === FamilyRole.CARE_RECIPIENT) {
+        const { agentLoopEnabled } = await import("./agentLoop/gate");
+        if (agentLoopEnabled(phone)) {
+            const { runFlaggedElderTurn } = await import("./agentLoop/runTurn");
+            const say = await runFlaggedElderTurn({
+                phone,
+                elderId: identity.userId,
+                familyId: identity.familyId,
+                text,
+                messageId: body.messageId || `${phone}:${text}`,
+            });
+            if (say) return outbound(phone, say);
         }
     }
 

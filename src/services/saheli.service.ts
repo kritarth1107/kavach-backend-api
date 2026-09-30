@@ -35,7 +35,7 @@ import {
     resolveElderWhatsappReply,
 } from "./saheliElderPipeline.service";
 import { buildGreetingReply, buildWarmNeutralReply, messageIsGreeting } from "./saheliElderFacts.service";
-import { finishElderReply, missedMedicineReply } from "./saheliFactGuard.service";
+import { finishElderReply } from "./saheliFactGuard.service";
 import { messageAsksForMemberPhone } from "./saheliCaregiverFacts.service";
 import {
     refreshRecipientMemoryToAiEngine,
@@ -417,9 +417,6 @@ function buildElderSmartReply(opts: {
 }): string {
     const q = opts.question.trim();
     const qLower = q.toLowerCase();
-
-    const missedReminder = missedMedicineReply(q, "");
-    if (missedReminder) return missedReminder;
 
     if (messageLooksLikeOrder(q)) {
         return (

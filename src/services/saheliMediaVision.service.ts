@@ -1,9 +1,10 @@
 /**
  * Gemini vision for WhatsApp care media (plate/food + Rx/prescription).
- * Uses gemini-3.5-flash @ asia-south1 by default (same live model as Phase 1).
+ * Uses gemini-3.1-pro-preview on the global endpoint.
  * Never diagnoses — extract printed facts / visible meal description only.
  */
 import { GoogleAuth } from "google-auth-library";
+import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
 
 export type VisionMediaKind = "food" | "prescription" | "other";
 
@@ -32,28 +33,12 @@ function gcpProjectId(): string {
     );
 }
 
-function visionLocation(): string {
-    if (process.env.VERTEX_VISION_LOCATION?.trim()) {
-        return process.env.VERTEX_VISION_LOCATION.trim();
-    }
-    // Flash is live in asia-south1; Cloud Run often sets VERTEX_LOCATION=global for Pro.
-    const model = (
-        process.env.VERTEX_VISION_MODEL?.trim() ||
-        process.env.VERTEX_STT_MODEL?.trim() ||
-        "gemini-3.5-flash"
-    ).toLowerCase();
-    if (model.includes("flash")) {
-        return process.env.GCP_REGION?.trim() || "asia-south1";
-    }
-    return process.env.VERTEX_LOCATION?.trim() || process.env.GCP_REGION?.trim() || "asia-south1";
+function visionModel(): string {
+    return preferPro(process.env.VERTEX_VISION_MODEL || process.env.VERTEX_STT_MODEL);
 }
 
-function visionModel(): string {
-    return (
-        process.env.VERTEX_VISION_MODEL?.trim() ||
-        process.env.VERTEX_STT_MODEL?.trim() ||
-        "gemini-3.5-flash"
-    );
+function visionLocation(): string {
+    return vertexLocationForModel(visionModel());
 }
 
 async function getAccessToken(): Promise<string | null> {

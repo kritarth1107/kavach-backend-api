@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
-import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry } from "../src/services/commerceAutomation/orderChat/flowBind";
+import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry, isMoreOptionsRequest, shouldPageCatalog } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
 import { isLiteralConfirm } from "../src/services/commerceAutomation/literalConfirm";
 import { classifyOrderInterruptRules } from "../src/services/commerceAutomation/orderInterrupt.service";
@@ -252,6 +252,15 @@ t("Ha does not place an order; only confirm does", () => {
     assert.equal(isLiteralConfirm("Ha"), false);
     assert.equal(isLiteralConfirm("yes"), false);
     assert.equal(isLiteralConfirm("confirm"), true);
+});
+
+t("show more pages the open list and is not a search for retry", () => {
+    assert.equal(isMoreOptionsRequest("show more"), true);
+    assert.equal(isMoreOptionsRequest("aur dikhao"), true);
+    assert.equal(isMoreOptionsRequest("retry"), false);
+    assert.equal(shouldPageCatalog("show more", "awaiting_sku_confirm", 12), true);
+    assert.equal(shouldPageCatalog("retry", "awaiting_sku_confirm", 12), false);
+    assert.equal(shouldPageCatalog("show more", "running", 12), false);
 });
 
 console.log(`all ${n} passed`);

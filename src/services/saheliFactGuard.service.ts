@@ -62,19 +62,13 @@ export function finishElderReply(input: {
     refusedMaa?: boolean;
 }): string {
     const facts = input.savedFacts || "";
-    const refused = input.refusedMaa || refusesMaa(input.inbound);
-    const missed = missedMedicineReply(input.inbound, facts);
-    let reply = missed || input.draft || "How are you?";
-    if (replyInventsWake(reply, facts, input.inbound)) {
-        reply = missed || "I missed the medicine reminder. Please take it now.";
-    }
+    let reply = input.draft || "How are you?";
     if (inventedDish(reply, `${facts}\n${input.inbound}`)) {
         reply = "How are you?";
     }
     if (RESEND.test(reply)) {
-        reply = missed || (inventedDish(input.draft, `${facts}\n${input.inbound}`) ? "How are you?" : "I'm here. How are you?");
+        reply = "I'm here. How are you?";
     }
-    if (refused) reply = stripMaa(reply);
     if (!reply.trim()) reply = "How are you?";
     return reply;
 }

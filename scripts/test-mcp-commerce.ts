@@ -52,6 +52,9 @@ ok("zepto Gurugram doesn't match Raipur", !storeAddressMatchesPlace(z[1]!.text, 
 const imSearch = `Found 5 product(s)\n\nDISPLAY INSTRUCTIONS:\n- x\n{\n "products": [ {"displayName":"Amul Taaza Milky Milk","inStock":true,"variations":[{"spinId":"D9PNFAT8MI","skuId":"4XY","quantityDescription":"500 ml x 4","displayName":"Amul Taaza Milky Milk","price":{"mrp":120,"offerPrice":120},"isInStockAndAvailable":false},{"spinId":"SKS75T1GV1","skuId":"VQJ","quantityDescription":"500 ml","displayName":"Amul Taaza Milky Milk","price":{"mrp":30,"offerPrice":29.5},"isInStockAndAvailable":true}]} ]\n}`;
 const im = parseInstamartSearch(imSearch);
 ok("instamart search: in-stock variation only", im.length === 1 && im[0]!.spinId === "SKS75T1GV1" && im[0]!.pricePaise === 2950);
+const imPrices = `Found 2 product(s)\n{\n "products": [ {"displayName":"RiteBite Max Protein Daily Choco Almond","inStock":true,"variations":[{"spinId":"A1","quantityDescription":"50 g","displayName":"RiteBite Max Protein Daily Choco Almond 10g Protein Bar","price":{"offerPrice":80},"isInStockAndAvailable":true},{"spinId":"A2","quantityDescription":"50 g x 4","displayName":"RiteBite Max Protein Daily Choco Almond 10g Protein Bar","price":{"offerPrice":302},"isInStockAndAvailable":true}]}, {"displayName":"Yoga Bar","inStock":true,"variations":[{"spinId":"B1","quantityDescription":"50 g","displayName":"Yoga Bar Breakfast Protein Bar","price":{"offerPrice":49},"isInStockAndAvailable":true},{"spinId":"B2","quantityDescription":"50 g x 6","displayName":"Yoga Bar Breakfast Protein Bar","price":{"offerPrice":249},"isInStockAndAvailable":false}]} ]\n}`;
+const priced = parseInstamartSearch(imPrices);
+ok("instamart keeps each in-stock price", priced.length === 3 && priced[0]!.pricePaise === 8000 && priced[1]!.pricePaise === 30200 && priced[2]!.pricePaise === 4900 && /50 g x 4/.test(priced[1]!.name));
 
 const zSearch = `Found 10 products for "amul taaza milk":
 

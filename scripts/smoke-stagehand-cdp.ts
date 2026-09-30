@@ -11,7 +11,7 @@ async function main() {
     console.log("cdpUrl", Boolean(cdpUrl));
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { V3 } = require("@browserbasehq/stagehand");
-    const sh = new V3({ env: "LOCAL", localBrowserLaunchOptions: { cdpUrl }, model: { modelName: "vertex/gemini-3.5-flash", providerOptions: { vertex: { project: "kavach-care", location: "asia-south1" } } }, disablePino: true, verbose: 0, logger: () => undefined, experimental: true });
+    const sh = new V3({ env: "LOCAL", localBrowserLaunchOptions: { cdpUrl }, model: { modelName: "vertex/gemini-3.1-pro-preview", providerOptions: { vertex: { project: "kavach-care", location: "global" } } }, disablePino: true, verbose: 0, logger: () => undefined, experimental: true });
     await sh.init();
     const r = await sh.act({ selector: "xpath=/html/body/button", description: "Proceed", method: "click", arguments: [] }, { page });
     console.log("act", r.success, "title", await page.title());

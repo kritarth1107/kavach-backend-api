@@ -592,6 +592,7 @@ async function processMetaInboundMessages(
             const reply = await handleWhatsAppInbound({
                 from: inbound.from,
                 text: inbound.text,
+                messageId: inbound.messageId,
                 interactiveId: inbound.interactiveId,
                 modality: inbound.mediaType === "voice" || inbound.mediaType === "audio" ? "voice" : "text",
                 mediaType: inbound.mediaType,

@@ -8,7 +8,7 @@
  *   flow_reply  → confirm / OTP digits / 1-2-3 / retry — handled by the order state machine
  *   unrelated   → return null so the companion answers while the order keeps running
  */
-import { parseJsonLoose, vertexFlashModel, vertexGenerateText } from "../../clients/vertexGemini.client";
+import { parseJsonLoose, vertexProModel, vertexGenerateText } from "../../clients/vertexGemini.client";
 
 export type OrderInterruptIntent = "cancel" | "change" | "status" | "flow_reply" | "unrelated";
 
@@ -102,7 +102,7 @@ export async function classifyOrderInterrupt(input: {
     if (rules) return remember(rules);
 
     const raw = await vertexGenerateText({
-        model: vertexFlashModel(),
+        model: vertexProModel(),
         json: true,
         timeoutMs: 4500,
         maxOutputTokens: 200,

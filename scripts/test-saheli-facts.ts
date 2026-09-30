@@ -40,26 +40,22 @@ t("a reply that invents a dish fails", () => {
     assert.doesNotMatch(reply, /dal makhani/i);
 });
 
-t("a missed medicine reminder is not explained with an early wake", () => {
+t("a model reply is not replaced by matching the question", () => {
     const reply = finishElderReply({
         inbound: "Why did you not remind me for medicine",
-        draft: "I let you rest because you were awake early",
+        draft: "I missed the medicine reminder. Please take it now.",
         savedFacts: "",
     });
-    assert.match(reply, /missed the medicine reminder/i);
-    assert.match(reply, /take it now/i);
-    assert.doesNotMatch(reply, /awake early/i);
+    assert.equal(reply, "I missed the medicine reminder. Please take it now.");
 });
 
-t("I woke up late replaces the early-wake story", () => {
+t("a stored wake fact is the model's sentence, not a matched phrase", () => {
     const reply = finishElderReply({
         inbound: "Why did you not remind me for medicine. I woke up late",
-        draft: "You were awake early so I let you rest",
-        savedFacts: "",
+        draft: "You woke up late. Please take the medicine now.",
+        savedFacts: "I woke up late",
     });
-    assert.match(reply, /woke up late/i);
-    assert.match(reply, /take the medicine now/i);
-    assert.doesNotMatch(reply, /awake early/i);
+    assert.equal(reply, "You woke up late. Please take the medicine now.");
 });
 
 t("after dont call me maa the next reply is not Maa and not a resend", () => {

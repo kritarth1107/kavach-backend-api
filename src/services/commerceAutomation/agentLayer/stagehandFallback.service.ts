@@ -2,7 +2,7 @@
  * Stagehand (v3) as a self-healing fallback for a single step.
  *
  * - Attaches to our already-running Chromium over local CDP (same signed-in page).
- * - Model: Gemini flash on Vertex (ADC) — `vertex/${VERTEX_BROWSER_MODEL || "gemini-3.5-flash"}`.
+ * - Model: Gemini 3.1 Pro on Vertex (ADC), global endpoint.
  * - observe() proposes candidate actions; EVERY candidate is validated in code against the
  *   guardrail denylists using the model's description AND the element's live DOM text.
  *   Only click/scroll are ever executed. Typing, payment, COD, Place order stay in code.
@@ -10,6 +10,7 @@
  *   fall back to the existing Gemini computer-use step).
  */
 import type { Page } from "playwright";
+import { preferPro, vertexLocationForModel } from "../../../clients/vertexGemini.client";
 import { cdpUrlForPage, stagehandEnabled } from "./cdpRegistry";
 import { validateAgentAction, type GuardVerdict } from "./guardrails";
 
@@ -22,7 +23,7 @@ type StagehandLike = {
     close(opts?: Record<string, unknown>): Promise<void>;
 };
 
-export const STAGEHAND_MODEL = () => `vertex/${process.env.VERTEX_BROWSER_MODEL?.trim() || "gemini-3.5-flash"}`;
+export const STAGEHAND_MODEL = () => `vertex/${preferPro(process.env.VERTEX_BROWSER_MODEL)}`;
 
 const instances = new Map<string, Promise<StagehandLike | null>>();
 const disabled = new Set<string>();
@@ -45,7 +46,7 @@ async function createStagehand(cdpUrl: string, log: Log): Promise<StagehandLike 
         const Ctor = mod.V3 || mod.Stagehand;
         if (!Ctor) return null;
         const project = process.env.GCP_PROJECT_ID?.trim() || process.env.GOOGLE_CLOUD_PROJECT?.trim() || "kavach-care";
-        const location = process.env.STAGEHAND_VERTEX_LOCATION?.trim() || process.env.GCP_REGION?.trim() || "asia-south1";
+        const location = vertexLocationForModel(preferPro(process.env.VERTEX_BROWSER_MODEL));
         const sh = new Ctor({
             env: "LOCAL",
             localBrowserLaunchOptions: { cdpUrl, connectTimeoutMs: 8000 },

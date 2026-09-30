@@ -6,7 +6,7 @@
  * Soft health tips on confirm when care context matches cart (never diagnose / never block).
  */
 import { isLiteralConfirm, isSoftYes, signInConfirmNudge } from "./literalConfirm";
-import { browserPhaseResumesOnRetry } from "./orderChat/flowBind";
+import { browserPhaseResumesOnRetry, CATALOG_KEEP, CATALOG_PAGE, isMoreOptionsRequest, shouldPageCatalog } from "./orderChat/flowBind";
 import { applyFaithfulHits, brandLineOf, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "./orderChat/queryRewrite";
 import { catalogRetryNeeded, formatLinkedFailure, linkedGroceryTargets } from "./orderChat/searchPolicy";
 import WhatsappSession from "../../models/whatsappSession.model";
@@ -124,6 +124,8 @@ export type BrowserTaskDraft = {
         /** Came from the family's linked store account (MCP) — ids to add exactly this item. */
         mcp?: McpPick;
     }>;
+    /** Which page of catalogOptions was last shown. "show more" advances it. */
+    catalogPage?: number;
     selectedSku?: {
         id: string;
         name: string;
@@ -214,6 +216,37 @@ function extractOrderQuery(text: string, partner: string): string {
     return q.slice(0, 80) || text.slice(0, 80);
 }
 
+function shownCatalog(draft: BrowserTaskDraft): { opts: NonNullable<BrowserTaskDraft["catalogOptions"]>; start: number; more: boolean } {
+    const all = draft.catalogOptions || [];
+    const start = Math.max(0, draft.catalogPage || 0) * CATALOG_PAGE;
+    const opts = all.slice(start, start + CATALOG_PAGE);
+    return { opts, start, more: start + opts.length < all.length };
+}
+
+function pickFooter(start: number, count: number, more: boolean, confirmFirst = false): string {
+    const from = start + 1;
+    const to = start + count;
+    const range = count <= 1 ? "Reply *1*" : start === 0 ? replyPickCopy(count) : `Reply a number *${from}*–*${to}*`;
+    const first = confirmFirst && start === 0 ? " (or *confirm* for #1)" : "";
+    const next = more ? " Reply *show more* for the next prices." : "";
+    return `${range} to pick${first}.${next} Or *cancel*.`;
+}
+
+async function pageOpenCatalog(
+    input: { phone: string },
+    draft: BrowserTaskDraft,
+): Promise<{ text: string; draft: BrowserTaskDraft }> {
+    const all = draft.catalogOptions || [];
+    const page = (draft.catalogPage ?? 0) + 1;
+    if (page * CATALOG_PAGE >= all.length) {
+        const what = draft.productQuery ? ` for "${draft.productQuery}"` : "";
+        return { text: `That's every price I found${what}. Reply a number to pick, or *cancel*.`, draft };
+    }
+    draft.catalogPage = page;
+    await saveDraft(input.phone, draft);
+    return { text: skuConfirmCopy(draft), draft };
+}
+
 function skuConfirmCopy(draft: BrowserTaskDraft): string {
     // Linked-account (MCP) options never go through a login — no OTP wording.
     if (draft.catalogOptions?.some((o) => o.mcp) || draft.selectedSku?.mcp) return mcpOptionsCopy(draft);
@@ -223,33 +256,33 @@ function skuConfirmCopy(draft: BrowserTaskDraft): string {
     const addr = draftPlaceLine(draft);
     const where = draft.restaurantName ? `*${draft.restaurantName}* on *${label}*` : `*${label}*`;
     if (opts.length > 1 && draft.compare) {
-        const shown = opts.slice(0, 3);
+        const { opts: shown, start, more } = shownCatalog(draft);
         return [
             `Prices for "${draft.productQuery || "your item"}" 🛒`,
             ...shown.map((o, i) => {
                 const price = formatInr(o.pricePaise);
-                return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""} · ${partnerLabel(String(o.partner || ""))}`;
+                return `${start + i + 1}. ${o.name}${price ? ` — *${price}*` : ""} · ${partnerLabel(String(o.partner || ""))}`;
             }),
             ...(draft.lastMessage ? [``, draft.lastMessage] : []),
             addr,
             ``,
-            `${replyPickCopy(shown.length)} to pick, or *cancel*. Cash on Delivery only.`,
+            `${pickFooter(start, shown.length, more)} Cash on Delivery only.`,
         ]
             .filter((l, i, a) => l !== "" || a[i - 1] !== "")
             .join("\n");
     }
     if (opts.length > 1) {
-        const shown = opts.slice(0, 3);
+        const { opts: shown, start, more } = shownCatalog(draft);
         const lines = shown.map((o, i) => {
             const price = formatInr(o.pricePaise);
-            return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}`;
+            return `${start + i + 1}. ${o.name}${price ? ` — *${price}*` : ""}`;
         });
         return [
             `Found on ${where} 🛒`,
             ...lines,
             addr,
             ``,
-            `${replyPickCopy(shown.length)} (or *confirm* for #1). Cash on Delivery only.`,
+            `${pickFooter(start, shown.length, more, true)} Cash on Delivery only.`,
         ]
             .filter((l, i, a) => l !== "" || a[i - 1] !== "")
             .join("\n");
@@ -535,6 +568,10 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
     if (draft && draft.phase === "awaiting_mcp_confirm") {
         const r = await handleMcpConfirmTurn(input, draft, text);
         if (r) return r;
+    }
+    // "show more" pages the prices already found. It is not a new search, and not the word "retry".
+    if (draft && shouldPageCatalog(text, draft.phase, draft.catalogOptions?.length || 0)) {
+        return pageOpenCatalog(input, draft);
     }
     // Linked-store (MCP) options: a number / "confirm" builds the real cart → confirm card.
     if (draft && draft.phase === "awaiting_sku_confirm" && draft.catalogOptions?.some((o) => o.mcp)) {
@@ -894,8 +931,8 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
     // Confirm SKU (guest search) before opening login for browser-first partners
     if (draft && draft.phase === "awaiting_sku_confirm") {
         const nPick = /^\d{1,2}$/.test(text) ? Number(text) : NaN;
-        if (draft.catalogOptions && draft.catalogOptions.length > 1 && Number.isFinite(nPick) && (nPick < 1 || nPick > Math.min(5, draft.catalogOptions.length))) {
-            return { text: `Please pick ${replyPickCopy(Math.min(5, draft.catalogOptions.length)).replace(/^Reply /, "")}, or *cancel*.`, draft };
+        if (draft.catalogOptions && draft.catalogOptions.length > 1 && Number.isFinite(nPick) && (nPick < 1 || nPick > draft.catalogOptions.length)) {
+            return { text: `Please pick a number from 1 to ${draft.catalogOptions.length}, or *cancel*.`, draft };
         }
         if (draft.catalogOptions && draft.catalogOptions.length > 1 && Number.isFinite(nPick)) {
             const pick = draft.catalogOptions[nPick - 1];
@@ -1067,7 +1104,11 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
                 }
                 return startFoodFlow(input, q, home);
             }
-            const query = extractOrderQuery(stripAddressPhrases(text, home?.full) || text, String(partner));
+            const asked = /^(retry|try again|again)$/i.test(text) && draft.productQuery ? draft.productQuery : text;
+            const query = extractOrderQuery(stripAddressPhrases(asked, home?.full) || asked, String(partner));
+            if (/^(retry|show more|more)$/i.test(query)) {
+                return { text: skuConfirmCopy(draft), draft };
+            }
             if (String(partner) === "instamart") {
                 if (!home) return askForAddress(input, text);
                 const goalText = text;
@@ -1091,7 +1132,8 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
             draft.goal = text.slice(0, 240);
             draft.partner = partner;
             if (result.hits.length) {
-                draft.catalogOptions = result.hits.slice(0, 3).map((h) => ({
+                draft.catalogPage = 0;
+                draft.catalogOptions = result.hits.slice(0, CATALOG_KEEP).map((h) => ({
                     id: h.id,
                     name: h.name,
                     pricePaise: h.pricePaise,
@@ -1190,7 +1232,7 @@ async function handleBrowserTaskWhatsAppTurnInner(input: {
         };
 
         if (catalog.hits.length) {
-            draft.catalogOptions = catalog.hits.slice(0, 3).map((h) => ({
+            draft.catalogOptions = catalog.hits.slice(0, CATALOG_KEEP).map((h) => ({
                 id: h.id,
                 name: h.name,
                 pricePaise: h.pricePaise,
@@ -1248,7 +1290,7 @@ async function grocerySearchCore(
         productQuery: query,
         category: kind,
     };
-    const shaped = await shapeFor(input, query, await relevantOnly(input.phone, query, catalog.hits.slice(0, 8), kind === "food"));
+    const shaped = await shapeFor(input, query, await relevantOnly(input.phone, query, catalog.hits.slice(0, CATALOG_KEEP), kind === "food"));
     const relevant = shaped.shown;
     if (relevant.length) {
         draft.catalogOptions = relevant.map((h) => ({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: h.productUrl }));
@@ -1534,8 +1576,9 @@ function draftPlaceLine(draft: BrowserTaskDraft): string {
 }
 
 /**
- * Instinct: how many choices to show. Her usual → just it (with a "Your usual" header);
- * one clear match → 1; otherwise ≤3; options she declined recently are dropped.
+ * Instinct: how many choices to keep. Her usual → just it (with a "Your usual" header);
+ * one clear match → 1; a broad ask keeps the priced list (a page at a time).
+ * A saved maxOptions of 1–3 still shortens the list when choices confuse her.
  */
 async function shapeFor<T extends { name: string; pricePaise?: number; partner?: string }>(
     input: { phone: string; familyId: string; actorUserId: string; recipientUserId?: string },
@@ -1561,7 +1604,7 @@ async function shapeFor<T extends { name: string; pricePaise?: number; partner?:
             const hit = opts.filter((o) => o.name.toLowerCase().includes(b));
             if (hit.length) r.shown = [...hit.slice(0, 1), ...r.shown.filter((o) => o !== hit[0])];
         }
-        const max = tuning?.maxOptions && tuning.maxOptions >= 1 && tuning.maxOptions <= 3 ? tuning.maxOptions : 3;
+        const max = tuning?.maxOptions && tuning.maxOptions >= 1 && tuning.maxOptions <= 3 ? tuning.maxOptions : CATALOG_KEEP;
         r.shown = r.shown.slice(0, max);
         let header = "";
         if (usual && r.usualHit) {
@@ -1573,7 +1616,7 @@ async function shapeFor<T extends { name: string; pricePaise?: number; partner?:
         if (!header && brand && r.shown[0]?.name.toLowerCase().includes(brand.toLowerCase())) header = `Aapka pasandida *${brand}* sabse upar rakha hai 🙂`;
         return { shown: r.shown, header };
     } catch {
-        return { shown: opts.slice(0, 3), header: "" };
+        return { shown: opts.slice(0, CATALOG_KEEP), header: "" };
     }
 }
 
@@ -2646,6 +2689,10 @@ async function handleRoutedCommerceTurnInner(input: RoutedInput, route: SaheliRo
             detail: rawText,
             data: { intent, phase: draft?.phase || null, source: "gemini_router", confidence: route.confidence },
         });
+    if (draft && shouldPageCatalog(rawText, draft.phase, draft.catalogOptions?.length || 0)) {
+        log("show_more");
+        return ctl(rawText);
+    }
 
     // Unusual-activity backstop: risky medicines in bulk (sleeping pills / painkillers) → pause and ask
     // her gently + alert caregivers, instead of searching / placing.
@@ -3169,12 +3216,12 @@ async function compareSearchCore(
     const rawAny = per.some((p) => p.hits.length);
     await Promise.all(
         per.map(async (p) => {
-            p.hits = (await relevantOnly(input.phone, query, p.hits, false)).slice(0, 3);
+            p.hits = (await relevantOnly(input.phone, query, p.hits, false)).slice(0, CATALOG_KEEP);
         }),
     );
     // Interleave so each platform shows its best match first.
     const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < CATALOG_KEEP; k++) {
         for (const p of per) {
             const h = p.hits[k];
             if (h) opts.push({ id: h.id, name: h.name, pricePaise: h.pricePaise, productUrl: (h as { productUrl?: string }).productUrl, partner: p.partner });
@@ -3343,20 +3390,20 @@ function relinkNote(input: RoutedInput, labels: string[]): string {
 }
 
 function mcpOptionsCopy(draft: BrowserTaskDraft): string {
-    const opts = (draft.catalogOptions || []).slice(0, 3);
-    const stores = new Set(opts.map((o) => o.mcp?.store));
+    const { opts, start, more } = shownCatalog(draft);
+    const stores = new Set((draft.catalogOptions || []).map((o) => o.mcp?.store));
     const head = draft.compare && stores.size > 1 ? `Prices for "${draft.productQuery || "your item"}" 🛒` : `Found on *${partnerLabel(String(opts[0]?.partner || draft.partner || ""))}* 🛒`;
     return [
         head,
         ...opts.map((o, i) => {
             const price = formatInr(o.pricePaise);
             const tail = o.mcp?.restaurantName ? ` · ${o.mcp.restaurantName}` : stores.size > 1 ? ` · ${partnerLabel(String(o.partner || ""))}` : "";
-            return `${i + 1}. ${o.name}${price ? ` — *${price}*` : ""}${tail}`;
+            return `${start + i + 1}. ${o.name}${price ? ` — *${price}*` : ""}${tail}`;
         }),
         ...(draft.lastMessage ? [``, draft.lastMessage] : []),
         draftPlaceLine(draft),
         ``,
-        `${replyPickCopy(opts.length)} to pick, or *cancel*. Cash on Delivery only.`,
+        `${pickFooter(start, opts.length, more)} Cash on Delivery only.`,
     ]
         .filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== ""))
         .join("\n");
@@ -3523,7 +3570,7 @@ async function mcpSearchCore(
         }
     }
     const opts: NonNullable<BrowserTaskDraft["catalogOptions"]> = [];
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < CATALOG_KEEP; k++) {
         for (const r of results) {
             const h = r.hits[k];
             if (h) opts.push({ id: `${h.store}:${h.spinId || h.pvid || h.menuItemId}`, name: h.name, pricePaise: h.pricePaise, partner: h.store, mcp: h });
@@ -3573,7 +3620,7 @@ async function handleMcpPickTurn(
     text: string,
 ): Promise<{ text: string; draft?: BrowserTaskDraft } | null> {
     const opts = draft.catalogOptions || [];
-    const max = Math.min(5, opts.length);
+    const max = opts.length;
     const n = /^\d{1,2}$/.test(text) ? Number(text) : NaN;
     let pick: (typeof opts)[number] | undefined;
     if (Number.isFinite(n)) {

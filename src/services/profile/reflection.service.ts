@@ -9,7 +9,7 @@ import ActivityLog from "../../models/activityLog.model";
 import ElderProfile, { type CareAction, type ProfileFact } from "../../models/elderProfile.model";
 import ElderWellbeingDay from "../../models/elderWellbeingDay.model";
 import * as Vertex from "../../clients/vertexGemini.client";
-import { parseJsonLoose, vertexFlashModel, vertexGenerateText, vertexProModel } from "../../clients/vertexGemini.client";
+import { parseJsonLoose, preferPro, vertexGenerateText, vertexProModel } from "../../clients/vertexGemini.client";
 import { istDayKey } from "../activityLog.service";
 import { applyReflection, detectDeviations, isActive, isInternalTalk, isUnsafeFact, timelineDetail, newActionId, type FactJudgement, type NewQuestion, type ReflectionOp } from "./profileCore";
 import { DECAY_CLASSES, QUESTION_EXPIRY_DAYS } from "./factPolicy";
@@ -216,7 +216,7 @@ async function phraseQuestions(qs: NewQuestion[], name: string): Promise<string[
     );
     try {
         const raw = await vertexGenerateText({
-            model: vertexFlashModel(),
+            model: vertexProModel(),
             json: true,
             timeoutMs: 20_000,
             maxOutputTokens: 1024,
@@ -296,25 +296,22 @@ export async function reflectElderDay(w: Who, dayKey = istDayKey(new Date(Date.n
             if (!out && raw) rawDiag.push(`${m}: ${raw.length} chars … ${raw.slice(Math.max(0, raw.length - 240)).replace(/\s+/g, " ")}`);
             return out;
         };
-        const pro = opts.model || process.env.VERTEX_REFLECTION_MODEL?.trim() || vertexProModel();
-        // Pro in JSON mode first (same JSON contract, validated in code): with the full responseSchema,
-        // gemini-3.1-pro-preview looped in free-text fields on ~half of the nights we measured
-        // (27 Sep: 5 of 10 runs hit MAX_TOKENS / timeout). Flash + responseSchema is the fallback.
-        // REFLECTION_PRO_SCHEMA=1 puts Pro back on the response schema.
+        const pro = preferPro(opts.model || process.env.VERTEX_REFLECTION_MODEL);
+        // Pro in JSON mode first. A failed parse retries the same 3.1 Pro call with the
+        // response schema, then plain JSON. There is no Flash model on this path.
         let parsed = await tryModel(pro, opts.schema ?? process.env.REFLECTION_PRO_SCHEMA === "1").catch(() => null);
         model = pro;
         if (!parsed?.ops && !parsed?.day) {
             fallbackReason = String(Vertex.lastVertexError || "unparseable").slice(0, 160);
-            console.warn(`[reflection] ${pro} unusable (${fallbackReason}); falling back to flash`);
-            model = vertexFlashModel();
+            console.warn(`[reflection] ${pro} unusable (${fallbackReason}); retrying 3.1 Pro with schema`);
+            model = vertexProModel();
             parsed = await tryModel(model, true).catch(() => null);
             if (!parsed?.ops && !parsed?.day) {
-                // Last resort: plain JSON mode (no response schema) — the pre-schema path.
-                fallbackReason += ` | flash: ${String(Vertex.lastVertexError || "unparseable").slice(0, 120)}`;
+                fallbackReason += ` | pro: ${String(Vertex.lastVertexError || "unparseable").slice(0, 120)}`;
                 parsed = await tryModel(model, false).catch(() => null);
                 model = `${model} (json)`;
             }
-            if (!parsed?.ops && !parsed?.day) fallbackReason += ` | flash: ${String(Vertex.lastVertexError || "unparseable").slice(0, 160)}`;
+            if (!parsed?.ops && !parsed?.day) fallbackReason += ` | pro: ${String(Vertex.lastVertexError || "unparseable").slice(0, 160)}`;
         }
         if (parsed) {
             // Handles → real fact ids (unknown handles dropped / treated as new facts).

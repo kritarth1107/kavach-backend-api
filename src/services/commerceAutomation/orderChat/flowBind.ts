@@ -6,6 +6,25 @@
 
 export type ShortControl = "retry" | "cancel" | "confirm" | "pick";
 
+/** One WhatsApp page. The rest of the priced list stays on the draft. */
+export const CATALOG_PAGE = 8;
+/** In-stock products and pack sizes kept from one store search. */
+export const CATALOG_KEEP = 24;
+
+/** "show more" / "aur dikhao" asks for the next prices already found. */
+export function isMoreOptionsRequest(text: string): boolean {
+    const t = String(text || "")
+        .trim()
+        .replace(/[.!]+$/g, "")
+        .replace(/\s+/g, " ");
+    return /^(show\s*more|more(\s+options|\s+prices)?|aur(\s+dikhao|\s+dikha)?|next)$/i.test(t);
+}
+
+/** An open product list owns "show more". It must not start a search for "retry". */
+export function shouldPageCatalog(text: string, phase: string | undefined | null, optionCount: number): boolean {
+    return phase === "awaiting_sku_confirm" && optionCount > 0 && isMoreOptionsRequest(text);
+}
+
 const RETRY_PHASES = new Set(["running", "awaiting_otp", "awaiting_confirm", "awaiting_sku_confirm", "awaiting_mcp_confirm"]);
 const CONFIRM_PHASES = new Set(["awaiting_confirm", "awaiting_mcp_confirm", "awaiting_sku_confirm", "awaiting_address_confirm", "running", "confirm_basket"]);
 const PICK_PHASES = new Set(["awaiting_sku_confirm", "awaiting_mcp_confirm", "awaiting_restaurant_pick", "awaiting_address_confirm"]);

@@ -62,6 +62,7 @@ async function shouldSkipStillWorking(from: string | undefined): Promise<boolean
 export async function handleWhatsAppInbound(body: {
     from?: string;
     text?: string;
+    messageId?: string;
     interactiveId?: string;
     modality?: "text" | "voice";
     audioBase64?: string;

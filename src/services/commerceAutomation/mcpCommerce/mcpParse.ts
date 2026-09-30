@@ -119,28 +119,31 @@ export function sameStoreAddressId(listed: string, known: string): boolean {
 // ── Search ──────────────────────────────────────────────────────────────────
 
 /** Instamart search_products JSON: products[].variations[] (price in rupees). In-stock only. */
-export function parseInstamartSearch(text: string, max = 3): McpPick[] {
+export function parseInstamartSearch(text: string, max = 24): McpPick[] {
     const j = jsonTail(text) as { products?: Array<Record<string, unknown>> } | null;
     const out: McpPick[] = [];
+    const seen = new Set<string>();
     for (const p of j?.products || []) {
         if (p.inStock === false || p.isAvail === false) continue;
         const vars = (p.variations as Array<Record<string, unknown>> | undefined) || [];
         for (const v of vars) {
+            if (out.length >= max) return out;
             if (v.isInStockAndAvailable === false) continue;
             const price = v.price as { offerPrice?: unknown; mrp?: unknown } | undefined;
+            const rupees = price?.offerPrice ?? price?.mrp;
+            if (rupeesToPaise(rupees) == null) continue;
             const spinId = typeof v.spinId === "string" ? v.spinId : undefined;
-            if (!spinId) continue;
+            if (!spinId || seen.has(spinId)) continue;
+            seen.add(spinId);
             const name = [String(v.displayName || p.displayName || "").trim(), String(v.quantityDescription || "").trim()].filter(Boolean).join(" — ");
-            out.push({ store: "instamart", name, pricePaise: rupeesToPaise(price?.offerPrice ?? price?.mrp), spinId, skuId: typeof v.skuId === "string" ? v.skuId : undefined });
-            break; // one variation per product keeps the list short; the elder can ask for a size
+            out.push({ store: "instamart", name, pricePaise: rupeesToPaise(rupees), spinId, skuId: typeof v.skuId === "string" ? v.skuId : undefined });
         }
-        if (out.length >= max) break;
     }
     return out;
 }
 
 /** Zepto search_products: "1. Name - ₹77 (1 pack (1 L))" + "[1] pvid: …, spid: …". */
-export function parseZeptoSearch(text: string, max = 3): McpPick[] {
+export function parseZeptoSearch(text: string, max = 24): McpPick[] {
     const [body, ids = ""] = text.split(/Product IDs:/i);
     const idMap = new Map<number, { pvid: string; spid: string }>();
     for (const line of ids.split("\n")) {

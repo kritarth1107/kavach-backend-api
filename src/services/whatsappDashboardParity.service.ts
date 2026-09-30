@@ -879,9 +879,9 @@ function fmtClock12(hhmm: string): string {
 
 /** Short reminder title + warm confirmation (sender's language). Null on model failure. */
 async function reminderWording(text: string, fromCaregiver: boolean): Promise<{ title: string; reply: string; forSelf: boolean } | null> {
-    const { vertexGenerateText, parseJsonLoose, vertexFlashModel } = await import("../clients/vertexGemini.client");
+    const { vertexGenerateText, parseJsonLoose, vertexProModel } = await import("../clients/vertexGemini.client");
     const raw = await vertexGenerateText({
-        model: vertexFlashModel(),
+        model: vertexProModel(),
         system:
             "You word WhatsApp reminders for Saheli, a warm elder-care companion. From the message return JSON: " +
             'title = what to do, 2-6 words, imperative, no time/day words (e.g. "Take BP tablet", "Drink water", "Call Priya"); ' +

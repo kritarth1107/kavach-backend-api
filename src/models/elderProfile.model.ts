@@ -33,6 +33,10 @@ export type ProfileFact = {
     firstSeen: Date;
     lastConfirmed: Date;
     status: FactStatus;
+    /** Caregiver confirm. The loop may mention a pinned fact. */
+    pinned?: boolean;
+    /** Caregiver reject. Loaded as a deny list. Not deleted. */
+    blocked?: boolean;
     editedBy?: string;
     /** How fast it may fade (factPolicy.DECAY). Missing on old facts until the next reflection classifies it. */
     decayClass?: DecayClass;
@@ -112,6 +116,19 @@ export interface IElderProfile {
     questions?: CaregiverQuestion[];
     labels?: FactLabel[];
     tuning: { maxOptions?: number; preferredNudgeHour?: number; addressAs?: string; language?: string; avoidMaa?: boolean };
+    /** Name she asked to be called. Empty after "don't call me Maa". */
+    nameToUse?: string;
+    allergies?: string[];
+    dietRules?: string[];
+    medicines?: Array<{
+        name: string;
+        dose?: string;
+        time?: string;
+        channel?: "whatsapp";
+        active?: boolean;
+        lastRemindedAt?: Date | null;
+        lastAnsweredAt?: Date | null;
+    }>;
     retentionDays: number;
     lastReflectedDay?: string;
     lastReflection?: { at: Date; model: string; added: number; reinforced: number; faded: number; actions: number; contradicted?: number; questions?: number; decayed?: number; classified?: number; readded?: number; fallbackReason?: string };
@@ -131,6 +148,10 @@ const schema = new Schema<IElderProfileDocument>(
         questions: { type: Schema.Types.Mixed as never, default: [] },
         labels: { type: Schema.Types.Mixed as never, default: [] },
         tuning: { type: Schema.Types.Mixed, default: {} },
+        nameToUse: { type: String },
+        allergies: { type: [String], default: undefined },
+        dietRules: { type: [String], default: undefined },
+        medicines: { type: Schema.Types.Mixed, default: undefined },
         retentionDays: { type: Number, default: 365 },
         lastReflectedDay: { type: String },
         lastReflection: { type: Schema.Types.Mixed },

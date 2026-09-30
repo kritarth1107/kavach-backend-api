@@ -759,7 +759,7 @@ export function rankGroceryItems<T extends { name: string; pack?: string }>(quer
     const QTY = /^(\d+(\.\d+)?(kg|g|gm|gms|l|ltr|litre|liter|ml|pcs?|pack)?|kg|gm|ml|ltr|litre|pack)$/;
     const qty = all.filter((t) => QTY.test(t));
     const q = all.filter((t) => !QTY.test(t));
-    if (!q.length) return items.slice(0, 5);
+    if (!q.length) return items.slice(0, 24);
     const scored = items
         .map((it, idx) => {
             const n = it.name.toLowerCase();
@@ -781,7 +781,7 @@ export function rankGroceryItems<T extends { name: string; pack?: string }>(quer
         })
         .filter((x) => x.s >= 0.99)
         .sort((a, b) => b.s - a.s || a.idx - b.idx);
-    return scored.map((x) => x.it).slice(0, 5);
+    return scored.map((x) => x.it).slice(0, 24);
 }
 
 /** WA copy for found SKU(s). Prefer top hit; list up to 3 numbered options. */

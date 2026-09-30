@@ -2,11 +2,12 @@
  * Zomato guest search on the remote India-proxy Chrome (BROWSER_REMOTE=browseruse).
  * Zomato blocks our Cloud Run headless Chromium; on Browser Use Cloud's Chrome a guest can set
  * the delivery location and search (trial 2026-09-26). Zomato's search UI is heavily dynamic,
- * so the READ-ONLY search is done by Browser Use's hosted agent (Gemini flash) with a strict
+ * so the READ-ONLY search is done by Browser Use's hosted agent (Gemini 3.1 Pro) with a strict
  * task: set THIS recipient's address as the location, search, report dishes. No login, no cart,
  * no checkout — ordering itself stays in our own browser worker behind every existing guardrail
  * (confirm card, literal confirm, COD only, address-book match, one placement lock).
  */
+import { preferPro } from "../../clients/vertexGemini.client";
 import { cityOf, locationQueryFor, pincodeOf } from "./kavachAddress";
 import { useRemoteBrowserFor } from "./remoteBrowser";
 
@@ -71,9 +72,9 @@ async function bu<T>(method: string, path: string, body?: unknown): Promise<T> {
     return (text ? JSON.parse(text) : {}) as T;
 }
 
-/** Hosted-agent model (Browser Use Cloud llm id). Gemini family for prod unless approved otherwise. */
+/** Hosted-agent model (Browser Use Cloud llm id). 3.1 Pro; Flash and 2.5 names are refused. */
 export function browserAgentModel(): string {
-    return process.env.BROWSER_AGENT_MODEL?.trim() || process.env.BROWSER_USE_AGENT_MODEL?.trim() || "gemini-3-flash-preview";
+    return preferPro(process.env.BROWSER_AGENT_MODEL || process.env.BROWSER_USE_AGENT_MODEL);
 }
 
 /** Login / sign-in / OTP pages (URL) — hosted-agent tasks stop here (early stop caps wasted cost). */

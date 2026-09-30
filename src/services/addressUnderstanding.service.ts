@@ -5,7 +5,7 @@
  * Code keeps the checks: the pincode must be in her text (or already known), street words must
  * come from her text. null → the rule parser is the fallback.
  */
-import { vertexGenerateText, parseJsonLoose, vertexFlashModel } from "../clients/vertexGemini.client";
+import { vertexGenerateText, parseJsonLoose, preferPro } from "../clients/vertexGemini.client";
 
 export type AddressUnderstanding = {
     /** 6-digit pincode from her text (or the one she gave earlier). */
@@ -75,7 +75,7 @@ export async function understandAddressText(
     const msg = String(text || "").trim().slice(0, 400);
     if (!msg) return null;
     const raw = await vertexGenerateText({
-        model: process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel(),
+        model: preferPro(process.env.VERTEX_ROUTER_MODEL),
         system: SYSTEM,
         responseSchema: SCHEMA,
         timeoutMs: Number(process.env.VERTEX_ADDRESS_TIMEOUT_MS) || 6000,

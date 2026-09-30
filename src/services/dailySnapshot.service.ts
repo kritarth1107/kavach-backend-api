@@ -4,7 +4,7 @@
  */
 import ActivityLog from "../models/activityLog.model";
 import DailySnapshot, { type IDailySnapshot } from "../models/dailySnapshot.model";
-import { parseJsonLoose, vertexGenerateText, vertexProModel, vertexFlashModel } from "../clients/vertexGemini.client";
+import { parseJsonLoose, vertexGenerateText, vertexProModel } from "../clients/vertexGemini.client";
 import { isInternalTalk, timelineDetail } from "./profile/profileCore";
 import { istDayKey } from "./activityLog.service";
 
@@ -74,13 +74,11 @@ export async function generateDailySnapshot(input: {
         "Never mention Saheli's own technical problems, errors or missed replies — they are not part of the family's day. " +
         'Reply ONLY JSON: {"summary":"3-5 sentence overview","highlights":["≤6 short bullets"],"concerns":["health/mood/safety items worth a caregiver\'s attention, else empty"],"mood":"one word or null"}';
     const prompt = `Day: ${dayKey} (IST)\nActivity log:\n${lines.join("\n")}`;
-    // Pro first (thinking eats the output budget, so a roomy cap + low thinking), then Flash —
-    // a busy or truncated Pro reply used to leave the family a "couldn't generate" card.
+    // 3.1 Pro. A truncated first reply is retried once on the same model.
     let model = vertexProModel();
     let raw = await vertexGenerateText({ model, json: true, timeoutMs: 45_000, maxOutputTokens: 8192, temperature: 0.3, thinkingLevel: "low", system, prompt }).catch(() => null);
     if (!parseJsonLoose<{ summary?: string }>(raw)?.summary) {
-        console.warn("[daily-snapshot] Pro reply unusable — Flash fallback");
-        model = vertexFlashModel();
+        console.warn("[daily-snapshot] 3.1 Pro reply unusable — retrying once");
         raw = await vertexGenerateText({ model, json: true, timeoutMs: 30_000, maxOutputTokens: 4096, temperature: 0.3, system, prompt }).catch(() => null);
     }
     const parsed = parseJsonLoose<{ summary?: string; highlights?: string[]; concerns?: string[]; mood?: string | null }>(raw);

@@ -3,7 +3,8 @@
  * meals and mismatches, then let Gemini keep only what matches the elder's intent. Nothing
  * relevant → [] (the caller offers alternatives instead of listing junk).
  */
-import { vertexGenerateText, parseJsonLoose, vertexFlashModel } from "../../../clients/vertexGemini.client";
+import { vertexGenerateText, parseJsonLoose, preferPro } from "../../../clients/vertexGemini.client";
+import { flavourOf } from "./queryRewrite";
 
 const JUNK =
     /\b(ketchup|sauce|sachets?|dips?|mayo(?:nnaise)?|chutney|extra|add[\s-]?ons?|addon|cutlery|carry\s*bag|packaging|seasoning|oregano|chil+i\s*flakes|straws?|napkins?|tissue|raita\s*cup|pickle\s*sachet|salt\s*sachet|sugar\s*sachet|water\s*bottle\s*200|gift\s*card|donation|tip)\b/i;
@@ -25,7 +26,7 @@ export async function filterRelevant<T extends Rankable>(intent: string, query: 
     if (!pre.length) return [];
     const list = pre.map((it, i) => `${i + 1}. ${it.name}${it.restaurantName ? ` (${it.restaurantName})` : ""}${typeof it.pricePaise === "number" ? ` ₹${Math.round(it.pricePaise / 100)}` : ""}`).join("\n");
     const raw = await vertexGenerateText({
-        model: process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel(),
+        model: preferPro(process.env.VERTEX_ROUTER_MODEL),
         system:
             "You filter store search results for an elderly shopper. Keep ONLY items that genuinely match what she wants (the intent), best match first. Drop condiments, sachets, add-ons, extras, sides that aren't the dish, combos/meals far from the ask, non-food items for food asks, and anything that doesn't match (wrong product type, wrong flavour, wrong diet, e.g. non-veg for a veg ask, sugary for a sugar-free ask). If nothing matches, return an empty list. Return JSON {keep: [item numbers]}.",
         prompt: `Intent: ${intent}\nSearch words: ${query}\nResults:\n${list}`,
@@ -37,8 +38,15 @@ export async function filterRelevant<T extends Rankable>(intent: string, query: 
     const p = parseJsonLoose<{ keep?: number[] }>(raw);
     if (!p || !Array.isArray(p.keep)) return pre; // model down → the deterministic filter only
     const seen = new Set<number>();
-    return p.keep
+    const kept = p.keep
         .map((n) => Math.floor(Number(n)) - 1)
         .filter((i) => i >= 0 && i < pre.length && !seen.has(i) && (seen.add(i), true))
         .map((i) => pre[i]!);
+    // A broad ask ("protein bar", "ice cream") must not collapse to two or three prices.
+    // A named flavour still uses the model's shorter list.
+    const words = query.trim().split(/\s+/).filter(Boolean).length;
+    if (!opts.food && !flavourOf(query) && words > 0 && words <= 4 && kept.length < Math.min(8, pre.length) && pre.length > kept.length) {
+        return pre.slice(0, 24);
+    }
+    return kept;
 }

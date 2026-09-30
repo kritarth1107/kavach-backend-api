@@ -4,10 +4,9 @@
  * slots. Code keeps the guardrails (money / OTP / safety); regex routers are only the
  * fallback when this returns null (model unavailable / timeout).
  *
- * Model: Gemini 3.5 Flash (VERTEX_ROUTER_MODEL) — Pro adds ~3–6 s per turn, too slow for a
- * router that runs on every message under the 35 s WhatsApp SLA.
+ * Model: Gemini 3.1 Pro (VERTEX_ROUTER_MODEL). Flash and 2.5 names are refused.
  */
-import { vertexGenerateText, parseJsonLoose, vertexFlashModel, lastVertexError } from "../clients/vertexGemini.client";
+import { vertexGenerateText, parseJsonLoose, preferPro, lastVertexError } from "../clients/vertexGemini.client";
 
 export const ROUTER_INTENTS = [
     "order_new",
@@ -126,7 +125,7 @@ Slots:
 - WAITING FOR DELIVERY ADDRESS CONFIRM (options listed): "yes"/"haan"/"ok"/"theek hai" → intent=order_control, control=confirm; a number → control=pick, pickIndex; a place name → order_modify + addressNickname; a new full address → order_modify, addressKind=other, addressText; "no"/"cancel" → control=cancel.
 - placeName: when Saheli just asked what to call a newly saved place (Active flows say "ASKED FOR PLACE NAME"), a short name reply ("Home", "beti ka ghar", "call it clinic") → intent=order_modify, placeName = the name tidied ("Beti ka ghar", "Clinic"). "skip"/"no"/"keep it" → placeName=null, control=none. Anything unrelated → the normal intent.
 - Saheli's own offer (Active flows say "SAHELI JUST OFFERED …"): an agreement ("yes", "go for it", "sure", "haan kar do", "ok try", "please") → intent=order_control, control=confirm (never companion_chat / account_info); naming a different platform ("zepto instead") → order_modify with that partner; "no"/"leave it" → control=cancel.
-- control/pickIndex: "1", "2nd one", "pehla wala" while options are shown → order_control, control=pick, pickIndex. "confirm"/"yes place it" → confirm. "cancel"/"rehne do"/"nahi chahiye" → cancel. "what's happening with my order" → status.
+- control/pickIndex: "1", "2nd one", "pehla wala" while options are shown → order_control, control=pick, pickIndex. "confirm"/"yes place it" → confirm. "cancel"/"rehne do"/"nahi chahiye" → cancel. "what's happening with my order" → status. "show more" / "more options" / "aur dikhao" / "next" while a product list is on screen → order_control, control=none, productQuery=null. Those words are never a product and never "retry".
 - otpCode: the digits, only for otp_code.
 - ridePickup/rideDrop (intent=ride, also answers inside an active ride flow): just the place words ("railway station", "Apollo hospital Jubilee Hills"). "mujhe station jaana hai" → rideDrop="station". "ghar se" → ridePickup="home". If the ride flow is waiting for pickup (phase need_pickup) a bare place is ridePickup; if waiting for drop (need_drop / pickup noted) it is rideDrop. Never put filler words in a place.
 - blockedItem: set when the user wants to BUY/order cigarettes or any tobacco (bidi, cigar, hookah, "sutta", brands like Marlboro / Gold Flake / Classic Ice Burst) → "tobacco"; gutka, pan masala, zarda, khaini → "gutka"; vapes / e-cigarettes → "vape"; alcohol (beer, wine, whisky, "daru", "sharab") → "alcohol". Keep intent=order_new and category as usual. Only for buying — talking about it ("my son drinks too much", "I quit smoking") stays null. Ginger, root beer, non-alcoholic drinks, nicotine gum/patches are NOT blocked.
@@ -235,7 +234,7 @@ export async function routeSaheliTurn(input: {
     const started = Date.now();
     const call = (timeoutMs: number) =>
         vertexGenerateText({
-            model: process.env.VERTEX_ROUTER_MODEL?.trim() || vertexFlashModel(),
+            model: preferPro(process.env.VERTEX_ROUTER_MODEL),
             system: SYSTEM,
             responseSchema: SCHEMA,
             timeoutMs,
