@@ -8,6 +8,7 @@ import type { ElderContext, GoalDoc, LoopResult, ToolResult } from "./types";
 import { runAgentLoop, type AgentDeps } from "./loop";
 import { PROMPT_VERSION, SAHELI_PRO_PROMPT } from "./prompt";
 import { draftFromHits, liveRideSearch, liveStoreSearch } from "./liveTools";
+import { learnBrief } from "./learn";
 import { factIsSubstring } from "./schema";
 
 const EPISODE_KEEP = 200;
@@ -24,6 +25,7 @@ type FamilyMemory = {
     episodes: string[];
     alerts: FamilyAlert[];
     record: string;
+    brief: string;
     medicines: MedicineRow[];
     reminders: ReminderRow[];
     readings: ReadingRow[];
@@ -47,6 +49,7 @@ function blankMemory(familyId: string): FamilyMemory {
         episodes: [],
         alerts: [],
         record: "",
+        brief: "",
         medicines: [],
         reminders: [],
         readings: [],
@@ -74,6 +77,7 @@ async function loadHistory(familyId: string) {
             episodes?: string[];
             alerts?: FamilyAlert[];
             record?: string;
+            brief?: string;
             medicines?: MedicineRow[];
             reminders?: ReminderRow[];
             readings?: ReadingRow[];
@@ -85,6 +89,7 @@ async function loadHistory(familyId: string) {
             mem.episodes = Array.isArray(doc.episodes) ? doc.episodes.slice(-EPISODE_KEEP) : [];
             mem.alerts = Array.isArray(doc.alerts) ? doc.alerts : [];
             mem.record = typeof doc.record === "string" ? doc.record : "";
+            mem.brief = typeof doc.brief === "string" ? doc.brief : "";
             mem.medicines = Array.isArray(doc.medicines) ? doc.medicines : [];
             mem.reminders = Array.isArray(doc.reminders) ? doc.reminders : [];
             mem.readings = Array.isArray(doc.readings) ? doc.readings : [];
@@ -100,6 +105,7 @@ async function loadHistory(familyId: string) {
 
 async function saveHistory(familyId: string) {
     const mem = remember(familyId);
+    mem.brief = learnBrief(mem);
     try {
         const { default: mongoose } = await import("mongoose");
         if (mongoose.connection.readyState !== 1 || !mem.familyId) return;
@@ -113,6 +119,7 @@ async function saveHistory(familyId: string) {
                     episodes: mem.episodes.slice(-EPISODE_KEEP),
                     alerts: mem.alerts.slice(-50),
                     record: mem.record,
+                    brief: mem.brief,
                     medicines: mem.medicines,
                     reminders: mem.reminders.slice(-80),
                     readings: mem.readings.slice(-80),
@@ -153,6 +160,7 @@ function elderContext(input: {
         speaker: input.speaker || null,
         household: { caregivers: mem.caregivers, careRecipients: mem.careRecipients },
         record: mem.record,
+        learned: mem.brief || learnBrief(mem),
         reminders: mem.reminders.map((row) => ({ text: row.text, when: row.when, held: row.held })),
         readings: mem.readings.map((row) => ({ kind: row.kind, value: row.value })),
         routines: mem.routines,

@@ -68,6 +68,8 @@ export type ElderContext = {
     /** Names in this family. Absent on older callers. */
     household?: { caregivers: string[]; careRecipients: string[] } | null;
     record?: string;
+    /** Compact memory rebuilt from saved facts, doses, and the record. */
+    learned?: string;
     reminders?: Array<{ text: string; when: string; held: boolean }>;
     readings?: Array<{ kind: string; value: string }>;
     routines?: string[];

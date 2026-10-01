@@ -422,6 +422,18 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
+    // A Done on the dose we just reminded is taken, before any model or keyword route.
+    if (identity.role === FamilyRole.CARE_RECIPIENT && text) {
+        const { closeRemindedDose } = await import("./saheliCareAction.service");
+        const closed = await closeRemindedDose({
+            familyId: identity.familyId,
+            recipientUserId: identity.userId,
+            actorUserId: identity.userId,
+            message: text,
+        }).catch(() => null);
+        if (closed) return outbound(phone, closed);
+    }
+
     // Phrase routes stay the decider for real numbers. The agent loop runs only for
     // a flagged +9997 phone, and it does not fall through into those routes.
     if (identity.role === FamilyRole.CARE_RECIPIENT) {

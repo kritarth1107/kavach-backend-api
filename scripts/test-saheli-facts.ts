@@ -3,12 +3,16 @@
  * and a due medicine is a reminder at that time — not a story.
  */
 import assert from "node:assert/strict";
+import { learnBrief } from "../src/services/agentLoop/learn";
+import { resolveItemStatus } from "../src/services/careScheduleCompletion.service";
+import { doneScheduleId, isDoseDoneReply } from "../src/services/saheliCareAction.service";
 import {
     finishElderReply,
     groundOutreachReply,
     medicineDueWindow,
     refusesMaa,
 } from "../src/services/saheliFactGuard.service";
+import { toDateKeyIST } from "../src/utils/istTime.util";
 
 let n = 0;
 const t = (name: string, fn: () => void) => {
@@ -68,6 +72,30 @@ t("after dont call me maa the next reply is not Maa and not a resend", () => {
     assert.doesNotMatch(reply, /\bmaa\b/i);
     assert.doesNotMatch(reply, /dheema|phir bhej/i);
     assert.match(reply, /How are you/i);
+});
+
+t("Done on a reminded dose stays due, then taken, and is not filed as missed", () => {
+    const now = new Date("2026-10-01T07:31:00.000Z");
+    const key = toDateKeyIST(now);
+    assert.equal(resolveItemStatus({ scheduleTime: "1:00 PM", dateKey: key, now }), "due");
+    const later = new Date(now.getTime() + 20 * 60 * 1000);
+    assert.equal(resolveItemStatus({ scheduleTime: "1:00 PM", dateKey: toDateKeyIST(later), now: later }), "missed");
+    assert.equal(resolveItemStatus({ scheduleTime: "1:00 PM", dateKey: key, now, manualStatus: "completed" }), "completed");
+    assert.equal(doneScheduleId("I completed schedule folvite-1"), "folvite-1");
+    assert.equal(doneScheduleId("Done"), null);
+    assert.equal(isDoseDoneReply("Done"), true);
+    assert.equal(isDoseDoneReply("Done ✅"), true);
+    assert.equal(isDoseDoneReply("please get atta"), false);
+    const brief = learnBrief({
+        facts: ["Leela is allergic to milk."],
+        record: "",
+        medicines: [{ name: "Folvite 5mg", time: "1:00 PM", status: "taken" }],
+        routines: [],
+        reminders: [],
+    });
+    assert.match(brief, /Folvite 5mg/);
+    assert.match(brief, /taken/);
+    assert.doesNotMatch(brief, /missed/);
 });
 
 t("a medicine due at its time is sent, and a missed send is not a story", () => {

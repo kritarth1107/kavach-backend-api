@@ -11,6 +11,7 @@ const schema = new Schema(
         facts: { type: [String], default: [] },
         episodes: { type: [String], default: [] },
         record: { type: String, default: "" },
+        brief: { type: String, default: "" },
         medicines: { type: [Schema.Types.Mixed], default: [] },
         reminders: { type: [Schema.Types.Mixed], default: [] },
         readings: { type: [Schema.Types.Mixed], default: [] },

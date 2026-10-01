@@ -132,7 +132,7 @@ function openGoal(partial: Partial<GoalDoc> = {}): GoalDoc {
 
 async function main() {
 await t("prompt version is set", async () => {
-    assert.equal(PROMPT_VERSION, 5);
+    assert.equal(PROMPT_VERSION, 6);
 });
 
 await t("an alert must quote something the family already said", async () => {

@@ -73,6 +73,7 @@ function payload(ctx: ElderContext, userText: string, extra: Record<string, unkn
             speaker: ctx.speaker || null,
             household: ctx.household || null,
             record: ctx.record || "",
+            learned: ctx.learned || "",
             medicines: ctx.medicines || [],
             reminders: ctx.reminders || [],
             readings: ctx.readings || [],

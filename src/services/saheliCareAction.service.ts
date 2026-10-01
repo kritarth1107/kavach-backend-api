@@ -12,6 +12,17 @@ import {
 } from "./careScheduleCompletion.service";
 import { toDateKeyIST } from "../utils/istTime.util";
 
+/** The Done button on a reminder. The id is the schedule, not a guess from the words. */
+export function doneScheduleId(text: string): string | null {
+    const match = text.trim().match(/^I completed schedule ([\w-]+)$/i);
+    return match?.[1] ?? null;
+}
+
+/** A short reply to the dose that was just reminded. */
+export function isDoseDoneReply(text: string): boolean {
+    return /^(done|haan le li|le li|le liya)(\s*[✅✓])?[!.?\s]*$/i.test(text.trim());
+}
+
 function fuzzyMatchScheduleTitle(title: string, query: string): boolean {
     const t = title.toLowerCase();
     const q = query.toLowerCase().trim();
@@ -352,6 +363,47 @@ export async function logCheckIn(input: {
     }
 
     return { logged: true, summary: parts.join(". ") };
+}
+
+/**
+ * A reminded dose that was answered Done is taken.
+ * Returns the WhatsApp line, or null when this message is not that answer.
+ */
+export async function closeRemindedDose(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    message: string;
+}): Promise<string | null> {
+    const scheduleFromButton = doneScheduleId(input.message);
+    let scheduleId = scheduleFromButton;
+    if (!scheduleId && isDoseDoneReply(input.message)) {
+        const { default: Nudge } = await import("../models/saheliNudgeLog.model");
+        const since = new Date(Date.now() - 3 * 60 * 60 * 1000);
+        const nudge = await Nudge.findOne({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            delivered: true,
+            nudgeKind: { $in: ["dose_due", "pre_reminder", "missed_followup"] },
+            scheduleId: { $nin: [null, "", "daily_schedule"] },
+            createdAt: { $gte: since },
+        })
+            .sort({ createdAt: -1 })
+            .lean<{ scheduleId?: string }>();
+        scheduleId = nudge?.scheduleId || null;
+    }
+    if (!scheduleId) return null;
+    const marked = await markScheduleCompleted({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        actorUserId: input.actorUserId,
+        scheduleId,
+        note: "They replied Done.",
+        channel: ChannelType.WHATSAPP,
+    });
+    const title = typeof marked.title === "string" ? marked.title : "";
+    if (!title) return "I could not mark that dose. Tell me the medicine name and I will mark it taken.";
+    return `Done — ${title} is taken. It is not missed.`;
 }
 
 export async function tryApplyElderCareActionFromMessage(input: {

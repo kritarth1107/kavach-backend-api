@@ -97,7 +97,7 @@ async function getSchedulesForDayOfWeek(
         });
 }
 
-function resolveItemStatus(input: {
+export function resolveItemStatus(input: {
     scheduleTime: string;
     dateKey: string;
     now?: Date;
@@ -119,6 +119,8 @@ function resolveItemStatus(input: {
 
     const nowMinutes = getISTParts(now).minutesSinceMidnight;
     if (nowMinutes < scheduleMinutes) return "upcoming";
+    // The reminder minute is still due. Missed starts once they have had time to answer.
+    if (nowMinutes - scheduleMinutes < 15) return "due";
     return "missed";
 }
 
