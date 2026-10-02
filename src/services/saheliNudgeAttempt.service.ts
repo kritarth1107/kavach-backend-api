@@ -135,4 +135,24 @@ export async function finalizeNudgeAttempt(
     ).catch((err) => {
         console.warn("finalizeNudgeAttempt failed:", err instanceof Error ? err.message : err);
     });
+    void pushNudgeToLedger(nudgeId, outcome);
+}
+
+/** Saheli's ledger must know every reminder that went out or failed, or she cannot answer "was I reminded?". */
+async function pushNudgeToLedger(nudgeId: string, outcome: { delivered: boolean; terminal?: boolean; reason?: string; messagePreview?: string }) {
+    if (!outcome.delivered && !outcome.terminal) return;
+    const row = await SaheliNudgeLog.findOne({ nudgeId }).lean().catch(() => null);
+    if (!row) return;
+    const { default: CareSchedule } = await import("../models/careSchedule.model");
+    const item = row.scheduleId ? await CareSchedule.findOne({ scheduleId: row.scheduleId }).lean().catch(() => null) : null;
+    const what = item ? `${item.title}${item.dosage ? ` ${item.dosage}` : ""} at ${item.time}` : row.scheduleId || row.nudgeKind;
+    const { aiPushCareEvent } = await import("../clients/aiEngine.client");
+    await aiPushCareEvent({
+        family_id: row.familyId,
+        subject_id: row.recipientUserId,
+        kind: outcome.delivered ? "reminder_sent" : "reminder_failed",
+        summary: `${row.nudgeKind.replace(/_/g, " ")}: ${what}${outcome.delivered ? "" : ` (not delivered: ${outcome.reason || "unknown"})`}`,
+        payload: { nudgeKind: row.nudgeKind, scheduleId: row.scheduleId, dateKey: row.dateKey, preview: outcome.messagePreview?.slice(0, 200) },
+        ref: `nudge:${nudgeId}:${outcome.delivered ? "sent" : "failed"}`,
+    });
 }

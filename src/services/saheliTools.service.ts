@@ -69,7 +69,9 @@ export type SaheliToolName =
     | "ride_status"
     | "cancel_ride"
     | "sync_medicine_schedule"
-    | "get_reminder_log";
+    | "get_reminder_log"
+    | "export_care_record"
+    | "claim_schedule_rows";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -504,6 +506,19 @@ export async function executeSaheliTool(input: {
                 instructions: input.args.instructions ? String(input.args.instructions) : undefined,
                 daysOfWeek: Array.isArray(input.args.days) ? (input.args.days as number[]) : undefined,
                 active: input.args.active !== false,
+            });
+        }
+        case "export_care_record": {
+            const { exportCareRecord } = await import("./careMemorySync.service");
+            return exportCareRecord({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        }
+        case "claim_schedule_rows": {
+            const { claimScheduleRows } = await import("./careMemorySync.service");
+            return claimScheduleRows({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                key: String(input.args.key ?? ""),
+                scheduleIds: Array.isArray(input.args.scheduleIds) ? (input.args.scheduleIds as unknown[]).map(String) : [],
             });
         }
         case "get_reminder_log": {

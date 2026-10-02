@@ -543,6 +543,24 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         profileHint = await profileSummary(w, true).catch(() => "");
     }
 
+    // ── Saheli Brain v2: shadow beside this path on real traffic, or live for switched-over
+    // families. Runs after the emergency and scam backstops; a v2 failure falls through to v1.
+    if (text && !body.interactiveId && !MEDIA_PLACEHOLDER.test(text)) {
+        const V2 = await import("./brainV2.service");
+        const mode = V2.brainV2Mode(identity.familyId);
+        if (mode === "live") {
+            const v2 = await V2.runBrainV2({ identity, text, messageRef: body.messageId, mode }).catch((err) => {
+                console.warn("[brain-v2] live turn failed, using v1:", err instanceof Error ? err.message : err);
+                return null;
+            });
+            if (v2?.reply?.trim()) return outbound(phone, v2.reply);
+        } else if (mode === "shadow") {
+            void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode }).catch((err) =>
+                console.warn("[brain-v2] shadow turn failed:", err instanceof Error ? err.message : err),
+            );
+        }
+    }
+
     // ── Understanding: ONE Gemini structured-output call per turn (message + recent turns +
     // this phone's active flows). Regex gates below run only when this returns null.
     let route: SaheliRoute | null = null;

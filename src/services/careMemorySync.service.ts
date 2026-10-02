@@ -112,3 +112,43 @@ export async function reminderLog(input: { familyId: string; recipientUserId: st
             .map((s) => ({ scheduleId: s.scheduleId, item: titles.get(s.scheduleId) })),
     };
 }
+
+/** Everything the backend knows about a care recipient, for seeding Saheli's care memory once. */
+export async function exportCareRecord(input: { familyId: string; recipientUserId: string }) {
+    const { default: ElderProfile } = await import("../models/elderProfile.model");
+    const [profile, schedules] = await Promise.all([
+        ElderProfile.findOne({ familyId: input.familyId, recipientUserId: input.recipientUserId }).lean(),
+        CareSchedule.find({ familyId: input.familyId, recipientUserId: input.recipientUserId, active: true }).lean(),
+    ]);
+    const learned = (profile?.facts || [])
+        .filter((f) => f.status !== "rejected" && f.status !== "faded" && !f.blocked && (f.pinned || f.status !== "learned" || f.confidence >= 0.7))
+        .map((f) => ({ category: f.category, text: f.text, confirmed: Boolean(f.pinned) || f.status !== "learned", confidence: f.confidence }));
+    return {
+        nameToUse: profile?.nameToUse || profile?.tuning?.addressAs || null,
+        avoidMaa: Boolean(profile?.tuning?.avoidMaa),
+        language: profile?.tuning?.language || null,
+        allergies: profile?.allergies || [],
+        dietRules: profile?.dietRules || [],
+        profileMedicines: (profile?.medicines || []).filter((m) => m.active !== false).map((m) => ({ name: m.name, dose: m.dose, time: m.time })),
+        schedules: schedules.map((s) => ({
+            scheduleId: s.scheduleId,
+            type: s.type,
+            title: s.title,
+            time: s.time,
+            dosage: s.dosage || null,
+            instructions: s.instructions || null,
+            daysOfWeek: s.daysOfWeek || [],
+            sourceKey: s.sourceKey || null,
+        })),
+        learned,
+    };
+}
+
+/** Hand dashboard-made schedule rows to a care-record key so later syncs update them instead of duplicating. */
+export async function claimScheduleRows(input: { familyId: string; recipientUserId: string; key: string; scheduleIds: string[] }) {
+    const res = await CareSchedule.updateMany(
+        { familyId: input.familyId, recipientUserId: input.recipientUserId, scheduleId: { $in: input.scheduleIds }, sourceKey: { $in: [null, undefined, ""] } },
+        { $set: { sourceKey: input.key } },
+    );
+    return { claimed: res.modifiedCount };
+}

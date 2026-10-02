@@ -143,6 +143,50 @@ async function aiFetch(
     }
 }
 
+/**
+ * Feed Saheli's care ledger (ai-engine) with what happened outside a conversation, such as a
+ * reminder the scheduler sent. Best effort: a failure is logged and never blocks the caller.
+ */
+export async function aiPushCareEvent(payload: {
+    family_id: string;
+    subject_id: string;
+    kind: string;
+    summary: string;
+    payload?: Record<string, unknown>;
+    ref?: string;
+    at?: string;
+}): Promise<void> {
+    try {
+        const res = await aiFetch(
+            "/v2/events",
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+            5000,
+        );
+        if (!res.ok) console.warn(`care event push ${payload.kind} → HTTP ${res.status}`);
+    } catch (err) {
+        console.warn(`care event push ${payload.kind} failed:`, err instanceof Error ? err.message : err);
+    }
+}
+
+export async function aiPostBrainTurn(payload: {
+    family_id: string;
+    elder: { id: string; name: string; role: string };
+    speaker: { id: string; name: string; role: string };
+    members: Array<{ id: string; name: string; role: string }>;
+    text: string;
+    message_ref?: string;
+    channel: string;
+    mode: "live" | "shadow";
+}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }> }> {
+    const res = await aiFetch(
+        "/v2/turn",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+        120_000,
+    );
+    if (!res.ok) throw new AppError(`Brain v2 HTTP ${res.status}`, 502);
+    return parseAiJson(res);
+}
+
 export async function aiFamilyExists(aiFamilyId: string): Promise<boolean> {
     try {
         const res = await aiFetch(`/v1/families/${aiFamilyId}`, {
