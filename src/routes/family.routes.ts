@@ -1,3 +1,4 @@
+import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import {
     careActionHandler,
@@ -95,6 +96,7 @@ import {
 } from "../controllers/dashboard.controller";
 import { postSaheliMemoryRefreshHandler } from "../controllers/saheliCompanion.controller";
 import { familyDocumentUpload, rejectOversizedUpload } from "../middleware/upload.middleware";
+import { postMemberAvatar } from "../controllers/memberAvatar.controller";
 import { protect } from "../middleware/auth.middleware";
 
 const router = Router();
@@ -307,6 +309,13 @@ router.delete(
 );
 router.post("/:familyId/members/invite", protect, inviteMember);
 router.patch("/:familyId/members/:memberUserId", protect, patchMemberDetails);
+router.post(
+    "/:familyId/members/:memberUserId/avatar",
+    protect,
+    familyDocumentUpload.single("photo"),
+    rejectOversizedUpload,
+    (req: Request, res: Response, next: NextFunction) => postMemberAvatar(req, res).catch(next),
+);
 router.patch("/:familyId/members/:memberUserId/status", protect, patchMemberStatus);
 router.delete("/:familyId/members/:memberUserId", protect, deleteMember);
 router.patch("/:familyId/invitations/:inviteId", protect, patchInvitationDetails);
