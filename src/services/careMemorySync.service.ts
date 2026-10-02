@@ -169,7 +169,15 @@ export async function sendSaheliWhatsApp(input: { familyId: string; recipientUse
     const member = family?.members.find((m) => m.userId === input.toUserId && m.status !== "REMOVED");
     if (!member) return { delivered: false, reason: "not a family member" };
     const user = await User.findOne({ userId: input.toUserId }).lean();
-    const phone = user?.phone?.countryCode && user.phone.number ? `${user.phone.countryCode}${user.phone.number}` : "";
+    let phone = user?.phone?.countryCode && user.phone.number ? `${user.phone.countryCode}${user.phone.number}` : "";
+    if (!phone) {
+        // Elders who joined by WhatsApp invite may only have the number on the accepted invitation.
+        const { default: FamilyInvitation } = await import("../models/familyInvitation.model");
+        const inv = await FamilyInvitation.findOne({ familyId: input.familyId, userId: input.toUserId, phone: { $exists: true, $ne: "" } })
+            .sort({ updatedAt: -1 })
+            .lean();
+        if (inv?.phone) phone = `${inv.phoneCountryCode || "+91"}${String(inv.phone).replace(/\D/g, "").slice(-10)}`;
+    }
     if (!phone) return { delivered: false, reason: "no WhatsApp number" };
     const { deliverOutboundMessage } = await import("./channelOutbound.service");
     const { scrubStack } = await import("./stackScrub");
