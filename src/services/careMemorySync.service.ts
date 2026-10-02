@@ -152,3 +152,27 @@ export async function claimScheduleRows(input: { familyId: string; recipientUser
     );
     return { claimed: res.modifiedCount };
 }
+
+/** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */
+export async function sendSaheliWhatsApp(input: { familyId: string; recipientUserId: string; toUserId: string; text: string }) {
+    const text = input.text.trim();
+    if (!text) return { delivered: false, reason: "empty" };
+    const { default: Family } = await import("../models/family.model");
+    const { default: User } = await import("../models/users.model");
+    const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" }).lean();
+    const member = family?.members.find((m) => m.userId === input.toUserId && m.status !== "REMOVED");
+    if (!member) return { delivered: false, reason: "not a family member" };
+    const user = await User.findOne({ userId: input.toUserId }).lean();
+    const phone = user?.phone?.countryCode && user.phone.number ? `${user.phone.countryCode}${user.phone.number}` : "";
+    if (!phone) return { delivered: false, reason: "no WhatsApp number" };
+    const { deliverOutboundMessage } = await import("./channelOutbound.service");
+    const { scrubStack } = await import("./stackScrub");
+    const delivery = await deliverOutboundMessage({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        content: scrubStack(text),
+        channel: "whatsapp",
+        channelIdentifier: phone,
+    });
+    return { delivered: Boolean(delivery.delivered) };
+}

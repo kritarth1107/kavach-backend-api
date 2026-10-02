@@ -71,7 +71,8 @@ export type SaheliToolName =
     | "sync_medicine_schedule"
     | "get_reminder_log"
     | "export_care_record"
-    | "claim_schedule_rows";
+    | "claim_schedule_rows"
+    | "send_whatsapp";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -511,6 +512,15 @@ export async function executeSaheliTool(input: {
         case "export_care_record": {
             const { exportCareRecord } = await import("./careMemorySync.service");
             return exportCareRecord({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        }
+        case "send_whatsapp": {
+            const { sendSaheliWhatsApp } = await import("./careMemorySync.service");
+            return sendSaheliWhatsApp({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                toUserId: String(input.args.to ?? input.recipientUserId),
+                text: String(input.args.text ?? ""),
+            });
         }
         case "claim_schedule_rows": {
             const { claimScheduleRows } = await import("./careMemorySync.service");
