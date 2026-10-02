@@ -1,5 +1,7 @@
 import Family from "../models/family.model";
+import Notification from "../models/notification.model";
 import User from "../models/users.model";
+import { toDateKeyIST } from "../utils/istTime.util";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import { deliverOutboundMessage } from "./channelOutbound.service";
 import { createFamilyNotification } from "./notification.service";
@@ -55,6 +57,8 @@ export async function notifyCaregivers(input: {
     message: string;
     urgency?: "low" | "medium" | "high";
     kind?: string;
+    /** Stable key for the in-app notification; without it every call makes a new one. */
+    dedupeKey?: string;
 }): Promise<{ notifiedCount: number; channels: string[] }> {
     const allowWhatsApp = caregiverWhatsAppAllowed(input.kind, input.urgency);
     {
@@ -104,7 +108,7 @@ export async function notifyCaregivers(input: {
             body: input.message.slice(0, 280),
             actionUrl: isOrderPlaced ? "/dashboard/approvals" : "/dashboard",
             recipientUserId: input.recipientUserId,
-            dedupeKey: `alert:${input.recipientUserId}:${input.message.slice(0, 40)}:${Date.now()}`,
+            dedupeKey: input.dedupeKey || `alert:${input.recipientUserId}:${input.message.slice(0, 40)}:${Date.now()}`,
         }).catch(() => {});
 
         if (!allowWhatsApp) continue;
@@ -147,14 +151,25 @@ export async function notifyCaregivers(input: {
     return { notifiedCount, channels };
 }
 
+/** Durable check across restarts: notification dedupe keys are stored as `<caregiverId>:<key>`. */
+async function alreadyNotifiedToday(familyId: string, key: string): Promise<boolean> {
+    const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return Boolean(await Notification.exists({ familyId, dedupeKey: { $regex: `:${escaped}$` } }));
+}
+
 export async function checkCaregiverAlertsForMissedTasks(input: {
     familyId: string;
     recipientUserId: string;
     missedCount: number;
     missedTitles: string[];
-}): Promise<void> {
+}, now: Date = new Date()): Promise<void> {
     if (input.missedCount < 2) return;
+    // Called on every scheduler tick after 17:00, so the alert must be claimed once per day.
+    const dayKey = toDateKeyIST(now);
+    if (!claimCaregiverAlert(`missed:${input.recipientUserId}:${dayKey}`, 24 * 60 * 60_000, now.getTime())) return;
+    if (await alreadyNotifiedToday(input.familyId, `missed:${input.recipientUserId}:${dayKey}`)) return;
     await notifyCaregivers({
+        dedupeKey: `missed:${input.recipientUserId}:${dayKey}`,
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.recipientUserId,
