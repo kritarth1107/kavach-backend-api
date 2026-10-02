@@ -51,8 +51,14 @@ export async function syncMedicineSchedule(input: {
     const days = Array.isArray(input.daysOfWeek) ? input.daysOfWeek.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : [];
     const kept: string[] = [];
     const disabled: string[] = [];
+    const { parseTimeToMinutes } = await import("./careScheduleCompletion.service");
+    const asHHMM = (t: string) => {
+        const m = parseTimeToMinutes(t);
+        return m === null ? t : `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    };
     for (const row of existing) {
-        if (times.includes(row.time)) {
+        // Dashboard rows may say "1:00 PM"; compare clock times, not strings.
+        if (times.includes(asHHMM(row.time)) && !kept.includes(asHHMM(row.time))) {
             row.title = input.name.slice(0, 120);
             row.dosage = input.dose?.slice(0, 80) || undefined;
             row.instructions = instructions.slice(0, 300) || undefined;
@@ -60,7 +66,7 @@ export async function syncMedicineSchedule(input: {
             row.active = true;
             row.updatedBy = input.actorUserId;
             await row.save();
-            kept.push(row.time);
+            kept.push(asHHMM(row.time));
         } else if (row.active) {
             row.active = false;
             row.updatedBy = input.actorUserId;
