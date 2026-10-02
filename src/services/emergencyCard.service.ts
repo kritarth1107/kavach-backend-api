@@ -7,9 +7,7 @@ import { aiEngineJson } from "../clients/aiEngine.client";
 import config from "../config/app.config";
 import { AppError } from "../middleware/error.middleware";
 import EmergencyLink from "../models/emergencyLink.model";
-import Family from "../models/family.model";
-import User from "../models/users.model";
-import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
+import { FamilyRole } from "../types/family.types";
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
 
@@ -45,34 +43,25 @@ export async function publicEmergencyCard(token: string) {
         { new: true },
     ).lean();
     if (!link) throw new AppError("This emergency link is no longer active", 404);
-    const family = await Family.findOne({ familyId: link.familyId, status: "ACTIVE" }).lean();
-    if (!family) throw new AppError("This emergency link is no longer active", 404);
-    const joined = family.members.filter((m) => m.status === FamilyMemberStatus.JOINED);
-    const users = await User.find({ userId: { $in: joined.map((m) => m.userId) } }).lean();
-    const byId = new Map(users.map((u) => [u.userId, u]));
-    const person = byId.get(link.subjectUserId);
-    const phone = (u: (typeof users)[number] | undefined) => {
-        const p = u?.phone as { countryCode?: string; number?: string } | undefined;
-        return p?.number ? `${p.countryCode || "+91"} ${p.number}` : null;
-    };
-    const caregivers = joined
-        .filter((m) => m.role === FamilyRole.PRIMARY_CAREGIVER || m.role === FamilyRole.CO_CAREGIVER)
-        .filter((m) => m.userId !== link.subjectUserId)
-        .map((m) => {
-            const u = byId.get(m.userId);
-            return { name: [u?.firstName, u?.lastName].filter(Boolean).join(" ") || "Family", phone: phone(u), primary: m.role === FamilyRole.PRIMARY_CAREGIVER };
-        })
+    // Names and numbers as the family sees them (invite names, prefixes, WhatsApp numbers).
+    const { getFamilyMembersList } = await import("./familyMember.service");
+    const list = await getFamilyMembersList(link.familyId, link.subjectUserId).catch(() => null);
+    if (!list) throw new AppError("This emergency link is no longer active", 404);
+    type M = { userId?: string; fullName?: string; name?: string; role?: string; status?: string; phone?: string; phoneCountryCode?: string; avatarUrl?: string | null };
+    const members = (list.members as M[]).filter((m) => m.userId && String(m.status ?? "JOINED").toUpperCase() !== "REMOVED");
+    const phoneOf = (m?: M) => (m?.phone ? `${m.phoneCountryCode || "+91"} ${m.phone}`.trim() : null);
+    const nameOf = (m?: M) => (m?.fullName || m?.name || "").trim();
+    const subject = members.find((m) => m.userId === link.subjectUserId);
+    const caregivers = members
+        .filter((m) => (m.role === FamilyRole.PRIMARY_CAREGIVER || m.role === FamilyRole.CO_CAREGIVER) && m.userId !== link.subjectUserId)
+        .map((m) => ({ name: nameOf(m) || "Family", phone: phoneOf(m), primary: m.role === FamilyRole.PRIMARY_CAREGIVER }))
         .sort((a, b) => Number(b.primary) - Number(a.primary));
     const card = await aiEngineJson(
         "GET",
         `/v2/dash/${encodeURIComponent(link.familyId)}/${encodeURIComponent(link.subjectUserId)}/emergency`,
     );
     return {
-        person: {
-            name: [person?.firstName, person?.lastName].filter(Boolean).join(" ") || "Care recipient",
-            photo: person?.avatarUrl ?? null,
-            phone: phone(person),
-        },
+        person: { name: nameOf(subject) || "Care recipient", photo: subject?.avatarUrl ?? null, phone: phoneOf(subject) },
         caregivers,
         card,
         updatedAt: new Date().toISOString(),
