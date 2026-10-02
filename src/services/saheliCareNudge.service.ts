@@ -194,14 +194,64 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
         }
     }
 
+    // Self care: caregivers who keep their own schedule get the same dose reminders, gently, with no family alerts.
+    try {
+        for (const target of await listSelfCareTargets()) {
+            if (isQuietHourIST(nowMinutes)) break;
+            scanned += 1;
+            try {
+                sent += await nudgeOneCompanion(target, now, dateKey, nowMinutes, { selfCare: true });
+            } catch (err) {
+                console.warn(`Self-care nudge skipped for ${target.recipientUserId}:`, err instanceof Error ? err.message : err);
+            }
+        }
+    } catch (err) {
+        console.warn("Self-care nudge scan failed:", err instanceof Error ? err.message : err);
+    }
+
     return { sent, scanned };
 }
 
+function isQuietHourIST(nowMinutes: number): boolean {
+    return nowMinutes >= 22 * 60 || nowMinutes < 7 * 60;
+}
+
+/** Caregivers (primary or co) with active schedule rows about themselves. */
+export async function listSelfCareTargets(): Promise<NudgeTarget[]> {
+    const CareSchedule = (await import("../models/careSchedule.model")).default;
+    const Family = (await import("../models/family.model")).default;
+    const { FamilyRole, FamilyMemberStatus } = await import("../types/family.types");
+    const rows = (await CareSchedule.aggregate([
+        { $match: { active: true } },
+        { $group: { _id: { familyId: "$familyId", recipientUserId: "$recipientUserId" } } },
+    ])) as Array<{ _id: { familyId: string; recipientUserId: string } }>;
+    const byFamily = new Map<string, string[]>();
+    for (const r of rows) byFamily.set(r._id.familyId, [...(byFamily.get(r._id.familyId) ?? []), r._id.recipientUserId]);
+    const out: NudgeTarget[] = [];
+    for (const [familyId, userIds] of byFamily) {
+        const family = await Family.findOne({ familyId, status: "ACTIVE" }).lean();
+        if (!family) continue;
+        for (const userId of userIds) {
+            const m = family.members.find((x) => x.userId === userId && x.status === FamilyMemberStatus.JOINED);
+            if (m && (m.role === FamilyRole.PRIMARY_CAREGIVER || m.role === FamilyRole.CO_CAREGIVER)) {
+                out.push({ familyId, recipientUserId: userId, nudgeIntensity: "gentle", preferredLanguage: "english", preferredChannel: "whatsapp" });
+            }
+        }
+    }
+    return out;
+}
+
+type NudgeTarget = Pick<
+    Awaited<ReturnType<typeof listEnabledCompanions>>[number],
+    "familyId" | "recipientUserId" | "nudgeIntensity" | "preferredLanguage" | "preferredChannel"
+>;
+
 async function nudgeOneCompanion(
-    companion: Awaited<ReturnType<typeof listEnabledCompanions>>[number],
+    companion: NudgeTarget,
     _now: Date,
     dateKey: string,
     nowMinutes: number,
+    opts: { selfCare?: boolean } = {},
 ): Promise<number> {
     let sent = 0;
         const day = await getScheduleDayStatuses(
@@ -375,7 +425,8 @@ async function nudgeOneCompanion(
         }
 
         const missed = day.items.filter((i) => i.status === "missed" || i.status === "due");
-        if (missed.length >= 2 && nowMinutes >= 17 * 60) {
+        // A caregiver's own self care never alerts the rest of the family.
+        if (!opts.selfCare && missed.length >= 2 && nowMinutes >= 17 * 60) {
             await checkCaregiverAlertsForMissedTasks({
                 familyId: companion.familyId,
                 recipientUserId: companion.recipientUserId,

@@ -73,7 +73,8 @@ export type SaheliToolName =
     | "export_care_record"
     | "claim_schedule_rows"
     | "send_whatsapp"
-    | "browser_profile";
+    | "browser_profile"
+    | "emergency_link";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -520,6 +521,17 @@ export async function executeSaheliTool(input: {
             const partner = String(input.args.partner ?? "").toLowerCase();
             if (!partner) return { profileId: null };
             return { profileId: (await profileFor(input.familyId, partner)) ?? null };
+        }
+        case "emergency_link": {
+            const { ensureEmergencyLink } = await import("./emergencyCard.service");
+            const family = await getFamilyForActor(input.familyId, input.actorUserId);
+            const { isCareSubject } = await import("./careRecordAuth.service");
+            // The card is for a care recipient, or for whoever is asking about their own self care.
+            if (!isCareSubject(family, input.recipientUserId, input.actorUserId) && !family.members.some((m) => m.userId === input.recipientUserId && m.role === "CARE_RECIPIENT")) {
+                return { url: null, error: "not a care subject" };
+            }
+            const link = await ensureEmergencyLink(input.familyId, input.recipientUserId, input.actorUserId);
+            return { url: link.url };
         }
         case "send_whatsapp": {
             const { sendSaheliWhatsApp } = await import("./careMemorySync.service");

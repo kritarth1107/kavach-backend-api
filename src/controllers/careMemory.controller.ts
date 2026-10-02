@@ -112,3 +112,106 @@ export async function getHome(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/home`, undefined, 45_000) });
 }
+
+// ── care views (the same data Saheli's tools read on WhatsApp) ──────────────
+
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+export async function getStock(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/stock`) });
+}
+
+export async function postStock(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const count = Number(req.body?.count);
+    if (!Number.isInteger(count) || count < 0 || count > 2000) throw new AppError("count must be 0–2000", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/stock`, { actor, key: String(req.body?.key ?? ""), count }) });
+}
+
+export async function postRefillOrder(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const key = String(req.params.key ?? "").slice(0, 160);
+    const service = String(req.body?.service ?? "");
+    if (!["apollo", "1mg", "pharmeasy"].includes(service)) throw new AppError("service must be apollo, 1mg or pharmeasy", 400);
+    const qty = Math.min(Math.max(Number(req.body?.qty) || 1, 1), 20);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/stock/${encodeURIComponent(key)}/order`, { actor, service, qty }, 45_000) });
+}
+
+export async function getEmergency(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/emergency`) });
+}
+
+export async function getCareTeam(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/care-team`) });
+}
+
+export async function postAppointmentQuestion(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const question = String(req.body?.question ?? "").trim().slice(0, 400);
+    if (!question) throw new AppError("question required", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/appointments/question`, { actor, key: String(req.body?.key ?? ""), question }, 45_000) });
+}
+
+export async function getReport(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const days = Math.min(Math.max(Number(req.query.days) || 7, 1), 31);
+    const subject = await User.findOne({ userId: req.params.subjectUserId }).lean();
+    const name = [subject?.firstName, subject?.lastName].filter(Boolean).join(" ");
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/report${qs({ days: String(days), name })}`, undefined, 60_000) });
+}
+
+export async function getWellbeing(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const days = Math.min(Math.max(Number(req.query.days) || 14, 3), 60);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/wellbeing${qs({ days: String(days) })}`) });
+}
+
+export async function getFamilyTasks(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/family-tasks`) });
+}
+
+export async function postFamilyTask(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const { familyId } = req.params;
+    const title = String(req.body?.title ?? "").trim();
+    const assignee = String(req.body?.assignee ?? "");
+    if (title.length < 2) throw new AppError("title required", 400);
+    const family = await getFamilyForActor(familyId, actor.id);
+    if (!family.hasJoinedMember(assignee)) throw new AppError("Assign the task to someone in the family", 400);
+    const due = typeof req.body?.due === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(req.body.due) ? req.body.due.slice(0, 16) : undefined;
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/family-tasks`, { actor, title: title.slice(0, 300), assignee, due }) });
+}
+
+export async function postFamilyTaskDone(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const taskId = id(req.params.taskId, "task id");
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/family-tasks/${taskId}/done`, { actor, note: String(req.body?.note || "done").slice(0, 200) }) });
+}
+
+export async function getSpending(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const month = typeof req.query.month === "string" && MONTH_RE.test(req.query.month) ? req.query.month : undefined;
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/spending${qs({ month })}`) });
+}
+
+export async function getEmergencyLink(req: Request, res: Response) {
+    await caregiverScope(req);
+    const { currentEmergencyLink } = await import("../services/emergencyCard.service");
+    res.json({ success: true, data: await currentEmergencyLink(req.params.familyId, req.params.subjectUserId) });
+}
+
+export async function postEmergencyLink(req: Request, res: Response) {
+    const { actor } = await caregiverScope(req);
+    const { ensureEmergencyLink } = await import("../services/emergencyCard.service");
+    res.json({ success: true, data: await ensureEmergencyLink(req.params.familyId, req.params.subjectUserId, actor.id) });
+}
+
+export async function deleteEmergencyLink(req: Request, res: Response) {
+    await caregiverScope(req);
+    const { revokeEmergencyLinks } = await import("../services/emergencyCard.service");
+    res.json({ success: true, data: await revokeEmergencyLinks(req.params.familyId, req.params.subjectUserId) });
+}

@@ -38,7 +38,13 @@ export async function runBrainV2(input: {
     );
     const elder =
         joined.find((m) => m.userId === input.identity.userId && m.role === FamilyRole.CARE_RECIPIENT) ||
-        joined.find((m) => m.role === FamilyRole.CARE_RECIPIENT);
+        joined.find((m) => m.role === FamilyRole.CARE_RECIPIENT) ||
+        // Self care: a family with no one to care for yet still gets the brain, about the caregiver themselves.
+        joined.find(
+            (m) =>
+                m.userId === input.identity.userId &&
+                (m.role === FamilyRole.PRIMARY_CAREGIVER || m.role === FamilyRole.CO_CAREGIVER),
+        );
     if (!elder) return null;
     const speaker = joined.find((m) => m.userId === input.identity.userId);
     const person = (m: { userId: string; name?: string; role: string }) => ({

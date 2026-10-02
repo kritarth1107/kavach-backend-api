@@ -11,6 +11,7 @@ import documentRoutes from "./routes/document.routes";
 import linkRoutes from "./routes/link.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import healthRoutes from "./routes/health.routes";
+import publicRoutes from "./routes/public.routes";
 import careRecordRoutes from "./routes/careRecord.routes";
 import webhookRoutes from "./routes/webhook.routes";
 import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.routes";
@@ -63,6 +64,7 @@ app.use("/api/links", linkRoutes);
 app.use("/api/analytics", analyticsRoutes);
 
 app.use("/api/health", healthRoutes);
+app.use("/api/public", publicRoutes);
 app.use("/internal", internalRoutes);
 
 app.use(errorHandler);
