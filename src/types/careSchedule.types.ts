@@ -19,6 +19,7 @@ export interface ICareScheduleItem {
     active: boolean;
     createdBy: string;
     updatedBy?: string;
+    sourceKey?: string;
     createdAt: Date;
     updatedAt: Date;
 }

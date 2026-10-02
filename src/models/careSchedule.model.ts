@@ -63,6 +63,11 @@ const careScheduleSchema = new Schema<ICareScheduleDocument>(
         updatedBy: {
             type: String,
         },
+        /** Care-record key (e.g. medicine:metformin) when Saheli's care memory owns this row. */
+        sourceKey: {
+            type: String,
+            index: true,
+        },
     },
     {
         timestamps: true,

@@ -67,7 +67,9 @@ export type SaheliToolName =
     | "browse_and_shop"
     | "book_ride"
     | "ride_status"
-    | "cancel_ride";
+    | "cancel_ride"
+    | "sync_medicine_schedule"
+    | "get_reminder_log";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -487,6 +489,31 @@ export async function executeSaheliTool(input: {
                 limit: Number(input.args.limit ?? 10),
             });
             return { memories: memories.memories };
+        }
+        case "sync_medicine_schedule": {
+            const { syncMedicineSchedule } = await import("./careMemorySync.service");
+            return syncMedicineSchedule({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                sourceKey: String(input.args.key ?? ""),
+                name: String(input.args.name ?? ""),
+                dose: input.args.dose ? String(input.args.dose) : undefined,
+                times: input.args.times,
+                foodTiming: input.args.food_timing ? String(input.args.food_timing) : undefined,
+                instructions: input.args.instructions ? String(input.args.instructions) : undefined,
+                daysOfWeek: Array.isArray(input.args.days) ? (input.args.days as number[]) : undefined,
+                active: input.args.active !== false,
+            });
+        }
+        case "get_reminder_log": {
+            const { reminderLog } = await import("./careMemorySync.service");
+            const { toDateKeyIST } = await import("../utils/istTime.util");
+            return reminderLog({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                dateKey: input.args.dateKey ? String(input.args.dateKey) : toDateKeyIST(),
+            });
         }
         case "get_today_schedule": {
             const { getScheduleDayStatuses } = await import("./careScheduleCompletion.service");
