@@ -107,3 +107,8 @@ export async function getTaskLive(req: Request, res: Response) {
     const taskId = id(req.params.taskId, "task id");
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/tasks/${taskId}/live`) });
 }
+
+export async function getHome(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/home`, undefined, 45_000) });
+}
