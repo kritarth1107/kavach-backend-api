@@ -5,7 +5,6 @@
  * families to it (with the current path as fallback if v2 fails).
  */
 import { FamilyRole } from "../types/family.types";
-import { getFamilyMembersList } from "./familyMember.service";
 
 export type BrainMode = "off" | "shadow" | "live";
 
@@ -32,6 +31,7 @@ export async function runBrainV2(input: {
     messageRef?: string;
     mode: Exclude<BrainMode, "off">;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string } | null> {
+    const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
     const joined = (members as Array<{ userId: string; name?: string; role: string; status?: string }>).filter(
         (m) => m.userId && m.status !== "REMOVED" && m.status !== "REJECTED",
