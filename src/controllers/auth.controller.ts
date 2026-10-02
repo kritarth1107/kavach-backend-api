@@ -1,5 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import User from "../models/users.model";
+import Family from "../models/family.model";
+import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import { AppError } from "../middleware/error.middleware";
 import { sendOtpEmail } from "../services/email.service";
 import {
@@ -116,6 +118,53 @@ const otpErrorMessages = {
   consumed: "Code already used. Please request a new one.",
 } as const;
 
+
+// No SMS provider yet: the phone code is a fixed mock, so phone sign-in stays off
+// until PHONE_OTP_ENABLED=true is set alongside a real SMS service.
+const phoneLoginEnabled = () => process.env.PHONE_OTP_ENABLED === "true";
+
+const PHONE_LOGIN_DISABLED =
+  "Mobile sign-in isn't available yet. Please use your email or Google.";
+
+const CARE_RECIPIENT_LOGIN_DENIED =
+  "This account belongs to someone Kavach cares for. Saheli talks to them on WhatsApp; only caregivers can sign in to the dashboard.";
+
+/**
+ * The dashboard is for caregivers. Someone who is only ever a care recipient
+ * (in every family they belong to) is refused; anyone who also holds a
+ * caregiving role somewhere, or has no family yet, may sign in.
+ */
+export function isCareRecipientOnly(
+  userId: string,
+  members: Array<{ userId: string; role: FamilyRole | string; status: FamilyMemberStatus | string }>,
+): boolean {
+  const roles = members
+    .filter(
+      (m) =>
+        m.userId === userId &&
+        m.status !== FamilyMemberStatus.REMOVED &&
+        m.status !== FamilyMemberStatus.REJECTED,
+    )
+    .map((m) => m.role);
+  return roles.length > 0 && roles.every((role) => role === FamilyRole.CARE_RECIPIENT);
+}
+
+async function assertDashboardLoginAllowed(userId: string) {
+  const families = await Family.find({
+    members: {
+      $elemMatch: {
+        userId,
+        status: { $in: [FamilyMemberStatus.JOINED, FamilyMemberStatus.PENDING, "ACTIVE"] },
+      },
+    },
+  })
+    .select("members")
+    .lean();
+  if (isCareRecipientOnly(userId, families.flatMap((family) => family.members))) {
+    throw new AppError(CARE_RECIPIENT_LOGIN_DENIED, 403);
+  }
+}
+
 export const googleAuth = async (
   req: Request,
   res: Response,
@@ -130,6 +179,7 @@ export const googleAuth = async (
 
     const profile = await verifyGoogleIdToken(idToken);
     const user = await findOrCreateGoogleUser(profile);
+    await assertDashboardLoginAllowed(user.userId);
     const session = await createAuthSession(user, AuthProvider.GOOGLE, req);
 
     res.json({
@@ -149,6 +199,14 @@ export const sendOtp = async (
 ): Promise<void> => {
   try {
     const context = getOtpContext(req.body);
+    if (context.channel === "phone" && !phoneLoginEnabled()) {
+      throw new AppError(PHONE_LOGIN_DISABLED, 403);
+    }
+
+    const existingUser = await findExistingUser(context);
+    if (existingUser) {
+      await assertDashboardLoginAllowed(existingUser.userId);
+    }
 
     if (context.channel === "email") {
       const code = generateOtpCode();
@@ -197,6 +255,10 @@ export const verifyOtp = async (
     const otpToken = getOtpToken(req.body);
     const { channel, identifier } = otpIdentifier(context);
 
+    if (context.channel === "phone" && !phoneLoginEnabled()) {
+      throw new AppError(PHONE_LOGIN_DISABLED, 403);
+    }
+
     const existingUser = await findExistingUser(context);
 
     const result = await verifyOtpToken(channel, identifier, code, otpToken, {
@@ -227,6 +289,8 @@ export const verifyOtp = async (
       });
       return;
     }
+
+    await assertDashboardLoginAllowed(existingUser.userId);
 
     const session = await createAuthSession(
       existingUser,
@@ -264,18 +328,22 @@ export const registerWithOtp = async (
       throw new AppError("Your name is required to register", 400);
     }
 
+    if (context.channel === "phone" && !phoneLoginEnabled()) {
+      throw new AppError(PHONE_LOGIN_DISABLED, 403);
+    }
+
+    // Always check the code, even when the account already exists.
+    const result = await verifyOtpToken(channel, identifier, code, otpToken, {
+      consume: true,
+    });
+    if (!result.valid) {
+      throw new AppError(otpErrorMessages[result.reason], 400);
+    }
+
     let user = await findExistingUser(context);
     let isNewUser = false;
 
     if (!user) {
-      const result = await verifyOtpToken(channel, identifier, code, otpToken, {
-        consume: true,
-      });
-
-      if (!result.valid) {
-        throw new AppError(otpErrorMessages[result.reason], 400);
-      }
-
       if (context.channel === "email") {
         user = await findOrCreateEmailUser(context.email, fullName);
       } else {
@@ -288,6 +356,7 @@ export const registerWithOtp = async (
       isNewUser = true;
     }
 
+    await assertDashboardLoginAllowed(user.userId);
     const session = await createAuthSession(user, AuthProvider.EMAIL, req);
 
     res.status(isNewUser ? 201 : 200).json({
