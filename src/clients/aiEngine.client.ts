@@ -168,6 +168,27 @@ export async function aiPushCareEvent(payload: {
     }
 }
 
+/** JSON call to the ai-engine; an engine 4xx becomes an AppError with its detail. */
+export async function aiEngineJson<T>(method: "GET" | "POST" | "PUT", path: string, body?: unknown, timeoutMs = 30_000): Promise<T> {
+    const res = await aiFetch(
+        path,
+        { method, headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) },
+        timeoutMs,
+    );
+    const text = await res.text();
+    let json: Record<string, unknown> = {};
+    try {
+        json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+        throw new AppError("AI engine returned invalid JSON", 502);
+    }
+    if (!res.ok) {
+        const detail = typeof json.detail === "string" ? json.detail : `AI engine HTTP ${res.status}`;
+        throw new AppError(detail, res.status >= 500 ? 502 : res.status);
+    }
+    return json as T;
+}
+
 export async function aiPostBrainTurn(payload: {
     family_id: string;
     elder: { id: string; name: string; role: string };

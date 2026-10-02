@@ -38,6 +38,8 @@ import {
     updateFamilyAddressHandler,
 } from "../controllers/familyAddress.controller";
 
+import * as careMemory from "../controllers/careMemory.controller";
+
 const router = Router();
 
 // Express 4: forward async errors (AppError 403/404/429) to the error middleware.
@@ -79,5 +81,19 @@ router.patch("/:familyId/integrations/:partner/settings", protect, patchPartnerO
 
 router.get("/:familyId/channel-identities", protect, getChannelIdentitiesHandler);
 router.post("/:familyId/channel-identities", protect, postChannelIdentityHandler);
+
+// Saheli's care memory and tasks (ai-engine /v2/dash), caregivers only
+const cm = "/:familyId/subjects/:subjectUserId/care-memory";
+router.get(`${cm}/overview`, protect, wrap(careMemory.getOverview));
+router.get(`${cm}/history`, protect, wrap(careMemory.getFactHistory));
+router.get(`${cm}/events`, protect, wrap(careMemory.getEvents));
+router.post(`${cm}/facts`, protect, wrap(careMemory.postFact));
+router.post(`${cm}/facts/stop`, protect, wrap(careMemory.postStopFact));
+router.post(`${cm}/facts/resolve`, protect, wrap(careMemory.postResolveFact));
+router.post(`${cm}/loops/:loopId/close`, protect, wrap(careMemory.postCloseLoop));
+router.put(`${cm}/notes`, protect, wrap(careMemory.putNote));
+router.post(`${cm}/tasks/:taskId/input`, protect, wrap(careMemory.postTaskInput));
+router.post(`${cm}/tasks/:taskId/cancel`, protect, wrap(careMemory.postTaskCancel));
+router.get(`${cm}/tasks/:taskId/live`, protect, wrap(careMemory.getTaskLive));
 
 export default router;
