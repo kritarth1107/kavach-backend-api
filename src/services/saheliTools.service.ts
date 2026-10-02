@@ -72,7 +72,8 @@ export type SaheliToolName =
     | "get_reminder_log"
     | "export_care_record"
     | "claim_schedule_rows"
-    | "send_whatsapp";
+    | "send_whatsapp"
+    | "browser_profile";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -512,6 +513,13 @@ export async function executeSaheliTool(input: {
         case "export_care_record": {
             const { exportCareRecord } = await import("./careMemorySync.service");
             return exportCareRecord({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        }
+        case "browser_profile": {
+            // The family's own logged-in browser profile for this store (one per family + store).
+            const { profileFor } = await import("./commerceAutomation/remoteBrowser");
+            const partner = String(input.args.partner ?? "").toLowerCase();
+            if (!partner) return { profileId: null };
+            return { profileId: (await profileFor(input.familyId, partner)) ?? null };
         }
         case "send_whatsapp": {
             const { sendSaheliWhatsApp } = await import("./careMemorySync.service");
