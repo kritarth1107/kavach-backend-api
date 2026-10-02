@@ -44,7 +44,7 @@ export function parseTimeToMinutes(time: string): number | null {
     return null;
 }
 
-async function getFamilyAndRecipient(familyId: string, recipientUserId: string) {
+async function getFamilyAndRecipient(familyId: string, recipientUserId: string, actorUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
     if (!family) throw new AppError("Family not found", 404);
 
@@ -52,7 +52,9 @@ async function getFamilyAndRecipient(familyId: string, recipientUserId: string) 
     if (!member || member.status !== FamilyMemberStatus.JOINED) {
         throw new AppError("Care recipient not found", 404);
     }
-    if (member.role !== FamilyRole.CARE_RECIPIENT) {
+    // Self care: a caregiver may keep their own schedule.
+    const selfCare = recipientUserId === actorUserId && (member.role === FamilyRole.PRIMARY_CAREGIVER || member.role === FamilyRole.CO_CAREGIVER);
+    if (member.role !== FamilyRole.CARE_RECIPIENT && !selfCare) {
         throw new AppError("Member is not a care recipient", 400);
     }
     return family;
@@ -139,7 +141,7 @@ export async function getScheduleDayStatuses(
     elapsedCount: number;
     adherencePercent: number | null;
 }> {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertFamilyAccess(family, actorUserId);
 
     const key = dateKey ?? toDateKeyIST();
@@ -215,7 +217,7 @@ export async function markScheduleItemCompletion(
         note?: string;
     },
 ) {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertFamilyAccess(family, actorUserId);
     const role = family.getMemberRole(actorUserId);
     const isSelf = actorUserId === recipientUserId;
@@ -269,7 +271,7 @@ export async function setScheduleCompletion(
         note?: string;
     },
 ) {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertCanManage(family, actorUserId);
     return markScheduleItemCompletion(
         familyId,

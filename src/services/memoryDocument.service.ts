@@ -23,7 +23,7 @@ import {
     CareRecordSource,
     ChannelType,
 } from "../types/careRecord.types";
-import { getFamilyForActor, requirePermission, requireCareRecipient } from "./careRecordAuth.service";
+import { getFamilyForActor, requirePermission, requireCareSubject } from "./careRecordAuth.service";
 import {
     applyExtraction,
     contentHash,
@@ -39,7 +39,7 @@ async function assertRecipientAccess(
     actorUserId: string,
 ) {
     const family = await getFamilyForActor(familyId, actorUserId);
-    requireCareRecipient(family, recipientUserId);
+    requireCareSubject(family, recipientUserId, actorUserId);
     requirePermission(family, actorUserId, "upload_document");
     return family;
 }

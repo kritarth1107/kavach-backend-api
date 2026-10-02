@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { AppError } from "../middleware/error.middleware";
-import { getFamilyForActor, getMemberRole, requireCareRecipient } from "../services/careRecordAuth.service";
+import { getFamilyForActor, getMemberRole, requireCareSubject } from "../services/careRecordAuth.service";
 import { FamilyRole } from "../types/family.types";
 import { listActivity, istDayKey } from "../services/activityLog.service";
 import { ACTIVITY_KINDS, type ActivityKind } from "../models/activityLog.model";
@@ -18,7 +18,7 @@ async function requireCaregiverOf(req: Request) {
     if (role !== FamilyRole.PRIMARY_CAREGIVER && role !== FamilyRole.CO_CAREGIVER) {
         throw new AppError("Only caregivers can view activity", 403);
     }
-    requireCareRecipient(family, subjectUserId);
+    requireCareSubject(family, subjectUserId, actorUserId);
     return { familyId, subjectUserId, actorUserId };
 }
 

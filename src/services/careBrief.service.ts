@@ -12,7 +12,7 @@ import {
     CareRecordSource,
     ChannelType,
 } from "../types/careRecord.types";
-import { getFamilyForActor, requireCareRecipient, requirePermission } from "./careRecordAuth.service";
+import { getFamilyForActor, requireCareSubject, requirePermission } from "./careRecordAuth.service";
 
 export async function generateCareBrief(
     familyId: string,
@@ -21,7 +21,7 @@ export async function generateCareBrief(
 ) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "read");
-    requireCareRecipient(family, subjectUserId);
+    requireCareSubject(family, subjectUserId, actorUserId);
 
     const events = await listCareRecordEvents({
         familyId,
@@ -128,7 +128,7 @@ export async function generateDoctorBrief(
 ) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "read");
-    requireCareRecipient(family, subjectUserId);
+    requireCareSubject(family, subjectUserId, actorUserId);
 
     const events = await listCareRecordEvents({
         familyId,

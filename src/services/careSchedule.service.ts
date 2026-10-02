@@ -12,7 +12,7 @@ function canManageSchedule(role: FamilyRole | null) {
     return role !== null && MANAGER_ROLES.has(role);
 }
 
-async function getFamilyAndRecipient(familyId: string, recipientUserId: string) {
+async function getFamilyAndRecipient(familyId: string, recipientUserId: string, actorUserId: string) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
     if (!family) {
         throw new AppError("Family not found", 404);
@@ -23,7 +23,9 @@ async function getFamilyAndRecipient(familyId: string, recipientUserId: string) 
         throw new AppError("Care recipient not found", 404);
     }
 
-    if (member.role !== FamilyRole.CARE_RECIPIENT) {
+    // Self care: a caregiver may keep their own schedule.
+    const selfCare = recipientUserId === actorUserId && (member.role === FamilyRole.PRIMARY_CAREGIVER || member.role === FamilyRole.CO_CAREGIVER);
+    if (member.role !== FamilyRole.CARE_RECIPIENT && !selfCare) {
         throw new AppError("Member is not a care recipient", 400);
     }
 
@@ -90,7 +92,7 @@ export async function listCareSchedules(
     recipientUserId: string,
     actorUserId: string,
 ) {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertFamilyAccess(family, actorUserId);
 
     const items = sortCareSchedules(
@@ -122,7 +124,7 @@ export async function createCareSchedule(
         active?: boolean;
     },
 ) {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertCanManageSchedule(family, actorUserId);
 
     const title = payload.title?.trim();
@@ -177,7 +179,7 @@ export async function updateCareSchedule(
         active?: boolean;
     },
 ) {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertCanManageSchedule(family, actorUserId);
 
     const item = await CareSchedule.findOne({ scheduleId, familyId, recipientUserId });
@@ -223,7 +225,7 @@ export async function deleteCareSchedule(
     scheduleId: string,
     actorUserId: string,
 ) {
-    const family = await getFamilyAndRecipient(familyId, recipientUserId);
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
     assertCanManageSchedule(family, actorUserId);
 
     const result = await CareSchedule.deleteOne({ scheduleId, familyId, recipientUserId });

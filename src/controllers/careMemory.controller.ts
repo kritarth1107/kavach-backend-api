@@ -6,7 +6,7 @@ import { Request, Response } from "express";
 import { aiEngineJson } from "../clients/aiEngine.client";
 import { AppError } from "../middleware/error.middleware";
 import User from "../models/users.model";
-import { getFamilyForActor, getMemberRole, requireCareRecipient } from "../services/careRecordAuth.service";
+import { getFamilyForActor, getMemberRole, requireCareSubject } from "../services/careRecordAuth.service";
 import { FamilyRole } from "../types/family.types";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -20,7 +20,7 @@ async function caregiverScope(req: Request) {
     if (role !== FamilyRole.PRIMARY_CAREGIVER && role !== FamilyRole.CO_CAREGIVER) {
         throw new AppError("Only caregivers can see Saheli's care memory", 403);
     }
-    requireCareRecipient(family, subjectUserId);
+    requireCareSubject(family, subjectUserId, actorUserId);
     const user = await User.findOne({ userId: actorUserId }).lean();
     const name = [user?.firstName, user?.lastName].filter(Boolean).join(" ");
     return { base: `/v2/dash/${encodeURIComponent(familyId)}/${encodeURIComponent(subjectUserId)}`, actor: { id: actorUserId, name } };

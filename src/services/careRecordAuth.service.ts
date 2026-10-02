@@ -50,6 +50,34 @@ export function requireCareRecipient(
     }
 }
 
+/**
+ * Who a care page can be about: a care recipient of the family, or (self care)
+ * a joined caregiver looking after themselves.
+ */
+export function isCareSubject(
+    family: IFamilyDocument,
+    subjectUserId: string,
+    actorUserId: string,
+): boolean {
+    const member = family.members.find(
+        (m) => m.userId === subjectUserId && m.status === FamilyMemberStatus.JOINED,
+    );
+    if (!member) return false;
+    if (member.role === FamilyRole.CARE_RECIPIENT) return true;
+    return subjectUserId === actorUserId && SELF_CARE_ROLES.has(member.role);
+}
+
+const SELF_CARE_ROLES = new Set([FamilyRole.PRIMARY_CAREGIVER, FamilyRole.CO_CAREGIVER]);
+
+export function requireCareSubject(
+    family: IFamilyDocument,
+    subjectUserId: string,
+    actorUserId: string,
+): void {
+    if (isCareSubject(family, subjectUserId, actorUserId)) return;
+    requireCareRecipient(family, subjectUserId);
+}
+
 export function assertSameTenant(
     familyId: string,
     resourceFamilyId: string,
