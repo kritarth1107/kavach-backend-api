@@ -1,7 +1,8 @@
 import { NextFunction, Request, Response } from "express";
 import User from "../models/users.model";
 import Family from "../models/family.model";
-import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
+import { FamilyMemberStatus } from "../types/family.types";
+import { isCareRecipientOnly } from "../services/loginGate";
 import { AppError } from "../middleware/error.middleware";
 import { sendOtpEmail } from "../services/email.service";
 import {
@@ -128,26 +129,6 @@ const PHONE_LOGIN_DISABLED =
 
 const CARE_RECIPIENT_LOGIN_DENIED =
   "This account belongs to someone Kavach cares for. Saheli talks to them on WhatsApp; only caregivers can sign in to the dashboard.";
-
-/**
- * The dashboard is for caregivers. Someone who is only ever a care recipient
- * (in every family they belong to) is refused; anyone who also holds a
- * caregiving role somewhere, or has no family yet, may sign in.
- */
-export function isCareRecipientOnly(
-  userId: string,
-  members: Array<{ userId: string; role: FamilyRole | string; status: FamilyMemberStatus | string }>,
-): boolean {
-  const roles = members
-    .filter(
-      (m) =>
-        m.userId === userId &&
-        m.status !== FamilyMemberStatus.REMOVED &&
-        m.status !== FamilyMemberStatus.REJECTED,
-    )
-    .map((m) => m.role);
-  return roles.length > 0 && roles.every((role) => role === FamilyRole.CARE_RECIPIENT);
-}
 
 async function assertDashboardLoginAllowed(userId: string) {
   const families = await Family.find({

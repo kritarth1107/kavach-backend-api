@@ -1,5 +1,5 @@
 /** Offline tests: only caregivers may sign in to the dashboard. `npm run test:login-gate` */
-import { isCareRecipientOnly } from "../src/controllers/auth.controller";
+import { isCareRecipientOnly } from "../src/services/loginGate";
 import { FamilyMemberStatus as S, FamilyRole as R } from "../src/types/family.types";
 
 let fail = 0;
