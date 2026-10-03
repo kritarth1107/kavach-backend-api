@@ -30,7 +30,7 @@ export async function runBrainV2(input: {
     text: string;
     messageRef?: string;
     mode: Exclude<BrainMode, "off">;
-}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string } | null> {
+}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }> } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
     const joined = (members as Array<{ userId: string; name?: string; role: string; status?: string }>).filter(

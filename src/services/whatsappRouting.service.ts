@@ -545,15 +545,23 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
 
     // ── Saheli Brain v2: shadow beside this path on real traffic, or live for switched-over
     // families. Runs after the emergency and scam backstops; a v2 failure falls through to v1.
-    if (text && !body.interactiveId && !MEDIA_PLACEHOLDER.test(text)) {
+    // A tapped Saheli v2 button ("v2:…" id) goes to the v2 brain, which records it without a model call.
+    const v2Button = Boolean(body.interactiveId?.startsWith("v2:"));
+    if (text && (!body.interactiveId || v2Button) && !MEDIA_PLACEHOLDER.test(text)) {
         const V2 = await import("./brainV2.service");
         const mode = V2.brainV2Mode(identity.familyId);
         if (mode === "live") {
-            const v2 = await V2.runBrainV2({ identity, text, messageRef: body.messageId, mode }).catch((err) => {
+            const v2Text = v2Button ? String(body.interactiveId) : text;
+            const v2 = await V2.runBrainV2({ identity, text: v2Text, messageRef: body.messageId, mode }).catch((err) => {
                 console.warn("[brain-v2] live turn failed, using v1:", err instanceof Error ? err.message : err);
                 return null;
             });
-            if (v2?.reply?.trim()) return outbound(phone, v2.reply);
+            if (v2?.reply?.trim()) {
+                return v2.buttons?.length
+                    ? outbound(phone, v2.reply, { kind: "saheli_buttons", buttons: v2.buttons })
+                    : outbound(phone, v2.reply);
+            }
+            if (v2Button) return outbound(phone, "🙏");
         } else if (mode === "shadow") {
             void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode }).catch((err) =>
                 console.warn("[brain-v2] shadow turn failed:", err instanceof Error ? err.message : err),

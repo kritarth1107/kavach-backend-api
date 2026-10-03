@@ -109,6 +109,7 @@ export type WhatsAppReplyKind =
     | "order_pending_approval"
     | "schedule_missed"
     | "companion"
+    | "saheli_buttons"
     | "plain";
 
 export type WhatsAppReplyContext = {
@@ -121,4 +122,6 @@ export type WhatsAppReplyContext = {
         itemList: string;
     };
     includeSaheliHeader?: boolean;
+    /** Saheli v2 one-tap answers (ids "v2:…"); at most 3, titles up to 20 characters. */
+    buttons?: Array<{ id: string; title: string }>;
 };

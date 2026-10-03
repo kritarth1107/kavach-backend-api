@@ -174,6 +174,33 @@ export async function getPatterns(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/patterns`) });
 }
 
+export async function getOutcomes(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/outcomes`) });
+}
+
+export async function postOutcome(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const body = { actor, kind: String(req.body?.kind ?? ""), summary: String(req.body?.summary ?? "").slice(0, 400) };
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/outcomes`, body) });
+}
+
+export async function postFeedback(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const body = { actor, target: String(req.body?.target ?? "").slice(0, 250), vote: req.body?.vote === "down" ? "down" : "up" };
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/feedback`, body) });
+}
+
+export async function getConsent(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/consent`) });
+}
+
+export async function postConsent(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/consent`, { actor, granted: req.body?.granted === true }) });
+}
+
 export async function getFamilyTasks(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/family-tasks`) });

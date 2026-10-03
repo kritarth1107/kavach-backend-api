@@ -160,7 +160,13 @@ export async function claimScheduleRows(input: { familyId: string; recipientUser
 }
 
 /** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */
-export async function sendSaheliWhatsApp(input: { familyId: string; recipientUserId: string; toUserId: string; text: string }) {
+export async function sendSaheliWhatsApp(input: {
+    familyId: string;
+    recipientUserId: string;
+    toUserId: string;
+    text: string;
+    buttons?: Array<{ id: string; title: string }>;
+}) {
     const text = input.text.trim();
     if (!text) return { delivered: false, reason: "empty" };
     const { default: Family } = await import("../models/family.model");
@@ -181,12 +187,19 @@ export async function sendSaheliWhatsApp(input: { familyId: string; recipientUse
     if (!phone) return { delivered: false, reason: "no WhatsApp number" };
     const { deliverOutboundMessage } = await import("./channelOutbound.service");
     const { scrubStack } = await import("./stackScrub");
+    const buttons = (input.buttons || []).filter((b) => b && typeof b.id === "string" && b.id.startsWith("v2:") && b.title);
+    let whatsappPayloads;
+    if (buttons.length) {
+        const { buildSaheliButtonMessages } = await import("./whatsappMessageComposer.service");
+        whatsappPayloads = buildSaheliButtonMessages(scrubStack(text), buttons);
+    }
     const delivery = await deliverOutboundMessage({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         content: scrubStack(text),
         channel: "whatsapp",
         channelIdentifier: phone,
+        ...(whatsappPayloads ? { whatsappPayloads } : {}),
     });
     return { delivered: Boolean(delivery.delivered) };
 }

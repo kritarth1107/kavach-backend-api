@@ -800,12 +800,30 @@ export function composeWhatsAppReply(
     if (kind === "order_pending_approval" && context.pendingOrder) {
         return buildPendingApprovalMessages(context.pendingOrder);
     }
+    if (kind === "saheli_buttons" && context.buttons?.length) {
+        return buildSaheliButtonMessages(text, context.buttons);
+    }
     if (kind === "schedule_missed") {
         const schedule = buildScheduleCompanionMessages(text);
         if (schedule.length) return schedule;
     }
 
     return [{ type: "text", text: { body: truncate(text, 4096) } }];
+}
+
+/** Saheli's message with up to three reply buttons. A long message goes first as text, then a short button card. */
+export function buildSaheliButtonMessages(text: string, buttons: Array<{ id: string; title: string }>): MetaWhatsAppPayload[] {
+    const action = {
+        buttons: buttons.slice(0, 3).map((b) => ({ type: "reply" as const, reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) } })),
+    };
+    const body = text.trim();
+    if (body && body.length <= 1000) {
+        return [{ type: "interactive", interactive: { type: "button", body: { text: body }, action } }];
+    }
+    return [
+        { type: "text", text: { body: truncate(body, 4096) } },
+        { type: "interactive", interactive: { type: "button", body: { text: "👇" }, action } },
+    ];
 }
 
 export function flattenWhatsAppPayloads(payloads: MetaWhatsAppPayload[]): string {

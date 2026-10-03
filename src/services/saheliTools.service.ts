@@ -604,6 +604,7 @@ export async function executeSaheliTool(input: {
                 recipientUserId: input.recipientUserId,
                 toUserId: String(input.args.to ?? input.recipientUserId),
                 text: String(input.args.text ?? ""),
+                buttons: Array.isArray(input.args.buttons) ? (input.args.buttons as Array<{ id: string; title: string }>) : undefined,
             });
         }
         case "claim_schedule_rows": {
