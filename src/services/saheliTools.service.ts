@@ -74,7 +74,11 @@ export type SaheliToolName =
     | "claim_schedule_rows"
     | "send_whatsapp"
     | "browser_profile"
-    | "emergency_link";
+    | "emergency_link"
+    | "delivery_place"
+    | "connector_status"
+    | "connector_prepare"
+    | "connector_place";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -521,6 +525,66 @@ export async function executeSaheliTool(input: {
             const partner = String(input.args.partner ?? "").toLowerCase();
             if (!partner) return { profileId: null };
             return { profileId: (await profileFor(input.familyId, partner)) ?? null };
+        }
+        case "delivery_place": {
+            // The saved place an order for this person must go to (the engine puts it in the task's limits).
+            const { defaultPlaceFor, findPlaceByWords } = await import("./familyAddressBook.service");
+            const words = String(input.args.words ?? "").trim();
+            const place = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (await defaultPlaceFor(input.familyId, input.recipientUserId));
+            return place ? { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full } : { addressId: null };
+        }
+        case "connector_status": {
+            // Can the engine's shopping agent order this store through its official connector?
+            const { familyStoreConnections, mcpOrderStores } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const { isFoodGroceryBrowserOnly } = await import("./commerceAutomation/siteAllowlist");
+            const store = String(input.args.store ?? "").toLowerCase() as "swiggy" | "instamart" | "zepto";
+            const connected = (await familyStoreConnections(input.familyId)).has(store);
+            if (!mcpOrderStores().includes(store)) return { connected, enabled: false, why: "connector ordering is off for this store" };
+            if (isFoodGroceryBrowserOnly(store) && process.env.MCP_AGENT_CONNECTOR !== "on") {
+                return { connected, enabled: false, why: "food/grocery connector ordering is switched off (MCP_AGENT_CONNECTOR)" };
+            }
+            return { connected, enabled: true };
+        }
+        case "connector_prepare": {
+            const mcp = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const ctx = await connectorCtx(input.familyId, input.recipientUserId, input.args.placeId ? String(input.args.placeId) : null);
+            if (!ctx) return { ok: false, kind: "no_place", detail: "No saved delivery place for this person." };
+            const store = String(input.args.store ?? "").toLowerCase() as "swiggy" | "instamart" | "zepto";
+            try {
+                const found = await mcp.searchStore(ctx, store, String(input.args.item ?? ""), { restaurantName: input.args.restaurant ? String(input.args.restaurant) : null });
+                if (found.error) return { ok: false, kind: found.error === "not_connected" ? "not_connected" : "store_error", detail: found.message || found.error };
+                const pick = found.hits[0];
+                if (!pick) return { ok: false, kind: "not_found", detail: `Nothing matching "${input.args.item}" on ${mcp.MCP_STORE_LABEL[store]}.` };
+                const card = await mcp.prepareMcpOrder(ctx, pick, Math.max(1, Number(input.args.qty ?? 1)));
+                const rs = (paise?: number) => (paise ? `₹${Math.round(paise / 100)}` : undefined);
+                return {
+                    ok: true,
+                    items: [{ name: pick.name, qty: card.qty, price: rs(pick.pricePaise) }],
+                    total: rs(card.totalPaise),
+                    fees: card.feesLabel,
+                    cod_available: true,
+                    address_used: `${card.addressNickname}, ${card.addressFull}`,
+                    alternatives: found.hits.slice(1, 4).map((h) => ({ name: h.name, price: rs(h.pricePaise) })),
+                    card,
+                };
+            } catch (err) {
+                const code = err instanceof mcp.McpStoreError ? err.code : "error";
+                return { ok: false, kind: code, detail: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+            }
+        }
+        case "connector_place": {
+            // The engine passes back the card from connector_prepare only after the family confirmed it.
+            // placeMcpOrder rebuilds the cart, re-checks address/COD/total and takes the single-order lock.
+            const mcp = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const card = input.args.card as import("./commerceAutomation/mcpCommerce/mcpCommerce.service").McpCard | undefined;
+            if (!card?.cardId) return { status: "failed", detail: "no card" };
+            const ctx = await connectorCtx(input.familyId, input.recipientUserId, card.placeAddressId);
+            if (!ctx) return { status: "refused", detail: "The saved delivery place is gone." };
+            const r = await mcp.placeMcpOrder(ctx, card, "confirm");
+            const rs = (paise?: number) => (paise ? `₹${Math.round(paise / 100)}` : undefined);
+            if (r.status === "placed") return { status: "placed", orderId: r.orderId, total: rs(r.totalPaise), detail: r.detail };
+            if (r.status === "refused" && r.newCard) return { status: "refused", detail: r.detail, newCard: r.newCard, newTotal: rs(r.newCard.totalPaise) };
+            return { status: r.status, detail: r.detail };
         }
         case "emergency_link": {
             const { ensureEmergencyLink } = await import("./emergencyCard.service");
@@ -1127,3 +1191,13 @@ case "notify_caregivers": {
     }
 }
 
+/** MCP context for the engine's connector tools: the person, their phone and the saved place to deliver to. */
+async function connectorCtx(familyId: string, recipientUserId: string, placeId: string | null) {
+    const { getPlace, defaultPlaceFor } = await import("./familyAddressBook.service");
+    const { default: User } = await import("../models/users.model");
+    const place = (placeId && (await getPlace(familyId, placeId))) || (await defaultPlaceFor(familyId, recipientUserId));
+    if (!place) return null;
+    const user = await User.findById(recipientUserId).select("phone phoneKey").lean<{ phoneKey?: string; phone?: { countryCode?: string; number?: string } }>();
+    const recipientPhone = user?.phoneKey || `${user?.phone?.countryCode ?? ""}${user?.phone?.number ?? ""}`;
+    return { familyId, recipientUserId, recipientPhone, place };
+}
