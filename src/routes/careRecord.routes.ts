@@ -104,6 +104,7 @@ router.get(`${cm}/care-team`, protect, wrap(careMemory.getCareTeam));
 router.post(`${cm}/appointments/question`, protect, wrap(careMemory.postAppointmentQuestion));
 router.get(`${cm}/report`, protect, wrap(careMemory.getReport));
 router.get(`${cm}/wellbeing`, protect, wrap(careMemory.getWellbeing));
+router.get(`${cm}/patterns`, protect, wrap(careMemory.getPatterns));
 router.get(`${cm}/family-tasks`, protect, wrap(careMemory.getFamilyTasks));
 router.post(`${cm}/family-tasks`, protect, wrap(careMemory.postFamilyTask));
 router.post(`${cm}/family-tasks/:taskId/done`, protect, wrap(careMemory.postFamilyTaskDone));

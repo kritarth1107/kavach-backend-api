@@ -169,6 +169,11 @@ export async function getWellbeing(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/wellbeing${qs({ days: String(days) })}`) });
 }
 
+export async function getPatterns(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/patterns`) });
+}
+
 export async function getFamilyTasks(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/family-tasks`) });
