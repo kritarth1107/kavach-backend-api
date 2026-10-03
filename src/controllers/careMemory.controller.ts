@@ -201,6 +201,25 @@ export async function postConsent(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/consent`, { actor, granted: req.body?.granted === true }) });
 }
 
+export async function getMemoryHealth(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/memory-health`) });
+}
+
+export async function postForget(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const what = String(req.body?.what ?? "").trim().slice(0, 200);
+    if (what.length < 3) throw new AppError("Say what to forget (a few words)", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/forget`, { actor, what }) });
+}
+
+export async function postRestoreForgotten(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const id = Number(req.params.eventId);
+    if (!Number.isInteger(id) || id < 1) throw new AppError("Bad id", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/forgotten/${id}/restore`, { actor }) });
+}
+
 export async function getFamilyTasks(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/family-tasks`) });
