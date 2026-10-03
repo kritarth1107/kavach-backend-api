@@ -8,5 +8,6 @@ const wrap = (fn: (req: Request, res: Response) => Promise<void>) => (req: Reque
 router.get("/check", protect, wrap(learning.getAdminCheck));
 router.get("/learning", protect, wrap(learning.getLearning));
 router.post("/learning/playbooks/:version/:action(approve|block)", protect, wrap(learning.postPlaybookAction));
+router.post("/learning/rules/:id/:action(approve|reject)", protect, wrap(learning.postRuleAction));
 
 export default router;

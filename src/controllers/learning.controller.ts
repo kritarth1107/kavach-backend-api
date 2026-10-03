@@ -36,6 +36,13 @@ export async function postPlaybookAction(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `/v2/learn/playbooks/${version}/${action}`, { by }) });
 }
 
+export async function postRuleAction(req: Request, res: Response) {
+    const by = await requireAdmin(req);
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) throw new AppError("Bad rule", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `/v2/learn/rules/${id}`, { by, approve: req.params.action === "approve" }) });
+}
+
 export async function getAdminCheck(req: Request, res: Response) {
     try {
         await requireAdmin(req);
