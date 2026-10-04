@@ -220,6 +220,38 @@ export async function postRestoreForgotten(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/forgotten/${id}/restore`, { actor }) });
 }
 
+const HISTORY_KINDS = new Set(["note", "fact", "skill", "style"]);
+
+/** What changed in this person's memory (notes, care record, skills, style), with the family member's name on each change. */
+export async function getMemoryHistory(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const kind = typeof req.query.kind === "string" && HISTORY_KINDS.has(req.query.kind) ? req.query.kind : undefined;
+    const target = typeof req.query.target === "string" ? req.query.target.slice(0, 200) : undefined;
+    const what = typeof req.query.what === "string" ? req.query.what.slice(0, 100) : undefined;
+    const limit = typeof req.query.limit === "string" ? String(Math.min(Math.max(Number(req.query.limit) || 40, 1), 100)) : undefined;
+    const data = (await aiEngineJson("GET", `${base}/memory-history${qs({ kind, target, what, limit })}`)) as {
+        changes?: Array<{ actorId?: string | null; by?: string }>;
+    };
+    const ids = [...new Set((data.changes ?? []).map((c) => c.actorId).filter((x): x is string => !!x && x !== "saheli"))];
+    if (ids.length) {
+        const users = await User.find({ userId: { $in: ids } }, { userId: 1, firstName: 1, lastName: 1 }).lean();
+        const names = new Map(users.map((u) => [u.userId, [u.firstName, u.lastName].filter(Boolean).join(" ")]));
+        for (const c of data.changes ?? []) if (c.actorId && names.get(c.actorId)) c.by = names.get(c.actorId);
+    }
+    res.json({ success: true, data });
+}
+
+/** Undo one change, or put an item back as it was (mode "restore"). `confirm` = the caregiver confirmed ending or restarting a medicine. */
+export async function postMemoryUndo(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const vid = Number(req.params.versionId);
+    if (!Number.isInteger(vid) || vid < 1) throw new AppError("Bad id", 400);
+    const mode = req.body?.mode === "restore" ? "restore" : "undo";
+    const reason = String(req.body?.reason ?? "").trim().slice(0, 300);
+    const confirm = req.body?.confirm === true;
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/memory-history/${vid}`, { actor, mode, reason, confirm }) });
+}
+
 export async function getSkills(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/skills`) });

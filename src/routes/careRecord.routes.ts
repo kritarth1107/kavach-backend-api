@@ -109,6 +109,8 @@ router.get(`${cm}/outcomes`, protect, wrap(careMemory.getOutcomes));
 router.get(`${cm}/memory-health`, protect, wrap(careMemory.getMemoryHealth));
 router.post(`${cm}/forget`, protect, wrap(careMemory.postForget));
 router.post(`${cm}/forgotten/:eventId/restore`, protect, wrap(careMemory.postRestoreForgotten));
+router.get(`${cm}/memory-history`, protect, wrap(careMemory.getMemoryHistory));
+router.post(`${cm}/memory-history/:versionId`, protect, wrap(careMemory.postMemoryUndo));
 router.get(`${cm}/skills`, protect, wrap(careMemory.getSkills));
 router.post(`${cm}/skills`, protect, wrap(careMemory.postSkill));
 router.post(`${cm}/skills/:skillId`, protect, wrap(careMemory.postSkillAction));
