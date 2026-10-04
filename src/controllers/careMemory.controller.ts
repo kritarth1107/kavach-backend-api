@@ -224,12 +224,13 @@ const HISTORY_KINDS = new Set(["note", "fact", "skill", "style"]);
 
 /** What changed in this person's memory (notes, care record, skills, style), with the family member's name on each change. */
 export async function getMemoryHistory(req: Request, res: Response) {
-    const { base } = await caregiverScope(req);
+    const { base, actor } = await caregiverScope(req);
     const kind = typeof req.query.kind === "string" && HISTORY_KINDS.has(req.query.kind) ? req.query.kind : undefined;
     const target = typeof req.query.target === "string" ? req.query.target.slice(0, 200) : undefined;
     const what = typeof req.query.what === "string" ? req.query.what.slice(0, 100) : undefined;
     const limit = typeof req.query.limit === "string" ? String(Math.min(Math.max(Number(req.query.limit) || 40, 1), 100)) : undefined;
-    const data = (await aiEngineJson("GET", `${base}/memory-history${qs({ kind, target, what, limit })}`)) as {
+    // actor: on a caregiver's own self-care page the engine leaves the shared family notes out
+    const data = (await aiEngineJson("GET", `${base}/memory-history${qs({ kind, target, what, limit, actor: actor.id })}`)) as {
         changes?: Array<{ actorId?: string | null; by?: string }>;
     };
     const ids = [...new Set((data.changes ?? []).map((c) => c.actorId).filter((x): x is string => !!x && x !== "saheli"))];
@@ -242,14 +243,31 @@ export async function getMemoryHistory(req: Request, res: Response) {
 }
 
 /** Undo one change, or put an item back as it was (mode "restore"). `confirm` = the caregiver confirmed ending or restarting a medicine. */
+const UNDO_MODES = new Set(["undo", "restore"]);
+
+function versionId(value: string): number {
+    const vid = Number(value);
+    if (!Number.isInteger(vid) || vid < 1) throw new AppError("Bad id", 400);
+    return vid;
+}
+
+/** What an undo/restore would do, in plain words (the dashboard shows it before the caregiver confirms). */
+export async function getMemoryUndoPreview(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const vid = versionId(req.params.versionId);
+    const mode = req.query.mode === "restore" ? "restore" : "undo";
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/memory-history/${vid}/preview${qs({ mode, actor: actor.id })}`) });
+}
+
 export async function postMemoryUndo(req: Request, res: Response) {
     const { base, actor } = await caregiverScope(req);
-    const vid = Number(req.params.versionId);
-    if (!Number.isInteger(vid) || vid < 1) throw new AppError("Bad id", 400);
-    const mode = req.body?.mode === "restore" ? "restore" : "undo";
+    const vid = versionId(req.params.versionId);
+    const mode = String(req.body?.mode ?? "undo");
+    if (!UNDO_MODES.has(mode)) throw new AppError("mode must be undo or restore", 400);
     const reason = String(req.body?.reason ?? "").trim().slice(0, 300);
     const confirm = req.body?.confirm === true;
-    res.json({ success: true, data: await aiEngineJson("POST", `${base}/memory-history/${vid}`, { actor, mode, reason, confirm }) });
+    // a medicine undo also updates its reminders through the backend: same 45 s budget as other medicine edits
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/memory-history/${vid}`, { actor, mode, reason, confirm }, 45_000) });
 }
 
 export async function getSkills(req: Request, res: Response) {
