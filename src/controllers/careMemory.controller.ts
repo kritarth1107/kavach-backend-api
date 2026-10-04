@@ -220,6 +220,30 @@ export async function postRestoreForgotten(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/forgotten/${id}/restore`, { actor }) });
 }
 
+export async function getSkills(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/skills`) });
+}
+
+export async function postSkill(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const text = String(req.body?.text ?? "").trim().slice(0, 600);
+    if (text.length < 3) throw new AppError("Write the skill in a few words", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/skills`, { actor, text }) });
+}
+
+const SKILL_ACTIONS = new Set(["approve", "edit", "remove", "restore"]);
+
+export async function postSkillAction(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const id = Number(req.params.skillId);
+    if (!Number.isInteger(id) || id < 1) throw new AppError("Bad id", 400);
+    const action = String(req.body?.action ?? "");
+    if (!SKILL_ACTIONS.has(action)) throw new AppError("Unknown action", 400);
+    const text = action === "edit" ? String(req.body?.text ?? "").trim().slice(0, 600) : undefined;
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/skills/${id}`, { actor, action, text }) });
+}
+
 export async function getFamilyTasks(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/family-tasks`) });
