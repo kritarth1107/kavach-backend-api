@@ -112,6 +112,7 @@ router.post(`${cm}/forgotten/:eventId/restore`, protect, wrap(careMemory.postRes
 router.get(`${cm}/skills`, protect, wrap(careMemory.getSkills));
 router.post(`${cm}/skills`, protect, wrap(careMemory.postSkill));
 router.post(`${cm}/skills/:skillId`, protect, wrap(careMemory.postSkillAction));
+router.get(`${cm}/logins`, protect, wrap(careMemory.getLogins));
 router.post(`${cm}/outcomes`, protect, wrap(careMemory.postOutcome));
 router.post(`${cm}/feedback`, protect, wrap(careMemory.postFeedback));
 router.get(`${cm}/consent`, protect, wrap(careMemory.getConsent));

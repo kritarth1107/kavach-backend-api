@@ -244,6 +244,11 @@ export async function postSkillAction(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/skills/${id}`, { actor, action, text }) });
 }
 
+export async function getLogins(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/logins`) });
+}
+
 export async function getFamilyTasks(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/family-tasks`) });
