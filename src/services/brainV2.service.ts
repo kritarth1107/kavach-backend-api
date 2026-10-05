@@ -30,6 +30,8 @@ export async function runBrainV2(input: {
     text: string;
     messageRef?: string;
     mode: Exclude<BrainMode, "off">;
+    /** The message was a voice note: `text` is its transcript (confidence 0..1 when the speech engine reported one). */
+    voice?: { confidence?: number; language?: string; engine?: string };
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }> } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
@@ -63,6 +65,9 @@ export async function runBrainV2(input: {
         message_ref: input.messageRef,
         channel: "whatsapp",
         mode: input.mode,
+        ...(input.voice
+            ? { modality: "voice", voice_confidence: input.voice.confidence ?? null, voice_language: input.voice.language ?? null }
+            : {}),
     });
     console.log(
         `[brain-v2] ${JSON.stringify({

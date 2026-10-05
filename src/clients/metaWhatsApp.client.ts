@@ -416,16 +416,22 @@ export async function uploadMediaBuffer(input: {
     return json.id;
 }
 
-/** Send WhatsApp voice note (audio with voice:true) optionally with a text caption first. */
+/**
+ * Send a WhatsApp voice note, with the text first (and its one-tap buttons, if any): the written words always arrive,
+ * so nothing important (an emergency instruction, a number) depends on the audio alone.
+ */
 export async function sendMetaWhatsAppVoice(input: {
     to: string;
     audioBuffer: Buffer;
     mimeType?: string;
     caption?: string;
+    payloads?: MetaWhatsAppPayload[];
 }): Promise<void> {
     await assertSendableWhatsAppRecipient(input.to);
-    if (input.caption?.trim()) {
-        await sendSingleMetaWhatsAppText(input.to, input.caption.trim());
+    if (input.payloads?.length) {
+        await sendViaMetaWhatsApp(input.to, input.caption || "", input.payloads);
+    } else if (input.caption?.trim()) {
+        await sendViaMetaWhatsApp(input.to, input.caption.trim());
     }
     const mimeType = input.mimeType || "audio/ogg";
     const mediaId = await uploadMediaBuffer({

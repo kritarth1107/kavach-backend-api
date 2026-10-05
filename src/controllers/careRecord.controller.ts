@@ -611,6 +611,7 @@ async function processMetaInboundMessages(
                         audioBuffer,
                         mimeType: reply.audioMimeType || "audio/mpeg",
                         caption: reply.content,
+                        payloads: reply.whatsappPayloads,
                     });
                 } else {
                     await sendViaMetaWhatsApp(

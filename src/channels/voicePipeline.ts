@@ -74,10 +74,23 @@ function audioPayload(input: SttInput): { base64: string; mimeType: string } | n
     return null;
 }
 
+export type SttResult = {
+    text: string;
+    engine: "chirp_3" | "gemini" | "fallback" | "none";
+    /** 0..1 when the engine reports it (Chirp); undefined when it does not. */
+    confidence?: number;
+    /** BCP-47 code the engine heard, e.g. "hi-IN". */
+    language?: string;
+    /** The engine said it could not make out the words. */
+    unclear?: boolean;
+};
+
+const UNCLEAR_MARK = "[unclear]";
+
 async function chirp3SpeechToText(input: {
     base64: string;
     languageCode?: string;
-}): Promise<string | null> {
+}): Promise<SttResult | null> {
     const token = await getAccessToken();
     if (!token) return null;
 
@@ -118,20 +131,25 @@ async function chirp3SpeechToText(input: {
     }
 
     const json = (await res.json()) as {
-        results?: Array<{ alternatives?: Array<{ transcript?: string }> }>;
+        results?: Array<{ alternatives?: Array<{ transcript?: string; confidence?: number }>; languageCode?: string }>;
     };
-    const transcript = (json.results || [])
-        .map((r) => r.alternatives?.[0]?.transcript?.trim() || "")
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-    return transcript || null;
+    const results = (json.results || []).filter((r) => r.alternatives?.[0]?.transcript?.trim());
+    const transcript = results.map((r) => r.alternatives![0].transcript!.trim()).join(" ").trim();
+    if (!transcript) return null;
+    // Chirp reports confidence for some languages only (0 means "not reported")
+    const confs = results.map((r) => r.alternatives![0].confidence ?? 0).filter((c) => c > 0);
+    return {
+        text: transcript,
+        engine: "chirp_3",
+        confidence: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : undefined,
+        language: results.find((r) => r.languageCode)?.languageCode,
+    };
 }
 
 async function geminiAudioSpeechToText(input: {
     base64: string;
     mimeType: string;
-}): Promise<string | null> {
+}): Promise<SttResult | null> {
     const token = await getAccessToken();
     if (!token) return null;
 
@@ -157,7 +175,10 @@ async function geminiAudioSpeechToText(input: {
                     role: "user",
                     parts: [
                         {
-                            text: "Transcribe this voice message exactly. Return only the transcript text, no commentary. Preserve the spoken language (English/Hindi/Hinglish/Tamil/Kannada).",
+                            text:
+                                "Transcribe this voice message exactly. Return only the transcript text, no commentary. Preserve the spoken " +
+                                "language and script the speaker would use (English, Hindi, Hinglish in Latin letters, Tamil, Bengali, Marathi, " +
+                                `Telugu, Kannada, Gujarati, Punjabi, Odia, Malayalam, Urdu). If you cannot make out the words, return exactly ${UNCLEAR_MARK}`,
                         },
                         {
                             inlineData: {
@@ -181,17 +202,20 @@ async function geminiAudioSpeechToText(input: {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
     const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
-    return text || null;
+    if (!text) return null;
+    const unclear = text.toLowerCase().includes(UNCLEAR_MARK);
+    return { text: unclear ? "" : text, engine: "gemini", unclear };
 }
 
-export async function speechToText(input: SttInput): Promise<string> {
+/** Transcript plus what the engine knows about how sure it is (Saheli asks again instead of guessing when it is not). */
+export async function speechToTextDetailed(input: SttInput): Promise<SttResult> {
     if (input.fallbackText?.trim() && !input.audioBase64 && !input.audioBuffer) {
-        return input.fallbackText.trim();
+        return { text: input.fallbackText.trim(), engine: "fallback" };
     }
 
     const audio = audioPayload(input);
     if (!audio) {
-        return input.fallbackText?.trim() || "";
+        return { text: input.fallbackText?.trim() || "", engine: input.fallbackText?.trim() ? "fallback" : "none" };
     }
 
     try {
@@ -200,25 +224,53 @@ export async function speechToText(input: SttInput): Promise<string> {
             languageCode: input.languageCode,
         });
         if (chirp) {
-            console.log("STT: Chirp3 transcript ok, chars=", chirp.length);
+            console.log("STT: Chirp3 transcript ok, chars=", chirp.text.length, "confidence=", chirp.confidence ?? "n/a");
             return chirp;
         }
     } catch (err) {
         console.warn("STT Chirp3 error:", err instanceof Error ? err.message : err);
     }
 
+    let unclear = false;
     try {
         const gemini = await geminiAudioSpeechToText(audio);
-        if (gemini) {
-            console.log("STT: Gemini audio transcript ok, chars=", gemini.length);
+        if (gemini?.text) {
+            console.log("STT: Gemini audio transcript ok, chars=", gemini.text.length);
             return gemini;
         }
+        unclear = Boolean(gemini?.unclear);
     } catch (err) {
         console.warn("STT Gemini error:", err instanceof Error ? err.message : err);
     }
 
-    if (input.fallbackText?.trim()) return input.fallbackText.trim();
-    return "";
+    if (input.fallbackText?.trim()) return { text: input.fallbackText.trim(), engine: "fallback" };
+    return { text: "", engine: "none", unclear };
+}
+
+export async function speechToText(input: SttInput): Promise<string> {
+    return (await speechToTextDetailed(input)).text;
+}
+
+/** Below this, Saheli treats a transcript as unsure: she checks what she heard before changing the care record. */
+export const VOICE_SURE = 0.6;
+
+/**
+ * Text as it should be spoken: no emoji, markdown, links or list bullets (a voice note reads them out or stumbles).
+ * The full text still goes as a message next to the voice note.
+ */
+export function speakable(text: string): string {
+    return String(text ?? "")
+        .replace(/https?:\/\/\S+/g, "")
+        .replace(/[*_~`#>]+/g, "")
+        .replace(/^\s*[-•·]\s+/gm, "")
+        .replace(/^\s*\d+[.)]\s+/gm, "")
+        .replace(/\p{Extended_Pictographic}(\uFE0F|\u200D\p{Extended_Pictographic})*/gu, "")
+        .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "")
+        .replace(/\s*\n+\s*/g, ". ")
+        .replace(/\s{2,}/g, " ")
+        .replace(/(\.\s*){2,}/g, ". ")
+        .replace(/^[.\s]+/, "")
+        .trim();
 }
 
 /** Saheli default voice: "Anika – Natural Conversations" (Indian female, Hindi/Hinglish). */
@@ -260,6 +312,8 @@ export async function textToSpeech(
 ): Promise<{ audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string }> {
     const trimmed = text.trim();
     if (!trimmed) return { text };
+    const spoken = speakable(trimmed);
+    if (!spoken) return { text: trimmed };
 
     const apiKey = elevenLabsApiKey();
     if (!apiKey) {
@@ -279,7 +333,7 @@ export async function textToSpeech(
                 Accept: "audio/mpeg",
             },
             body: JSON.stringify({
-                text: trimmed.slice(0, 2500),
+                text: spoken.slice(0, 2500),
                 model_id: modelId,
                 voice_settings: voiceSettings,
             }),

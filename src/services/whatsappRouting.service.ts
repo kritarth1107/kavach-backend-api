@@ -300,6 +300,15 @@ async function withVoiceReply(out: OutboundMessage): Promise<OutboundMessage> {
     return out;
 }
 
+function isVoiceInbound(body: WhatsAppInboundBody): boolean {
+    return body.mediaType === "voice" || body.mediaType === "audio" || body.modality === "voice";
+}
+
+/** A reply to a voice note is voiced (whichever brain or route answered), unless it already is, is empty, or is fallback copy. */
+export function shouldVoiceReply(body: WhatsAppInboundBody, out: Pick<OutboundMessage, "modality" | "content"> | null | undefined): boolean {
+    return isVoiceInbound(body) && !!out && out.modality !== "voice" && !!out.content?.trim() && !isSaheliFallbackCopy(out.content);
+}
+
 type WhatsAppInboundBody = {
     from?: string;
     text?: string;
@@ -323,7 +332,12 @@ export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<
     const dBefore = dWho
         ? await import("./delegate/turn.service").then((D) => D.beforeTurn(dPhone, dWho.familyId)).catch(() => null)
         : null;
-    const out = await handleWhatsAppInboundCore(body);
+    let out = await handleWhatsAppInboundCore(body);
+    // A voice note gets a voice note back (with the text first), whichever brain or route answered it.
+    // Fallback copy ("couldn't catch that") is never spoken.
+    if (shouldVoiceReply(body, out)) {
+        out = await withVoiceReply(out);
+    }
     if (out?.content) rememberTurn(String(body.from ?? ""), "saheli", out.content);
     if (dWho && out?.content) {
         void import("./delegate/turn.service")
@@ -368,18 +382,16 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
 
     // STT runs BEFORE emergency / language / intent checks so spoken emergencies escalate.
     // Voice/audio: download from Meta (or mock audioBase64) + STT, then continue with transcript.
-    const isVoiceMedia =
-        body.mediaType === "voice" ||
-        body.mediaType === "audio" ||
-        body.modality === "voice";
+    const isVoiceMedia = isVoiceInbound(body);
     let voiceTranscript: string | undefined;
+    let voiceMeta: { confidence?: number; language?: string; engine?: string } | undefined;
     const hasVoiceAudio = Boolean(body.mediaUrl || body.audioBase64?.trim());
     const isVoicePlaceholder = (t: string) =>
         !t.trim() || /^\[(voice|audio) (message|shared)\]$/i.test(t.trim());
     if (isVoiceMedia && hasVoiceAudio) {
         const sttStarted = Date.now();
         try {
-            const { speechToText } = await import("../channels/voicePipeline");
+            const { speechToTextDetailed } = await import("../channels/voicePipeline");
             let audioBuffer: Buffer | undefined;
             let mimeType: string | undefined;
             if (body.mediaUrl) {
@@ -391,12 +403,14 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                     `WhatsApp voice media downloaded (${media.buffer.length} bytes, ${media.mimeType}) in ${Date.now() - sttStarted}ms`,
                 );
             }
-            voiceTranscript = await speechToText({
+            const heard = await speechToTextDetailed({
                 audioBuffer,
                 audioBase64: audioBuffer ? undefined : body.audioBase64,
                 mimeType,
                 fallbackText: isVoicePlaceholder(text) ? undefined : text,
             });
+            voiceTranscript = heard.text;
+            voiceMeta = { confidence: heard.confidence, language: heard.language, engine: heard.engine };
             if (voiceTranscript.trim() && !isVoicePlaceholder(voiceTranscript)) {
                 text = voiceTranscript.trim();
                 console.log(
@@ -552,7 +566,10 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         const mode = V2.brainV2Mode(identity.familyId);
         if (mode === "live") {
             const v2Text = v2Button ? String(body.interactiveId) : text;
-            const v2 = await V2.runBrainV2({ identity, text: v2Text, messageRef: body.messageId, mode }).catch((err) => {
+            const v2 = await V2.runBrainV2({
+                identity, text: v2Text, messageRef: body.messageId, mode,
+                voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
+            }).catch((err) => {
                 console.warn("[brain-v2] live turn failed, using v1:", err instanceof Error ? err.message : err);
                 return null;
             });
@@ -563,7 +580,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             }
             if (v2Button) return outbound(phone, "🙏");
         } else if (mode === "shadow") {
-            void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode }).catch((err) =>
+            void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode, voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined }).catch((err) =>
                 console.warn("[brain-v2] shadow turn failed:", err instanceof Error ? err.message : err),
             );
         }

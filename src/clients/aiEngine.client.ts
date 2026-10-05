@@ -198,6 +198,9 @@ export async function aiPostBrainTurn(payload: {
     message_ref?: string;
     channel: string;
     mode: "live" | "shadow";
+    modality?: "text" | "voice";
+    voice_confidence?: number | null;
+    voice_language?: string | null;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }> }> {
     const res = await aiFetch(
         "/v2/turn",
