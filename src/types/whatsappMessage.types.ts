@@ -88,6 +88,8 @@ export type MetaWhatsAppAudioPayload = {
     audio: {
         id?: string;
         link?: string;
+        /** true (OGG/Opus only): shown as a voice note rather than an audio file. */
+        voice?: boolean;
     };
 };
 

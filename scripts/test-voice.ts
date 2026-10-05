@@ -3,7 +3,9 @@ import { languageCodeFor, parseScribe, speakable, sttLanguageCodes, sttOrder } f
 import { shouldVoiceReply } from "../src/services/whatsappRouting.service";
 import { VOICE_NOT_CAUGHT_REPLY } from "../src/services/saheliElderFacts.service";
 import { isVoiceMode, wantsVoice } from "../src/services/voicePreference.service";
-import { getTtsVoiceConfig, speechLanguage } from "../src/channels/voicePipeline";
+import { convertToOpus, getTtsVoiceConfig, isOggOpus, speechLanguage, toVoiceNote } from "../src/channels/voicePipeline";
+import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
+import { spawnSync } from "node:child_process";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -78,8 +80,38 @@ ok("not inside other words", speakable("BPL card") === "BPL card");
 process.env.TTS_SAY_AS = "not json";
 ok("bad table ignored", speakable("Ecosprin") === "Ecosprin");
 
-if (fail) {
-    console.error(`${fail} failed`);
-    process.exit(1);
+// voice note, not an audio file: OGG/Opus + voice: true
+const fakeOgg = Buffer.concat([Buffer.from("OggS"), Buffer.alloc(24), Buffer.from("OpusHead"), Buffer.alloc(40)]);
+ok("OGG/Opus recognised", isOggOpus(fakeOgg) && !isOggOpus(Buffer.from("ID3" + "x".repeat(60))) && !isOggOpus(undefined));
+ok("ogg → sent as a voice note", JSON.stringify(voiceAudioPayload("m1", "audio/ogg")) === JSON.stringify({ type: "audio", audio: { id: "m1", voice: true } }));
+ok("mp3 → plain audio (WhatsApp only voices OGG/Opus)", JSON.stringify(voiceAudioPayload("m1", "audio/mpeg")) === JSON.stringify({ type: "audio", audio: { id: "m1" } }));
+
+async function audioChecks() {
+    const already = await toVoiceNote(fakeOgg, "audio/ogg");
+    ok("already OGG/Opus kept as is", already.voice && already.buffer === fakeOgg);
+    const saved = process.env.FFMPEG_PATH;
+    process.env.FFMPEG_PATH = "/nonexistent/ffmpeg";
+    const fallback = await toVoiceNote(Buffer.from("ID3 not really mp3"), "audio/mpeg");
+    ok("no ffmpeg → still sends, as an audio file", !fallback.voice && fallback.mimeType === "audio/mpeg");
+    if (saved === undefined) delete process.env.FFMPEG_PATH;
+    else process.env.FFMPEG_PATH = saved;
+    // real conversion where ffmpeg exists (the Docker image, CI runners)
+    const ff = process.env.FFMPEG_PATH || "ffmpeg";
+    if (spawnSync(ff, ["-version"]).status === 0) {
+        const mp3 = spawnSync(ff, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-f", "mp3", "pipe:1"]).stdout;
+        const opus = await convertToOpus(mp3);
+        ok("mp3 → OGG/Opus voice note (real ffmpeg)", isOggOpus(opus) && opus.length > 1000, opus.length);
+        const note = await toVoiceNote(mp3, "audio/mpeg");
+        ok("toVoiceNote converts", note.voice && note.mimeType === "audio/ogg");
+    } else {
+        console.log("· ffmpeg not installed here: real conversion checked in the Docker image");
+    }
 }
-console.log("all passed");
+
+void audioChecks().then(() => {
+    if (fail) {
+        console.error(`${fail} failed`);
+        process.exit(1);
+    }
+    console.log("all passed");
+});

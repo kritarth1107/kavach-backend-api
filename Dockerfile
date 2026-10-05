@@ -27,9 +27,11 @@ ENV NODE_ENV=production \
     IMAGE_TAG=$IMAGE_TAG
 
 # Minimal tools; Chromium system libs come from `playwright install --with-deps`.
+# ffmpeg turns Saheli's spoken replies into OGG/Opus, the only format WhatsApp shows as a voice note.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./

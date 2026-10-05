@@ -2,6 +2,7 @@
  * Voice pipeline — STT (Chirp 3 preferred, Gemini audio fallback) + TTS (ElevenLabs).
  * Skips live TTS when ELEVENLABS_API_KEY / ELEVEN_LABS_API_KEY is absent.
  */
+import { spawn } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
 
@@ -448,7 +449,7 @@ export function getTtsDebugSnapshot() {
 
 export async function textToSpeech(
     text: string,
-): Promise<{ audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string }> {
+): Promise<{ audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string; voiceNote?: boolean }> {
     const trimmed = text.trim();
     if (!trimmed) return { text };
     const spoken = speakable(trimmed);
@@ -486,20 +487,73 @@ export async function textToSpeech(
             return { text: trimmed };
         }
         const ab = await res.arrayBuffer();
-        const buffer = Buffer.from(ab);
+        // WhatsApp shows only OGG/Opus as a voice note; ElevenLabs gives mp3, so convert
+        const note = await toVoiceNote(Buffer.from(ab), "audio/mpeg");
+        const buffer = note.buffer;
         lastTts = { at: new Date().toISOString(), voiceId, modelId, ok: true, bytes: buffer.length };
         console.log(
-            `TTS: ElevenLabs ok voice=${voiceId} model=${modelId} bytes=${buffer.length} ms=${Date.now() - started}`,
+            `TTS: ElevenLabs ok voice=${voiceId} model=${modelId} bytes=${buffer.length} voiceNote=${note.voice} ms=${Date.now() - started}`,
         );
         return {
             text: trimmed,
             audioBuffer: buffer,
             audioBase64: buffer.toString("base64"),
-            mimeType: "audio/mpeg",
+            mimeType: note.mimeType,
+            voiceNote: note.voice,
         };
     } catch (err) {
         console.warn("ElevenLabs TTS error:", err instanceof Error ? err.message : err);
         return { text: trimmed };
+    }
+}
+
+/** An OGG file with an Opus stream: the only audio WhatsApp shows as a voice note (waveform, play button). */
+export function isOggOpus(buf: Buffer | undefined): boolean {
+    if (!buf || buf.length < 36) return false;
+    return buf.subarray(0, 4).toString("latin1") === "OggS" && buf.subarray(0, 128).toString("latin1").includes("OpusHead");
+}
+
+/** mp3 (or anything ffmpeg reads) → mono 48 kHz Opus in OGG, the voice-note format. Rejects if ffmpeg is missing or fails. */
+export function convertToOpus(input: Buffer, timeoutMs = 20_000): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+        const ff = spawn(process.env.FFMPEG_PATH?.trim() || "ffmpeg",
+            ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "48000", "-c:a", "libopus",
+             "-b:a", "32k", "-application", "voip", "-f", "ogg", "pipe:1"],
+            { stdio: ["pipe", "pipe", "pipe"] });
+        const out: Buffer[] = [];
+        let err = "";
+        const timer = setTimeout(() => {
+            ff.kill("SIGKILL");
+            reject(new Error("ffmpeg timed out"));
+        }, timeoutMs);
+        ff.stdout.on("data", (d: Buffer) => out.push(d));
+        ff.stderr.on("data", (d: Buffer) => (err += d.toString()));
+        ff.on("error", (e) => {
+            clearTimeout(timer);
+            reject(e);
+        });
+        ff.on("close", (code) => {
+            clearTimeout(timer);
+            const buf = Buffer.concat(out);
+            if (code === 0 && isOggOpus(buf)) resolve(buf);
+            else reject(new Error(`ffmpeg exit ${code}: ${err.slice(0, 200)}`));
+        });
+        ff.stdin.on("error", () => undefined); // ffmpeg may close stdin early on bad input; "close" reports it
+        ff.stdin.end(input);
+    });
+}
+
+/**
+ * Make audio a WhatsApp voice note. Already OGG/Opus → as is; otherwise convert. If conversion is not possible the
+ * original goes out as an audio file (voice: false), never nothing.
+ */
+export async function toVoiceNote(buf: Buffer, mimeType: string): Promise<{ buffer: Buffer; mimeType: string; voice: boolean }> {
+    if (isOggOpus(buf)) return { buffer: buf, mimeType: "audio/ogg", voice: true };
+    try {
+        return { buffer: await convertToOpus(buf), mimeType: "audio/ogg", voice: true };
+    } catch (err) {
+        console.warn("Voice note conversion failed, sending an audio file instead:", err instanceof Error ? err.message : err);
+        return { buffer: buf, mimeType, voice: false };
     }
 }
 

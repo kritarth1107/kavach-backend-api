@@ -436,13 +436,22 @@ export async function sendMetaWhatsAppVoice(input: {
     const mimeType = input.mimeType || "audio/ogg";
     const mediaId = await uploadMediaBuffer({
         buffer: input.audioBuffer,
-        mimeType,
+        mimeType: mimeType.includes("ogg") ? "audio/ogg" : mimeType,
         filename: mimeType.includes("mpeg") ? "reply.mp3" : "reply.ogg",
     });
-    await sendSingleMetaWhatsAppPayload(input.to, {
+    await sendSingleMetaWhatsAppPayload(input.to, voiceAudioPayload(mediaId, mimeType));
+}
+
+
+/**
+ * The audio message: OGG/Opus goes with voice: true, so WhatsApp shows a voice note (waveform, play button) instead of
+ * an audio file; anything else is a plain audio file.
+ */
+export function voiceAudioPayload(mediaId: string, mimeType: string): MetaWhatsAppPayload {
+    return {
         type: "audio",
-        audio: { id: mediaId },
-    } as MetaWhatsAppPayload);
+        audio: mimeType.includes("ogg") ? { id: mediaId, voice: true } : { id: mediaId },
+    } as MetaWhatsAppPayload;
 }
 
 export function formatMetaSendError(status: number, body: string): string {
