@@ -392,6 +392,8 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         const sttStarted = Date.now();
         try {
             const { speechToTextDetailed } = await import("../channels/voicePipeline");
+            const { voiceLanguageHint, noteVoiceLanguage } = await import("./saheliRouter.service");
+            const languageHint = await voiceLanguageHint(phone).catch(() => null);
             let audioBuffer: Buffer | undefined;
             let mimeType: string | undefined;
             if (body.mediaUrl) {
@@ -407,9 +409,11 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 audioBuffer,
                 audioBase64: audioBuffer ? undefined : body.audioBase64,
                 mimeType,
+                languageHint,
                 fallbackText: isVoicePlaceholder(text) ? undefined : text,
             });
             voiceTranscript = heard.text;
+            if (heard.text && heard.language) noteVoiceLanguage(phone, heard.language);
             voiceMeta = { confidence: heard.confidence, language: heard.language, engine: heard.engine };
             if (voiceTranscript.trim() && !isVoicePlaceholder(voiceTranscript)) {
                 text = voiceTranscript.trim();

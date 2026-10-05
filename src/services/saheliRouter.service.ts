@@ -188,6 +188,37 @@ export function noteLanguage(phone: string, text: string, lang?: string | null):
         .catch(() => undefined);
     if (stickyLangs.size > 5000) stickyLangs.delete(stickyLangs.keys().next().value as string);
 }
+/**
+ * The language her voice notes were last heard in (from the speech engine), kept for 30 days. The next voice note is
+ * transcribed in that language first, so a Tamil or Bengali speaker isn't forced through Hindi.
+ */
+const voiceLangs = new Map<string, { lang: string; at: number }>();
+const VOICE_LANG_MS = 30 * 24 * 60 * 60 * 1000;
+export function noteVoiceLanguage(phone: string, lang?: string | null): void {
+    if (!lang) return;
+    voiceLangs.set(keyOf(phone), { lang, at: Date.now() });
+    void import("../models/whatsappSession.model")
+        .then(({ default: WS }) => WS.updateOne({ phone }, { $set: { voiceLang: { lang, at: new Date() } } }))
+        .catch(() => undefined);
+    if (voiceLangs.size > 5000) voiceLangs.delete(voiceLangs.keys().next().value as string);
+}
+/** Best guess at the language of her next voice note: last heard, else the language she writes in. */
+export async function voiceLanguageHint(phone: string): Promise<string | null> {
+    const v = voiceLangs.get(keyOf(phone));
+    if (v && Date.now() - v.at < VOICE_LANG_MS) return v.lang;
+    try {
+        const { default: WS } = await import("../models/whatsappSession.model");
+        const row = (await WS.findOne({ phone }, { voiceLang: 1 }).lean()) as { voiceLang?: { lang?: string; at?: Date } } | null;
+        const at = row?.voiceLang?.at ? new Date(row.voiceLang.at).getTime() : 0;
+        if (row?.voiceLang?.lang && Date.now() - at < VOICE_LANG_MS) {
+            voiceLangs.set(keyOf(phone), { lang: row.voiceLang.lang, at });
+            return row.voiceLang.lang;
+        }
+    } catch {
+        /* fall through */
+    }
+    return preferredLangAsync(phone);
+}
 /** After a restart: load her sticky language from the session (async callers). */
 export async function preferredLangAsync(phone: string): Promise<string | null> {
     const s = stickyLangs.get(keyOf(phone));

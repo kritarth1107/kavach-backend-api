@@ -18,6 +18,8 @@ export interface IWhatsappSession {
     lastRide?: Record<string, unknown>;
     /** Her language from substantive messages (survives restarts): { lang, at }. */
     stickyLang?: { lang?: string; at?: Date };
+    /** The language her voice notes were last heard in: { lang, at }. */
+    voiceLang?: { lang?: string; at?: Date };
     awaitingRecipientPick?: boolean;
     recipientOptions?: Array<{ userId: string; name: string }>;
     guestTurns?: number;
@@ -78,6 +80,7 @@ const whatsappSessionSchema = new Schema<IWhatsappSessionDocument>(
         orderSubject: { type: Schema.Types.Mixed },
         lastRide: { type: Schema.Types.Mixed },
         stickyLang: { type: Schema.Types.Mixed },
+        voiceLang: { type: Schema.Types.Mixed },
         expiresAt: { type: Date, required: true, index: true },
     },
     { timestamps: true },

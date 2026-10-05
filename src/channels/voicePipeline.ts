@@ -10,8 +10,39 @@ export type SttInput = {
     audioBuffer?: Buffer;
     mimeType?: string;
     languageCode?: string;
+    /** What we know of how this person speaks: "hi", "hinglish", "tamil", "bn-IN", … (first in the list the engines try). */
+    languageHint?: string | null;
     fallbackText?: string;
+    /** Only these engines, in this order (tests and the voice test set); default sttOrder(). */
+    engines?: Array<"chirp" | "scribe" | "gemini">;
 };
+
+/** Every language Saheli speaks, as BCP-47 codes the speech engines understand. */
+const LANG_CODES: Record<string, string> = {
+    en: "en-IN", english: "en-IN", hi: "hi-IN", hindi: "hi-IN", hinglish: "hi-IN", ta: "ta-IN", tamil: "ta-IN",
+    bn: "bn-IN", bengali: "bn-IN", bangla: "bn-IN", mr: "mr-IN", marathi: "mr-IN", te: "te-IN", telugu: "te-IN",
+    kn: "kn-IN", kannada: "kn-IN", gu: "gu-IN", gujarati: "gu-IN", pa: "pa-Guru-IN", punjabi: "pa-Guru-IN",
+    or: "or-IN", odia: "or-IN", oriya: "or-IN", ml: "ml-IN", malayalam: "ml-IN", ur: "ur-IN", urdu: "ur-IN",
+    as: "as-IN", assamese: "as-IN",
+};
+
+/** BCP-47 code for a hint ("hinglish", "Tamil", "ta", "ta-IN", "tam"), or undefined. */
+export function languageCodeFor(hint?: string | null): string | undefined {
+    const h = String(hint ?? "").trim().toLowerCase();
+    if (!h) return undefined;
+    if (LANG_CODES[h]) return LANG_CODES[h];
+    const base = h.split(/[-_]/)[0];
+    if (LANG_CODES[base]) return LANG_CODES[base];
+    const iso3: Record<string, string> = { hin: "hi", eng: "en", tam: "ta", ben: "bn", mar: "mr", tel: "te", kan: "kn", guj: "gu",
+        pan: "pa", ori: "or", ory: "or", mal: "ml", urd: "ur", asm: "as" };
+    return iso3[base] ? LANG_CODES[iso3[base]] : undefined;
+}
+
+/** Up to 3 codes for Chirp: the person's own language first, then Hindi and Indian English (the most common mix). */
+export function sttLanguageCodes(hint?: string | null, explicit?: string): string[] {
+    const first = explicit || languageCodeFor(hint);
+    return [...new Set([first, "hi-IN", "en-IN"].filter((c): c is string => !!c))].slice(0, 3);
+}
 
 function elevenLabsApiKey(): string {
     return (
@@ -76,7 +107,7 @@ function audioPayload(input: SttInput): { base64: string; mimeType: string } | n
 
 export type SttResult = {
     text: string;
-    engine: "chirp_3" | "gemini" | "fallback" | "none";
+    engine: "chirp_3" | "scribe" | "gemini" | "fallback" | "none";
     /** 0..1 when the engine reports it (Chirp); undefined when it does not. */
     confidence?: number;
     /** BCP-47 code the engine heard, e.g. "hi-IN". */
@@ -90,6 +121,7 @@ const UNCLEAR_MARK = "[unclear]";
 async function chirp3SpeechToText(input: {
     base64: string;
     languageCode?: string;
+    languageHint?: string | null;
 }): Promise<SttResult | null> {
     const token = await getAccessToken();
     if (!token) return null;
@@ -98,13 +130,7 @@ async function chirp3SpeechToText(input: {
     const location = speechLocation();
     const url = `https://${location}-speech.googleapis.com/v2/projects/${project}/locations/${location}/recognizers/_:recognize`;
 
-    const languageCodes = [
-        input.languageCode || "en-IN",
-        "hi-IN",
-        "ta-IN",
-        "kn-IN",
-        "en-US",
-    ];
+    const languageCodes = sttLanguageCodes(input.languageHint, input.languageCode);
 
     const res = await fetch(url, {
         method: "POST",
@@ -144,6 +170,61 @@ async function chirp3SpeechToText(input: {
         confidence: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : undefined,
         language: results.find((r) => r.languageCode)?.languageCode,
     };
+}
+
+function elevenLabsSttModel(): string {
+    return process.env.ELEVENLABS_STT_MODEL?.trim() || "scribe_v1";
+}
+
+/** Parse an ElevenLabs speech-to-text answer (exported for tests). */
+export function parseScribe(json: {
+    text?: string;
+    language_code?: string;
+    language_probability?: number;
+    words?: Array<{ text?: string; type?: string; logprob?: number }>;
+}): SttResult | null {
+    const text = String(json.text ?? "")
+        .replace(/\([^)]{1,40}\)/g, " ") // audio-event tags such as (background noise)
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    if (!text) return null;
+    const probs = (json.words || [])
+        .filter((w) => w.type !== "spacing" && w.type !== "audio_event" && typeof w.logprob === "number")
+        .map((w) => Math.exp(w.logprob as number));
+    return {
+        text,
+        engine: "scribe",
+        confidence: probs.length ? probs.reduce((a, b) => a + b, 0) / probs.length : undefined,
+        language: languageCodeFor(json.language_code) || json.language_code,
+    };
+}
+
+/** ElevenLabs speech-to-text: works when Google is unavailable, and detects the language itself. */
+async function scribeSpeechToText(input: { base64: string; mimeType: string; languageHint?: string | null }): Promise<SttResult | null> {
+    const apiKey = elevenLabsApiKey();
+    if (!apiKey) return null;
+    const form = new FormData();
+    form.append("model_id", elevenLabsSttModel());
+    form.append("tag_audio_events", "false");
+    const code = languageCodeFor(input.languageHint);
+    // Hinglish is mixed: let the engine detect rather than force Hindi
+    if (code && String(input.languageHint).toLowerCase() !== "hinglish") form.append("language_code", code.split("-")[0]);
+    const ext = input.mimeType.includes("mpeg") ? "mp3" : input.mimeType.includes("wav") ? "wav" : "ogg";
+    form.append("file", new Blob([Buffer.from(input.base64, "base64")], { type: input.mimeType }), `voice.${ext}`);
+    const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
+    if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.warn(`ElevenLabs STT failed (${res.status}): ${body.slice(0, 240)}`);
+        return null;
+    }
+    return parseScribe((await res.json()) as Parameters<typeof parseScribe>[0]);
+}
+
+/** Order the speech engines are tried in (STT_ORDER=chirp,scribe,gemini). */
+export function sttOrder(env: NodeJS.ProcessEnv = process.env): Array<"chirp" | "scribe" | "gemini"> {
+    const valid = new Set(["chirp", "scribe", "gemini"]);
+    const order = (env.STT_ORDER || "chirp,scribe,gemini").split(",").map((s) => s.trim().toLowerCase()).filter((s) => valid.has(s));
+    return (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini">;
 }
 
 async function geminiAudioSpeechToText(input: {
@@ -218,29 +299,23 @@ export async function speechToTextDetailed(input: SttInput): Promise<SttResult> 
         return { text: input.fallbackText?.trim() || "", engine: input.fallbackText?.trim() ? "fallback" : "none" };
     }
 
-    try {
-        const chirp = await chirp3SpeechToText({
-            base64: audio.base64,
-            languageCode: input.languageCode,
-        });
-        if (chirp) {
-            console.log("STT: Chirp3 transcript ok, chars=", chirp.text.length, "confidence=", chirp.confidence ?? "n/a");
-            return chirp;
-        }
-    } catch (err) {
-        console.warn("STT Chirp3 error:", err instanceof Error ? err.message : err);
-    }
-
     let unclear = false;
-    try {
-        const gemini = await geminiAudioSpeechToText(audio);
-        if (gemini?.text) {
-            console.log("STT: Gemini audio transcript ok, chars=", gemini.text.length);
-            return gemini;
+    for (const engine of input.engines ?? sttOrder()) {
+        try {
+            const got =
+                engine === "chirp"
+                    ? await chirp3SpeechToText({ base64: audio.base64, languageCode: input.languageCode, languageHint: input.languageHint })
+                    : engine === "scribe"
+                      ? await scribeSpeechToText({ ...audio, languageHint: input.languageHint })
+                      : await geminiAudioSpeechToText(audio);
+            if (got?.text) {
+                console.log(`STT: ${got.engine} ok, chars=${got.text.length} confidence=${got.confidence ?? "n/a"} lang=${got.language ?? "?"}`);
+                return got;
+            }
+            unclear = unclear || Boolean(got?.unclear);
+        } catch (err) {
+            console.warn(`STT ${engine} error:`, err instanceof Error ? err.message : err);
         }
-        unclear = Boolean(gemini?.unclear);
-    } catch (err) {
-        console.warn("STT Gemini error:", err instanceof Error ? err.message : err);
     }
 
     if (input.fallbackText?.trim()) return { text: input.fallbackText.trim(), engine: "fallback" };
