@@ -113,6 +113,8 @@ router.get(`${cm}/memory-history`, protect, wrap(careMemory.getMemoryHistory));
 router.get(`${cm}/memory-history/:versionId/preview`, protect, wrap(careMemory.getMemoryUndoPreview));
 router.post(`${cm}/memory-history/:versionId`, protect, wrap(careMemory.postMemoryUndo));
 router.get(`${cm}/skills`, protect, wrap(careMemory.getSkills));
+router.get(`${cm}/voice`, protect, wrap(careMemory.getVoicePreference));
+router.post(`${cm}/voice`, protect, wrap(careMemory.postVoicePreference));
 router.post(`${cm}/skills`, protect, wrap(careMemory.postSkill));
 router.post(`${cm}/skills/:skillId`, protect, wrap(careMemory.postSkillAction));
 router.get(`${cm}/logins`, protect, wrap(careMemory.getLogins));

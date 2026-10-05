@@ -304,9 +304,17 @@ function isVoiceInbound(body: WhatsAppInboundBody): boolean {
     return body.mediaType === "voice" || body.mediaType === "audio" || body.modality === "voice";
 }
 
-/** A reply to a voice note is voiced (whichever brain or route answered), unless it already is, is empty, or is fallback copy. */
-export function shouldVoiceReply(body: WhatsAppInboundBody, out: Pick<OutboundMessage, "modality" | "content"> | null | undefined): boolean {
-    return isVoiceInbound(body) && !!out && out.modality !== "voice" && !!out.content?.trim() && !isSaheliFallbackCopy(out.content);
+/**
+ * Whether to voice this reply: by the person's choice (auto = when they sent a voice note, always, never), whichever brain
+ * or route answered, unless it is already voiced, empty, or fallback copy.
+ */
+export function shouldVoiceReply(
+    body: WhatsAppInboundBody,
+    out: Pick<OutboundMessage, "modality" | "content"> | null | undefined,
+    mode: "auto" | "always" | "never" = "auto",
+): boolean {
+    const wanted = mode === "always" || (mode === "auto" && isVoiceInbound(body));
+    return wanted && !!out && out.modality !== "voice" && !!out.content?.trim() && !isSaheliFallbackCopy(out.content);
 }
 
 type WhatsAppInboundBody = {
@@ -333,10 +341,14 @@ export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<
         ? await import("./delegate/turn.service").then((D) => D.beforeTurn(dPhone, dWho.familyId)).catch(() => null)
         : null;
     let out = await handleWhatsAppInboundCore(body);
-    // A voice note gets a voice note back (with the text first), whichever brain or route answered it.
-    // Fallback copy ("couldn't catch that") is never spoken.
-    if (shouldVoiceReply(body, out)) {
+    // Voice notes follow the person's choice: by default a voice note gets a voice note back (with the text first),
+    // whichever brain or route answered it; "always" voices every reply, "never" none. Fallback copy is never spoken.
+    const { getVoiceMode } = await import("./voicePreference.service");
+    const voiceMode = dWho ? await getVoiceMode(dWho.userId) : "auto";
+    if (shouldVoiceReply(body, out, voiceMode)) {
         out = await withVoiceReply(out);
+    } else if (voiceMode === "never" && out?.modality === "voice") {
+        out = { ...out, modality: "text", audioBuffer: undefined, audioBase64: undefined, audioMimeType: undefined };
     }
     if (out?.content) rememberTurn(String(body.from ?? ""), "saheli", out.content);
     if (dWho && out?.content) {

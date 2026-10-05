@@ -78,7 +78,9 @@ export type SaheliToolName =
     | "delivery_place"
     | "connector_status"
     | "connector_prepare"
-    | "connector_place";
+    | "connector_place"
+    | "set_voice_preference"
+    | "get_voice_preference";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -498,6 +500,18 @@ export async function executeSaheliTool(input: {
                 limit: Number(input.args.limit ?? 10),
             });
             return { memories: memories.memories };
+        }
+        case "get_voice_preference": {
+            const { getVoiceMode, VOICE_MODE_LABEL } = await import("./voicePreference.service");
+            const mode = await getVoiceMode(input.recipientUserId);
+            return { mode, means: VOICE_MODE_LABEL[mode] };
+        }
+        case "set_voice_preference": {
+            const { isVoiceMode, setVoiceMode, VOICE_MODE_LABEL } = await import("./voicePreference.service");
+            const mode = input.args.mode;
+            if (!isVoiceMode(mode)) return { ok: false, error: "mode must be auto, always or never" };
+            await setVoiceMode({ userId: input.recipientUserId, familyId: input.familyId, mode, by: input.actorUserId });
+            return { ok: true, mode, means: VOICE_MODE_LABEL[mode] };
         }
         case "sync_medicine_schedule": {
             const { syncMedicineSchedule } = await import("./careMemorySync.service");

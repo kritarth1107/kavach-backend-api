@@ -270,6 +270,23 @@ export async function postMemoryUndo(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/memory-history/${vid}`, { actor, mode, reason, confirm }, 45_000) });
 }
 
+/** Voice replies for this person (auto = when they send a voice note, always, never): same setting Saheli changes on WhatsApp. */
+export async function getVoicePreference(req: Request, res: Response) {
+    await caregiverScope(req);
+    const { getVoiceMode, VOICE_MODE_LABEL } = await import("../services/voicePreference.service");
+    const mode = await getVoiceMode(req.params.subjectUserId);
+    res.json({ success: true, data: { mode, means: VOICE_MODE_LABEL[mode] } });
+}
+
+export async function postVoicePreference(req: Request, res: Response) {
+    const { actor } = await caregiverScope(req);
+    const { isVoiceMode, setVoiceMode, VOICE_MODE_LABEL } = await import("../services/voicePreference.service");
+    const mode = req.body?.mode;
+    if (!isVoiceMode(mode)) throw new AppError("mode must be auto, always or never", 400);
+    await setVoiceMode({ userId: req.params.subjectUserId, familyId: req.params.familyId, mode, by: actor.id });
+    res.json({ success: true, data: { mode, means: VOICE_MODE_LABEL[mode] } });
+}
+
 export async function getSkills(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/skills`) });

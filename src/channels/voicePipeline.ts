@@ -336,6 +336,13 @@ export const VOICE_SURE = 0.6;
 export function speakable(text: string): string {
     return String(text ?? "")
         .replace(/https?:\/\/\S+/g, "")
+        // BP 130/80 → "130 by 80", as it is said in India (only numbers that look like a BP, never a date)
+        .replace(/\b(\d{2,3})\s*\/\s*(\d{2,3})\b/g, (m, a, b) => (+a >= 70 && +a <= 260 && +b >= 40 && +b < +a ? `${a} by ${b}` : m))
+        .replace(/\b0(\d):(\d\d)\b/g, "$1:$2") // 08:00 → 8:00
+        .replace(/\b(\d+(?:\.\d+)?)\s*mg\b/gi, "$1 milligram")
+        .replace(/\b(\d+(?:\.\d+)?)\s*mcg\b/gi, "$1 microgram")
+        .replace(/\b(\d+(?:\.\d+)?)\s*ml\b/gi, "$1 ml")
+        .replace(/₹\s*(\d[\d,]*)/g, "$1 rupaye")
         .replace(/[*_~`#>]+/g, "")
         .replace(/^\s*[-•·]\s+/gm, "")
         .replace(/^\s*\d+[.)]\s+/gm, "")
@@ -359,15 +366,51 @@ function envNumber(name: string, fallback: number): number {
     return Number.isFinite(n) ? n : fallback;
 }
 
-export function getTtsVoiceConfig() {
+/** The language a reply is written in, from its script (Latin = English or Hinglish, which the default voice speaks). */
+export function speechLanguage(text: string): string {
+    const counts: Array<[string, RegExp]> = [
+        ["ta", /[\u0B80-\u0BFF]/g], ["bn", /[\u0980-\u09FF]/g], ["gu", /[\u0A80-\u0AFF]/g], ["pa", /[\u0A00-\u0A7F]/g],
+        ["or", /[\u0B00-\u0B7F]/g], ["te", /[\u0C00-\u0C7F]/g], ["kn", /[\u0C80-\u0CFF]/g], ["ml", /[\u0D00-\u0D7F]/g],
+        ["ur", /[\u0600-\u06FF]/g], ["hi", /[\u0900-\u097F]/g],
+    ];
+    let best = "latin";
+    let most = 0;
+    for (const [lang, rx] of counts) {
+        const n = (text.match(rx) || []).length;
+        if (n > most) [best, most] = [lang, n];
+    }
+    return most >= 3 ? best : "latin";
+}
+
+/** Languages ElevenLabs' multilingual v2 voice speaks; others use the wider model (ELEVENLABS_WIDE_MODEL_ID). */
+const V2_LANGS = new Set(["latin", "hi", "ta"]);
+
+function jsonEnv(name: string): Record<string, string> {
+    try {
+        const v = JSON.parse(process.env[name] || "{}");
+        return v && typeof v === "object" ? v : {};
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * Voice for one reply: a per-language voice if one is set (ELEVENLABS_VOICE_IDS='{"ta":"…","bn":"…"}'), a model that
+ * speaks that language, and a slightly slower pace for elders (ELEVENLABS_SPEED, 0.7–1.2).
+ */
+export function getTtsVoiceConfig(lang = "latin") {
+    const voices = jsonEnv("ELEVENLABS_VOICE_IDS");
+    const models = jsonEnv("ELEVENLABS_MODEL_IDS");
+    const baseModel = process.env.ELEVENLABS_MODEL_ID?.trim() || DEFAULT_ELEVENLABS_MODEL_ID;
     return {
-        voiceId: process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE_ID,
-        modelId: process.env.ELEVENLABS_MODEL_ID?.trim() || DEFAULT_ELEVENLABS_MODEL_ID,
+        voiceId: voices[lang] || process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE_ID,
+        modelId: models[lang] || (V2_LANGS.has(lang) ? baseModel : process.env.ELEVENLABS_WIDE_MODEL_ID?.trim() || "eleven_v3"),
         voiceSettings: {
             stability: envNumber("ELEVENLABS_STABILITY", 0.45),
             similarity_boost: envNumber("ELEVENLABS_SIMILARITY", 0.75),
             style: envNumber("ELEVENLABS_STYLE", 0.2),
             use_speaker_boost: process.env.ELEVENLABS_SPEAKER_BOOST?.trim() !== "false",
+            speed: Math.min(1.2, Math.max(0.7, envNumber("ELEVENLABS_SPEED", 0.9))),
         },
     };
 }
@@ -396,7 +439,7 @@ export async function textToSpeech(
         return { text: trimmed };
     }
 
-    const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig();
+    const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig(speechLanguage(spoken));
     const started = Date.now();
 
     try {
