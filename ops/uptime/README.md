@@ -10,13 +10,14 @@ A Cloudflare Worker that checks, every 5 minutes, from outside Google:
 
 Two failed checks in a row = down → one email (Resend), a reminder every 6 h while down, and a "recovered" email with
 how long it lasted. Monday 09:00 IST: a weekly check-in with each service's uptime, so a broken alarm is noticed too.
-`https://kavach-uptime.<account>.workers.dev/status` shows the last round. Free plan is enough (≈ 8,700 runs/month).
+No public URL (cron only). Last round: `npx wrangler kv key get last --binding STATE --remote`. Free plan is enough
+(≈ 8,700 runs/month). Deployed 2026-10-05 on account kritarth@kavach.care (workers.dev name `kavach-care`, KV `STATE`).
 
 ## Deploy (once)
 ```bash
 cd kavach-backend/ops/uptime
 npx wrangler login                                  # opens Cloudflare in the browser
-npx wrangler kv namespace create STATE              # paste the printed id into wrangler.toml
+npx wrangler kv namespace create STATE              # paste the printed id into wrangler.toml (done: 675de38b…)
 npx wrangler secret put RESEND_API_KEY              # the backend's Resend key (same sender domain emails.kavach.care)
 npx wrangler secret put HEALTH_SECRET               # the backend's HEALTH_SECRET (optional; checks the database too)
 npx wrangler deploy

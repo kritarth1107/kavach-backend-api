@@ -2,7 +2,7 @@
 name = "kavach-uptime"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
-workers_dev = true
+workers_dev = false   # runs on its cron only; no public URL (status: npx wrangler kv key get last --binding STATE --remote)
 
 [triggers]
 crons = ["*/5 * * * *", "30 3 * * 1"]   # every 5 minutes; Monday 09:00 IST weekly check-in
@@ -17,4 +17,4 @@ ENGINE_URL = "https://kawach-ai-engine-303943038694.asia-south1.run.app"
 # created on first deploy with: npx wrangler kv namespace create STATE  (then paste the id here)
 [[kv_namespaces]]
 binding = "STATE"
-id = "REPLACE_WITH_KV_ID"
+id = "675de38b5c7e47269fdbe94da7bc6b28"
