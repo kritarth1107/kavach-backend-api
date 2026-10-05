@@ -183,6 +183,7 @@ export async function getScheduleDayStatuses(
             status,
             markedBy: manual?.markedBy ?? null,
             markedAt: manual?.updatedAt?.toISOString?.() ?? manual?.createdAt?.toISOString?.() ?? null,
+            createdAt: (s as { createdAt?: Date }).createdAt?.toISOString?.() ?? null,
         };
     });
 

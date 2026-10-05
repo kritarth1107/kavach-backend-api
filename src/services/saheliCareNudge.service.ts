@@ -36,6 +36,8 @@ export async function deliverCareNudge(input: {
     dateKey: string;
     preferredChannel: "whatsapp" | "phone" | "dashboard";
     preferredLanguage?: string;
+    /** A medicine dose: never held back for recent chat, only for an order in progress (then remembered for later). */
+    medicine?: boolean;
 }): Promise<boolean> {
     const P = await import("./profile/elderProfile.service").catch(() => null);
     const w = { familyId: input.familyId, recipientUserId: input.recipientUserId };
@@ -89,9 +91,10 @@ export async function deliverCareNudge(input: {
     {
         // Nudge gate: quiet ≥60 min + no active job/flow (checked again right before send).
         const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
-        const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId, medicine: input.medicine });
         if (!gate.ok) {
             console.log(`Care nudge deferred (${gate.reason}) for ${input.recipientUserId} (${input.nudgeKind})`);
+            if (input.medicine && input.nudgeKind === "dose_due") await rememberHeldDose(input, gate.reason || "gate");
             return false;
         }
     }
@@ -120,9 +123,10 @@ export async function deliverCareNudge(input: {
 
     {
         const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
-        const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId, medicine: input.medicine });
         if (!gate.ok) {
             console.log(`Care nudge dropped at send (${gate.reason}) for ${input.recipientUserId}`);
+            if (input.medicine && input.nudgeKind === "dose_due") await rememberHeldDose(input, gate.reason || "gate");
             await finalizeNudgeAttempt(attemptId, {
                 delivered: false,
                 channel: target.channel,
@@ -172,7 +176,158 @@ export async function deliverCareNudge(input: {
     return delivery.delivered;
 }
 
+/** A medicine dose reminder the gate held back (an order in progress): remembered so the catch-up sends it once clear. */
+async function rememberHeldDose(input: { familyId: string; recipientUserId: string; scheduleId: string; dateKey: string }, reason: string) {
+    try {
+        const { NudgeDeferral } = await import("../models/schedulerHeartbeat.model");
+        await NudgeDeferral.updateOne(
+            { familyId: input.familyId, recipientUserId: input.recipientUserId, dateKey: input.dateKey, scheduleId: input.scheduleId },
+            { $setOnInsert: { reason, at: new Date() } },
+            { upsert: true },
+        );
+    } catch (err) {
+        console.warn("could not remember a held-back dose:", err instanceof Error ? err.message : err);
+    }
+}
+
+/** Record this tick; returns today's gaps (minutes when reminders were not running). */
+async function noteTick(now: Date): Promise<Array<{ from: Date; to: Date }>> {
+    try {
+        const { nextHeartbeat } = await import("./reminderCatchUp.service");
+        const { default: HB } = await import("../models/schedulerHeartbeat.model");
+        const prev = (await HB.findById("care-nudge").lean()) as { lastTickAt?: Date; gaps?: Array<{ from: Date; to: Date }> } | null;
+        const next = nextHeartbeat(prev, now);
+        await HB.updateOne({ _id: "care-nudge" }, { $set: next }, { upsert: true });
+        if (prev?.lastTickAt && next.gaps.length > (prev.gaps?.length ?? 0)) {
+            console.warn(`Reminder tick was not running from ${new Date(prev.lastTickAt).toISOString()} to ${now.toISOString()}: catching up`);
+        }
+        return next.gaps;
+    } catch (err) {
+        console.warn("reminder heartbeat failed:", err instanceof Error ? err.message : err);
+        return [];
+    }
+}
+
+type CatchUpInput = {
+    gaps: Array<{ from: Date; to: Date }>;
+    companion: NudgeTarget;
+    items: Awaited<ReturnType<typeof getScheduleDayStatuses>>["items"];
+    nowMinutes: number;
+    dateKey: string;
+    displayName: string;
+    preferredLanguage: string;
+};
+
+/**
+ * Doses whose reminder never went out: a little late → the normal reminder; 15–90 min → one combined "sorry, a little
+ * late" message, sent under the missed follow-up so nothing chases it; later (or the next dose is near) → no message,
+ * noted for the caregiver (dashboard activity) and in Saheli's ledger.
+ */
+async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; handled: Set<string> }> {
+    const { planCatchUp, lateDoseText, doseAt, inGap } = await import("./reminderCatchUp.service");
+    const { default: SaheliNudgeLog } = await import("../models/saheliNudgeLog.model");
+    const { NudgeDeferral } = await import("../models/schedulerHeartbeat.model");
+    const { companion: c, dateKey } = input;
+    const handled = new Set<string>();
+    const held = new Set<string>(
+        (await NudgeDeferral.distinct("scheduleId", { familyId: c.familyId, recipientUserId: c.recipientUserId, dateKey })).map(String),
+    );
+    if (!held.size && !input.gaps.length) return { sent: 0, handled }; // nothing was missed today: the usual case
+    const attempted = new Set<string>(
+        (await SaheliNudgeLog.distinct("scheduleId", {
+            familyId: c.familyId, recipientUserId: c.recipientUserId, dateKey,
+            nudgeKind: { $in: ["dose_due", "pre_reminder", "missed_followup"] },
+        })).map(String),
+    );
+    const plan = planCatchUp({
+        items: input.items,
+        nowMinutes: input.nowMinutes,
+        attempted,
+        parse: parseTimeToMinutes,
+        missedBecause: (item) => {
+            const at = parseTimeToMinutes(item.time);
+            if (at != null && inGap(input.gaps, doseAt(dateKey, at))) return "down";
+            return held.has(item.scheduleId) ? "held" : null;
+        },
+        createdTodayAt: (item) => {
+            if (!item.createdAt) return null;
+            const at = new Date(item.createdAt);
+            return toDateKeyIST(at) === dateKey ? getISTParts(at).minutesSinceMidnight : null;
+        },
+    });
+    let sent = 0;
+
+    for (const item of plan.onTime) {
+        handled.add(item.scheduleId);
+        const ok = await deliverCareNudge({
+            familyId: c.familyId, recipientUserId: c.recipientUserId, displayName: input.displayName, scheduleId: item.scheduleId,
+            title: item.title, time: item.time, nudgeKind: "dose_due", dateKey, preferredChannel: c.preferredChannel,
+            preferredLanguage: input.preferredLanguage, medicine: true,
+        });
+        if (ok) sent += 1;
+    }
+
+    if (plan.late.length) {
+        const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
+        const gate = await canSendProactiveNudge({ familyId: c.familyId, recipientUserId: c.recipientUserId, medicine: true });
+        if (!gate.ok) {
+            // an order or login page is open: try again next minute (until it is too late, then it is noted)
+            for (const item of plan.late) handled.add(item.scheduleId);
+            plan.late = [];
+        }
+    }
+    if (plan.late.length) {
+        const claims: Array<{ id: string; item: (typeof plan.late)[number] }> = [];
+        for (const item of plan.late) {
+            handled.add(item.scheduleId);
+            const id = await claimNudgeAttempt(
+                { familyId: c.familyId, recipientUserId: c.recipientUserId, scheduleId: item.scheduleId, dateKey, nudgeKind: "missed_followup" },
+                `late reminder: ${item.title} ${item.time}`,
+            );
+            if (id) claims.push({ id, item });
+        }
+        if (claims.length) {
+            const hindi = /hindi|hinglish/i.test(input.preferredLanguage);
+            const text = lateDoseText(claims.map((x) => x.item), input.displayName, hindi);
+            const target = await resolveRecipientChannel(c.familyId, c.recipientUserId, c.preferredChannel);
+            const delivery = target && target.channel !== "dashboard"
+                ? await deliverOutboundMessage({ familyId: c.familyId, recipientUserId: c.recipientUserId, content: text,
+                                                 channel: target.channel, channelIdentifier: target.channelIdentifier })
+                : { delivered: false, channel: "dashboard" as const, reason: "invalid_recipient" as const };
+            for (const x of claims) {
+                await finalizeNudgeAttempt(x.id, {
+                    delivered: delivery.delivered, channel: delivery.channel,
+                    terminal: !delivery.delivered, reason: delivery.delivered ? undefined : `late_reminder_${delivery.reason ?? "failed"}`,
+                    messagePreview: text,
+                });
+            }
+            if (delivery.delivered) sent += 1;
+        }
+    }
+
+    for (const item of plan.tooLate) {
+        handled.add(item.scheduleId);
+        // claimed so it is noted once; terminal, so nothing tries to send it later
+        const id = await claimNudgeAttempt(
+            { familyId: c.familyId, recipientUserId: c.recipientUserId, scheduleId: item.scheduleId, dateKey, nudgeKind: "missed_followup" },
+            `not sent (Kavach was down): ${item.title} ${item.time}`,
+        );
+        if (!id) continue;
+        await finalizeNudgeAttempt(id, { delivered: false, channel: "dashboard", terminal: true, reason: `missed_while_down: ${item.why}` });
+        void import("./activityLog.service").then(({ logActivity }) =>
+            logActivity({
+                familyId: c.familyId, recipientUserId: c.recipientUserId, kind: "reminder",
+                title: `Reminder not sent: ${item.title} (${item.time})`,
+                detail: `Kavach was down when this reminder was due, and ${item.why}, so Saheli did not send it late (a late reminder ` +
+                        `could lead to a double dose). Please check whether it was taken.`,
+            }),
+        ).catch(() => undefined);
+    }
+    return { sent, handled };
+}
+
 export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number; scanned: number }> {
+    const gaps = await noteTick(now);
     const companions = await listEnabledCompanions();
     let sent = 0;
     let scanned = 0;
@@ -184,7 +339,7 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
 
         scanned += 1;
         try {
-            const one = await nudgeOneCompanion(companion, now, dateKey, nowMinutes);
+            const one = await nudgeOneCompanion(companion, now, dateKey, nowMinutes, { gaps });
             sent += one;
         } catch (err) {
             console.warn(
@@ -200,7 +355,7 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
             if (isQuietHourIST(nowMinutes)) break;
             scanned += 1;
             try {
-                sent += await nudgeOneCompanion(target, now, dateKey, nowMinutes, { selfCare: true });
+                sent += await nudgeOneCompanion(target, now, dateKey, nowMinutes, { selfCare: true, gaps });
             } catch (err) {
                 console.warn(`Self-care nudge skipped for ${target.recipientUserId}:`, err instanceof Error ? err.message : err);
             }
@@ -251,7 +406,7 @@ async function nudgeOneCompanion(
     _now: Date,
     dateKey: string,
     nowMinutes: number,
-    opts: { selfCare?: boolean } = {},
+    opts: { selfCare?: boolean; gaps?: Array<{ from: Date; to: Date }> } = {},
 ): Promise<number> {
     let sent = 0;
         const day = await getScheduleDayStatuses(
@@ -298,7 +453,17 @@ async function nudgeOneCompanion(
             if (ok) sent += 1;
         }
 
+        // Reminders the backend missed while it was down or restarting (see reminderCatchUp.service).
+        const caught = await catchUpMissedDoses({
+            gaps: opts.gaps ?? [], companion, items: day.items, nowMinutes, dateKey, displayName, preferredLanguage,
+        }).catch((err) => {
+            console.warn(`Reminder catch-up failed for ${companion.recipientUserId}:`, err instanceof Error ? err.message : err);
+            return { sent: 0, handled: new Set<string>() };
+        });
+        sent += caught.sent;
+
         for (const item of day.items) {
+            if (caught.handled.has(item.scheduleId)) continue;
             const scheduleMinutes = parseTimeToMinutes(item.time);
             if (scheduleMinutes == null) {
                 console.warn(
@@ -323,6 +488,7 @@ async function nudgeOneCompanion(
                     dateKey,
                     preferredChannel: companion.preferredChannel,
                     preferredLanguage,
+                    medicine: true,
                 });
                 if (ok) sent += 1;
             }
@@ -359,6 +525,7 @@ async function nudgeOneCompanion(
                     dateKey,
                     preferredChannel: companion.preferredChannel,
                     preferredLanguage,
+                    medicine: item.type === "MEDICINE",
                 });
                 if (ok) sent += 1;
             }
@@ -379,6 +546,7 @@ async function nudgeOneCompanion(
                     dateKey,
                     preferredChannel: companion.preferredChannel,
                     preferredLanguage,
+                    medicine: item.type === "MEDICINE",
                 });
                 if (ok) sent += 1;
             }

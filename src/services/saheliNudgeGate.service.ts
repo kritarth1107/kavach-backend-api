@@ -50,6 +50,11 @@ export async function canSendProactiveNudge(input: {
     familyId: string;
     recipientUserId: string;
     now?: Date;
+    /**
+     * A medicine dose reminder: never held back because she chatted recently (a reminder in the middle of a chat is
+     * what a caring person does), only while an order or login page is in progress.
+     */
+    medicine?: boolean;
 }): Promise<{ ok: boolean; reason?: string }> {
     const now = (input.now ?? new Date()).getTime();
     const quietMs = nudgeQuietMs();
@@ -79,6 +84,8 @@ export async function canSendProactiveNudge(input: {
             if (hasParkedBrowserOtpSession(input.familyId, actor)) return { ok: false, reason: "active_flow:otp_page_open" };
             if (peekParkedCheckout(input.familyId, actor)) return { ok: false, reason: "active_flow:confirm_card_open" };
         }
+
+        if (input.medicine) return { ok: true };
 
         // (1) last conversation (inbound or non-nudge outbound) ≥ quiet window
         const companion = await SaheliCompanion.findOne({

@@ -28,4 +28,6 @@ export type ScheduleDayItem = {
     status: CareScheduleDayStatus;
     markedBy?: string | null;
     markedAt?: string | null;
+    /** When the schedule row was created (a dose added after its time today was never due). */
+    createdAt?: string | null;
 };
