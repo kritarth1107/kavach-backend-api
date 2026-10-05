@@ -1,0 +1,20 @@
+# Kavach uptime alarm (Cloudflare Worker, outside Google). Deploy: see README.md.
+name = "kavach-uptime"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[triggers]
+crons = ["*/5 * * * *", "30 3 * * 1"]   # every 5 minutes; Monday 09:00 IST weekly check-in
+
+[vars]
+ALERT_TO = "kritarth@kavach.care"
+ALERT_FROM = "Kavach monitor <alerts@emails.kavach.care>"
+DASHBOARD_URL = "https://app.kavach.care"
+BACKEND_URL = "https://kavach-backend-303943038694.asia-south1.run.app"
+ENGINE_URL = "https://kawach-ai-engine-303943038694.asia-south1.run.app"
+
+# created on first deploy with: npx wrangler kv namespace create STATE  (then paste the id here)
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_KV_ID"
