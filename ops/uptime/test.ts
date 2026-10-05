@@ -1,6 +1,7 @@
 /** Uptime alarm: when it alerts, what it says, and what it checks (fake network, fake storage). */
 import { decide, duration, formatAlerts, resetWeek, weeklySummary, type Probe, type State } from "./src/check";
 import { probe, runChecks, sendEmail, targets } from "./src/index";
+import { alertEmail, esc, LOGO_URL, recoveredLine, weeklyEmail } from "./src/email";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -44,6 +45,20 @@ ok("weekly uptime percent", week.text.includes("99.70% up"), week.text);
 ok("week counters reset, down state kept", resetWeek({ services: { a: { fails: 3, down: true, checks: 9, okChecks: 1 } } }, t(5)).services.a.checks === 0
     && resetWeek({ services: { a: { fails: 3, down: true, checks: 9, okChecks: 1 } } }, t(5)).services.a.down);
 
+// the designed email (dashboard look)
+const probesNow: Probe[] = [{ name: "engine", label: "Saheli's brain (AI engine)", ok: false, status: 404, ms: 90, error: "x <b>y</b>" }, P("dashboard", true)];
+const html = alertEmail([{ kind: "down", name: "engine", label: "Saheli's brain (AI engine)", since: t(0), detail: "" }], probesNow, t(5));
+ok("html: logo, two-tone heading, saffron pill", html.html.includes(LOGO_URL) && html.html.includes("Kavach is") && html.html.includes(">down<")
+    && html.html.includes("#d3541e"));
+ok("html: page text escaped", html.html.includes("x &lt;b&gt;y&lt;/b&gt;") && !html.html.includes("<b>y</b>"));
+ok("html subject short", html.subject === "Kavach is down: Saheli's brain", html.subject);
+ok("recovered once when together", recoveredLine([{ kind: "up", name: "a", label: "A", detail: "Back up after 2 h 0 min." },
+    { kind: "up", name: "b", label: "B", detail: "Back up after 2 h 0 min." }]) === "Back up after 2 h 0 min");
+ok("recovered per part when different", recoveredLine([{ kind: "up", name: "a", label: "A (x)", detail: "Back up after 5 min." },
+    { kind: "up", name: "b", label: "B", detail: "Back up after 2 h 0 min." }]) === "A: back after 5 min · B: back after 2 h 0 min");
+ok("weekly html bars", weeklyEmail({ services: { engine: { fails: 0, down: false, checks: 10, okChecks: 9 } }, weekStart: t(0) }, t(5)).html.includes("90.00%"));
+ok("esc", esc(`a"<&>`) === "a&quot;&lt;&amp;&gt;");
+
 // checks against a fake network
 const env = {
     STATE: (() => { const m = new Map<string, string>(); return { get: async (k: string) => m.get(k) ?? null, put: async (k: string, v: string) => void m.set(k, v) }; })(),
@@ -80,12 +95,13 @@ void (async () => {
     const email = sent.find((x) => x.url.startsWith("https://api.resend.com"));
     const body = JSON.parse(email?.body || "{}");
     ok("second failure: one email to both people", !!email && body.to.length === 2 && body.subject.includes("down"), body);
+    ok("sent as designed html plus plain text", typeof body.html === "string" && body.html.includes(LOGO_URL) && body.text.includes("All checks now"));
     ok("names backend and engine, not the dashboard", body.subject.includes("Backend") && body.subject.includes("brain") && !body.subject.includes("Dashboard"), body.subject);
     mode = "up";
     sent.length = 0;
     await runChecks(env, t(65), fakeFetch);
     const back = JSON.parse(sent.find((x) => x.url.startsWith("https://api.resend.com"))?.body || "{}");
-    ok("recovery email after an hour", back.subject?.includes("recovered") && back.text.includes("1 h 5 min"), back);
+    ok("recovery email after an hour", back.subject?.includes("back up") && back.text.includes("1 h 5 min"), back.subject);
     ok("status page has the last round", JSON.parse((await env.STATE.get("last")) || "{}").probes?.length === 3);
     ok("no Resend key: nothing sent, no crash", (await sendEmail({ ...env, RESEND_API_KEY: undefined }, "s", "t", fakeFetch)) === false);
 

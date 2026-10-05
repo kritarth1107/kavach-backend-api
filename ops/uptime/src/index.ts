@@ -8,6 +8,7 @@
  * Vars (wrangler.toml): ALERT_TO (comma-separated), ALERT_FROM, DASHBOARD_URL, BACKEND_URL, ENGINE_URL.
  */
 import { decide, formatAlerts, resetWeek, weeklySummary, type Probe, type State, type Target } from "./check";
+import { alertEmail, weeklyEmail } from "./email";
 
 type KV = { get(key: string): Promise<string | null>; put(key: string, value: string): Promise<void> };
 type Env = {
@@ -52,14 +53,16 @@ export async function probe(t: Target, fetchFn: typeof fetch = fetch, timeoutMs 
             ? "Google project suspended"
             : res.status === 404 && /<title>404 Page not found<\/title>/i.test(body)
               ? "Cloud Run has no service here: project suspended or service deleted"
-              : undefined;
+              : res.status >= 520 && res.status <= 530
+                ? "Cloudflare can't reach the server behind it"
+                : undefined;
         return { name: t.name, label: t.label, ok, status: res.status, ms: Date.now() - started, error: ok ? undefined : hint };
     } catch (err) {
         return { name: t.name, label: t.label, ok: false, ms: Date.now() - started, error: err instanceof Error ? err.message.slice(0, 120) : "failed" };
     }
 }
 
-export async function sendEmail(env: Env, subject: string, text: string, fetchFn: typeof fetch = fetch): Promise<boolean> {
+export async function sendEmail(env: Env, subject: string, text: string, fetchFn: typeof fetch = fetch, html?: string): Promise<boolean> {
     if (!env.RESEND_API_KEY) {
         console.error("RESEND_API_KEY not set: cannot send", subject);
         return false;
@@ -67,7 +70,7 @@ export async function sendEmail(env: Env, subject: string, text: string, fetchFn
     const res = await fetchFn("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: env.ALERT_FROM, to: env.ALERT_TO.split(",").map((s) => s.trim()).filter(Boolean), subject, text }),
+        body: JSON.stringify({ from: env.ALERT_FROM, to: env.ALERT_TO.split(",").map((s) => s.trim()).filter(Boolean), subject, text, ...(html ? { html } : {}) }),
     });
     if (!res.ok) console.error("Resend failed", res.status, (await res.text()).slice(0, 200));
     return res.ok;
@@ -87,7 +90,8 @@ export async function runChecks(env: Env, now = new Date().toISOString(), fetchF
     const { next, alerts } = decide(prev, probes, now);
     if (alerts.length) {
         const mail = formatAlerts(alerts, probes, now);
-        await sendEmail(env, mail.subject, mail.text, fetchFn);
+        const pretty = alertEmail(alerts, probes, now);
+        await sendEmail(env, pretty.subject, mail.text, fetchFn, pretty.html);
     }
     await env.STATE.put("state", JSON.stringify({ ...next, weekStart: next.weekStart || now }));
     await env.STATE.put("last", JSON.stringify({ at: now, probes: probes.map(({ name, ok, status, ms, error }) => ({ name, ok, status, ms, error })) }));
@@ -101,7 +105,8 @@ export default {
                 const state = await load(env);
                 const now = new Date().toISOString();
                 const mail = weeklySummary(state, now);
-                await sendEmail(env, mail.subject, mail.text);
+                const pretty = weeklyEmail(state, now);
+                await sendEmail(env, pretty.subject, mail.text, fetch, pretty.html);
                 await env.STATE.put("state", JSON.stringify(resetWeek(state, now)));
             })());
             return;
