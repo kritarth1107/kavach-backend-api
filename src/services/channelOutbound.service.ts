@@ -51,6 +51,21 @@ export async function resolveRecipientChannel(
     return { channel: "dashboard", channelIdentifier: "dashboard", delivered: true };
 }
 
+/** Best effort: a voice note after the text for people who chose "always". A failure never undoes the text. */
+async function alsoSendVoice(payload: { recipientUserId: string; channelIdentifier: string; content: string }): Promise<void> {
+    try {
+        const { getVoiceMode } = await import("./voicePreference.service");
+        if ((await getVoiceMode(payload.recipientUserId)) !== "always") return;
+        const { textToSpeech } = await import("../channels/voicePipeline");
+        const spoken = await textToSpeech(payload.content);
+        if (!spoken.audioBuffer) return;
+        const { sendMetaWhatsAppVoice } = await import("../clients/metaWhatsApp.client");
+        await sendMetaWhatsAppVoice({ to: payload.channelIdentifier, audioBuffer: spoken.audioBuffer, mimeType: spoken.mimeType || "audio/mpeg" });
+    } catch (err) {
+        console.warn("Voice note after a proactive message failed (text was sent):", err instanceof Error ? err.message : err);
+    }
+}
+
 export async function deliverOutboundMessage(payload: {
     familyId: string;
     recipientUserId: string;
@@ -138,6 +153,8 @@ export async function deliverOutboundMessage(payload: {
                         contextMessageId: payload.replyToMessageId,
                     })),
                 );
+                // Someone who chose "always" voice notes also hears reminders and check-ins (after the text).
+                await alsoSendVoice(payload);
             }
         } else {
             const adapter =

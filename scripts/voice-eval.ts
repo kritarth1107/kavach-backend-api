@@ -5,13 +5,18 @@
  *
  *     npx tsx scripts/voice-eval.ts               # shows what it would cost, does nothing
  *     npx tsx scripts/voice-eval.ts --yes [--out report.md] [--only scribe,gemini]
+ *     npx tsx scripts/voice-eval.ts --yes --medicines "Metformin,Ecosprin,Thyronorm"   # pronunciation round trip
+ *
+ * The medicines mode speaks a reminder for each name ("Kamla ji, Ecosprin ka samay ho gaya") the way Saheli would
+ * (through speakable and TTS_SAY_AS), transcribes it back, and lists names the voice says so badly they are not heard:
+ * add those to TTS_SAY_AS with a spelling that sounds right.
  *
  * Uses the founder's ElevenLabs plan (about 1,400 characters of speech and ~4 minutes of transcription per run); Google
  * engines only when Google Cloud access works. Synthetic voices are cleaner than real elders, so treat the scores as an
  * upper bound and add real voice notes (with consent) to the set later.
  */
 import { writeFileSync } from "node:fs";
-import { languageCodeFor, speechToTextDetailed, sttOrder } from "../src/channels/voicePipeline";
+import { languageCodeFor, speakable, speechToTextDetailed, sttOrder } from "../src/channels/voicePipeline";
 
 type Case = { lang: string; text: string; must: string[][] }; // must: each inner list = accepted spellings of one key term
 
@@ -97,8 +102,29 @@ async function speak(text: string): Promise<Buffer | null> {
     return Buffer.from(await res.arrayBuffer());
 }
 
+async function medicines(names: string[]): Promise<void> {
+    const bad: string[] = [];
+    for (const name of names) {
+        const audio = await speak(speakable(`Kamla ji, ${name} ka samay ho gaya hai`));
+        if (!audio) continue;
+        const got = await speechToTextDetailed({ audioBuffer: audio, mimeType: "audio/mpeg", languageHint: "hinglish" });
+        const heard = norm(got.text).includes(norm(name).split(" ")[0]);
+        console.log(`${heard ? "✓" : "✗"} ${name} → "${got.text}"`);
+        if (!heard) bad.push(name);
+    }
+    console.log(bad.length ? `\nNot heard back: ${bad.join(", ")}. Add each to TTS_SAY_AS with a spelling that sounds right, then run again.` : "\nAll names heard back.");
+}
+
 async function main() {
     const args = process.argv.slice(2);
+    if (args.includes("--medicines")) {
+        const names = (args[args.indexOf("--medicines") + 1] || "").split(",").map((n) => n.trim()).filter(Boolean);
+        if (!args.includes("--yes")) {
+            console.log(`Would speak and transcribe ${names.length} medicine reminders. Nothing was sent. Add --yes to do it.`);
+            return;
+        }
+        return medicines(names);
+    }
     const chars = CASES.reduce((n, c) => n + c.text.length, 0);
     if (!args.includes("--yes")) {
         console.log(`Would speak ${CASES.length} messages (${chars} characters of ElevenLabs speech) and transcribe each with: ${sttOrder().join(", ")}.`);

@@ -19,7 +19,7 @@ ok("markdown stars and bullets gone", speakable("*Metformin* 500 mg\n- subah 8 b
 ok("numbered list gone", speakable("1. Pehla\n2) Doosra") === "Pehla. Doosra", speakable("1. Pehla\n2) Doosra"));
 ok("Hindi kept", speakable("दवाई ले ली? 🙂") === "दवाई ले ली?", speakable("दवाई ले ली? 🙂"));
 ok("only emoji → nothing to speak", speakable("🙏") === "");
-ok("numbers and doses kept", speakable("BP 130/80, aadhi goli") === "BP 130 by 80, aadhi goli", speakable("BP 130/80, aadhi goli"));
+ok("numbers and doses kept", speakable("BP 130/80, aadhi goli") === "B P 130 by 80, aadhi goli", speakable("BP 130/80, aadhi goli"));
 
 // every reply to a voice note is voiced: the Brain v2 path used to return text only
 const reply = { modality: "text" as const, content: "Dawai le li, bahut accha." };
@@ -58,7 +58,7 @@ ok("wantsVoice matches", wantsVoice("always", false) && !wantsVoice("never", tru
 ok("mode validation", isVoiceMode("always") && !isVoiceMode("loud") && !isVoiceMode(undefined));
 
 // spoken the way people say it, in the language it is written in
-ok("BP read as 'by'", speakable("BP 130/80 hai") === "BP 130 by 80 hai", speakable("BP 130/80 hai"));
+ok("BP read as 'by'", speakable("BP 130/80 hai") === "B P 130 by 80 hai", speakable("BP 130/80 hai"));
 ok("a date is not a BP", speakable("12/10 ko aana") === "12/10 ko aana", speakable("12/10 ko aana"));
 ok("time without leading zero", speakable("subah 08:00 baje") === "subah 8:00 baje", speakable("subah 08:00 baje"));
 ok("mg said in full", speakable("Metformin 500mg") === "Metformin 500 milligram", speakable("Metformin 500mg"));
@@ -69,6 +69,14 @@ process.env.ELEVENLABS_VOICE_IDS = JSON.stringify({ bn: "voice-bn" });
 ok("per-language voice", getTtsVoiceConfig("bn").voiceId === "voice-bn" && getTtsVoiceConfig("hi").voiceId !== "voice-bn");
 ok("wide model for languages v2 lacks", getTtsVoiceConfig("bn").modelId !== getTtsVoiceConfig("hi").modelId, [getTtsVoiceConfig("bn").modelId, getTtsVoiceConfig("hi").modelId]);
 ok("elder pace, clamped", getTtsVoiceConfig().voiceSettings.speed === 0.9);
+
+// pronunciation table: built-ins and TTS_SAY_AS, whole words only, any case
+process.env.TTS_SAY_AS = JSON.stringify({ Ecosprin: "Eko-sprin" });
+ok("say-as from env", speakable("Ecosprin le li? ecosprin khatam") === "Eko-sprin le li? Eko-sprin khatam", speakable("Ecosprin le li? ecosprin khatam"));
+ok("built-in OTP spelled", speakable("OTP bhejiye") === "O T P bhejiye");
+ok("not inside other words", speakable("BPL card") === "BPL card");
+process.env.TTS_SAY_AS = "not json";
+ok("bad table ignored", speakable("Ecosprin") === "Ecosprin");
 
 if (fail) {
     console.error(`${fail} failed`);

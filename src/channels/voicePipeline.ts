@@ -333,8 +333,29 @@ export const VOICE_SURE = 0.6;
  * Text as it should be spoken: no emoji, markdown, links or list bullets (a voice note reads them out or stumbles).
  * The full text still goes as a message next to the voice note.
  */
+/**
+ * Words a voice says wrong, and how to spell them so it says them right. Built-ins plus TTS_SAY_AS='{"Ecosprin":"Eko-sprin"}',
+ * filled in after listening to real reminders (medicine brand names are the usual ones).
+ */
+const SAY_AS: Record<string, string> = { OTP: "O T P", COD: "cash on delivery", BP: "B P", ECG: "E C G", SOS: "S O S" };
+
+function sayAs(text: string): string {
+    let extra: Record<string, string> = {};
+    try {
+        extra = JSON.parse(process.env.TTS_SAY_AS || "{}");
+    } catch {
+        extra = {};
+    }
+    let out = text;
+    for (const [word, spoken] of Object.entries({ ...SAY_AS, ...extra })) {
+        if (!word || typeof spoken !== "string") continue;
+        out = out.replace(new RegExp(`(?<![\\p{L}\\p{N}])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "giu"), spoken);
+    }
+    return out;
+}
+
 export function speakable(text: string): string {
-    return String(text ?? "")
+    return sayAs(String(text ?? ""))
         .replace(/https?:\/\/\S+/g, "")
         // BP 130/80 → "130 by 80", as it is said in India (only numbers that look like a BP, never a date)
         .replace(/\b(\d{2,3})\s*\/\s*(\d{2,3})\b/g, (m, a, b) => (+a >= 70 && +a <= 260 && +b >= 40 && +b < +a ? `${a} by ${b}` : m))
