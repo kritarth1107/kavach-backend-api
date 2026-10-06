@@ -2,10 +2,14 @@ import { Resend } from "resend";
 import config from "../config/app.config";
 import { AppError } from "../middleware/error.middleware";
 
-const resend = new Resend(config.email.resendApiKey);
+let client: Resend | null = null;
+/** Created on first send, so importing this module (tests, scripts) needs no key. */
+function resend(): Resend {
+  return (client ??= new Resend(config.email.resendApiKey));
+}
 
 export async function sendOtpEmail(email: string, code: string) {
-  const { error } = await resend.emails.send({
+  const { error } = await resend().emails.send({
     from: config.email.from,
     to: email,
     subject: `${code} is your Kavach sign-in code`,
@@ -33,7 +37,7 @@ export async function sendFamilyInviteEmail(params: {
 }) {
   const { to, inviterName, familyName, roleLabel, acceptUrl } = params;
 
-  const { error } = await resend.emails.send({
+  const { error } = await resend().emails.send({
     from: config.email.from,
     to,
     subject: `${inviterName} invited you to ${familyName} on Kavach`,
