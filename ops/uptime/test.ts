@@ -18,13 +18,21 @@ let r = decide(s, [P("backend", false)], t(0));
 ok("one failure: no alert", r.alerts.length === 0 && r.next.services.backend.fails === 1);
 r = decide(r.next, [P("backend", false)], t(5));
 ok("two failures: down alert", r.alerts.length === 1 && r.alerts[0].kind === "down" && r.alerts[0].since === t(0));
+const downState = JSON.stringify(r.next);
 r = decide(r.next, [P("backend", false)], t(10));
 ok("still down soon after: no repeat", r.alerts.length === 0);
+ok("still down: state unchanged, so nothing is written", JSON.stringify(r.next) === downState);
 r = decide(r.next, [P("backend", false)], t(5 + 6 * 60));
-ok("still down 6 h later: reminder", r.alerts.length === 1 && r.alerts[0].kind === "still_down");
-r = decide(r.next, [P("backend", true)], t(7 * 60));
-ok("recovered: up alert with duration", r.alerts.length === 1 && r.alerts[0].kind === "up" && r.alerts[0].detail.includes("7 h"), r.alerts);
+ok("6 h later: no reminder yet", r.alerts.length === 0);
+r = decide(r.next, [P("backend", false)], t(5 + 24 * 60));
+ok("a day later: one reminder", r.alerts.length === 1 && r.alerts[0].kind === "still_down");
+r = decide(r.next, [P("backend", true)], t(25 * 60));
+ok("recovered: up alert with duration", r.alerts.length === 1 && r.alerts[0].kind === "up" && r.alerts[0].detail.includes("25 h"), r.alerts);
 ok("state cleared after recovery", !r.next.services.backend.down && r.next.services.backend.fails === 0);
+ok("downtime kept for the week", r.next.services.backend.downMs === 25 * 3_600_000, r.next.services.backend);
+const fine = decide({ services: { backend: { fails: 0, down: false, downMs: 0 } } }, [P("backend", true)], t(30));
+ok("all fine: state unchanged", JSON.stringify(fine.next) === JSON.stringify({ services: { backend: { fails: 0, down: false, downMs: 0 } } }));
+ok("old stored state (per-check counters) is cleaned", JSON.stringify(decide({ services: { a: { fails: 0, down: false, checks: 5, okChecks: 5 } as never } }, [P("a", true)], t(0)).next.services.a) === '{"fails":0,"down":false,"downMs":0}');
 s = { services: {} };
 r = decide(s, [P("engine", false)], t(0));
 r = decide(r.next, [P("engine", true)], t(5));
@@ -38,12 +46,16 @@ ok("down subject names the service", mail.subject.includes("down") && mail.subje
 ok("body lists every check and next step", mail.text.includes("All checks now") && mail.text.includes("verify.sh"));
 const upMail = formatAlerts([{ kind: "up", name: "engine", label: "Saheli's brain", detail: "Back up after 2 h 0 min." }], [P("engine", true)], t(5));
 ok("recovery subject", upMail.subject.includes("recovered"));
+ok("reminder wording says once a day", alertEmail([{ kind: "down", name: "engine", label: "Saheli's brain", since: t(0), detail: "" }], [P("engine", false)], t(5)).html.includes("once a day"));
 
 // weekly check-in proves the alarm is alive
-const week = weeklySummary({ services: { backend: { fails: 0, down: false, checks: 2016, okChecks: 2010 } }, weekStart: t(0) }, t(5));
-ok("weekly uptime percent", week.text.includes("99.70% up"), week.text);
-ok("week counters reset, down state kept", resetWeek({ services: { a: { fails: 3, down: true, checks: 9, okChecks: 1 } } }, t(5)).services.a.checks === 0
-    && resetWeek({ services: { a: { fails: 3, down: true, checks: 9, okChecks: 1 } } }, t(5)).services.a.down);
+const week = weeklySummary({ services: { backend: { fails: 0, down: false, downMs: 30 * 60_000 } }, weekStart: t(0) }, t(7 * 24 * 60));
+ok("weekly uptime percent from downtime", week.text.includes("99.70% up"), week.text);
+const ongoing = { services: { a: { fails: 2, down: true, since: t(0), downMs: 60_000 } }, weekStart: t(0) };
+const reset = resetWeek(ongoing, t(60));
+ok("new week: downtime from zero, outage kept and counted from now", reset.services.a.downMs === 0 && reset.services.a.down && reset.services.a.countFrom === t(60));
+const after = decide(reset, [P("a", true)], t(90));
+ok("outage across weeks: only this week's part counted", after.next.services.a.downMs === 30 * 60_000 && after.alerts[0]?.detail.includes("1 h 30 min"), after);
 
 // the designed email (dashboard look)
 const probesNow: Probe[] = [{ name: "engine", label: "Saheli's brain (AI engine)", ok: false, status: 404, ms: 90, error: "x <b>y</b>" }, P("dashboard", true)];
@@ -56,7 +68,7 @@ ok("recovered once when together", recoveredLine([{ kind: "up", name: "a", label
     { kind: "up", name: "b", label: "B", detail: "Back up after 2 h 0 min." }]) === "Back up after 2 h 0 min");
 ok("recovered per part when different", recoveredLine([{ kind: "up", name: "a", label: "A (x)", detail: "Back up after 5 min." },
     { kind: "up", name: "b", label: "B", detail: "Back up after 2 h 0 min." }]) === "A: back after 5 min · B: back after 2 h 0 min");
-ok("weekly html bars", weeklyEmail({ services: { engine: { fails: 0, down: false, checks: 10, okChecks: 9 } }, weekStart: t(0) }, t(5)).html.includes("90.00%"));
+ok("weekly html bars", weeklyEmail({ services: { engine: { fails: 0, down: false, downMs: 60_000 } }, weekStart: t(0) }, t(10)).html.includes("90.00%"));
 ok("esc", esc(`a"<&>`) === "a&quot;&lt;&amp;&gt;");
 
 // checks against a fake network
@@ -104,7 +116,8 @@ void (async () => {
     await runChecks(env, t(65), fakeFetch);
     const back = JSON.parse(sent.find((x) => x.url.startsWith("https://api.resend.com"))?.body || "{}");
     ok("recovery email after an hour", back.subject?.includes("back up") && back.text.includes("1 h 5 min"), back.subject);
-    ok("status page has the last round", JSON.parse((await env.STATE.get("last")) || "{}").probes?.length === 3);
+    const quiet = await runChecks(env, t(70), fakeFetch);
+    ok("all fine again: nothing written", quiet.wrote === false);
     ok("no Resend key: nothing sent, no crash", (await sendEmail({ ...env, RESEND_API_KEY: undefined }, "s", "t", fakeFetch)) === false);
 
     if (fail) {

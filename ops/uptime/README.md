@@ -8,7 +8,7 @@ A Cloudflare Worker that checks, every 5 minutes, from outside Google:
 | Backend + database | `<backend>/api/health/detailed?HEALTH_SECRET=…` | 200 and `"status": "ok"` (MongoDB answers) |
 | Saheli's brain | `<engine>/health` | 200 and `"ok"` |
 
-Two failed checks in a row = down → one email (Resend), a reminder every 6 h while down, and a "recovered" email with
+Two failed checks in a row = down → one email (Resend), a reminder once a day while down, and a "recovered" email with
 how long it lasted. Monday 09:00 IST: a weekly check-in with each service's uptime, so a broken alarm is noticed too.
 No public URL (cron only). Last round: `npx wrangler kv key get last --binding STATE --remote`. Free plan is enough
 (≈ 8,700 runs/month). Deployed 2026-10-05 on account kritarth@kavach.care (workers.dev name `kavach-care`, KV `STATE`).
@@ -29,3 +29,6 @@ once — that is the alarm working.
 
 ## Test
 `npm run test:uptime` (from kavach-backend) — the decisions, emails and checks with a fake network; runs in CI.
+
+**Storage use:** the Worker writes to KV only when something changes (a failure starts, an alert goes out, a recovery,
+the Monday reset), a few writes a day; the free tier allows 1,000. `GET /status` runs a check live and saves nothing.

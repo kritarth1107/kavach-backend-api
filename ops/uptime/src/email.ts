@@ -3,7 +3,7 @@
  * markers, pill tags (saffron = down, forest green = ok), a dark pill button. Email-safe HTML: tables and inline styles,
  * Geist with system fonts as fallback (Gmail strips web fonts), no images except the hosted logo.
  */
-import { describeProbe, duration, type Alert, type Probe, type State } from "./check";
+import { clean, describeProbe, downtimeMs, duration, formatMs, uptimePct, type Alert, type Probe, type State } from "./check";
 
 export const LOGO_URL = "https://cdn.kavach.care/brand/kavach-careos-logo.png";
 const C = {
@@ -116,7 +116,7 @@ Run <span style="font-family:monospace;color:${C.ink};">golive/verify.sh</span>,
 <tr><td style="padding:4px 28px 0 28px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${serviceRows(probes, alerts)}</table></td></tr>
 ${meaning}`;
     const footer = isDown
-        ? "Checked by the Kavach monitor on Cloudflare, outside Google, so it still reaches you when Google is down. You'll get a reminder every 6 hours while it stays down, and an email when it recovers."
+        ? "Checked by the Kavach monitor on Cloudflare, outside Google, so it still reaches you when Google is down. You'll get a reminder once a day while it stays down, and an email when it recovers."
         : "Checked by the Kavach monitor on Cloudflare, outside Google.";
     return { subject, html: shell(isDown ? `${down.length} part(s) of Kavach are not answering.` : "Everything is answering again.", inner, esc(footer)) };
 }
@@ -124,8 +124,9 @@ ${meaning}`;
 /** Monday check-in: each service's uptime for the week as a dark bar, so a silent alarm is noticed. */
 export function weeklyEmail(state: State, now: string): { subject: string; html: string } {
     const labels: Record<string, string> = { dashboard: "Dashboard", backend: "Backend + database", engine: "Saheli's brain" };
-    const rows = Object.entries(state.services).map(([name, s]) => {
-        const pct = s.checks ? (100 * s.okChecks) / s.checks : 100;
+    const rows = Object.entries(state.services).map(([name, raw]) => {
+        const s = clean(raw);
+        const pct = uptimePct(s, state.weekStart, now);
         const w = Math.max(2, Math.round(pct));
         return `<tr><td style="padding:0 0 12px 0;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
@@ -133,7 +134,7 @@ export function weeklyEmail(state: State, now: string): { subject: string; html:
 <td align="right" style="font:500 13px/20px ${FONT};color:${pct >= 99.5 ? C.ink : C.accentInk};">${pct.toFixed(2)}%${s.down ? "&nbsp;&nbsp;" + pill("Down now", "down") : ""}</td></tr></table>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.card};border-radius:6px;margin-top:6px;"><tr>
 <td width="${w}%" style="background:${pct >= 99.5 ? C.forest : C.accent};height:10px;border-radius:6px;font-size:0;line-height:0;">&nbsp;</td><td style="font-size:0;line-height:0;">&nbsp;</td></tr></table>
-<div style="font:400 11px/16px ${FONT};color:${C.ink3};margin-top:4px;">${s.checks} checks</div></td></tr>`;
+<div style="font:400 11px/16px ${FONT};color:${C.ink3};margin-top:4px;">${downtimeMs(s, now) ? `Down ${formatMs(downtimeMs(s, now))} in total` : "No downtime"}</div></td></tr>`;
     }).join("");
     const inner = `<tr><td style="padding:18px 28px 4px 28px;">${heading("Weekly", "check-in")}
 <div style="font:400 12px/18px ${FONT};color:${C.ink3};margin-top:6px;">Since ${esc(state.weekStart ? ist(state.weekStart, true) : "the monitor started")}</div></td></tr>

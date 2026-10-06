@@ -2,7 +2,8 @@
  * Kavach uptime alarm: a Cloudflare Worker (outside Google, so a Google suspension can't silence it).
  * Every 5 minutes it checks the dashboard, the backend (and its database) and Saheli's engine, and emails the founder
  * through Resend when one goes down, every 6 h while it stays down, and when it recovers. Monday 09:00 IST it sends a
- * weekly check-in, so a silent alarm is noticed too. GET /status shows the last round (no secrets).
+ * weekly check-in, so a silent alarm is noticed too. GET /status runs a round now and shows it (no secrets, saves nothing).
+ * KV is written only when the state changes (a few times a day), never every round: the free tier allows 1,000 writes a day.
  *
  * Secrets (wrangler secret put): RESEND_API_KEY, HEALTH_SECRET (backend detailed health; optional).
  * Vars (wrangler.toml): ALERT_TO (comma-separated), ALERT_FROM, DASHBOARD_URL, BACKEND_URL, ENGINE_URL.
@@ -85,26 +86,29 @@ export async function sendEmail(env: Env, subject: string, text: string, fetchFn
     return res.ok;
 }
 
-async function load(env: Env): Promise<State> {
+async function loadRaw(env: Env): Promise<{ state: State; raw: string | null }> {
+    const raw = await env.STATE.get("state");
     try {
-        return JSON.parse((await env.STATE.get("state")) || "") as State;
+        return { state: JSON.parse(raw || "") as State, raw };
     } catch {
-        return { services: {} };
+        return { state: { services: {} }, raw };
     }
 }
+const load = async (env: Env) => (await loadRaw(env)).state;
 
 export async function runChecks(env: Env, now = new Date().toISOString(), fetchFn: typeof fetch = fetch) {
     const probes = await Promise.all(targets(env).map((t) => probe(t, fetchFn)));
-    const prev = await load(env);
+    const { state: prev, raw } = await loadRaw(env);
     const { next, alerts } = decide(prev, probes, now);
     if (alerts.length) {
         const mail = formatAlerts(alerts, probes, now);
         const pretty = alertEmail(alerts, probes, now);
         await sendEmail(env, pretty.subject, mail.text, fetchFn, pretty.html);
     }
-    await env.STATE.put("state", JSON.stringify({ ...next, weekStart: next.weekStart || now }));
-    await env.STATE.put("last", JSON.stringify({ at: now, probes: probes.map(({ name, ok, status, ms, error }) => ({ name, ok, status, ms, error })) }));
-    return { probes, alerts };
+    const json = JSON.stringify({ ...next, weekStart: next.weekStart || now });
+    const wrote = json !== raw;
+    if (wrote) await env.STATE.put("state", json);
+    return { probes, alerts, wrote };
 }
 
 export default {
@@ -124,6 +128,8 @@ export default {
     },
     async fetch(req: Request, env: Env) {
         if (new URL(req.url).pathname !== "/status") return new Response("Kavach uptime monitor", { status: 200 });
-        return new Response((await env.STATE.get("last")) || "{}", { headers: { "content-type": "application/json" } });
+        const probes = await Promise.all(targets(env).map((t) => probe(t)));
+        const body = { at: new Date().toISOString(), probes: probes.map(({ name, ok, status, ms, error }) => ({ name, ok, status, ms, error })), state: await load(env) };
+        return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
     },
 };
