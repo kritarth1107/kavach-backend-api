@@ -143,6 +143,18 @@ async function aiFetch(
     }
 }
 
+/** Is the engine answering? For the uptime alarm: the engine is private, so outside checks go through the backend. */
+export async function aiEngineHealth(timeoutMs = 8_000): Promise<{ ok: boolean; status?: number; ms: number; error?: string }> {
+    const started = Date.now();
+    try {
+        const res = await aiFetch("/health", { method: "GET" }, timeoutMs);
+        const body = await res.text();
+        return { ok: res.ok && body.includes('"ok"'), status: res.status, ms: Date.now() - started };
+    } catch (err) {
+        return { ok: false, ms: Date.now() - started, error: err instanceof Error ? err.message.slice(0, 120) : "failed" };
+    }
+}
+
 /**
  * Feed Saheli's care ledger (ai-engine) with what happened outside a conversation, such as a
  * reminder the scheduler sent. Best effort: a failure is logged and never blocks the caller.

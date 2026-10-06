@@ -39,7 +39,16 @@ export function targets(env: Env): Target[] {
             // detailed health says "ok" only when MongoDB answers
             expect: (status, body) => status === 200 && (!env.HEALTH_SECRET || /"status"\s*:\s*"ok"/.test(body)),
         },
-        { name: "engine", label: "Saheli's brain (AI engine)", url: `${env.ENGINE_URL}/health`, expect: (s, b) => s === 200 && b.includes('"ok"') },
+        // The engine is private (no public access allowed in the Workspace), so with the secret it is asked through
+        // the backend, which calls it with its own Google identity. A backend outage then shows on both lines.
+        env.HEALTH_SECRET
+            ? {
+                  name: "engine",
+                  label: "Saheli's brain (AI engine)",
+                  url: `${env.BACKEND_URL}/api/health/engine?HEALTH_SECRET=${encodeURIComponent(env.HEALTH_SECRET)}`,
+                  expect: (s, b) => s === 200 && /"status"\s*:\s*"ok"/.test(b),
+              }
+            : { name: "engine", label: "Saheli's brain (AI engine)", url: `${env.ENGINE_URL}/health`, expect: (s, b) => s === 200 && b.includes('"ok"') },
     ];
 }
 

@@ -66,6 +66,8 @@ const env = {
     DASHBOARD_URL: "https://app.kavach.care", BACKEND_URL: "https://be.test", ENGINE_URL: "https://en.test",
 };
 ok("backend check uses detailed health with the secret", targets(env)[1].url === "https://be.test/api/health/detailed?HEALTH_SECRET=hs");
+ok("private engine checked through the backend", targets(env)[2].url === "https://be.test/api/health/engine?HEALTH_SECRET=hs");
+ok("without the secret, the engine directly", targets({ ...env, HEALTH_SECRET: undefined })[2].url === "https://en.test/health");
 const sent: Array<{ url: string; body?: string }> = [];
 let mode: "up" | "down" = "down";
 const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -74,7 +76,7 @@ const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
     if (u.startsWith("https://api.resend.com")) return new Response("{}", { status: 200 });
     if (mode === "down" && !u.startsWith("https://app.kavach.care"))
         return new Response('{"error":{"status":"PERMISSION_DENIED","details":"CONSUMER_SUSPENDED"}}', { status: 404 });
-    if (u.includes("/api/health/detailed")) return new Response('{"status":"ok"}', { status: 200 });
+    if (u.includes("/api/health/detailed") || u.includes("/api/health/engine")) return new Response('{"status":"ok"}', { status: 200 });
     if (u.endsWith("/health")) return new Response('{"status":"ok"}', { status: 200 });
     return new Response("<html>", { status: 200 });
 }) as typeof fetch;

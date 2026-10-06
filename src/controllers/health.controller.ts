@@ -2,6 +2,7 @@ import { timingSafeEqual } from "crypto";
 import { Request, Response } from "express";
 import config from "../config/app.config";
 import { buildBasicHealthReport, buildHealthReport } from "../services/health.service";
+import { aiEngineHealth } from "../clients/aiEngine.client";
 
 function isValidHealthSecret(provided: unknown): boolean {
     const expected = config.health.secret;
@@ -14,6 +15,16 @@ function isValidHealthSecret(provided: unknown): boolean {
     }
 
     return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
+/** GET /api/health/engine?HEALTH_SECRET=…: the private engine's health, asked with the backend's own identity. */
+export async function getEngineHealth(req: Request, res: Response): Promise<void> {
+    if (!config.health.secret || !isValidHealthSecret(req.query.HEALTH_SECRET)) {
+        res.status(config.health.secret ? 401 : 503).json({ status: "error", message: "Unauthorized", checkedAt: new Date().toISOString() });
+        return;
+    }
+    const engine = await aiEngineHealth();
+    res.status(engine.ok ? 200 : 503).json({ status: engine.ok ? "ok" : "down", engine, checkedAt: new Date().toISOString() });
 }
 
 export async function getHealth(_req: Request, res: Response): Promise<void> {
