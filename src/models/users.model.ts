@@ -154,6 +154,8 @@ const userSchema = new Schema<IUserDocument>(
             status: { type: String, enum: ["pending", "done", "skipped"] },
             at: { type: Date },
         },
+        /** Last time they proved this number with a WhatsApp code (mobile sign-in). */
+        phoneVerifiedAt: { type: Date },
         preferences: {
             emailAlerts: { type: Boolean, default: true },
             pushReminders: { type: Boolean, default: true },

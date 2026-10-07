@@ -13,8 +13,8 @@ import {
 } from "../services/otp.service";
 import {
   generatePhoneOtpCode,
-  sendOtpSms,
-} from "../services/sms.service";
+  sendPhoneSignInCode,
+} from "../services/whatsappOtp.service";
 import {
   createAuthSession,
   findOrCreateEmailUser,
@@ -120,9 +120,14 @@ const otpErrorMessages = {
 } as const;
 
 
-// No SMS provider yet: the phone code is a fixed mock, so phone sign-in stays off
-// until PHONE_OTP_ENABLED=true is set alongside a real SMS service.
+// Mobile sign-in codes go on WhatsApp (approved "otp" template); on when PHONE_OTP_ENABLED=true.
 const phoneLoginEnabled = () => process.env.PHONE_OTP_ENABLED === "true";
+
+/** The number was just proven with a WhatsApp code: onboarding won't ask to verify it again. */
+async function markPhoneVerified(userId: string, context: OtpContext) {
+  if (context.channel !== "phone") return;
+  await User.updateOne({ userId, phoneKey: context.phone.key }, { $set: { phoneVerifiedAt: new Date() } });
+}
 
 const PHONE_LOGIN_DISABLED =
   "Mobile sign-in isn't available yet. Please use your email or Google.";
@@ -191,7 +196,7 @@ export const sendOtp = async (
 
     if (context.channel === "email") {
       const code = generateOtpCode();
-      const otpToken = createOtpToken("email", context.email, code);
+      const otpToken = await createOtpToken("email", context.email, code);
       await sendOtpEmail(context.email, code);
 
       res.json({
@@ -207,12 +212,12 @@ export const sendOtp = async (
     }
 
     const code = generatePhoneOtpCode();
-    const otpToken = createOtpToken("phone", context.phone.key, code);
-    await sendOtpSms(context.phone.countryCode, context.phone.number, code);
+    const otpToken = await createOtpToken("phone", context.phone.key, code);
+    await sendPhoneSignInCode(context.phone, code);
 
     res.json({
       success: true,
-      message: "Verification code sent to your mobile",
+      message: "Verification code sent on WhatsApp",
       data: {
         channel: "phone" as const,
         phone: context.phone.number,
@@ -272,6 +277,7 @@ export const verifyOtp = async (
     }
 
     await assertDashboardLoginAllowed(existingUser.userId);
+    await markPhoneVerified(existingUser.userId, context);
 
     const session = await createAuthSession(
       existingUser,
@@ -338,6 +344,7 @@ export const registerWithOtp = async (
     }
 
     await assertDashboardLoginAllowed(user.userId);
+    await markPhoneVerified(user.userId, context);
     const session = await createAuthSession(user, AuthProvider.EMAIL, req);
 
     res.status(isNewUser ? 201 : 200).json({

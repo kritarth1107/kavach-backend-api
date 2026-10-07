@@ -8,7 +8,7 @@ import {
 } from "crypto";
 import jwt from "jsonwebtoken";
 import config from "../config/app.config";
-import TokenBlacklist from "../utils/tokenBlacklist.util";
+import { AuthOtpCode } from "../models/authOtp.model";
 
 const OTP_EXPIRY = "10m";
 const OTP_EXPIRY_SECONDS = 10 * 60;
@@ -25,8 +25,6 @@ interface IOtpJwtPayload extends jwt.JwtPayload {
   enc: string;
   jti: string;
 }
-
-const attemptCounts = new Map<string, number>();
 
 function getAesKey(): Buffer {
   const secret = config.encryption.secretKey;
@@ -86,11 +84,12 @@ export function generateOtpCode(): string {
   return String(randomInt(100000, 999999));
 }
 
-export function createOtpToken(
+/** The token carries the code (encrypted); its tries and use live in the database (AuthOtpCode). */
+export async function createOtpToken(
   channel: OtpChannel,
   identifier: string,
   code: string,
-): string {
+): Promise<string> {
   const normalized =
     channel === "email" ? identifier.toLowerCase().trim() : identifier.trim();
 
@@ -102,6 +101,11 @@ export function createOtpToken(
     jti: randomBytes(16).toString("hex"),
   };
 
+  await AuthOtpCode.create({
+    jti: payload.jti,
+    channel,
+    expiresAt: new Date(Date.now() + OTP_EXPIRY_SECONDS * 1000),
+  });
   return jwt.sign(payload, config.jwt.secret, { expiresIn: OTP_EXPIRY });
 }
 
@@ -109,6 +113,10 @@ export type OtpVerifyResult =
   | { valid: true }
   | { valid: false; reason: "expired" | "invalid" | "max_attempts" | "consumed" };
 
+/**
+ * Check a code. Each try is counted before comparing (at most 5 per code, across all instances). `consume: false`
+ * (a new user who still has to give their name) leaves the code usable once more, by the registration step.
+ */
 export async function verifyOtpToken(
   channel: OtpChannel,
   identifier: string,
@@ -118,10 +126,6 @@ export async function verifyOtpToken(
 ): Promise<OtpVerifyResult> {
   const normalized =
     channel === "email" ? identifier.toLowerCase().trim() : identifier.trim();
-
-  if (await TokenBlacklist.isBlacklisted(otpToken)) {
-    return { valid: false, reason: "consumed" };
-  }
 
   let payload: IOtpJwtPayload;
   try {
@@ -144,9 +148,15 @@ export async function verifyOtpToken(
     return { valid: false, reason: "invalid" };
   }
 
-  const attempts = attemptCounts.get(payload.jti) ?? 0;
-  if (attempts >= MAX_ATTEMPTS) {
-    return { valid: false, reason: "max_attempts" };
+  const claimed = await AuthOtpCode.updateOne(
+    { jti: payload.jti, usedAt: null, tries: { $lt: MAX_ATTEMPTS }, expiresAt: { $gt: new Date() } },
+    { $inc: { tries: 1 } },
+  );
+  if (claimed.modifiedCount !== 1) {
+    const row = await AuthOtpCode.findOne({ jti: payload.jti }).lean<{ usedAt?: Date | null; tries: number }>();
+    if (!row) return { valid: false, reason: "expired" }; // issued before codes were tracked, or long gone
+    if (row.usedAt) return { valid: false, reason: "consumed" };
+    return { valid: false, reason: row.tries >= MAX_ATTEMPTS ? "max_attempts" : "expired" };
   }
 
   let decrypted: string;
@@ -157,15 +167,14 @@ export async function verifyOtpToken(
   }
 
   if (!codesMatch(decrypted, code)) {
-    attemptCounts.set(payload.jti, attempts + 1);
     return { valid: false, reason: "invalid" };
   }
 
-  attemptCounts.delete(payload.jti);
-
-  if (options.consume !== false) {
-    await TokenBlacklist.blacklistToken(otpToken, OTP_EXPIRY_SECONDS);
+  if (options.consume === false) {
+    await AuthOtpCode.updateOne({ jti: payload.jti, usedAt: null }, { $set: { tries: 0 } });
+    return { valid: true };
   }
-
+  const used = await AuthOtpCode.updateOne({ jti: payload.jti, usedAt: null }, { $set: { usedAt: new Date() } });
+  if (used.modifiedCount !== 1) return { valid: false, reason: "consumed" };
   return { valid: true };
 }

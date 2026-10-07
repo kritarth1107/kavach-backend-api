@@ -105,17 +105,30 @@ export function allow(userId: string, kind: string, perHour: number, now = Date.
     return true;
 }
 
+type AccountPhone = { phone?: { countryCode?: string; number?: string }; phoneVerifiedAt?: Date | null };
+
+/** Their own number, when they proved it with a WhatsApp code at mobile sign-in (E.164), else null. */
+export function provenPhone(u: AccountPhone | null | undefined): string | null {
+    const cc = u?.phone?.countryCode;
+    if (!u?.phoneVerifiedAt || !cc || !u.phone?.number || cc === "+99") return null; // +99: placeholder, no real number
+    return `${cc}${u.phone.number}`;
+}
+
 export async function onboardingState(userId: string) {
-    const user = await User.findOne({ userId }).lean<{ onboarding?: { status?: string }; activeFamilyId?: string; firstName?: string; lastName?: string; email?: string }>();
+    const user = await User.findOne({ userId }).lean<{ onboarding?: { status?: string }; activeFamilyId?: string; firstName?: string; lastName?: string; email?: string } & AccountPhone>();
     if (!user) throw new AppError("User not found", 404);
     const draft = await OnboardingDraft.findOne({ userId, completedAt: null }).sort({ updatedAt: -1 }).lean<{ answers?: Record<string, unknown>; step?: string }>();
     const verifications = await PhoneVerification.find({ userId, verifiedAt: { $ne: null } }).lean<Array<{ target: string; phone: string; verifiedAt: Date }>>();
+    const myPhone = provenPhone(user);
+    const verified: Record<string, { phone: string; at: Date }> = Object.fromEntries(verifications.map((v) => [v.target, { phone: v.phone, at: v.verifiedAt }]));
+    if (myPhone && !verified.self) verified.self = { phone: myPhone, at: user.phoneVerifiedAt! };
     return {
         required: user.onboarding?.status === "pending",
         status: user.onboarding?.status ?? "done",
         name: [user.firstName, user.lastName].filter(Boolean).join(" "),
         draft: draft ? { answers: draft.answers ?? {}, step: draft.step ?? "welcome" } : null,
-        verified: Object.fromEntries(verifications.map((v) => [v.target, { phone: v.phone, at: v.verifiedAt }])),
+        verified,
+        myPhone,
         saheliNumber: appConfig.whatsapp.kavachNumber,
     };
 }
@@ -152,7 +165,6 @@ const last10 = (p: string) => p.replace(/\D/g, "").slice(-10);
 export const VERIFY_TTL_MS = 60 * 60_000;
 
 export const OTP_TTL_MS = 10 * 60_000; // what the approved template's footer promises
-export const OTP_TEMPLATE = process.env.WHATSAPP_OTP_TEMPLATE || "otp";
 export const OTP_TRIES = 5;
 
 /**
@@ -179,8 +191,8 @@ export async function startVerification(userId: string, input: { target?: unknow
     const row = await PhoneVerification.create({ code: sha(code), userId, familyId, target, phoneKey: last10(p.data), phone: p.data, method, expiresAt: new Date(Date.now() + ttl) });
     if (method === "otp") {
         try {
-            const { sendMetaWhatsAppTemplate } = await import("../clients/metaWhatsApp.client");
-            await sendMetaWhatsAppTemplate({ to: p.data, templateName: OTP_TEMPLATE, languageCode: "en", bodyParameters: [code], urlButtonParameter: code });
+            const { sendWhatsAppCode } = await import("./whatsappOtp.service");
+            await sendWhatsAppCode(p.data, code);
         } catch (err) {
             await PhoneVerification.updateOne({ _id: row._id }, { $set: { expiresAt: new Date() } });
             console.warn("onboarding OTP send failed:", err instanceof Error ? err.message : err);
@@ -508,7 +520,8 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
     user.lastName = rest.join(" ") || undefined;
     const rows = await PhoneVerification.find({ userId, verifiedAt: { $ne: null } }).sort({ verifiedAt: 1 }).lean<Array<{ target: string; phoneKey: string; method?: string; verifiedAt: Date }>>();
     const verified = new Map(rows.map((v) => [v.target, v])); // the latest per target wins
-    const isVerified = (target: string, ph?: string) => !!ph && verified.get(target)?.phoneKey === last10(ph);
+    const mine = provenPhone(user); // proven at mobile sign-in
+    const isVerified = (target: string, ph?: string) => !!ph && (verified.get(target)?.phoneKey === last10(ph) || (target === "self" && !!mine && last10(mine) === last10(ph)));
     const myPhone = self ? answers.persons[0]?.phone || answers.you.phone : answers.you.phone;
     let phoneVerified = false;
     if (myPhone && isVerified("self", myPhone)) {
@@ -603,7 +616,7 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
         // Verified by a code we sent, she may write only after they message her once, so she greets them then.
         let welcome: Welcome = verifiedHere ? "waiting" : "not_verified";
         const v = verified.get(target);
-        const windowOpen = verifiedHere && v?.method !== "otp" && Date.now() - new Date(v!.verifiedAt).getTime() < 23 * 3_600_000;
+        const windowOpen = !!v && verifiedHere && v.method !== "otp" && Date.now() - new Date(v.verifiedAt).getTime() < 23 * 3_600_000;
         if (windowOpen && !self) {
             try {
                 const { sendSaheliWhatsApp } = await import("./careMemorySync.service");

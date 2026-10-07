@@ -47,6 +47,7 @@ export interface IUserPreferences {
 export interface IUser {
     /** New caregivers start "pending" and see onboarding before the dashboard; older accounts have none (= done). */
     onboarding?: { status: "pending" | "done" | "skipped"; at?: Date };
+    phoneVerifiedAt?: Date;
     userId: string;
     email: string;
     phone?: IPhone;
