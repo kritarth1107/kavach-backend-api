@@ -7,6 +7,7 @@
  */
 import express, { type Request, type Response, type Router } from "express";
 import { AdminError, loadAdmin, verifyAssertion, verifyCaller, type AdminConfig, type AdminCtx } from "./auth";
+import { loadSession, type SessionInfo } from "./login";
 import { AdminAudit, auditSig, type IAdminAudit } from "./models";
 import { can, validReason, type Permission } from "./permissions";
 
@@ -30,6 +31,7 @@ export type Deps = {
     cfg: AdminConfig;
     verifyCaller?: typeof verifyCaller;
     loadAdmin?: typeof loadAdmin;
+    loadSession?: (token: string | undefined) => Promise<SessionInfo>;
     writeAudit?: (entry: IAdminAudit) => Promise<unknown>;
 };
 
@@ -55,6 +57,7 @@ export function buildAdminRouter(defs: RouteDef[], deps: Deps): Router {
     const router = express.Router();
     const check = deps.verifyCaller ?? verifyCaller;
     const lookup = deps.loadAdmin ?? loadAdmin;
+    const session = deps.loadSession ?? ((t: string | undefined) => loadSession(t, deps.cfg));
     const write = deps.writeAudit ?? ((e: IAdminAudit) => AdminAudit.create(e));
 
     for (const def of defs) {
@@ -73,7 +76,11 @@ export function buildAdminRouter(defs: RouteDef[], deps: Deps): Router {
             };
             try {
                 await check(req.header("authorization"), deps.cfg);
-                who = { ...verifyAssertion(req.header("x-admin-assertion"), deps.cfg, { method: req.method, path: req.baseUrl + req.path }), role: "unverified" };
+                const signed = verifyAssertion(req.header("x-admin-assertion"), deps.cfg, { method: req.method, path: req.baseUrl + req.path });
+                // The person comes from the signed-in session (email code + authenticator), not from the web app's word.
+                const sess = await session(req.header("x-admin-session"));
+                if (signed.email !== "session" && signed.email !== sess.email) throw new AdminError(401, "session_mismatch");
+                who = { ...signed, email: sess.email, sessionId: sess.id, role: "unverified" };
                 admin = { ...who, role: await lookup(who.email, deps.cfg) } as AdminCtx;
                 if (!can(admin.role, def.perm)) throw new AdminError(403, "missing_permission", def.perm);
                 if (needsReason(def) && !validReason(admin.reason)) throw new AdminError(400, "reason_required");

@@ -1,6 +1,7 @@
 /** Who am I, the admin team, and the audit log. */
 import { z } from "zod";
 import { AdminError, type AdminConfig } from "../auth";
+import { endLogins, endSessions, noticeEmail, sendMail, SETUP_WINDOW_MS, type Mailer } from "../login";
 import { AdminAudit, AdminUser, auditSig, type IAdminAudit, type IAdminUser } from "../models";
 import { permissionsOf, ROLES } from "../permissions";
 import type { RouteDef } from "../router";
@@ -10,7 +11,8 @@ const emailOf = (domain: string) =>
 
 const publicAdmin = (a: IAdminUser) => ({
     email: a.email, role: a.role, active: a.active, expiresAt: a.expiresAt ?? null, addedBy: a.addedBy, addedAt: a.addedAt,
-    lastSeenAt: a.lastSeenAt ?? null, note: a.note ?? null,
+    lastSeenAt: a.lastSeenAt ?? null, note: a.note ?? null, authenticator: !!a.totpSecretEnc, authenticatorSince: a.totpEnrolledAt ?? null,
+    setupUntil: a.totpSecretEnc ? null : a.enrollUntil ?? null,
 });
 
 async function activeOwners(): Promise<number> {
@@ -18,7 +20,7 @@ async function activeOwners(): Promise<number> {
     return owners.filter((o) => !o.expiresAt || new Date(o.expiresAt) > new Date()).length;
 }
 
-export function teamRoutes(cfg: AdminConfig): RouteDef[] {
+export function teamRoutes(cfg: AdminConfig, mail: Mailer = sendMail): RouteDef[] {
     return [
         {
             method: "get", path: "/me", perm: "overview.read", action: "me.read", noAudit: true,
@@ -45,7 +47,10 @@ export function teamRoutes(cfg: AdminConfig): RouteDef[] {
                 if (expiresAt && expiresAt <= new Date()) throw new AdminError(400, "bad_input", "expiry is in the past");
                 return {
                     status: 201, target: `admin:${email}`, detail: { role },
-                    data: publicAdmin((await AdminUser.create({ email, role, note, expiresAt: expiresAt ?? null, active: true, addedBy: admin.email, addedAt: new Date() })).toObject()),
+                    data: publicAdmin((await AdminUser.create({
+                        email, role, note, expiresAt: expiresAt ?? null, active: true, addedBy: admin.email, addedAt: new Date(),
+                        enrollUntil: new Date(Date.now() + SETUP_WINDOW_MS), // they set up an authenticator at their first sign-in
+                    })).toObject()),
                 };
             },
         },
@@ -55,7 +60,7 @@ export function teamRoutes(cfg: AdminConfig): RouteDef[] {
                 const email = String(params.email || "").toLowerCase();
                 const input = z.object({
                     role: z.enum(ROLES).optional(), active: z.boolean().optional(), expiresAt: z.coerce.date().nullable().optional(),
-                    note: z.string().max(200).optional(),
+                    note: z.string().max(200).optional(), resetAuthenticator: z.literal(true).optional(),
                 }).strict().safeParse(body);
                 if (!input.success || !Object.keys(input.data).length) throw new AdminError(400, "bad_input", input.success ? "nothing to change" : input.error.issues[0]?.message);
                 const current = await AdminUser.findOne({ email }).lean<IAdminUser>();
@@ -66,9 +71,25 @@ export function teamRoutes(cfg: AdminConfig): RouteDef[] {
                 const losesOwner = current.role === "owner" && current.active
                     && ((input.data.role && input.data.role !== "owner") || input.data.active === false || input.data.expiresAt);
                 if (losesOwner && (await activeOwners()) <= 1) throw new AdminError(400, "last_owner", "There must always be one active owner.");
-                await AdminUser.updateMany({ email }, { $set: input.data });
+                const { resetAuthenticator, ...change } = input.data;
+                if (resetAuthenticator && email === admin.email) throw new AdminError(400, "cannot_change_self", "Ask another owner to reset your authenticator.");
+                // Reset (also "reopen setup" for someone who never finished): no authenticator, a new 72 h window.
+                const reset = resetAuthenticator
+                    ? { totpSecretEnc: null, totpLastStep: null, totpEnrolledAt: null, enrollUntil: new Date(Date.now() + SETUP_WINDOW_MS) }
+                    : {};
+                await AdminUser.updateMany({ email }, { $set: { ...change, ...reset } });
+                // Losing access or the authenticator ends every open session and half-done sign-in at once.
+                const cuts = change.active === false || change.role || resetAuthenticator || change.expiresAt;
+                const ended = cuts ? await endSessions({ email }, resetAuthenticator ? "authenticator_reset" : "access_changed") : 0;
+                if (cuts) await endLogins(email);
+                if (resetAuthenticator) {
+                    await mail([email], noticeEmail("Authenticator reset", [
+                        `${admin.email} reset the authenticator for ${email}. You've been signed out everywhere.`,
+                        "At your next sign-in (within 72 hours) you'll set up an authenticator app again. If you didn't expect this, tell the team.",
+                    ]));
+                }
                 const after = await AdminUser.findOne({ email }).lean<IAdminUser>();
-                return { target: `admin:${email}`, detail: { changed: Object.keys(input.data), role: after?.role, active: after?.active }, data: publicAdmin(after!) };
+                return { target: `admin:${email}`, detail: { changed: Object.keys(input.data), role: after?.role, active: after?.active, sessionsEnded: ended }, data: publicAdmin(after!) };
             },
         },
         {

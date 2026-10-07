@@ -89,7 +89,7 @@ jobs:
             --command=node --args=dist/admin/server.js \
             --port=8080 --memory=512Mi --cpu=1 --min-instances=0 --max-instances=2 --timeout=60 \
             --env-vars-file=/tmp/admin-env.yaml \
-            --set-secrets="MONGODB_URI=admin-mongodb-uri:latest,ADMIN_ASSERTION_KEY=admin-assertion-key:latest,ADMIN_AUDIT_KEY=admin-audit-key:latest,ENGINE_ADMIN_SECRET=engine-admin-secret:latest" \
+            --set-secrets="MONGODB_URI=admin-mongodb-uri:latest,ADMIN_ASSERTION_KEY=admin-assertion-key:latest,ADMIN_AUDIT_KEY=admin-audit-key:latest,ENGINE_ADMIN_SECRET=engine-admin-secret:latest,ADMIN_TOTP_KEY=admin-totp-key:latest,RESEND_API_KEY=backend-resend-api-key:latest" \
             --quiet
 
       - name: Only the admin web app may call it

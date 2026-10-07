@@ -13,6 +13,7 @@ import { auditSig, type IAdminAudit } from "../src/admin/models";
 import { can, permissionsOf, PERMISSIONS, validReason } from "../src/admin/permissions";
 import { buildAdminRouter, needsReason, type RouteDef } from "../src/admin/router";
 import { adminRoutes } from "../src/admin/routes";
+import { base32Decode, base32Encode, codeEmail, decryptSecret, encryptSecret, hashCode, hotp, noticeEmail, otpauthUrl, setupOpen, totpMatch } from "../src/admin/login";
 import { brainV2Mode } from "../src/services/brainV2.service";
 import { flaggedEnv, isSaheliPaused, validFlagValue } from "../src/services/featureFlags.service";
 
@@ -62,8 +63,12 @@ ok("replayed assertion refused", throwsCode(() => verifyAssertion(once, cfg), "r
 // config
 const throwsAny = (fn: () => unknown) => { try { fn(); return false; } catch { return true; } };
 ok("config refuses short keys", throwsAny(() => loadAdminConfig({ ADMIN_API_AUDIENCE: "x", ADMIN_WEB_SA: "y", ADMIN_ASSERTION_KEY: "short", ADMIN_AUDIT_KEY: "a".repeat(40) } as NodeJS.ProcessEnv)));
-ok("local bypass impossible in production or on Cloud Run", !loadAdminConfig({ ADMIN_INSECURE_LOCAL: "1", NODE_ENV: "production", ADMIN_API_AUDIENCE: "x", ADMIN_WEB_SA: "y", ADMIN_ASSERTION_KEY: "k".repeat(40), ADMIN_AUDIT_KEY: "a".repeat(40) } as NodeJS.ProcessEnv).insecureLocal
-    && !loadAdminConfig({ ADMIN_INSECURE_LOCAL: "1", K_SERVICE: "kavach-admin-api", ADMIN_API_AUDIENCE: "x", ADMIN_WEB_SA: "y", ADMIN_ASSERTION_KEY: "k".repeat(40), ADMIN_AUDIT_KEY: "a".repeat(40) } as NodeJS.ProcessEnv).insecureLocal);
+const keys = { ADMIN_ASSERTION_KEY: "k".repeat(40), ADMIN_AUDIT_KEY: "a".repeat(40), ADMIN_TOTP_KEY: "t".repeat(40) };
+ok("local bypass impossible in production or on Cloud Run", !loadAdminConfig({ ADMIN_INSECURE_LOCAL: "1", NODE_ENV: "production", ADMIN_API_AUDIENCE: "x", ADMIN_WEB_SA: "y", ...keys } as NodeJS.ProcessEnv).insecureLocal
+    && !loadAdminConfig({ ADMIN_INSECURE_LOCAL: "1", K_SERVICE: "kavach-admin-api", ADMIN_API_AUDIENCE: "x", ADMIN_WEB_SA: "y", ...keys } as NodeJS.ProcessEnv).insecureLocal);
+ok("authenticator key required outside local", throwsAny(() => loadAdminConfig({ ADMIN_API_AUDIENCE: "x", ADMIN_WEB_SA: "y", ADMIN_ASSERTION_KEY: "k".repeat(40), ADMIN_AUDIT_KEY: "a".repeat(40) } as NodeJS.ProcessEnv)));
+ok("caller check can't be turned off on Cloud Run by accident", throwsAny(() => loadAdminConfig({ ADMIN_CALLER_CHECK: "off", K_SERVICE: "kavach-admin-api", ...keys } as NodeJS.ProcessEnv))
+    && loadAdminConfig({ ADMIN_CALLER_CHECK: "off", ...keys } as NodeJS.ProcessEnv).callerCheck === "off");
 
 // audit signature
 const entry = { at: new Date("2026-10-07T10:00:00Z"), admin: "kritarth@kavach.care", role: "owner", action: "family.view", method: "GET", path: "/admin/v1/families/f1", result: "ok", status: 200 } as Omit<IAdminAudit, "sig">;
@@ -80,6 +85,33 @@ ok("brain mode reads the console's live list", brainV2Mode("fam1", flaggedEnv({ 
 ok("paused family detected", isSaheliPaused("f1", { "saheli.pausedFamilies": ["f1"] }) && !isSaheliPaused("f2", { "saheli.pausedFamilies": ["f1"] }));
 ok("flag values validated", validFlagValue("brain.mode", "live") && !validFlagValue("brain.mode", "on") && validFlagValue("saheli.pausedFamilies", ["abc-1"])
     && !validFlagValue("saheli.pausedFamilies", ["bad id!"]) && validFlagValue("connectors.mcpFirst", false) && validFlagValue("brain.mode", null));
+
+// sign-in: authenticator codes (RFC 6238 test vectors), secrets encrypted at rest, codes hashed
+const rfc = Buffer.from("12345678901234567890");
+ok("TOTP matches RFC 6238 vectors (SHA-1)", hotp(rfc, Math.floor(59 / 30), 8) === "94287082" && hotp(rfc, Math.floor(1111111109 / 30), 8) === "07081804" && hotp(rfc, Math.floor(20000000000 / 30), 8) === "65353130");
+ok("base32 round trip", base32Decode(base32Encode(rfc)).equals(rfc) && base32Encode(Buffer.from("foobar")) === "MZXW6YTBOI");
+const sec = base32Encode(rfc);
+const nowMs = 1_791_000_000_000;
+const cur = hotp(rfc, Math.floor(nowMs / 30_000));
+ok("current code accepted, ±30 s allowed", totpMatch(sec, cur, nowMs) === Math.floor(nowMs / 30_000) && totpMatch(sec, hotp(rfc, Math.floor(nowMs / 30_000) - 1), nowMs) !== null);
+ok("old code (2 min) refused", totpMatch(sec, hotp(rfc, Math.floor(nowMs / 30_000) - 4), nowMs) === null && totpMatch(sec, "12345", nowMs) === null);
+const enc = encryptSecret(cfg, sec, "k@kavach.care");
+ok("authenticator secret encrypted at rest", !enc.includes(sec) && decryptSecret(cfg, enc, "k@kavach.care") === sec);
+const refused = (f: () => unknown) => { try { f(); return false; } catch { return true; } };
+ok("tampered secret refused", refused(() => decryptSecret(cfg, enc.slice(0, -2) + (enc.endsWith("A") ? "BB" : "AA"), "k@kavach.care")));
+ok("a secret can't be moved to another admin", refused(() => decryptSecret(cfg, enc, "x@kavach.care")));
+const withKey = { ...cfg, totpKey: "t".repeat(40) };
+const encK = encryptSecret(withKey, sec, "k@kavach.care");
+ok("own authenticator key (not the audit key)", refused(() => decryptSecret(cfg, encK, "k@kavach.care")) && decryptSecret(withKey, encK, "k@kavach.care") === sec);
+ok("old key still reads secrets while rotating", decryptSecret({ ...cfg, totpKey: "n".repeat(40), totpKeyPrevious: "t".repeat(40) }, encK, "k@kavach.care") === sec
+    && refused(() => decryptSecret({ ...cfg, totpKey: "n".repeat(40) }, encK, "k@kavach.care")));
+const soon = new Date(Date.now() + 3_600_000), past = new Date(Date.now() - 1000);
+ok("setup only inside the window, never over an existing authenticator", setupOpen({ enrollUntil: soon }) && !setupOpen({ enrollUntil: past }) && !setupOpen({ enrollUntil: null })
+    && !setupOpen({}) && !setupOpen({ enrollUntil: soon, totpSecretEnc: "x" }));
+ok("login codes stored only as keyed hashes", hashCode(cfg, "a@kavach.care", "123456") !== hashCode(cfg, "b@kavach.care", "123456") && !hashCode(cfg, "a@kavach.care", "123456").includes("123456"));
+ok("otpauth link for authenticator apps", otpauthUrl("k@kavach.care", sec).startsWith("otpauth://totp/Kavach%20Admin%3Ak%40kavach.care?secret=") && otpauthUrl("k@kavach.care", sec).includes("issuer=Kavach%20Admin"));
+ok("code email: code in the body only, never the subject", codeEmail("042917").html.includes(">0<") && codeEmail("042917").text.includes("042917") && !codeEmail("042917").subject.includes("042917"));
+ok("notice email escapes what it shows", noticeEmail("Authenticator set up", ["<b>x</b>"]).html.includes("&lt;b&gt;x&lt;/b&gt;"));
 
 // every real route is declared properly
 const routes = adminRoutes(cfg);
@@ -114,8 +146,10 @@ const fakeDefs: RouteDef[] = [
     { method: "get", path: "/q", perm: "users.read", action: "q.read", handler: async ({ query }) => ({ data: { q: query.q ?? null } }) },
     { method: "get", path: "/boom", perm: "users.read", action: "x.boom", handler: async () => { throw new Error("db down"); } },
 ];
+const sessions: Record<string, string> = { "sess-owner-000000000000000000000000": "kritarth@kavach.care", "sess-help-0000000000000000000000000": "help@kavach.care", "sess-stranger-000000000000000000000": "stranger@kavach.care" };
 const app = express().use(express.json()).use("/admin/v1", buildAdminRouter(fakeDefs, {
     cfg,
+    loadSession: async (t) => { const email = sessions[t || ""]; if (!email) throw new AdminError(401, "not_signed_in"); return { id: `id-${email}`, email, createdAt: new Date() }; },
     verifyCaller: async (h) => { if (h !== "Bearer good") throw new AdminError(403, "caller_not_allowed"); return cfg.webServiceAccount; },
     loadAdmin: async (email) => { const r = roles[email]; if (!r) throw new AdminError(403, "not_an_admin"); return r as never; },
     writeAudit: async (e) => { if (auditDown) throw new Error("audit store down"); audits.push(e); },
@@ -137,7 +171,8 @@ void (async () => {
         fetch(base + path, {
             method: init.method || "GET",
             headers: { authorization: init.caller ?? "Bearer good", "content-type": "application/json", ...(init.headers || {}),
-                ...(init.who !== "" ? { "x-admin-assertion": assertion({ sub: init.who || "kritarth@kavach.care", reason: init.reason, m: init.method || "GET", p: `/admin/v1${init.boundTo ?? path.split("?")[0]}` }) } : {}) },
+                ...(init.who !== "" ? { "x-admin-assertion": assertion({ sub: "session", reason: init.reason, m: init.method || "GET", p: `/admin/v1${init.boundTo ?? path.split("?")[0]}` }) } : {}),
+                ...(init.who !== "" ? { "x-admin-session": init.who === "help@kavach.care" ? "sess-help-0000000000000000000000000" : init.who === "stranger@kavach.care" ? "sess-stranger-000000000000000000000" : init.who === "nobody" ? "" : "sess-owner-000000000000000000000000" } : {}) },
             body: init.method && init.method !== "GET" ? "{}" : undefined,
         });
 
@@ -151,6 +186,8 @@ void (async () => {
     r = await call("/x", { who: "stranger@kavach.care" });
     ok("not an admin refused", r.status === 403 && (await r.json()).error === "not_an_admin");
     ok("refusal names who tried", audits.at(-1)?.admin === "stranger@kavach.care" && audits.at(-1)?.result === "denied", audits.at(-1));
+    r = await call("/x", { who: "nobody" });
+    ok("no session → not signed in", r.status === 401 && (await r.json()).error === "not_signed_in");
     r = await call("/x", { boundTo: "/secret" });
     ok("assertion signed for another path refused", r.status === 401 && (await r.json()).error === "assertion_not_for_this_request");
     r = await call("/secret", { who: "help@kavach.care", reason: "looking at chat" });

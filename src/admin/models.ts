@@ -15,6 +15,12 @@ export interface IAdminUser {
     addedAt: Date;
     lastSeenAt?: Date | null;
     note?: string;
+    /** Authenticator (TOTP) secret, AES-256-GCM encrypted; pending until the first code confirms it. */
+    totpSecretEnc?: string | null;
+    /** Until when this admin may set up an authenticator (opened when added or reset). */
+    enrollUntil?: Date | null;
+    totpLastStep?: number | null;
+    totpEnrolledAt?: Date | null;
 }
 
 const adminUserSchema = new Schema<IAdminUser>(
@@ -27,6 +33,10 @@ const adminUserSchema = new Schema<IAdminUser>(
         addedAt: { type: Date, default: () => new Date() },
         lastSeenAt: { type: Date, default: null },
         note: { type: String, maxlength: 200 },
+        totpSecretEnc: { type: String, default: null },
+        enrollUntil: { type: Date, default: null },
+        totpLastStep: { type: Number, default: null },
+        totpEnrolledAt: { type: Date, default: null },
     },
     { collection: "admin_users", versionKey: false },
 );

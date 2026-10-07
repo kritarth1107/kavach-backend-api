@@ -9,6 +9,7 @@ import express from "express";
 import { connectDB } from "../config/db";
 import { loadAdminConfig, seedOwner } from "./auth";
 import { adminRoutes } from "./routes";
+import { buildAuthRouter } from "./authRoutes";
 import { buildAdminRouter } from "./router";
 
 const cfg = loadAdminConfig();
@@ -27,6 +28,7 @@ app.use((_req, res, next) => {
 });
 app.use(express.json({ limit: "100kb" }));
 app.get("/admin/healthz", (_req, res) => res.json({ ok: true }));
+app.use("/admin/v1/auth", buildAuthRouter(cfg));
 app.use("/admin/v1", buildAdminRouter(adminRoutes(cfg), { cfg }));
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
 
