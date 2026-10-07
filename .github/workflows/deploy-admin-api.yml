@@ -1,0 +1,93 @@
+name: Deploy admin API to GCP Cloud Run
+
+# The admin API is its own Cloud Run service (kavach-admin-api) with its own service account and secrets.
+# Private: only the admin web app's service account may call it (IAM invoker), never allUsers.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/admin/**"
+      - "src/models/**"
+      - "src/types/**"
+      - "src/config/**"
+      - "scripts/test-admin.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-admin-api.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-admin-api
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  GCP_REGION: asia-south1
+  ARTIFACT_REPO: kavach
+  SERVICE: kavach-admin-api
+  API_SA: kavach-admin-api@kavach-care.iam.gserviceaccount.com
+  WEB_SA: kavach-admin-web@kavach-care.iam.gserviceaccount.com
+  AUDIENCE: https://kavach-admin-api-303943038694.asia-south1.run.app
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Tests (type check + admin locks, roles, audit, isolation)
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit -p .
+          npm run test:admin
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build, push, and deploy
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
+          docker build -t "$IMAGE:${{ github.sha }}" .
+          docker push "$IMAGE:${{ github.sha }}"
+          gcloud run deploy ${{ env.SERVICE }} \
+            --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.GCP_REGION }} --platform=managed \
+            --image="$IMAGE:${{ github.sha }}" \
+            --no-allow-unauthenticated \
+            --service-account=${{ env.API_SA }} \
+            --command=node --args=dist/admin/server.js \
+            --port=8080 --memory=512Mi --cpu=1 --min-instances=0 --max-instances=2 --timeout=60 \
+            --set-env-vars="NODE_ENV=production,ADMIN_WEB_SA=${{ env.WEB_SA }},ADMIN_API_AUDIENCE=${{ env.AUDIENCE }},ADMIN_OWNER_EMAIL=kritarth@kavach.care,ADMIN_ALLOWED_DOMAIN=kavach.care" \
+            --set-secrets="MONGODB_URI=admin-mongodb-uri:latest,ADMIN_ASSERTION_KEY=admin-assertion-key:latest,ADMIN_AUDIT_KEY=admin-audit-key:latest" \
+            --quiet
+
+      - name: Only the admin web app may call it
+        run: |
+          set -euo pipefail
+          POLICY=$(gcloud run services get-iam-policy ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --format=json)
+          echo "$POLICY" | python3 -c "
+          import json, sys
+          p = json.load(sys.stdin)
+          inv = [m for b in p.get('bindings', []) if b['role'] == 'roles/run.invoker' for m in b['members']]
+          bad = [m for m in inv if m != 'serviceAccount:${{ env.WEB_SA }}']
+          print('invokers:', inv)
+          sys.exit('::error::unexpected invokers: %s' % bad if bad else 0)"
+
+      - name: Smoke test (refuses an unauthenticated call)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' "${{ env.AUDIENCE }}/admin/healthz")
+          echo "unauthenticated healthz: $code"
+          [ "$code" = "403" ] || [ "$code" = "401" ] || { echo "::error::admin API answered an unauthenticated call ($code)"; exit 1; }
