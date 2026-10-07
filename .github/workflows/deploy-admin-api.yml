@@ -65,6 +65,22 @@ jobs:
           IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
           docker build -t "$IMAGE:${{ github.sha }}" .
           docker push "$IMAGE:${{ github.sha }}"
+          # The console shows what the family backend actually runs with: mirror its Saheli switches' env values
+          # (console-set switches still override them, exactly as in the backend).
+          gcloud run services describe kavach-backend --region=${{ env.GCP_REGION }} --format=json > /tmp/backend.json
+          python3 - <<'PY'
+          import json
+          e = {x["name"]: x.get("value") for x in json.load(open("/tmp/backend.json"))["spec"]["template"]["spec"]["containers"][0].get("env", []) if "value" in x}
+          env = {
+              "NODE_ENV": "production", "ADMIN_WEB_SA": "${{ env.WEB_SA }}", "ADMIN_API_AUDIENCE": "${{ env.AUDIENCE }}",
+              "ADMIN_OWNER_EMAIL": "kritarth@kavach.care", "ADMIN_ALLOWED_DOMAIN": "kavach.care",
+              "ENGINE_URL": "https://kawach-ai-engine-303943038694.asia-south1.run.app", "BACKEND_URL": "https://kavach-backend-303943038694.asia-south1.run.app",
+          }
+          for k in ("BRAIN_V2", "BRAIN_V2_LIVE_FAMILIES", "MCP_AGENT_CONNECTOR"):
+              if e.get(k): env[k] = e[k]
+          with open("/tmp/admin-env.yaml", "w") as f:
+              for k, v in env.items(): f.write(f"{k}: {json.dumps(v)}\n")
+          PY
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.GCP_REGION }} --platform=managed \
             --image="$IMAGE:${{ github.sha }}" \
@@ -72,7 +88,7 @@ jobs:
             --service-account=${{ env.API_SA }} \
             --command=node --args=dist/admin/server.js \
             --port=8080 --memory=512Mi --cpu=1 --min-instances=0 --max-instances=2 --timeout=60 \
-            --set-env-vars="NODE_ENV=production,ADMIN_WEB_SA=${{ env.WEB_SA }},ADMIN_API_AUDIENCE=${{ env.AUDIENCE }},ADMIN_OWNER_EMAIL=kritarth@kavach.care,ADMIN_ALLOWED_DOMAIN=kavach.care,ENGINE_URL=https://kawach-ai-engine-303943038694.asia-south1.run.app,BACKEND_URL=https://kavach-backend-303943038694.asia-south1.run.app" \
+            --env-vars-file=/tmp/admin-env.yaml \
             --set-secrets="MONGODB_URI=admin-mongodb-uri:latest,ADMIN_ASSERTION_KEY=admin-assertion-key:latest,ADMIN_AUDIT_KEY=admin-audit-key:latest,ENGINE_ADMIN_SECRET=engine-admin-secret:latest" \
             --quiet
 
