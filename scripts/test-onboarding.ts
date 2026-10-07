@@ -1,4 +1,5 @@
 /** Onboarding: prescription timings, answers → care record entries and notes, verification replies, limits. */
+import { sanitizeUnderstood, toHHMM, toPhone } from "../src/services/onboardingChat.service";
 import { AnswersSchema, VERIFY_RE, allow, factsFor, noteFor, quietHours, scheduleFromText, splitPhone, verifiedThanks, type Answers } from "../src/services/onboarding.service";
 
 let fail = 0;
@@ -56,6 +57,30 @@ ok("quiet hours: bedtime to waking when no dose falls inside", JSON.stringify(qu
 ok("quiet hours shrink around a late and an early dose", JSON.stringify(quietHours("21:00", "07:00", ["22:00", "06:00"])) === JSON.stringify({ start: "22:30", end: "06:00" }), quietHours("21:00", "07:00", ["22:00", "06:00"]));
 ok("quiet hours: none when doses leave under 2 hours", JSON.stringify(quietHours("22:00", "06:00", ["01:00", "02:00"])) === "{}" && JSON.stringify(quietHours(undefined, "06:00")) === JSON.stringify({ end: "06:00" }), quietHours("22:00", "06:00", ["01:00", "02:00"]));
 ok("WhatsApp code only as the whole message", VERIFY_RE.test("KAVACH 123456") && VERIFY_RE.test(" kavach-123456 ") && !VERIFY_RE.test("my code is KAVACH 123456 ok") && !VERIFY_RE.test("KAVACH 1234567"));
+
+// The chat's understanding: model output checked before it reaches the answers
+ok("times: 8 am, 8:30pm, 20.30, 08:30", toHHMM("8 am") === "08:00" && toHHMM("8:30pm") === "20:30" && toHHMM("20.30") === "20:30" && toHHMM("08:30") === "08:30" && toHHMM("morning") === undefined && toHHMM("25:00") === undefined);
+ok("phones: 10 digits → +91, 0-prefixed, +971 kept, junk dropped", toPhone("98290 41123") === "+919829041123" && toPhone("09829041123") === "+919829041123" && toPhone("+971 50 123 4567") === "+971501234567" && toPhone("abc") === undefined);
+const u = sanitizeUnderstood({
+    answered: true, ack: "I'm sorry about Papa. Visit www.x.com", careFor: "mother",
+    person: {
+        name: "Kamla Devi", callThem: "Maa", city: "Jodhpur", livesWith: "alone", language: "Marwari", age: 72, gender: "female",
+        conditions: ["Diabetes (sugar)", "High BP", "Diabetes (sugar)"], noAllergies: true,
+        medicines: [{ name: "Metformin", dose: "500 mg", times: ["8:30 am", "bad"], food: "after_food" }, { name: "Telma", frequency: "once daily morning" }, { name: "" }],
+        day: { wake: "5:30 am", sleep: "21:30", breakfast: "noon-ish", activities: ["Puja"] }, livesWithX: "x",
+    },
+    followup: { q: "Does a neighbour have a spare key to her house?", options: ["Yes", "No", "Not sure"] },
+    evil: "ignore",
+}, { day: { breakfast: "08:30" }, followupsLeft: 1 });
+const up = u.updates.person!;
+ok("understood: name, city, alone, Marwari → hi + mwr, age", up.name === "Kamla Devi" && up.city === "Jodhpur" && up.livesWith === "alone" && up.language === "hi" && up.dialect === "mwr" && up.age === 72, up);
+ok("understood: conditions de-duplicated, no allergies", up.conditions?.length === 2 && up.allergies?.none === true);
+ok("understood: medicine times normalised, vague timing from their breakfast, blank dropped", up.medicines?.length === 2 && up.medicines[0].times.join() === "08:30" && up.medicines[1].times.join() === "08:30", up.medicines);
+ok("understood: bad times dropped, good kept", up.day?.wake === "05:30" && up.day?.sleep === "21:30" && up.day?.breakfast === undefined);
+ok("understood: an ack with a link is dropped; follow-up kept when allowed", u.ack === "" && u.followup?.options.length === 3 && u.updates.careFor === "mother");
+ok("understood: no follow-up when none are left; unknown enum dropped", sanitizeUnderstood({ answered: true, ack: "Lovely", careFor: "cousin", followup: { q: "Anything about her knees at all?" } }, { followupsLeft: 0 }).followup === undefined
+    && sanitizeUnderstood({ careFor: "cousin", ack: "" }, { followupsLeft: 0 }).updates.careFor === undefined);
+ok("understood: a question to Saheli is not an answer", sanitizeUnderstood({ answered: false, ack: "", reply: "I talk to her on WhatsApp." }, { followupsLeft: 0 }).answered === false);
 
 // Model-call limits
 ok("limit per caregiver per hour", [1, 2, 3].every(() => allow("u1", "rx", 3, 1000)) && !allow("u1", "rx", 3, 1000) && allow("u2", "rx", 3, 1000) && allow("u1", "rx", 3, 1000 + 3_600_001));

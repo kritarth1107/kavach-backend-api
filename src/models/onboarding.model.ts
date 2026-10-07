@@ -9,6 +9,9 @@ export interface IOnboardingDraft {
     familyId: string;
     answers: Record<string, unknown>;
     step: string;
+    /** The onboarding chat so far (Saheli's and their messages) and where it stands, to pick up after a refresh. */
+    chat?: unknown[];
+    flow?: Record<string, unknown>;
     completedAt?: Date | null;
     result?: Record<string, unknown> | null;
     updatedAt?: Date;
@@ -21,6 +24,8 @@ const draftSchema = new Schema<IOnboardingDraft>(
         familyId: { type: String, required: true },
         answers: { type: Schema.Types.Mixed, default: {} },
         step: { type: String, default: "welcome" },
+        chat: { type: [Schema.Types.Mixed], default: undefined },
+        flow: { type: Schema.Types.Mixed, default: undefined },
         completedAt: { type: Date, default: null },
         result: { type: Schema.Types.Mixed, default: null },
     },

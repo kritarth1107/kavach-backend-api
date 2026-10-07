@@ -85,7 +85,7 @@ export const AnswersSchema = z.object({
     persons: z.array(PersonSchema).min(1).max(2),
     helpWith: z.array(z.string().trim().max(30)).max(10).default([]),
     emergency: z.object({ name: z.string().trim().max(80).optional(), phone: z.string().trim().max(20).optional(), relation: z.string().trim().max(40).optional() }).optional(),
-    followups: z.array(z.object({ q: z.string().max(300), a: z.string().max(500) })).max(5).default([]),
+    followups: z.array(z.object({ q: z.string().max(300), a: z.string().max(500) })).max(12).default([]),
     anythingElse: z.string().trim().max(1500).optional(),
 });
 export type Answers = z.infer<typeof AnswersSchema>;
@@ -117,7 +117,7 @@ export function provenPhone(u: AccountPhone | null | undefined): string | null {
 export async function onboardingState(userId: string) {
     const user = await User.findOne({ userId }).lean<{ onboarding?: { status?: string }; activeFamilyId?: string; firstName?: string; lastName?: string; email?: string } & AccountPhone>();
     if (!user) throw new AppError("User not found", 404);
-    const draft = await OnboardingDraft.findOne({ userId, completedAt: null }).sort({ updatedAt: -1 }).lean<{ answers?: Record<string, unknown>; step?: string }>();
+    const draft = await OnboardingDraft.findOne({ userId, completedAt: null }).sort({ updatedAt: -1 }).lean<{ answers?: Record<string, unknown>; step?: string; chat?: unknown[]; flow?: Record<string, unknown> }>();
     const verifications = await PhoneVerification.find({ userId, verifiedAt: { $ne: null } }).lean<Array<{ target: string; phone: string; verifiedAt: Date }>>();
     const myPhone = provenPhone(user);
     const verified: Record<string, { phone: string; at: Date }> = Object.fromEntries(verifications.map((v) => [v.target, { phone: v.phone, at: v.verifiedAt }]));
@@ -126,14 +126,14 @@ export async function onboardingState(userId: string) {
         required: user.onboarding?.status === "pending",
         status: user.onboarding?.status ?? "done",
         name: [user.firstName, user.lastName].filter(Boolean).join(" "),
-        draft: draft ? { answers: draft.answers ?? {}, step: draft.step ?? "welcome" } : null,
+        draft: draft ? { answers: draft.answers ?? {}, step: draft.step ?? "welcome", chat: draft.chat ?? [], flow: draft.flow ?? {} } : null,
         verified,
         myPhone,
         saheliNumber: appConfig.whatsapp.kavachNumber,
     };
 }
 
-async function familyOf(userId: string): Promise<string> {
+export async function familyOf(userId: string): Promise<string> {
     const user = await User.findOne({ userId }).lean<{ activeFamilyId?: string; primaryFamilyId?: string }>();
     const familyId = user?.activeFamilyId || user?.primaryFamilyId;
     if (!familyId) throw new AppError("No family yet; sign in again", 409);
@@ -143,13 +143,23 @@ async function familyOf(userId: string): Promise<string> {
     return familyId;
 }
 
-/** Saved after every answer; nothing is set up until completeOnboarding. */
-export async function saveDraft(userId: string, input: { answers: unknown; step?: unknown }) {
+/** Saved after every answer (the answers, the chat so far and where it is); nothing is set up until completeOnboarding. */
+export async function saveDraft(userId: string, input: { answers: unknown; step?: unknown; chat?: unknown; flow?: unknown }) {
     const familyId = await familyOf(userId);
     const answers = input.answers && typeof input.answers === "object" ? (input.answers as Record<string, unknown>) : {};
     if (JSON.stringify(answers).length > 60_000) throw new AppError("Too much to save at once", 413);
     const step = typeof input.step === "string" ? input.step.slice(0, 60) : "welcome";
-    await OnboardingDraft.updateOne({ userId, completedAt: null }, { $set: { familyId, answers, step } }, { upsert: true });
+    const set: Record<string, unknown> = { familyId, answers, step };
+    if (Array.isArray(input.chat)) {
+        const chat = input.chat.slice(-200);
+        if (JSON.stringify(chat).length > 120_000) throw new AppError("The conversation is too long to save", 413);
+        set.chat = chat;
+    }
+    if (input.flow && typeof input.flow === "object") {
+        if (JSON.stringify(input.flow).length > 20_000) throw new AppError("Too much to save at once", 413);
+        set.flow = input.flow;
+    }
+    await OnboardingDraft.updateOne({ userId, completedAt: null }, { $set: set }, { upsert: true });
     return { saved: true };
 }
 
@@ -480,7 +490,7 @@ async function welcomeText(p: Person, speech: SpeechProfile, meds: string[]): Pr
  */
 export type Welcome = "sent" | "waiting" | "not_verified" | "failed";
 export type SetupResult = {
-    persons: Array<{ userId: string; name: string; addressAs: string; language: string; reminders: Array<{ name: string; times: string[] }>; checkins: string[]; verified: boolean; welcomeSent: boolean; welcome: Welcome; problems: string[] }>;
+    persons: Array<{ userId: string; name: string; addressAs: string; language: string; reminders: Array<{ name: string; times: string[] }>; checkins: string[]; verified: boolean; welcomeSent: boolean; welcome: Welcome; welcomeText?: string; problems: string[] }>;
     caregiver: { name: string; phoneVerified: boolean };
 };
 
@@ -574,7 +584,7 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
                 problems.push("voice and language settings");
             }
         }
-        const checkins = answers.helpWith.includes("checkins") || answers.helpWith.includes("company") ? ["morning", "evening"] : [];
+        const checkins = ["checkins", "company", "mood"].some((h) => answers.helpWith.includes(h)) ? ["morning", "evening"] : [];
         const quiet = quietHours(p.day.sleep, p.day.wake, p.medicines.flatMap((m) => m.times));
         try {
             const { updateCompanionProfile } = await import("./saheliCompanion.service");
@@ -615,6 +625,7 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
         // Saheli says hello only when they verified by messaging her: that message opened WhatsApp's 24-hour window.
         // Verified by a code we sent, she may write only after they message her once, so she greets them then.
         let welcome: Welcome = verifiedHere ? "waiting" : "not_verified";
+        let hello: string | undefined;
         const v = verified.get(target);
         const windowOpen = !!v && verifiedHere && v.method !== "otp" && Date.now() - new Date(v.verifiedAt).getTime() < 23 * 3_600_000;
         if (windowOpen && !self) {
@@ -622,6 +633,7 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
                 const { sendSaheliWhatsApp } = await import("./careMemorySync.service");
                 const text = await welcomeText(p, speech, reminders.map((r) => r.name));
                 welcome = (await sendSaheliWhatsApp({ familyId, recipientUserId: subject, toUserId: subject, text })).delivered ? "sent" : "failed";
+                if (welcome === "sent") hello = text;
             } catch {
                 welcome = "failed";
             }
@@ -629,7 +641,7 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
         }
         result.persons.push({
             userId: subject, name: p.name, addressAs, language: speechLabel(speech),
-            reminders, checkins, verified: verifiedHere, welcomeSent: welcome === "sent", welcome, problems: [...new Set(problems)],
+            reminders, checkins, verified: verifiedHere, welcomeSent: welcome === "sent", welcome, welcomeText: hello, problems: [...new Set(problems)],
         });
     }
 
