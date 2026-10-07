@@ -23,7 +23,7 @@ export type OutboundDelivery = {
     channelIdentifier: string;
     delivered: boolean;
     /** Set when delivery was skipped/failed; "invalid_recipient" is terminal (placeholder number). */
-    reason?: "invalid_recipient" | "send_failed";
+    reason?: "invalid_recipient" | "send_failed" | "paused";
     /** WhatsApp message ids (wamid…) of what was sent, when the provider returned them. */
     messageIds?: string[];
 };
@@ -75,6 +75,9 @@ export async function deliverOutboundMessage(payload: {
     whatsappPayloads?: MetaWhatsAppPayload[];
     /** Send as a WhatsApp reply quoting this earlier message (Cloud API `context.message_id`). */
     replyToMessageId?: string;
+    /** "proactive" = Saheli starts it (reminders, nudges, outreach): held back while the family is paused from the
+     *  admin console. "alert" = caregiver alerts, never held back. */
+    purpose?: "proactive" | "alert";
 }): Promise<OutboundDelivery> {
     const record = {
         messageId: randomUUID(),
@@ -86,6 +89,16 @@ export async function deliverOutboundMessage(payload: {
         direction: "outbound" as const,
         deliveredAt: new Date(),
     };
+
+    if (payload.purpose === "proactive" && payload.channel !== "dashboard") {
+        const { flagsLoadedAt, isSaheliPaused, refreshFlags } = await import("./featureFlags.service");
+        // Right after a start the switches may not be loaded yet: load them once before deciding.
+        if (!flagsLoadedAt()) await refreshFlags().catch(() => undefined);
+        if (isSaheliPaused(payload.familyId)) {
+            // Nothing was sent, so nothing is recorded as a send (and it never counts as a failed send).
+            return { channel: "dashboard", channelIdentifier: "dashboard", delivered: false, reason: "paused" };
+        }
+    }
 
     if (payload.channel === "dashboard") {
         await OutboundMessage.create(record);

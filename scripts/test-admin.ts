@@ -13,6 +13,8 @@ import { auditSig, type IAdminAudit } from "../src/admin/models";
 import { can, permissionsOf, PERMISSIONS, validReason } from "../src/admin/permissions";
 import { buildAdminRouter, needsReason, type RouteDef } from "../src/admin/router";
 import { adminRoutes } from "../src/admin/routes";
+import { brainV2Mode } from "../src/services/brainV2.service";
+import { flaggedEnv, isSaheliPaused, validFlagValue } from "../src/services/featureFlags.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -49,7 +51,9 @@ ok("missing assertion refused", throwsCode(() => verifyAssertion(undefined, cfg)
 ok("wrong key refused", throwsCode(() => verifyAssertion(jwt.sign({ sub: "x@kavach.care", jti: "j" }, "z".repeat(40), { algorithm: "HS256", audience: "kavach-admin-api", issuer: "kavach-admin-web", expiresIn: 60 }), cfg), "bad_admin_assertion"));
 ok("wrong audience refused", throwsCode(() => verifyAssertion(assertion({}, { audience: "kavach-backend" }), cfg), "bad_admin_assertion"));
 ok("long-lived assertion refused", throwsCode(() => verifyAssertion(assertion({}, { expiresIn: 3600 }), cfg), "bad_admin_assertion"));
-ok("expired assertion refused", throwsCode(() => verifyAssertion(assertion({}, { expiresIn: 60 }), cfg, Date.now() + 120_000), "bad_admin_assertion"));
+ok("expired assertion refused", throwsCode(() => verifyAssertion(assertion({}, { expiresIn: 60 }), cfg, undefined, Date.now() + 120_000), "bad_admin_assertion"));
+ok("assertion for another request refused", throwsCode(() => verifyAssertion(assertion({ m: "GET", p: "/admin/v1/me" }), cfg, { method: "POST", path: "/admin/v1/users/u1/status" }), "assertion_not_for_this_request"));
+ok("assertion for this request accepted", verifyAssertion(assertion({ m: "POST", p: "/admin/v1/users/u1/status" }), cfg, { method: "POST", path: "/admin/v1/users/u1/status" }).email === "kritarth@kavach.care");
 ok("'none' algorithm refused", throwsCode(() => verifyAssertion(jwt.sign({ sub: "x@kavach.care", jti: "j2" }, "", { algorithm: "none", audience: "kavach-admin-api", issuer: "kavach-admin-web", expiresIn: 60 } as jwt.SignOptions), cfg), "bad_admin_assertion"));
 const once = assertion();
 verifyAssertion(once, cfg);
@@ -64,12 +68,27 @@ ok("local bypass impossible in production or on Cloud Run", !loadAdminConfig({ A
 // audit signature
 const entry = { at: new Date("2026-10-07T10:00:00Z"), admin: "kritarth@kavach.care", role: "owner", action: "family.view", method: "GET", path: "/admin/v1/families/f1", result: "ok", status: 200 } as Omit<IAdminAudit, "sig">;
 ok("audit signature changes when an entry is edited", auditSig(entry, cfg.auditKey) !== auditSig({ ...entry, admin: "someone@kavach.care" }, cfg.auditKey));
+ok("audit signature ignores key order of the detail", auditSig({ ...entry, detail: { a: 1, b: { c: 2, d: 3 } } }, cfg.auditKey) === auditSig({ ...entry, detail: { b: { d: 3, c: 2 }, a: 1 } }, cfg.auditKey));
+
+// feature flags from the console override env; pause holds back proactive sends only
+ok("flag overrides env", flaggedEnv({ BRAIN_V2: "off" } as NodeJS.ProcessEnv, { "brain.mode": "live" }).BRAIN_V2 === "live");
+ok("unset flag leaves env", flaggedEnv({ BRAIN_V2: "shadow" } as NodeJS.ProcessEnv, {}).BRAIN_V2 === "shadow");
+ok("live families list joins", flaggedEnv({} as NodeJS.ProcessEnv, { "brain.liveFamilies": ["a", "b"] }).BRAIN_V2_LIVE_FAMILIES === "a,b");
+ok("connector flag maps to on/off", flaggedEnv({} as NodeJS.ProcessEnv, { "connectors.mcpFirst": true }).MCP_AGENT_CONNECTOR === "on");
+ok("brain mode reads the console's live list", brainV2Mode("fam1", flaggedEnv({ BRAIN_V2: "off" } as NodeJS.ProcessEnv, { "brain.liveFamilies": ["fam1"] })) === "live"
+    && brainV2Mode("fam2", flaggedEnv({ BRAIN_V2: "off" } as NodeJS.ProcessEnv, { "brain.liveFamilies": ["fam1"] })) === "off");
+ok("paused family detected", isSaheliPaused("f1", { "saheli.pausedFamilies": ["f1"] }) && !isSaheliPaused("f2", { "saheli.pausedFamilies": ["f1"] }));
+ok("flag values validated", validFlagValue("brain.mode", "live") && !validFlagValue("brain.mode", "on") && validFlagValue("saheli.pausedFamilies", ["abc-1"])
+    && !validFlagValue("saheli.pausedFamilies", ["bad id!"]) && validFlagValue("connectors.mcpFirst", false) && validFlagValue("brain.mode", null));
 
 // every real route is declared properly
 const routes = adminRoutes(cfg);
-ok("every route has a permission and an audit action", routes.every((r) => PERMISSIONS.includes(r.perm) && /^[a-z]+\.[a-z_.]+$/.test(r.action)), routes.map((r) => r.action));
+ok("every route has a permission and an audit action", routes.every((r) => PERMISSIONS.includes(r.perm) && /^[a-z_]+\.[a-z_.]+$/.test(r.action)), routes.map((r) => r.action));
 ok("only GET /me skips the audit", routes.filter((r) => r.noAudit).map((r) => `${r.method} ${r.path}`).join() === "get /me");
 ok("every write needs a reason", routes.filter((r) => r.method !== "get").every(needsReason));
+ok("health data needs break-glass + reason", routes.filter((r) => ["family.activity_full", "family.conversation", "family.care_record"].includes(r.action)).every((r) => r.perm === "care.breakglass" && needsReason(r)));
+ok("reveal needs pii.reveal + reason", routes.filter((r) => r.action === "user.reveal").every((r) => r.perm === "pii.reveal" && needsReason(r)));
+ok("data requests are owner-only", routes.filter((r) => r.action.startsWith("data_request")).every((r) => r.perm === "data.requests"));
 ok("no duplicate routes", new Set(routes.map((r) => `${r.method} ${r.path}`)).size === routes.length);
 
 // isolation: the public backend never loads admin code, the admin service never loads public routes
@@ -87,10 +106,12 @@ ok("admin service doesn't load public routes, controllers or the public auth", b
 const audits: IAdminAudit[] = [];
 let auditDown = false;
 const roles: Record<string, string> = { "kritarth@kavach.care": "owner", "help@kavach.care": "support" };
+let handlerRuns = 0;
 const fakeDefs: RouteDef[] = [
     { method: "get", path: "/x", perm: "users.read", action: "x.read", handler: async () => ({ data: { hello: 1 }, target: "family:f1" }) },
     { method: "get", path: "/secret", perm: "care.breakglass", action: "care.read", reason: "required", handler: async () => ({ data: { chat: "…" }, target: "family:f1" }) },
-    { method: "post", path: "/w", perm: "users.manage", action: "user.suspend", handler: async () => ({ data: { done: true }, target: "user:u1" }) },
+    { method: "post", path: "/w", perm: "users.manage", action: "user.suspend", handler: async () => { handlerRuns++; return { data: { done: true }, target: "user:u1" }; } },
+    { method: "get", path: "/q", perm: "users.read", action: "q.read", handler: async ({ query }) => ({ data: { q: query.q ?? null } }) },
     { method: "get", path: "/boom", perm: "users.read", action: "x.boom", handler: async () => { throw new Error("db down"); } },
 ];
 const app = express().use(express.json()).use("/admin/v1", buildAdminRouter(fakeDefs, {
@@ -112,11 +133,11 @@ void (async () => {
 
     const server = app.listen(0);
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/admin/v1`;
-    const call = (path: string, init: { method?: string; caller?: string; who?: string; reason?: string } = {}) =>
+    const call = (path: string, init: { method?: string; caller?: string; who?: string; reason?: string; boundTo?: string; headers?: Record<string, string> } = {}) =>
         fetch(base + path, {
             method: init.method || "GET",
-            headers: { authorization: init.caller ?? "Bearer good", "content-type": "application/json",
-                ...(init.who !== "" ? { "x-admin-assertion": assertion({ sub: init.who || "kritarth@kavach.care", reason: init.reason }) } : {}) },
+            headers: { authorization: init.caller ?? "Bearer good", "content-type": "application/json", ...(init.headers || {}),
+                ...(init.who !== "" ? { "x-admin-assertion": assertion({ sub: init.who || "kritarth@kavach.care", reason: init.reason, m: init.method || "GET", p: `/admin/v1${init.boundTo ?? path.split("?")[0]}` }) } : {}) },
             body: init.method && init.method !== "GET" ? "{}" : undefined,
         });
 
@@ -129,6 +150,9 @@ void (async () => {
     ok("no assertion refused", r.status === 401);
     r = await call("/x", { who: "stranger@kavach.care" });
     ok("not an admin refused", r.status === 403 && (await r.json()).error === "not_an_admin");
+    ok("refusal names who tried", audits.at(-1)?.admin === "stranger@kavach.care" && audits.at(-1)?.result === "denied", audits.at(-1));
+    r = await call("/x", { boundTo: "/secret" });
+    ok("assertion signed for another path refused", r.status === 401 && (await r.json()).error === "assertion_not_for_this_request");
     r = await call("/secret", { who: "help@kavach.care", reason: "looking at chat" });
     ok("support can't break glass", r.status === 403 && audits.at(-1)?.detail?.code === "missing_permission");
     r = await call("/secret");
@@ -137,12 +161,19 @@ void (async () => {
     ok("break-glass with a reason works, reason audited", r.status === 200 && audits.at(-1)?.reason === "fixing a missed reminder");
     r = await call("/w", { method: "POST" });
     ok("a change without a reason refused", r.status === 400);
+    const before = audits.length;
     r = await call("/w", { method: "POST", who: "help@kavach.care", reason: "user asked to pause" });
     ok("support can make account changes with a reason", r.status === 200 && audits.at(-1)?.action === "user.suspend");
+    ok("a change is logged as an attempt before it runs, then its outcome", audits[before]?.result === "attempt" && audits[before + 1]?.result === "ok", audits.slice(before).map((a) => a.result));
     auditDown = true;
     r = await call("/x");
     ok("audit store down → no data returned (fail closed)", r.status === 503 && !JSON.stringify(await r.json()).includes("hello"));
+    const runs = handlerRuns;
+    r = await call("/w", { method: "POST", reason: "trying while the log is down" });
+    ok("audit store down → the change is not made", r.status === 503 && handlerRuns === runs);
     auditDown = false;
+    r = await call("/q", { headers: { "x-admin-q": Buffer.from("Kamla Sharma").toString("base64url") } });
+    ok("search text arrives through the header, not the URL", r.status === 200 && (await r.json()).data.q === "Kamla Sharma");
     r = await call("/boom");
     const body = await r.json();
     ok("server error hides details", r.status === 500 && body.error === "server_error" && !JSON.stringify(body).includes("db down"));

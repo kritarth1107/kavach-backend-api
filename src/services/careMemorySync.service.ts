@@ -193,7 +193,7 @@ export async function sendSaheliWhatsApp(input: {
         const { buildSaheliButtonMessages } = await import("./whatsappMessageComposer.service");
         whatsappPayloads = buildSaheliButtonMessages(scrubStack(text), buttons);
     }
-    const delivery = await deliverOutboundMessage({
+    const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         content: scrubStack(text),

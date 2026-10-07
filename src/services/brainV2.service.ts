@@ -5,10 +5,12 @@
  * families to it (with the current path as fallback if v2 fails).
  */
 import { FamilyRole } from "../types/family.types";
+import { flaggedEnv } from "./featureFlags.service";
 
 export type BrainMode = "off" | "shadow" | "live";
 
-export function brainV2Mode(familyId: string, env: NodeJS.ProcessEnv = process.env): BrainMode {
+/** Env BRAIN_V2 / BRAIN_V2_LIVE_FAMILIES, overridden by the admin console's flags when set. */
+export function brainV2Mode(familyId: string, env: NodeJS.ProcessEnv = flaggedEnv()): BrainMode {
     const live = (env.BRAIN_V2_LIVE_FAMILIES || "").split(",").map((s) => s.trim()).filter(Boolean);
     if (live.includes(familyId)) return "live";
     const mode = (env.BRAIN_V2 || "off").trim().toLowerCase();

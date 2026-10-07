@@ -76,3 +76,7 @@ coverage/
 *.p12
 *.crt
 .saheli-browser-profiles/
+
+# local-only scripts and browser profiles (never commit)
+scripts/.local/
+scripts/.pbt/

@@ -69,7 +69,8 @@ export async function verifyCaller(
     const parts = token.split(".");
     if (parts.length !== 3) throw new AdminError(401, "bad_caller_token");
     let payload: Record<string, unknown>;
-    if (parts[2]) {
+    const stripped = parts[2] === "" || parts[2] === "SIGNATURE_REMOVED_BY_GOOGLE"; // Cloud Run checked and removed it
+    if (!stripped) {
         try {
             payload = (await verifier.verifyIdToken({ idToken: token, audience: cfg.audience })).getPayload() || {};
         } catch {
@@ -89,8 +90,8 @@ export async function verifyCaller(
 
 const seenJti = new Map<string, number>();
 
-/** Lock 2. The admin web app's short-lived statement of who is acting and why. */
-export function verifyAssertion(token: string | undefined, cfg: AdminConfig, now = Date.now()): Omit<AdminCtx, "role"> {
+/** Lock 2. The admin web app's short-lived statement of who is acting and why, bound to this method and path. */
+export function verifyAssertion(token: string | undefined, cfg: AdminConfig, bind?: { method: string; path: string }, now = Date.now()): Omit<AdminCtx, "role"> {
     if (!token) throw new AdminError(401, "no_admin_assertion");
     let claims: jwt.JwtPayload;
     try {
@@ -100,7 +101,10 @@ export function verifyAssertion(token: string | undefined, cfg: AdminConfig, now
     } catch {
         throw new AdminError(401, "bad_admin_assertion");
     }
-    if (!claims.iat || !claims.exp || claims.exp - claims.iat > 120 || !claims.jti || !claims.sub) throw new AdminError(401, "bad_admin_assertion");
+    if (!claims.iat || !claims.exp || claims.exp - claims.iat > 70 || !claims.jti || !claims.sub) throw new AdminError(401, "bad_admin_assertion");
+    if (bind && (String(claims.m || "").toUpperCase() !== bind.method.toUpperCase() || claims.p !== bind.path)) {
+        throw new AdminError(401, "assertion_not_for_this_request");
+    }
     for (const [k, until] of seenJti) if (until < now) seenJti.delete(k);
     if (seenJti.has(claims.jti)) throw new AdminError(401, "replayed_admin_assertion");
     seenJti.set(claims.jti, claims.exp * 1000 + 60_000);
@@ -108,7 +112,7 @@ export function verifyAssertion(token: string | undefined, cfg: AdminConfig, now
         email: String(claims.sub).toLowerCase(),
         sessionId: typeof claims.sid === "string" ? claims.sid : undefined,
         reason: typeof claims.reason === "string" ? claims.reason : undefined,
-        ip: typeof claims.ip === "string" ? claims.ip.slice(0, 64) : undefined,
+        ip: typeof claims.ip === "string" ? claims.ip.slice(0, 120) : undefined,
         ua: typeof claims.ua === "string" ? claims.ua.slice(0, 200) : undefined,
     };
 }
@@ -118,8 +122,10 @@ const lastSeenWrite = new Map<string, number>();
 /** Lock 3. The admin record decides the role. */
 export async function loadAdmin(email: string, cfg: AdminConfig, now = new Date()): Promise<Role> {
     if (!email.endsWith(`@${cfg.allowedDomain}`)) throw new AdminError(403, "not_an_admin");
-    const admin = await AdminUser.findOne({ email }).lean<IAdminUser>();
-    if (!admin || !admin.active || !isRole(admin.role) || (admin.expiresAt && new Date(admin.expiresAt) <= now)) {
+    // Every record for this email must allow access (a duplicate can never keep an ended admin in).
+    const rows = await AdminUser.find({ email }).lean<IAdminUser[]>();
+    const admin = rows[0];
+    if (!admin || rows.some((r) => !r.active || !isRole(r.role) || (r.expiresAt && new Date(r.expiresAt) <= now)) || new Set(rows.map((r) => r.role)).size > 1) {
         throw new AdminError(403, "not_an_admin");
     }
     if ((lastSeenWrite.get(email) ?? 0) < now.getTime() - 10 * 60_000) {

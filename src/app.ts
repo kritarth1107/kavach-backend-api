@@ -30,6 +30,7 @@ const app = express();
 const PORT = config.server.port || 5000;
 
 connectDB();
+void import("./services/featureFlags.service").then(({ startFlagRefresh }) => startFlagRefresh());
 
 app.use(
   cors({

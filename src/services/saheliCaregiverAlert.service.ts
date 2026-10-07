@@ -133,7 +133,7 @@ export async function notifyCaregivers(input: {
                         ? "plain"
                         : "order_pending_approval",
             });
-            const delivery = await deliverOutboundMessage({
+            const delivery = await deliverOutboundMessage({ purpose: "alert",
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
                 content: input.message,

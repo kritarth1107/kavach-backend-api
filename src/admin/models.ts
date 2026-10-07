@@ -43,7 +43,7 @@ export interface IAdminAudit {
     path: string;
     target?: string; // what it touched: "family:…", "user:…", "admin:…"
     reason?: string;
-    result: "ok" | "denied" | "error";
+    result: "attempt" | "ok" | "denied" | "error";
     status: number;
     detail?: Record<string, unknown>; // small, never personal data
     ip?: string;
@@ -62,7 +62,7 @@ const auditSchema = new Schema<IAdminAudit>(
         path: { type: String, required: true },
         target: { type: String, index: true },
         reason: String,
-        result: { type: String, enum: ["ok", "denied", "error"], required: true },
+        result: { type: String, enum: ["attempt", "ok", "denied", "error"], required: true },
         status: { type: Number, required: true },
         detail: { type: Schema.Types.Mixed },
         ip: String,
@@ -87,10 +87,104 @@ export const AdminAudit = mongoose.models.AdminAudit || mongoose.model<IAdminAud
 
 type Signable = Omit<IAdminAudit, "sig">;
 
+/** JSON with object keys sorted at every level, so a stored entry signs the same whatever order the database keeps. */
+export function stableJson(v: unknown): string {
+    if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+    if (v && typeof v === "object" && !(v instanceof Date)) {
+        return `{${Object.keys(v as object).sort().filter((k) => (v as Record<string, unknown>)[k] !== undefined).map((k) => `${JSON.stringify(k)}:${stableJson((v as Record<string, unknown>)[k])}`).join(",")}}`;
+    }
+    return JSON.stringify(v instanceof Date ? v.toISOString() : v ?? null);
+}
+
 export function auditSig(entry: Signable, key: string): string {
-    const canonical = JSON.stringify([
+    const canonical = stableJson([
         new Date(entry.at).toISOString(), entry.admin, entry.role, entry.sessionId ?? "", entry.action, entry.method, entry.path,
         entry.target ?? "", entry.reason ?? "", entry.result, entry.status, entry.detail ?? null, entry.ip ?? "", entry.ua ?? "",
     ]);
     return createHmac("sha256", key).update(canonical).digest("hex");
 }
+
+/** Internal notes on a family or user (never shown to families). */
+export interface IAdminNote {
+    target: string; // "family:<id>" | "user:<id>"
+    text: string;
+    by: string;
+    at: Date;
+}
+const noteSchema = new Schema<IAdminNote>(
+    {
+        target: { type: String, required: true, index: true },
+        text: { type: String, required: true, maxlength: 2000 },
+        by: { type: String, required: true },
+        at: { type: Date, default: () => new Date() },
+    },
+    { collection: "admin_notes", versionKey: false },
+);
+export const AdminNote = mongoose.models.AdminNote || mongoose.model<IAdminNote>("AdminNote", noteSchema);
+
+export const ISSUE_STATUSES = ["open", "in_progress", "waiting", "resolved"] as const;
+export const ISSUE_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+export interface ISupportIssue {
+    issueId: string;
+    title: string;
+    body?: string;
+    familyId?: string;
+    userId?: string;
+    area?: string;
+    status: (typeof ISSUE_STATUSES)[number];
+    priority: (typeof ISSUE_PRIORITIES)[number];
+    assignee?: string;
+    createdBy: string;
+    createdAt: Date;
+    updatedAt: Date;
+    log: Array<{ at: Date; by: string; text: string }>;
+}
+const issueSchema = new Schema<ISupportIssue>(
+    {
+        issueId: { type: String, required: true, index: true },
+        title: { type: String, required: true, maxlength: 200 },
+        body: { type: String, maxlength: 4000 },
+        familyId: { type: String, index: true },
+        userId: String,
+        area: { type: String, maxlength: 40 },
+        status: { type: String, enum: ISSUE_STATUSES as unknown as string[], default: "open", index: true },
+        priority: { type: String, enum: ISSUE_PRIORITIES as unknown as string[], default: "normal" },
+        assignee: String,
+        createdBy: { type: String, required: true },
+        createdAt: { type: Date, default: () => new Date() },
+        updatedAt: { type: Date, default: () => new Date() },
+        log: { type: [{ at: Date, by: String, text: String, _id: false }], default: [] },
+    },
+    { collection: "support_issues", versionKey: false },
+);
+export const SupportIssue = mongoose.models.SupportIssue || mongoose.model<ISupportIssue>("SupportIssue", issueSchema);
+
+/** A user's legal request (India's DPDP Act): a copy of their data, or erasure. Tracked with a due date. */
+export const DATA_REQUEST_TYPES = ["export", "erasure"] as const;
+export const DATA_REQUEST_STATUSES = ["received", "in_progress", "done", "rejected"] as const;
+export interface IDataRequest {
+    requestId: string;
+    type: (typeof DATA_REQUEST_TYPES)[number];
+    userId: string;
+    status: (typeof DATA_REQUEST_STATUSES)[number];
+    receivedAt: Date;
+    dueAt: Date;
+    note?: string;
+    createdBy: string;
+    log: Array<{ at: Date; by: string; text: string }>;
+}
+const dataRequestSchema = new Schema<IDataRequest>(
+    {
+        requestId: { type: String, required: true, index: true },
+        type: { type: String, enum: DATA_REQUEST_TYPES as unknown as string[], required: true },
+        userId: { type: String, required: true, index: true },
+        status: { type: String, enum: DATA_REQUEST_STATUSES as unknown as string[], default: "received" },
+        receivedAt: { type: Date, default: () => new Date() },
+        dueAt: { type: Date, required: true },
+        note: { type: String, maxlength: 1000 },
+        createdBy: { type: String, required: true },
+        log: { type: [{ at: Date, by: String, text: String, _id: false }], default: [] },
+    },
+    { collection: "data_requests", versionKey: false },
+);
+export const DataRequest = mongoose.models.DataRequest || mongoose.model<IDataRequest>("DataRequest", dataRequestSchema);

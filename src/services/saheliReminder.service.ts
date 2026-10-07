@@ -409,7 +409,7 @@ async function fireReminderMessage(input: {
         return false;
     }
 
-    const delivery = await deliverOutboundMessage({
+    const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         content: text,
@@ -417,6 +417,12 @@ async function fireReminderMessage(input: {
         channelIdentifier: target.channelIdentifier,
     });
 
+    if (delivery.reason === "paused") {
+        // Paused from the admin console: no retries, no "not delivered" warning, and this slot never fires late after a resume.
+        await finalizeNudgeAttempt(attemptId, { delivered: false, channel: target.channel, terminal: true, reason: "paused" });
+        await SaheliReminder.updateOne({ reminderId: input.reminder.reminderId }, { $set: { lastFiredSlotKey: `${input.dateKey}:${input.slotKey}` } });
+        return false;
+    }
     await finalizeNudgeAttempt(attemptId, {
         delivered: delivery.delivered,
         channel: target.channel,

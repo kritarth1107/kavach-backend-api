@@ -554,7 +554,7 @@ export async function executeSaheliTool(input: {
             const store = String(input.args.store ?? "").toLowerCase() as "swiggy" | "instamart" | "zepto";
             const connected = (await familyStoreConnections(input.familyId)).has(store);
             if (!mcpOrderStores().includes(store)) return { connected, enabled: false, why: "connector ordering is off for this store" };
-            if (isFoodGroceryBrowserOnly(store) && process.env.MCP_AGENT_CONNECTOR !== "on") {
+            if (isFoodGroceryBrowserOnly(store) && (await import("./featureFlags.service")).flaggedEnv().MCP_AGENT_CONNECTOR !== "on") {
                 return { connected, enabled: false, why: "food/grocery connector ordering is switched off (MCP_AGENT_CONNECTOR)" };
             }
             return { connected, enabled: true };

@@ -136,7 +136,7 @@ export async function deliverCareNudge(input: {
             return false;
         }
     }
-    const delivery = await deliverOutboundMessage({
+    const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         content: text,
@@ -291,7 +291,7 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
             const text = lateDoseText(claims.map((x) => x.item), input.displayName, hindi);
             const target = await resolveRecipientChannel(c.familyId, c.recipientUserId, c.preferredChannel);
             const delivery = target && target.channel !== "dashboard"
-                ? await deliverOutboundMessage({ familyId: c.familyId, recipientUserId: c.recipientUserId, content: text,
+                ? await deliverOutboundMessage({ purpose: "proactive", familyId: c.familyId, recipientUserId: c.recipientUserId, content: text,
                                                  channel: target.channel, channelIdentifier: target.channelIdentifier })
                 : { delivered: false, channel: "dashboard" as const, reason: "invalid_recipient" as const };
             for (const x of claims) {

@@ -1,7 +1,9 @@
 /**
  * Every admin route is declared here with its permission, its audit action and whether it needs a reason. The
- * wrapper checks the three locks, the permission and the reason, runs the handler, then writes the audit entry
- * BEFORE answering: if the audit can't be written, the data is not returned (fail closed).
+ * wrapper checks the three locks, the permission and the reason, then:
+ *  - for a change: writes an "attempt" audit entry BEFORE running it (no entry, no change), then the outcome;
+ *  - for a read: runs it and writes the audit entry BEFORE answering (no entry, no data).
+ * Search text travels in the x-admin-q header (base64url), never in a URL that ends up in request logs.
  */
 import express, { type Request, type Response, type Router } from "express";
 import { AdminError, loadAdmin, verifyAssertion, verifyCaller, type AdminConfig, type AdminCtx } from "./auth";
@@ -24,6 +26,7 @@ export type RouteDef = {
 };
 
 export type Deps = {
+    /** Override for tests. */
     cfg: AdminConfig;
     verifyCaller?: typeof verifyCaller;
     loadAdmin?: typeof loadAdmin;
@@ -38,6 +41,16 @@ function flat(o: unknown): Record<string, string> {
     return out;
 }
 
+function headerQuery(req: Request): string | undefined {
+    const raw = req.header("x-admin-q");
+    if (!raw) return undefined;
+    try {
+        return Buffer.from(raw, "base64url").toString("utf8").slice(0, 120);
+    } catch {
+        return undefined;
+    }
+}
+
 export function buildAdminRouter(defs: RouteDef[], deps: Deps): Router {
     const router = express.Router();
     const check = deps.verifyCaller ?? verifyCaller;
@@ -46,29 +59,44 @@ export function buildAdminRouter(defs: RouteDef[], deps: Deps): Router {
 
     for (const def of defs) {
         router[def.method](def.path, async (req: Request, res: Response) => {
+            // Who is asking is recorded as soon as the signed assertion checks out, even if the role lookup refuses.
+            let who: (Omit<AdminCtx, "role"> & { role?: string }) | undefined;
             let admin: AdminCtx | undefined;
+            const path = req.originalUrl.split("?")[0].slice(0, 200);
             const audit = async (result: IAdminAudit["result"], status: number, extra: Partial<IAdminAudit> = {}) => {
                 const entry = {
-                    at: new Date(), admin: admin?.email || "unknown", role: admin?.role || "none", sessionId: admin?.sessionId,
-                    action: def.action, method: def.method.toUpperCase(), path: req.originalUrl.split("?")[0].slice(0, 200),
-                    reason: admin?.reason, result, status, ip: admin?.ip, ua: admin?.ua, ...extra,
+                    at: new Date(), admin: who?.email || "unknown", role: admin?.role || who?.role || "none", sessionId: who?.sessionId,
+                    action: def.action, method: def.method.toUpperCase(), path,
+                    reason: who?.reason, result, status, ip: who?.ip, ua: who?.ua, ...extra,
                 } as Omit<IAdminAudit, "sig">;
                 await write({ ...entry, sig: auditSig(entry, deps.cfg.auditKey) } as IAdminAudit);
             };
             try {
                 await check(req.header("authorization"), deps.cfg);
-                const who = verifyAssertion(req.header("x-admin-assertion"), deps.cfg);
-                admin = { ...who, role: await lookup(who.email, deps.cfg) };
+                who = { ...verifyAssertion(req.header("x-admin-assertion"), deps.cfg, { method: req.method, path: req.baseUrl + req.path }), role: "unverified" };
+                admin = { ...who, role: await lookup(who.email, deps.cfg) } as AdminCtx;
                 if (!can(admin.role, def.perm)) throw new AdminError(403, "missing_permission", def.perm);
                 if (needsReason(def) && !validReason(admin.reason)) throw new AdminError(400, "reason_required");
-                const out = await def.handler({ admin, params: flat(req.params), query: flat(req.query), body: req.body });
+                const isWrite = def.method !== "get";
+                if (isWrite) {
+                    try {
+                        await audit("attempt", 0, { target: req.params?.familyId || req.params?.userId || req.params?.email || undefined });
+                    } catch (err) {
+                        console.error("admin audit write failed, refusing the change", err);
+                        return res.status(503).json({ error: "audit_unavailable" });
+                    }
+                }
+                const q = headerQuery(req);
+                const query = { ...flat(req.query), ...(q !== undefined ? { q } : {}) };
+                const out = await def.handler({ admin, params: flat(req.params), query, body: req.body });
                 const status = out.status ?? 200;
                 if (!def.noAudit) {
                     try {
                         await audit("ok", status, { target: out.target, detail: out.detail });
                     } catch (err) {
-                        console.error("admin audit write failed, refusing to answer", err);
-                        return res.status(503).json({ error: "audit_unavailable" });
+                        console.error("admin audit write failed", err);
+                        // A read never answers without its entry; a change already has its "attempt" entry.
+                        if (!isWrite) return res.status(503).json({ error: "audit_unavailable" });
                     }
                 }
                 return res.status(status).json({ data: out.data });

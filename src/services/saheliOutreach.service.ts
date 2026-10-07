@@ -328,7 +328,7 @@ export async function deliverSaheliOutreach(payload: {
             console.log(`Saheli outreach dropped at send (${gate.reason}) for ${payload.recipientUserId}`);
             return null;
         }
-        const delivery = await deliverOutboundMessage({
+        const delivery = await deliverOutboundMessage({ purpose: "proactive",
             familyId: payload.familyId,
             recipientUserId: payload.recipientUserId,
             content: reply,

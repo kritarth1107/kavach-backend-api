@@ -60,13 +60,13 @@ export function teamRoutes(cfg: AdminConfig): RouteDef[] {
                 if (!input.success || !Object.keys(input.data).length) throw new AdminError(400, "bad_input", input.success ? "nothing to change" : input.error.issues[0]?.message);
                 const current = await AdminUser.findOne({ email }).lean<IAdminUser>();
                 if (!current) throw new AdminError(404, "no_such_admin");
-                if (email === admin.email && (input.data.role || input.data.active === false || input.data.expiresAt)) {
+                if (email === admin.email && (input.data.role || input.data.active === false || "expiresAt" in input.data)) {
                     throw new AdminError(400, "cannot_change_self", "Ask another owner to change your own access.");
                 }
                 const losesOwner = current.role === "owner" && current.active
                     && ((input.data.role && input.data.role !== "owner") || input.data.active === false || input.data.expiresAt);
                 if (losesOwner && (await activeOwners()) <= 1) throw new AdminError(400, "last_owner", "There must always be one active owner.");
-                await AdminUser.updateOne({ email }, { $set: input.data });
+                await AdminUser.updateMany({ email }, { $set: input.data });
                 const after = await AdminUser.findOne({ email }).lean<IAdminUser>();
                 return { target: `admin:${email}`, detail: { changed: Object.keys(input.data), role: after?.role, active: after?.active }, data: publicAdmin(after!) };
             },

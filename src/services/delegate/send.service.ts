@@ -131,6 +131,7 @@ export async function sendDelegateMessage(
         (FALLBACK[purpose] || FALLBACK.delivery_check)(item);
     const { deliverOutboundMessage } = await import("../channelOutbound.service");
     const delivery = await deliverOutboundMessage({
+        purpose: "proactive", // delivery checks and resume nudges are Saheli's own: held back while the family is paused
         familyId: task.familyId,
         recipientUserId: task.recipientUserId,
         content: text,
