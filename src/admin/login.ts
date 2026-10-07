@@ -303,23 +303,23 @@ const FONT = "-apple-system,Segoe UI,Roboto,Arial,sans-serif";
 const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 function frame(title: string, body: string): string {
-    return `<!doctype html><html><body style="margin:0;background:#f1eefc;padding:28px 12px;font-family:${FONT};">
+    return `<!doctype html><html><body style="margin:0;background:#f1f2f3;padding:28px 12px;font-family:${FONT};">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#fff;border-radius:22px;border:1px solid #ebe8f5;">
-<tr><td style="padding:26px 28px 6px;font:600 15px/20px ${FONT};color:#17152b;">Kavach <span style="color:#6d4fe0;">Admin</span></td></tr>
-<tr><td style="padding:10px 28px 0;font:600 24px/30px ${FONT};color:#17152b;">${esc(title)}</td></tr>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#fff;border-radius:22px;border:1px solid #ebebed;">
+<tr><td style="padding:24px 28px 4px;"><img src="https://cdn.kavach.care/brand/kavach-careos-logo.png" width="128" height="36" alt="Kavach CareOS" style="display:inline-block;vertical-align:middle;border:0;"> <span style="display:inline-block;vertical-align:middle;margin-left:6px;padding:2px 6px;border-radius:6px;background:#fbe7da;color:#9c3a10;font:600 10px/14px ${FONT};letter-spacing:0.06em;text-transform:uppercase;">Admin</span></td></tr>
+<tr><td style="padding:10px 28px 0;font:600 24px/30px ${FONT};color:#142a22;">${esc(title)}</td></tr>
 ${body}
 </table></td></tr></table></body></html>`;
 }
 
 /** The sign-in code email. The code is only in the body, never the subject. */
 export function codeEmail(code: string): { subject: string; html: string; text: string } {
-    const digits = code.split("").map((d) => `<span style="display:inline-block;width:40px;height:52px;line-height:52px;margin:0 3px;border-radius:12px;background:#efeafe;color:#4b32b8;font:600 26px/52px ${FONT};text-align:center;">${d}</span>`).join("");
+    const digits = code.split("").map((d) => `<span style="display:inline-block;width:40px;height:52px;line-height:52px;margin:0 3px;border-radius:12px;background:#fbe7da;color:#9c3a10;font:600 26px/52px ${FONT};text-align:center;">${d}</span>`).join("");
     return {
         subject: "Your Kavach Admin sign-in code",
         text: `Your Kavach Admin sign-in code is ${code}. It works for 10 minutes. If you didn't try to sign in, ignore this email and tell the team.`,
         html: frame("Your sign-in code", `<tr><td style="padding:16px 25px 6px;">${digits}</td></tr>
-<tr><td style="padding:10px 28px 24px;font:400 13.5px/21px ${FONT};color:#59566f;">It works for 10 minutes, once. Then you'll be asked for your authenticator code.<br><br>If you didn't try to sign in, ignore this email and tell the team.</td></tr>`),
+<tr><td style="padding:10px 28px 24px;font:400 13.5px/21px ${FONT};color:#59625e;">It works for 10 minutes, once. Then you'll be asked for your authenticator code.<br><br>If you didn't try to sign in, ignore this email and tell the team.</td></tr>`),
     };
 }
 
@@ -328,7 +328,7 @@ export function noticeEmail(title: string, lines: string[]): { subject: string; 
     return {
         subject: `Kavach Admin: ${title.toLowerCase()}`,
         text: lines.join("\n\n"),
-        html: frame(title, `<tr><td style="padding:12px 28px 24px;font:400 13.5px/21px ${FONT};color:#59566f;">${lines.map(esc).join("<br><br>")}</td></tr>`),
+        html: frame(title, `<tr><td style="padding:12px 28px 24px;font:400 13.5px/21px ${FONT};color:#59625e;">${lines.map(esc).join("<br><br>")}</td></tr>`),
     };
 }
 
