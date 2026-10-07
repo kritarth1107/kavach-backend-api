@@ -33,7 +33,20 @@ app.use("/admin/v1", buildAdminRouter(adminRoutes(cfg), { cfg }));
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
 
 const PORT = Number(process.env.PORT) || 8080;
+/** The owner seed must not be lost to a brief database blip at start: retry a few times, then in the background. */
+async function seedWithRetry(): Promise<void> {
+    for (let i = 0; i < 8; i++) {
+        try {
+            await seedOwner(cfg);
+            return;
+        } catch (err) {
+            console.error(`admin owner seed failed (try ${i + 1})`, (err as Error).message);
+            await new Promise((r) => setTimeout(r, Math.min(30_000, 1000 * 2 ** i)));
+        }
+    }
+}
+
 void connectDB().then(async () => {
-    await seedOwner(cfg).catch((err) => console.error("admin owner seed failed", err));
+    await Promise.race([seedWithRetry(), new Promise((r) => setTimeout(r, 5000))]);
     app.listen(PORT, () => console.log(`Kavach admin API on :${PORT}`));
 });
