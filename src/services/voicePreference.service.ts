@@ -3,8 +3,10 @@
  * voice_replies tool, through saheliTools) and on the dashboard; the WhatsApp reply path and reminders read it.
  */
 import { type VoiceMode, VOICE_MODES } from "../models/voicePreference.model";
+import { normaliseSpeech, type SpeechProfile } from "./language.service";
 
 const cache = new Map<string, { mode: VoiceMode; at: number }>();
+const speechCache = new Map<string, { p: SpeechProfile; at: number }>();
 const CACHE_MS = 60_000;
 
 export function isVoiceMode(v: unknown): v is VoiceMode {
@@ -34,6 +36,39 @@ export async function setVoiceMode(input: { userId: string; familyId: string; mo
     );
     cache.set(input.userId, { mode: input.mode, at: Date.now() });
     return input.mode;
+}
+
+/** The language, dialect and script Saheli uses with this person ({} when not known yet). */
+export async function getSpeechProfile(userId: string): Promise<SpeechProfile> {
+    const hit = speechCache.get(userId);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.p;
+    try {
+        const { default: VP } = await import("../models/voicePreference.model");
+        const row = (await VP.findOne({ userId }, { language: 1, dialect: 1, script: 1 }).lean()) as SpeechProfile | null;
+        const p = normaliseSpeech({ language: row?.language, dialect: row?.dialect, script: row?.script });
+        speechCache.set(userId, { p, at: Date.now() });
+        return p;
+    } catch {
+        return {};
+    }
+}
+
+/** Save how Saheli speaks to someone (from onboarding, the dashboard, or Saheli when they tell her on WhatsApp). */
+export async function setSpeechProfile(input: { userId: string; familyId: string; by: string } & { language?: unknown; dialect?: unknown; script?: unknown }): Promise<SpeechProfile> {
+    const p = normaliseSpeech(input);
+    const set: Record<string, unknown> = { familyId: input.familyId, updatedBy: input.by };
+    if (p.language) set.language = p.language;
+    if (input.dialect !== undefined || p.dialect) set.dialect = p.dialect ?? null; // "no dialect" clears it
+    if (p.script) set.script = p.script;
+    const { default: VP } = await import("../models/voicePreference.model");
+    // A new language without a dialect drops the old dialect (Marwari is a way of speaking Hindi, not Tamil).
+    if (p.language && !("dialect" in set)) {
+        const current = await VP.findOne({ userId: input.userId }).lean<{ language?: string; dialect?: string | null }>();
+        if (current?.dialect && current.language !== p.language) set.dialect = null;
+    }
+    await VP.updateOne({ userId: input.userId }, { $set: set, $setOnInsert: { mode: "auto" } }, { upsert: true });
+    speechCache.delete(input.userId);
+    return getSpeechProfile(input.userId);
 }
 
 /** Should this reply go as a voice note too? */

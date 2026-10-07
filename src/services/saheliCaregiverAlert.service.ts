@@ -136,6 +136,7 @@ export async function notifyCaregivers(input: {
             const delivery = await deliverOutboundMessage({ purpose: "alert",
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
+                toUserId: caregiverId, // a voice note goes in the caregiver's language, not the elder's
                 content: input.message,
                 channel: "whatsapp",
                 channelIdentifier: phone,

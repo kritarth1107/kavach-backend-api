@@ -3,7 +3,7 @@ import { languageCodeFor, parseScribe, speakable, sttLanguageCodes, sttOrder } f
 import { shouldVoiceReply } from "../src/services/whatsappRouting.service";
 import { VOICE_NOT_CAUGHT_REPLY } from "../src/services/saheliElderFacts.service";
 import { isVoiceMode, wantsVoice } from "../src/services/voicePreference.service";
-import { convertToOpus, getTtsVoiceConfig, isOggOpus, speechLanguage, toVoiceNote } from "../src/channels/voicePipeline";
+import { baseLanguageOf, convertToOpus, getTtsVoiceConfig, googleVoiceFor, isOggOpus, speechLanguage, toVoiceNote, ttsLocale, ttsOrder, withinBytes } from "../src/channels/voicePipeline";
 import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
 import { spawnSync } from "node:child_process";
 
@@ -71,6 +71,21 @@ process.env.ELEVENLABS_VOICE_IDS = JSON.stringify({ bn: "voice-bn" });
 ok("per-language voice", getTtsVoiceConfig("bn").voiceId === "voice-bn" && getTtsVoiceConfig("hi").voiceId !== "voice-bn");
 ok("wide model for languages v2 lacks", getTtsVoiceConfig("bn").modelId !== getTtsVoiceConfig("hi").modelId, [getTtsVoiceConfig("bn").modelId, getTtsVoiceConfig("hi").modelId]);
 ok("elder pace, clamped", getTtsVoiceConfig().voiceSettings.speed === 0.9);
+// Google voice: locale from script + the listener's language
+ok("Tamil script → Tamil voice", ttsLocale("வணக்கம் அம்மா! மருந்து சாப்பிட்டீங்களா?") === "ta-IN");
+ok("Bengali script → Bengali voice (not Gujarati)", ttsLocale("নমস্কার মা! ওষুধ খেয়েছেন?") === "bn-IN");
+ok("Devanagari + Marathi listener → Marathi voice", ttsLocale("नमस्कार आई, औषध घेतलं का?", "mr") === "mr-IN" && ttsLocale("नमस्कार आई, औषध घेतलं का?", "marathi") === "mr-IN");
+ok("Devanagari + Marwari listener → Hindi voice", ttsLocale("राम राम सा! थे दवाई ले ली कांई?", baseLanguageOf("marwari")) === "hi-IN" && baseLanguageOf("mwr") === "hi" && baseLanguageOf("tulu") === "kn");
+ok("Devanagari, no hint → Hindi voice", ttsLocale("दवाई ले ली?") === "hi-IN");
+ok("English → Indian English voice", ttsLocale("Good morning! Time for your medicine.") === "en-IN");
+ok("Roman Hinglish → Hindi voice", ttsLocale("Namaste ji, dawai le li kya? Subah ki goli hai.") === "hi-IN" && ttsLocale("Dawai le li?", "hinglish") === "hi-IN");
+ok("Gurmukhi → Punjabi voice", ttsLocale("ਸਤ ਸ੍ਰੀ ਅਕਾਲ ਮਾਂ ਜੀ") === "pa-IN");
+ok("English from a Tamil listener → Indian English voice (not Hindi)", ttsLocale("Good morning! Time for your medicine.", "ta") === "en-IN" && ttsLocale("Good morning!", "marwari") === "hi-IN");
+const long = "दवाई ले लीजिए। ".repeat(400);
+const cut = withinBytes(long, 4800);
+ok("Google TTS input kept under 5000 bytes, ending at a sentence", Buffer.byteLength(cut, "utf8") <= 4800 && cut.endsWith("।") && withinBytes("short", 4800) === "short", Buffer.byteLength(cut, "utf8"));
+ok("Google first, ElevenLabs next", ttsOrder().join() === "google,eleven");
+ok("one Saheli voice in every language", googleVoiceFor("ta-IN").name === "ta-IN-Chirp3-HD-Kore" && googleVoiceFor("hi-IN").speakingRate === 0.95);
 
 // pronunciation table: built-ins and TTS_SAY_AS, whole words only, any case
 process.env.TTS_SAY_AS = JSON.stringify({ Ecosprin: "Eko-sprin" });

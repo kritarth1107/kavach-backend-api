@@ -621,6 +621,8 @@ async function addCareRecipientMember(
         phone?: string;
         phoneCountryCode?: string;
         location?: string;
+        /** false: no "added you on Kavach" WhatsApp (onboarding: Saheli greets them herself, in their language). */
+        notify?: boolean;
     },
 ) {
     const invitationEmail =
@@ -700,7 +702,7 @@ async function addCareRecipientMember(
         userId: memberUserId,
     });
 
-    if (params.phone?.trim() && params.phoneCountryCode?.trim()) {
+    if (params.notify !== false && params.phone?.trim() && params.phoneCountryCode?.trim()) {
         void notifyCareRecipientWhatsApp({
             phoneCountryCode: params.phoneCountryCode.trim(),
             phone: params.phone.trim(),
@@ -1063,6 +1065,7 @@ export async function inviteFamilyMember(
         phone?: string;
         phoneCountryCode?: string;
         location?: string;
+        notify?: boolean;
     },
 ) {
     const family = await Family.findOne({ familyId, status: "ACTIVE" });
@@ -1113,6 +1116,7 @@ export async function inviteFamilyMember(
             phone: payload.phone?.trim(),
             phoneCountryCode: payload.phoneCountryCode?.trim(),
             location: payload.location?.trim(),
+            notify: payload.notify,
         });
 
         return getFamilyMembersList(familyId, inviter.userId);
@@ -1208,7 +1212,18 @@ export async function inviteFamilyMember(
     return getFamilyMembersList(familyId, inviter.userId);
 }
 
+/** Someone who joined through an invitation does not need the new-family onboarding. */
+async function skipOnboardingAfterJoin(userId: string) {
+    await User.updateOne({ userId, "onboarding.status": "pending" }, { $set: { onboarding: { status: "skipped", at: new Date() } } }).catch(() => undefined);
+}
+
 export async function acceptFamilyInvitation(user: IUserDocument, token: string) {
+    const out = await acceptFamilyInvitationInner(user, token);
+    await skipOnboardingAfterJoin(user.userId);
+    return out;
+}
+
+async function acceptFamilyInvitationInner(user: IUserDocument, token: string) {
     const { inviteId, familyId, email } = verifyInviteJwt(token);
 
     const invitation = await FamilyInvitation.findOne({
@@ -1622,6 +1637,12 @@ export async function revokeInvitation(
 }
 
 export async function acceptInvitationById(user: IUserDocument, inviteId: string) {
+    const out = await acceptInvitationByIdInner(user, inviteId);
+    await skipOnboardingAfterJoin(user.userId);
+    return out;
+}
+
+async function acceptInvitationByIdInner(user: IUserDocument, inviteId: string) {
     const invitation = await FamilyInvitation.findOne({
         inviteId,
         status: FamilyInvitationStatus.PENDING,

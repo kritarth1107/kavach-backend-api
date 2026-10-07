@@ -43,12 +43,14 @@ export async function deliverCareNudge(input: {
     const w = { familyId: input.familyId, recipientUserId: input.recipientUserId };
     const tuning = P ? await P.profileTuning(w).catch(() => undefined) : undefined;
     const avoidMaa = Boolean((tuning as { avoidMaa?: boolean } | undefined)?.avoidMaa);
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.recipientUserId)).catch(() => null);
     let text = buildCareNudgeText({
         nudgeKind: input.nudgeKind,
         title: input.title,
         time: input.time,
         displayName: input.displayName,
         preferredLanguage: input.preferredLanguage,
+        speech,
         addressAs: avoidMaa ? undefined : tuning?.addressAs,
     });
     if (avoidMaa) {

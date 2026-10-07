@@ -277,11 +277,14 @@ async function buildFlowState(phone: string, doc: FlowDoc, who?: { familyId: str
 
 const MEDIA_PLACEHOLDER = /^\[(image|document|video|audio|voice|sticker) (message|shared)\]$/i;
 
-async function withVoiceReply(out: OutboundMessage): Promise<OutboundMessage> {
+async function withVoiceReply(out: OutboundMessage, listenerUserId?: string): Promise<OutboundMessage> {
     if (!out.content?.trim() || isSaheliFallbackCopy(out.content)) return out;
     try {
         const { textToSpeech } = await import("../channels/voicePipeline");
-        const spoken = await textToSpeech(out.content);
+        const { getSpeechProfile } = await import("./voicePreference.service");
+        const { voiceHint } = await import("./language.service");
+        const hint = listenerUserId ? voiceHint(await getSpeechProfile(listenerUserId)) : null;
+        const spoken = await textToSpeech(out.content, { languageHint: hint });
         if (spoken.audioBuffer || spoken.audioBase64) {
             return {
                 ...out,
@@ -340,13 +343,16 @@ export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<
     const dBefore = dWho
         ? await import("./delegate/turn.service").then((D) => D.beforeTurn(dPhone, dWho.familyId)).catch(() => null)
         : null;
+    // Onboarding: "KAVACH 123456" from a parent's (or caregiver's) phone verifies that number, before anything else.
+    const verify = await import("./onboarding.service").then((O) => O.verifyFromWhatsApp(dPhone, String(body.text ?? ""))).catch(() => null);
+    if (verify) return outbound(dPhone, verify.reply);
     let out = await handleWhatsAppInboundCore(body);
     // Voice notes follow the person's choice: by default a voice note gets a voice note back (with the text first),
     // whichever brain or route answered it; "always" voices every reply, "never" none. Fallback copy is never spoken.
     const { getVoiceMode } = await import("./voicePreference.service");
     const voiceMode = dWho ? await getVoiceMode(dWho.userId) : "auto";
     if (shouldVoiceReply(body, out, voiceMode)) {
-        out = await withVoiceReply(out);
+        out = await withVoiceReply(out, dWho?.userId);
     } else if (voiceMode === "never" && out?.modality === "voice") {
         out = { ...out, modality: "text", audioBuffer: undefined, audioBase64: undefined, audioMimeType: undefined };
     }
@@ -405,7 +411,12 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         try {
             const { speechToTextDetailed } = await import("../channels/voicePipeline");
             const { voiceLanguageHint, noteVoiceLanguage } = await import("./saheliRouter.service");
-            const languageHint = await voiceLanguageHint(phone).catch(() => null);
+            // What we know of how they speak: their saved language/dialect first, then what we last heard from them.
+            const saved = identity?.userId
+                ? await import("./voicePreference.service").then((V) => V.getSpeechProfile(identity!.userId)).catch(() => ({}))
+                : {};
+            const { voiceHint, dialectBase } = await import("./language.service");
+            const languageHint = dialectBase(voiceHint(saved)) || (await voiceLanguageHint(phone).catch(() => null));
             let audioBuffer: Buffer | undefined;
             let mimeType: string | undefined;
             if (body.mediaUrl) {
@@ -743,7 +754,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             }),
         ).catch(() => undefined);
         let out = outbound(phone, reply);
-        if (isVoiceMedia) out = await withVoiceReply(out);
+        if (isVoiceMedia) out = await withVoiceReply(out, identity?.userId);
         return out;
     }
 
@@ -756,7 +767,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         });
         let presenceOut = outbound(phone, presence);
         if (isVoiceMedia) {
-            presenceOut = await withVoiceReply(presenceOut);
+            presenceOut = await withVoiceReply(presenceOut, identity.userId);
         }
         return presenceOut;
     }
@@ -1276,10 +1287,9 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         out = outbound(phone, reply.content, { kind: "plain" });
     }
 
-    // Voice replies: synthesize ElevenLabs audio when key present (else text-only).
-    // Error/fallback copy is never spoken.
+    // Voice replies in the listener's language and dialect. Error/fallback copy is never spoken.
     if (isVoiceMedia && out.content?.trim() && !isSaheliFallbackCopy(out.content)) {
-        out = await withVoiceReply(out);
+        out = await withVoiceReply(out, identity.userId);
     }
 
     return out;

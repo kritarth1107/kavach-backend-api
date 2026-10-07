@@ -51,13 +51,18 @@ export async function resolveRecipientChannel(
     return { channel: "dashboard", channelIdentifier: "dashboard", delivered: true };
 }
 
-/** Best effort: a voice note after the text for people who chose "always". A failure never undoes the text. */
-async function alsoSendVoice(payload: { recipientUserId: string; channelIdentifier: string; content: string }): Promise<void> {
+/**
+ * Best effort: a voice note after the text for people who chose "always", in their language and dialect. The person
+ * who reads the message decides (toUserId), not the person it is about. A failure never undoes the text.
+ */
+async function alsoSendVoice(payload: { recipientUserId: string; toUserId?: string; channelIdentifier: string; content: string }): Promise<void> {
     try {
-        const { getVoiceMode } = await import("./voicePreference.service");
-        if ((await getVoiceMode(payload.recipientUserId)) !== "always") return;
+        const { getVoiceMode, getSpeechProfile } = await import("./voicePreference.service");
+        const listener = payload.toUserId || payload.recipientUserId;
+        if ((await getVoiceMode(listener)) !== "always") return;
         const { textToSpeech } = await import("../channels/voicePipeline");
-        const spoken = await textToSpeech(payload.content);
+        const { voiceHint } = await import("./language.service");
+        const spoken = await textToSpeech(payload.content, { languageHint: voiceHint(await getSpeechProfile(listener)) });
         if (!spoken.audioBuffer) return;
         const { sendMetaWhatsAppVoice } = await import("../clients/metaWhatsApp.client");
         await sendMetaWhatsAppVoice({ to: payload.channelIdentifier, audioBuffer: spoken.audioBuffer, mimeType: spoken.mimeType || "audio/mpeg" });
@@ -69,6 +74,8 @@ async function alsoSendVoice(payload: { recipientUserId: string; channelIdentifi
 export async function deliverOutboundMessage(payload: {
     familyId: string;
     recipientUserId: string;
+    /** Who reads it, when that is not the person it is about (a caregiver getting news of the elder). */
+    toUserId?: string;
     content: string;
     channel: "whatsapp" | "phone" | "dashboard";
     channelIdentifier: string;

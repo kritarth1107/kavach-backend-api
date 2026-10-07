@@ -1,10 +1,14 @@
 /**
- * Voice pipeline — STT (Chirp 3 preferred, Gemini audio fallback) + TTS (ElevenLabs).
- * Skips live TTS when ELEVENLABS_API_KEY / ELEVEN_LABS_API_KEY is absent.
+ * Voice pipeline — STT (Chirp 3 preferred, Gemini audio fallback) + TTS.
+ * TTS: Google Chirp 3 HD first (one native Indian voice across Hindi, Bengali, Tamil, Telugu, Marathi, Gujarati, Kannada,
+ * Malayalam, Punjabi and Indian English; OGG/Opus straight from Google), ElevenLabs for the rest and as a fallback.
+ * Chosen 2026-10-08 after a round-trip test (speak → transcribe → compare): the old ElevenLabs setup misread Bengali
+ * completely; Chirp 3 HD made no errors in Tamil, Bengali or Marathi.
  */
 import { spawn } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
+import { dialectBase } from "../services/language.service";
 
 export type SttInput = {
     audioBase64?: string;
@@ -437,74 +441,169 @@ export function getTtsVoiceConfig(lang = "latin") {
     };
 }
 
+/** Locales Google's Chirp 3 HD voices speak. */
+const GOOGLE_TTS_LOCALES = new Set(["hi-IN", "bn-IN", "gu-IN", "kn-IN", "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN", "en-IN"]);
+
+/** Dialects and languages written in Devanagari that are spoken with a Devanagari locale (Marwari → Hindi voice, Konkani → Marathi). */
+const DEVANAGARI_LOCALE: Record<string, string> = {
+    mr: "mr-IN", marathi: "mr-IN", kok: "mr-IN", konkani: "mr-IN",
+};
+
+/**
+ * The voice locale for a reply: from its script, refined by what we know of the listener's language (Devanagari can be
+ * Hindi, Marathi or a dialect; Roman letters can be English or Hinglish).
+ */
+export function ttsLocale(text: string, languageHint?: string | null): string {
+    const script = speechLanguage(text);
+    const hint = String(languageHint ?? "").trim().toLowerCase();
+    const hinted = languageCodeFor(hint);
+    if (script === "hi") return DEVANAGARI_LOCALE[hint] || (hinted === "mr-IN" ? "mr-IN" : "hi-IN");
+    if (script === "latin") {
+        // Hinglish in Roman letters reads well with the Hindi voice; English (also from a Tamil or Bengali speaker)
+        // with the Indian English voice.
+        const hindi = hinted === "hi-IN" || baseLanguageOf(hint) === "hi" || ["hindi", "hinglish"].includes(hint);
+        return hindi || looksHinglish(text) ? "hi-IN" : "en-IN";
+    }
+    if (script === "pa") return "pa-IN";
+    return languageCodeFor(script) || "hi-IN";
+}
+
+const HINGLISH_WORDS = /\b(hai|hain|nahi|nahin|aap|aapka|aapki|kya|kaise|kab|haan|ji|dawai|dawa|goli|subah|shaam|raat|khana|le lijiye|kar|karo|kijiye|theek|accha|achha|bahut|abhi|kal|aaj)\b/gi;
+function looksHinglish(text: string): boolean {
+    return (text.match(HINGLISH_WORDS) || []).length >= 2;
+}
+
+export function ttsOrder(): Array<"google" | "eleven"> {
+    const raw = (process.env.TTS_ORDER || "google,eleven").split(",").map((x) => x.trim().toLowerCase());
+    const out = raw.filter((x): x is "google" | "eleven" => x === "google" || x === "eleven");
+    return out.length ? [...new Set(out)] : ["google", "eleven"];
+}
+
+/** Saheli's Google voice (Chirp 3 HD name, same in every language) and pace. */
+export function googleVoiceFor(locale: string) {
+    const voice = process.env.TTS_GOOGLE_VOICE?.trim() || "Kore";
+    return {
+        name: `${locale}-Chirp3-HD-${voice}`,
+        voice,
+        speakingRate: Math.min(1.2, Math.max(0.75, envNumber("TTS_SPEAKING_RATE", 0.95))),
+    };
+}
+
 let lastTts:
-    | { at: string; voiceId: string; modelId: string; ok: boolean; bytes?: number; status?: number }
+    | { at: string; provider: "google" | "eleven"; voiceId: string; modelId: string; locale?: string; ok: boolean; bytes?: number; status?: number }
     | null = null;
 
 /** Non-secret TTS runtime snapshot (for /meta/debug). */
 export function getTtsDebugSnapshot() {
     const cfg = getTtsVoiceConfig();
-    return { configured: Boolean(elevenLabsApiKey()), ...cfg, lastTts };
+    return { order: ttsOrder(), google: googleVoiceFor("hi-IN"), elevenConfigured: Boolean(elevenLabsApiKey()), ...cfg, lastTts };
 }
 
-export async function textToSpeech(
-    text: string,
-): Promise<{ audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string; voiceNote?: boolean }> {
+type Spoken = { audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string; voiceNote?: boolean };
+
+/** At most `max` UTF-8 bytes, cut at the last sentence end (।, ., ?, !) that fits, else at a whole character. */
+export function withinBytes(text: string, max: number): string {
+    if (Buffer.byteLength(text, "utf8") <= max) return text;
+    let out = "";
+    for (const ch of text) {
+        if (Buffer.byteLength(out + ch, "utf8") > max) break;
+        out += ch;
+    }
+    const end = Math.max(...["।", ".", "?", "!"].map((c) => out.lastIndexOf(c)));
+    return end > out.length / 2 ? out.slice(0, end + 1) : out;
+}
+
+async function googleTts(spoken: string, locale: string): Promise<Spoken | null> {
+    if (!GOOGLE_TTS_LOCALES.has(locale)) return null;
+    const token = await getAccessToken();
+    if (!token) return null;
+    const v = googleVoiceFor(locale);
+    const started = Date.now();
+    try {
+        const res = await fetch("https://texttospeech.googleapis.com/v1/text:synthesize", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "x-goog-user-project": gcpProjectId() },
+            body: JSON.stringify({
+                input: { text: withinBytes(spoken, 4800) }, // the API takes at most 5000 bytes; Indic letters are 3 each
+                voice: { languageCode: locale, name: v.name },
+                // OGG/Opus at 48 kHz is exactly what WhatsApp plays as a voice note: no conversion needed.
+                audioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 48000, speakingRate: v.speakingRate },
+            }),
+            signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            lastTts = { at: new Date().toISOString(), provider: "google", voiceId: v.name, modelId: "chirp3-hd", locale, ok: false, status: res.status };
+            console.warn(`Google TTS failed (${res.status}) voice=${v.name}: ${body.slice(0, 200)}`);
+            return null;
+        }
+        const json = (await res.json()) as { audioContent?: string };
+        if (!json.audioContent) return null;
+        const note = await toVoiceNote(Buffer.from(json.audioContent, "base64"), "audio/ogg");
+        lastTts = { at: new Date().toISOString(), provider: "google", voiceId: v.name, modelId: "chirp3-hd", locale, ok: true, bytes: note.buffer.length };
+        console.log(`TTS: Google ok voice=${v.name} bytes=${note.buffer.length} voiceNote=${note.voice} ms=${Date.now() - started}`);
+        return { text: spoken, audioBuffer: note.buffer, audioBase64: note.buffer.toString("base64"), mimeType: note.mimeType, voiceNote: note.voice };
+    } catch (err) {
+        console.warn("Google TTS error:", err instanceof Error ? err.message : err);
+        return null;
+    }
+}
+
+async function elevenTts(spoken: string, locale: string): Promise<Spoken | null> {
+    const apiKey = elevenLabsApiKey();
+    if (!apiKey) return null;
+    const lang = speechLanguage(spoken);
+    const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig(lang === "hi" && locale === "mr-IN" ? "mr" : lang);
+    // Telling ElevenLabs the language stops it guessing (it read Bengali as Gujarati without this).
+    const languageCode = locale === "en-IN" ? "en" : locale.split("-")[0];
+    const started = Date.now();
+    try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+            method: "POST",
+            headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
+            body: JSON.stringify({ text: spoken.replace(/₹\s*(\d[\d,]*)/g, "$1 rupaye").slice(0, 2500), model_id: modelId, language_code: languageCode, voice_settings: voiceSettings }),
+            signal: AbortSignal.timeout(30_000),
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            lastTts = { at: new Date().toISOString(), provider: "eleven", voiceId, modelId, locale, ok: false, status: res.status };
+            console.warn(`ElevenLabs TTS failed (${res.status}) voice=${voiceId} model=${modelId}: ${body.slice(0, 200)}`);
+            return null;
+        }
+        // WhatsApp shows only OGG/Opus as a voice note; ElevenLabs gives mp3, so convert
+        const note = await toVoiceNote(Buffer.from(await res.arrayBuffer()), "audio/mpeg");
+        lastTts = { at: new Date().toISOString(), provider: "eleven", voiceId, modelId, locale, ok: true, bytes: note.buffer.length };
+        console.log(`TTS: ElevenLabs ok voice=${voiceId} model=${modelId} bytes=${note.buffer.length} voiceNote=${note.voice} ms=${Date.now() - started}`);
+        return { text: spoken, audioBuffer: note.buffer, audioBase64: note.buffer.toString("base64"), mimeType: note.mimeType, voiceNote: note.voice };
+    } catch (err) {
+        console.warn("ElevenLabs TTS error:", err instanceof Error ? err.message : err);
+        return null;
+    }
+}
+
+/**
+ * Speak a reply. `languageHint` is the listener's language or dialect ("mr", "marwari", "hinglish"…): it picks the
+ * right accent for Devanagari and Roman text. Google first, ElevenLabs next; text only if neither answers.
+ */
+export async function textToSpeech(text: string, opts: { languageHint?: string | null } = {}): Promise<Spoken> {
     const trimmed = text.trim();
     if (!trimmed) return { text };
     const spoken = speakable(trimmed);
     if (!spoken) return { text: trimmed };
-
-    const apiKey = elevenLabsApiKey();
-    if (!apiKey) {
-        console.log("TTS: ELEVENLABS_API_KEY missing — text-only reply");
-        return { text: trimmed };
+    const locale = ttsLocale(spoken, baseLanguageOf(opts.languageHint));
+    for (const provider of ttsOrder()) {
+        const out = provider === "google" ? await googleTts(spoken, locale) : await elevenTts(spoken, locale);
+        if (out) return { ...out, text: trimmed };
     }
+    if (!elevenLabsApiKey()) console.log("TTS: no voice available — text-only reply");
+    return { text: trimmed };
+}
 
-    const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig(speechLanguage(spoken));
-    const started = Date.now();
-
-    try {
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-            method: "POST",
-            headers: {
-                "xi-api-key": apiKey,
-                "Content-Type": "application/json",
-                Accept: "audio/mpeg",
-            },
-            body: JSON.stringify({
-                text: spoken.slice(0, 2500),
-                model_id: modelId,
-                voice_settings: voiceSettings,
-            }),
-        });
-        if (!res.ok) {
-            const body = await res.text().catch(() => "");
-            lastTts = { at: new Date().toISOString(), voiceId, modelId, ok: false, status: res.status };
-            console.warn(
-                `ElevenLabs TTS failed (${res.status}) voice=${voiceId} model=${modelId}: ${body.slice(0, 200)}`,
-            );
-            return { text: trimmed };
-        }
-        const ab = await res.arrayBuffer();
-        // WhatsApp shows only OGG/Opus as a voice note; ElevenLabs gives mp3, so convert
-        const note = await toVoiceNote(Buffer.from(ab), "audio/mpeg");
-        const buffer = note.buffer;
-        lastTts = { at: new Date().toISOString(), voiceId, modelId, ok: true, bytes: buffer.length };
-        console.log(
-            `TTS: ElevenLabs ok voice=${voiceId} model=${modelId} bytes=${buffer.length} voiceNote=${note.voice} ms=${Date.now() - started}`,
-        );
-        return {
-            text: trimmed,
-            audioBuffer: buffer,
-            audioBase64: buffer.toString("base64"),
-            mimeType: note.mimeType,
-            voiceNote: note.voice,
-        };
-    } catch (err) {
-        console.warn("ElevenLabs TTS error:", err instanceof Error ? err.message : err);
-        return { text: trimmed };
-    }
+/** A dialect's base language for the voice (Marwari → hi, Tulu → kn), or the hint itself. */
+export function baseLanguageOf(hint?: string | null): string | null {
+    const h = String(hint ?? "").trim().toLowerCase();
+    if (!h) return null;
+    return dialectBase(h) ?? h;
 }
 
 /** An OGG file with an Opus stream: the only audio WhatsApp shows as a voice note (waveform, play button). */

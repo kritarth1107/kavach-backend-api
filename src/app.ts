@@ -1,3 +1,4 @@
+import onboardingRoutes from "./routes/onboarding.routes";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -54,6 +55,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/families", familyRoutes);
+app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/families", careRecordRoutes);
 app.use("/api/admin", learningRoutes);
 app.use("/api/families", familyZeptoRouter);

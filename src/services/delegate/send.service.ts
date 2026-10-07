@@ -134,6 +134,7 @@ export async function sendDelegateMessage(
         purpose: "proactive", // delivery checks and resume nudges are Saheli's own: held back while the family is paused
         familyId: task.familyId,
         recipientUserId: task.recipientUserId,
+        toUserId: isElder ? task.recipientUserId : task.ownerUserId,
         content: text,
         channel: "whatsapp",
         channelIdentifier: task.phone,

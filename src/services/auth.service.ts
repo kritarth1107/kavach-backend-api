@@ -44,6 +44,9 @@ export function sanitizeUser(user: IUserDocument | Record<string, unknown>) {
     emailVerified: u.emailVerified,
     primaryAuthProvider: u.primaryAuthProvider,
     activeFamilyId: u.activeFamilyId ?? null,
+    // New caregivers answer a few questions before the dashboard (onboarding); older accounts never see it.
+    onboardingRequired: u.onboarding?.status === "pending",
+    onboardingSkipped: u.onboarding?.status === "skipped",
     createdAt: u.createdAt,
   };
 }
@@ -226,6 +229,7 @@ export async function findOrCreateGoogleUser(profile: {
       passwordHash,
       primaryAuthProvider: AuthProvider.GOOGLE,
       emailVerified: profile.emailVerified,
+      onboarding: { status: "pending" },
       socialAccounts: [
         {
           provider: AuthProvider.GOOGLE,
@@ -265,6 +269,7 @@ export async function findOrCreateEmailUser(email: string, fullName: string) {
     passwordHash,
     primaryAuthProvider: AuthProvider.EMAIL,
     emailVerified: true,
+    onboarding: { status: "pending" },
     ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
   });
 
@@ -295,6 +300,7 @@ export async function findOrCreatePhoneUser(
     passwordHash,
     primaryAuthProvider: AuthProvider.EMAIL,
     emailVerified: false,
+    onboarding: { status: "pending" },
     ...phoneFieldsFromNormalized(normalizedPhone),
   });
 

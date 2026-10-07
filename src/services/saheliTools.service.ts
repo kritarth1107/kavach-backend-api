@@ -502,16 +502,28 @@ export async function executeSaheliTool(input: {
             return { memories: memories.memories };
         }
         case "get_voice_preference": {
-            const { getVoiceMode, VOICE_MODE_LABEL } = await import("./voicePreference.service");
+            const { getVoiceMode, getSpeechProfile, VOICE_MODE_LABEL } = await import("./voicePreference.service");
+            const { speechLabel } = await import("./language.service");
             const mode = await getVoiceMode(input.recipientUserId);
-            return { mode, means: VOICE_MODE_LABEL[mode] };
+            const speech = await getSpeechProfile(input.recipientUserId);
+            return { mode, means: VOICE_MODE_LABEL[mode], ...speech, language_label: speechLabel(speech) };
         }
         case "set_voice_preference": {
-            const { isVoiceMode, setVoiceMode, VOICE_MODE_LABEL } = await import("./voicePreference.service");
+            const { isVoiceMode, setVoiceMode, setSpeechProfile, VOICE_MODE_LABEL } = await import("./voicePreference.service");
+            const { speechLabel } = await import("./language.service");
+            const out: Record<string, unknown> = { ok: true };
             const mode = input.args.mode;
-            if (!isVoiceMode(mode)) return { ok: false, error: "mode must be auto, always or never" };
-            await setVoiceMode({ userId: input.recipientUserId, familyId: input.familyId, mode, by: input.actorUserId });
-            return { ok: true, mode, means: VOICE_MODE_LABEL[mode] };
+            if (mode !== undefined) {
+                if (!isVoiceMode(mode)) return { ok: false, error: "mode must be auto, always or never" };
+                await setVoiceMode({ userId: input.recipientUserId, familyId: input.familyId, mode, by: input.actorUserId });
+                Object.assign(out, { mode, means: VOICE_MODE_LABEL[mode] });
+            }
+            const { language, dialect, script } = input.args;
+            if (language !== undefined || dialect !== undefined || script !== undefined) {
+                const speech = await setSpeechProfile({ userId: input.recipientUserId, familyId: input.familyId, by: input.actorUserId, language, dialect, script });
+                Object.assign(out, speech, { language_label: speechLabel(speech) });
+            }
+            return out;
         }
         case "sync_medicine_schedule": {
             const { syncMedicineSchedule } = await import("./careMemorySync.service");

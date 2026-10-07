@@ -125,9 +125,12 @@ export async function updateCompanionProfile(
     if (patch.birthday !== undefined) allowed.birthday = patch.birthday;
     if (patch.importantDates !== undefined) allowed.importantDates = patch.importantDates;
 
+    // Defaults only for fields this update does not set: Mongo refuses the same path in $set and $setOnInsert
+    // ("would create a conflict"), which made every first save that set e.g. `enabled` fail.
+    const defaults = Object.fromEntries(Object.entries(DEFAULT_COMPANION).filter(([k]) => !(k in allowed)));
     const doc = await SaheliCompanion.findOneAndUpdate(
         { familyId, recipientUserId },
-        { $set: allowed, $setOnInsert: { familyId, recipientUserId, ...DEFAULT_COMPANION } },
+        { $set: allowed, $setOnInsert: { familyId, recipientUserId, ...defaults } },
         { upsert: true, new: true },
     ).lean();
 

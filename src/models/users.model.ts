@@ -149,6 +149,11 @@ const userSchema = new Schema<IUserDocument>(
             type: String,
             index: true,
         },
+        // No default on purpose: a default would mark every existing account "pending" when read.
+        onboarding: {
+            status: { type: String, enum: ["pending", "done", "skipped"] },
+            at: { type: Date },
+        },
         preferences: {
             emailAlerts: { type: Boolean, default: true },
             pushReminders: { type: Boolean, default: true },

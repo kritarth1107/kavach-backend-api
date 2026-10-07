@@ -282,6 +282,8 @@ export async function sendMetaWhatsAppTemplate(input: {
     templateName: string;
     languageCode?: string;
     bodyParameters?: string[];
+    /** Authentication templates: the "Copy code" URL button takes the code as its parameter. */
+    urlButtonParameter?: string;
 }): Promise<string | undefined> {
     await assertSendableWhatsAppRecipient(input.to);
     const meta = config.whatsapp.meta;
@@ -302,15 +304,14 @@ export async function sendMetaWhatsAppTemplate(input: {
             template: {
                 name: input.templateName,
                 language: { code: input.languageCode ?? "en" },
-                components: input.bodyParameters?.length
+                components: input.bodyParameters?.length || input.urlButtonParameter
                     ? [
-                          {
-                              type: "body",
-                              parameters: input.bodyParameters.map((text) => ({
-                                  type: "text",
-                                  text,
-                              })),
-                          },
+                          ...(input.bodyParameters?.length
+                              ? [{ type: "body", parameters: input.bodyParameters.map((text) => ({ type: "text", text })) }]
+                              : []),
+                          ...(input.urlButtonParameter
+                              ? [{ type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: input.urlButtonParameter }] }]
+                              : []),
                       ]
                     : undefined,
             },

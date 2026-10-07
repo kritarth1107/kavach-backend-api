@@ -196,6 +196,7 @@ export async function sendSaheliWhatsApp(input: {
     const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
+        toUserId: input.toUserId,
         content: scrubStack(text),
         channel: "whatsapp",
         channelIdentifier: phone,
