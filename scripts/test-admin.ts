@@ -13,6 +13,8 @@ import { auditSig, type IAdminAudit } from "../src/admin/models";
 import { can, permissionsOf, PERMISSIONS, validReason } from "../src/admin/permissions";
 import { buildAdminRouter, needsReason, type RouteDef } from "../src/admin/router";
 import { adminRoutes } from "../src/admin/routes";
+import { sigv4 } from "../src/admin/infra/aws";
+import { istDay, istMidnight, lastDays, parseCpu, parseGib, runCostUsd, totals } from "../src/admin/infra/pricing";
 import { base32Decode, base32Encode, codeEmail, decryptSecret, encryptSecret, hashCode, hotp, noticeEmail, otpauthUrl, setupOpen, totpMatch } from "../src/admin/login";
 import { brainV2Mode } from "../src/services/brainV2.service";
 import { flaggedEnv, isSaheliPaused, validFlagValue } from "../src/services/featureFlags.service";
@@ -35,7 +37,7 @@ const assertion = (claims: Record<string, unknown> = {}, opts: jwt.SignOptions =
 ok("owner can do everything", PERMISSIONS.every((p) => can("owner", p)));
 ok("admin can't manage admins, read the audit or handle data requests", !can("admin", "admins.manage") && !can("admin", "audit.read") && !can("admin", "data.requests") && can("admin", "care.breakglass"));
 ok("support can't open conversations or change flags", !can("support", "care.breakglass") && !can("support", "flags.manage") && can("support", "users.manage"));
-ok("analyst sees numbers only", permissionsOf("analyst").join() === "overview.read,system.read");
+ok("analyst sees numbers only", permissionsOf("analyst").join() === "overview.read,system.read,infra.read");
 ok("unknown role can do nothing", !can("root", "overview.read") && !can(undefined, "overview.read"));
 ok("reasons must say something", validReason("fixing a missed reminder") && !validReason("x") && !validReason("12345678") && !validReason("a".repeat(301)));
 
@@ -112,6 +114,27 @@ ok("login codes stored only as keyed hashes", hashCode(cfg, "a@kavach.care", "12
 ok("otpauth link for authenticator apps", otpauthUrl("k@kavach.care", sec).startsWith("otpauth://totp/Kavach%20Admin%3Ak%40kavach.care?secret=") && otpauthUrl("k@kavach.care", sec).includes("issuer=Kavach%20Admin"));
 ok("code email: code in the body only, never the subject", codeEmail("042917").html.includes(">0<") && codeEmail("042917").text.includes("042917") && !codeEmail("042917").subject.includes("042917"));
 ok("notice email escapes what it shows", noticeEmail("Authenticator set up", ["<b>x</b>"]).html.includes("&lt;b&gt;x&lt;/b&gt;"));
+
+// infrastructure: days, money, forecast, AWS signing
+ok("IST day boundaries", istDay(Date.parse("2026-10-07T18:29:00Z")) === "2026-10-07" && istDay(Date.parse("2026-10-07T18:31:00Z")) === "2026-10-08"
+    && istMidnight("2026-10-08").toISOString() === "2026-10-07T18:30:00.000Z");
+const ld = lastDays(30, Date.parse("2026-10-07T12:00:00Z"));
+ok("last 30 IST days end today", ld.length === 30 && ld[29] === "2026-10-07" && ld[0] === "2026-09-08");
+ok("Cloud Run sizes parsed", parseCpu("2") === 2 && parseCpu("1000m") === 1 && parseGib("4Gi") === 4 && parseGib("512Mi") === 0.5);
+ok("Cloud Run cost: always-on 2 vCPU / 4 GiB for a day ≈ $4.56", Math.abs(runCostUsd(86_400, 2, 4, true) - 4.5619) < 0.01 && runCostUsd(100, 1, 1, false, 1e6) > 0.4);
+const fNow = Date.parse("2026-10-10T06:00:00Z"); // 10 Oct, 11:30 IST
+const series: Record<string, number> = { "2026-10-01": 100, "2026-10-02": 100, "2026-10-03": 100, "2026-10-04": 100, "2026-10-05": 100, "2026-10-06": 100, "2026-10-07": 100, "2026-10-08": 100, "2026-10-09": 100, "2026-10-10": 30, "2026-09-30": 999 };
+const ft = totals(series, fNow);
+ok("today / yesterday / month so far", ft.today === 30 && ft.yesterday === 100 && ft.mtd === 930, ft);
+ok("forecast = done days + 7-day average × rest of month", ft.avg7 === 100 && ft.forecast === 900 + 100 * 22, ft);
+ok("no data → no numbers (never a guess)", totals({}, fNow).forecast === null && totals({}, fNow).today === null);
+// AWS Signature V4 test vector (AWS docs: IAM ListUsers, 2015-08-30)
+ok("AWS signing matches the published test vector", sigv4({
+    method: "GET", host: "iam.amazonaws.com", path: "/", query: "Action=ListUsers&Version=2010-05-08",
+    headers: { "Content-Type": "application/x-www-form-urlencoded; charset=utf-8" }, body: "", region: "us-east-1", service: "iam",
+    accessKey: "AKIDEXAMPLE", secretKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", amzDate: "20150830T123600Z",
+}).endsWith("Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7"));
+ok("infrastructure: owner, admin, analyst yes; support no", can("owner", "infra.read") && can("admin", "infra.read") && can("analyst", "infra.read") && !can("support", "infra.read"));
 
 // every real route is declared properly
 const routes = adminRoutes(cfg);

@@ -5,6 +5,7 @@
 export const PERMISSIONS = [
     "overview.read", // aggregates, no person
     "system.read", // jobs, backups, uptime, versions
+    "infra.read", // infrastructure, cloud spend, AI model usage
     "users.read", // users and families, masked
     "pii.reveal", // unmask a phone or email (reason)
     "care.breakglass", // conversations and the full care record (reason)
@@ -28,7 +29,7 @@ const ADMIN = new Set<Permission>([...PERMISSIONS].filter((p) => !["data.request
 const SUPPORT = new Set<Permission>([
     "overview.read", "system.read", "users.read", "pii.reveal", "users.manage", "saheli.manage", "orders.manage",
 ]);
-const ANALYST = new Set<Permission>(["overview.read", "system.read"]);
+const ANALYST = new Set<Permission>(["overview.read", "system.read", "infra.read"]);
 
 const BY_ROLE: Record<Role, ReadonlySet<Permission>> = { owner: ALL, admin: ADMIN, support: SUPPORT, analyst: ANALYST };
 
