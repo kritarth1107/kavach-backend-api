@@ -32,8 +32,17 @@ export interface ILabDocument {
         value: string;
         unit?: string;
         refRange?: string;
+        flag?: "low" | "high" | "normal";
         date?: string;
     }>;
+    /** Nothing from a new record reaches Saheli, schedules or trends until a person chooses (saved / file_only). */
+    reviewStatus?: "needs_review" | "saved" | "file_only";
+    via?: "dashboard" | "whatsapp";
+    /** What the reader saw (editable before saving); see healthRecordReader.service Reading. */
+    reading?: Record<string, unknown>;
+    personCheck?: { status: "match" | "mismatch" | "unknown"; nameOnReport?: string; suggestedUserId?: string; suggestedName?: string; confirmedBy?: string };
+    decision?: Record<string, unknown>;
+    readError?: string;
     createdAt?: Date;
 }
 
@@ -83,11 +92,18 @@ const labDocumentSchema = new Schema<ILabDocumentRecord>(
                     value: { type: String, trim: true },
                     unit: { type: String, trim: true },
                     refRange: { type: String, trim: true },
+                    flag: { type: String, enum: ["low", "high", "normal"] },
                     date: { type: String, trim: true },
                 },
             ],
             default: [],
         },
+        reviewStatus: { type: String, enum: ["needs_review", "saved", "file_only"] },
+        via: { type: String, enum: ["dashboard", "whatsapp"] },
+        reading: { type: Schema.Types.Mixed },
+        personCheck: { type: Schema.Types.Mixed },
+        decision: { type: Schema.Types.Mixed },
+        readError: { type: String, trim: true, maxlength: 300 },
     },
     {
         timestamps: true,
@@ -106,6 +122,7 @@ labDocumentSchema.pre("save", function (next) {
 });
 
 labDocumentSchema.index({ familyId: 1, recipientUserId: 1, createdAt: -1 });
+labDocumentSchema.index({ familyId: 1, reviewStatus: 1 });
 labDocumentSchema.index(
     { familyId: 1, recipientUserId: 1, contentHash: 1 },
     { unique: true, sparse: true },

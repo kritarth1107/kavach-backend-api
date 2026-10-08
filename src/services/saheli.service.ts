@@ -1059,7 +1059,7 @@ export async function sendSaheliMessage(
     const historyLimit = waChannel ? 50 : 80;
     const elderHistory = await listThread(familyId, recipientUserId, "elder", historyLimit, sessionId);
     const elderLines = elderHistory.filter((m) => m.role === "elder").map((m) => m.content);
-    const labs = await LabDocument.find({ familyId, recipientUserId })
+    const labs = await LabDocument.find({ familyId, recipientUserId, reviewStatus: { $nin: ["needs_review", "file_only"] } })
         .sort({ createdAt: 1 })
         .lean();
 
@@ -1394,7 +1394,7 @@ export async function sendCaregiverSaheliMessage(
     const sessionLines = sessionHistory
         .filter((m) => m.role === "family" || m.role === "saheli")
         .map((m) => `${m.role}: ${m.content}`);
-    const labs = await LabDocument.find({ familyId, recipientUserId })
+    const labs = await LabDocument.find({ familyId, recipientUserId, reviewStatus: { $nin: ["needs_review", "file_only"] } })
         .sort({ createdAt: 1 })
         .lean();
 
@@ -1679,7 +1679,7 @@ export async function* streamCaregiverSaheliMessage(
     const sessionLines = sessionHistory
         .filter((m) => m.role === "family" || m.role === "saheli")
         .map((m) => `${m.role}: ${m.content}`);
-    const labs = await LabDocument.find({ familyId, recipientUserId })
+    const labs = await LabDocument.find({ familyId, recipientUserId, reviewStatus: { $nin: ["needs_review", "file_only"] } })
         .sort({ createdAt: 1 })
         .lean();
 
@@ -2118,7 +2118,7 @@ export async function getFamilyOverview(familyId: string, actorUserId: string) {
         const [schedules, msgs, labs] = await Promise.all([
             CareSchedule.find({ familyId, recipientUserId, active: true }).lean(),
             SaheliMessage.find({ familyId, recipientUserId }).sort({ createdAt: 1 }).limit(120).lean(),
-            LabDocument.find({ familyId, recipientUserId }).sort({ createdAt: -1 }).lean(),
+            LabDocument.find({ familyId, recipientUserId, reviewStatus: { $nin: ["needs_review", "file_only"] } }).sort({ createdAt: -1 }).lean(),
         ]);
 
         labCount += labs.length;

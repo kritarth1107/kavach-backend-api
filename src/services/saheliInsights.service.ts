@@ -84,6 +84,7 @@ export async function getSaheliInsights(
         familyId,
         recipientUserId,
         createdAt: { $gte: cutoff },
+        reviewStatus: { $nin: ["needs_review", "file_only"] },
     })
         .sort({ createdAt: -1 })
         .limit(3)

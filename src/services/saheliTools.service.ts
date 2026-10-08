@@ -74,6 +74,7 @@ export type SaheliToolName =
     | "claim_schedule_rows"
     | "send_whatsapp"
     | "browser_profile"
+    | "record_review"
     | "emergency_link"
     | "delivery_place"
     | "connector_status"
@@ -106,6 +107,7 @@ export async function executeSaheliTool(input: {
             const labs = await LabDocument.find({
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
+                reviewStatus: { $nin: ["needs_review", "file_only"] },
             })
                 .sort({ createdAt: -1 })
                 .limit(20)
@@ -134,6 +136,7 @@ export async function executeSaheliTool(input: {
             const labs = await LabDocument.find({
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
+                reviewStatus: { $nin: ["needs_review", "file_only"] },
             })
                 .sort({ createdAt: -1 })
                 .lean();
@@ -544,6 +547,11 @@ export async function executeSaheliTool(input: {
         case "export_care_record": {
             const { exportCareRecord } = await import("./careMemorySync.service");
             return exportCareRecord({ familyId: input.familyId, recipientUserId: input.recipientUserId });
+        }
+        case "record_review": {
+            // A health record Saheli read on WhatsApp and is waiting for an answer (typed instead of a button).
+            const { recordReviewTool } = await import("./healthRecordReview.service");
+            return recordReviewTool(input.familyId, input.actorUserId, input.args);
         }
         case "browser_profile": {
             // The family's own logged-in browser profile for this store (one per family + store).

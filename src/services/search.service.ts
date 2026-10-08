@@ -63,7 +63,7 @@ export async function searchFamily(
         });
     }
 
-    const labs = await LabDocument.find({ familyId }).sort({ createdAt: -1 }).limit(30).lean();
+    const labs = await LabDocument.find({ familyId, reviewStatus: { $nin: ["needs_review", "file_only"] } }).sort({ createdAt: -1 }).limit(30).lean();
     for (const lab of labs) {
         if (!lab.title.toLowerCase().includes(q) && !lab.rawText.toLowerCase().includes(q)) continue;
         results.push({

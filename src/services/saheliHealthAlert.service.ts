@@ -29,7 +29,7 @@ export async function getAbnormalLabFlags(
     actorUserId: string,
 ): Promise<{ flags: Array<{ name: string; value: string; source: string; date?: string }> }> {
     await getFamilyForActor(familyId, actorUserId);
-    const docs = await LabDocument.find({ familyId, recipientUserId })
+    const docs = await LabDocument.find({ familyId, recipientUserId, reviewStatus: { $nin: ["needs_review", "file_only"] } })
         .sort({ createdAt: -1 })
         .limit(15)
         .lean();

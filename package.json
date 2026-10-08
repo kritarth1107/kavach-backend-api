@@ -34,13 +34,14 @@
     "test:agent-loop": "tsx scripts/test-agent-loop.ts",
     "test:care-sync": "tsx scripts/test-care-memory-sync.ts",
     "test:brain-v2": "tsx scripts/test-brain-v2-gate.ts",
-    "test:ci": "tsc --noEmit -p . && npm run test:admin && npm run test:login-gate && npm run test:self-care && npm run test:care-sync && npm run test:brain-v2 && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records && npm run test:facts && npm run test:agent-loop && npm run test:buttons && npm run test:voice && npm run test:language && npm run test:onboarding && npm run test:uptime && npm run test:catchup",
+    "test:ci": "tsc --noEmit -p . && npm run test:admin && npm run test:login-gate && npm run test:self-care && npm run test:care-sync && npm run test:brain-v2 && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records && npm run test:facts && npm run test:agent-loop && npm run test:buttons && npm run test:voice && npm run test:language && npm run test:onboarding && npm run test:uptime && npm run test:catchup && npm run test:health-records",
     "test:buttons": "tsx scripts/test-saheli-buttons.ts",
     "test:voice": "tsx scripts/test-voice.ts",
     "test:language": "tsx scripts/test-language.ts",
     "test:onboarding": "tsx scripts/test-onboarding.ts",
     "test:uptime": "tsx ops/uptime/test.ts",
-    "test:catchup": "tsx scripts/test-reminder-catchup.ts"
+    "test:catchup": "tsx scripts/test-reminder-catchup.ts",
+    "test:health-records": "tsx scripts/test-health-records.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1118.0",

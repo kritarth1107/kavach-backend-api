@@ -36,6 +36,7 @@ export async function evaluateContextSignalsForDocument(opts: {
         familyId: opts.familyId,
         recipientUserId: opts.subjectUserId,
         documentId: { $ne: opts.documentId },
+        reviewStatus: { $nin: ["needs_review", "file_only"] },
     })
         .sort({ createdAt: -1 })
         .limit(5)

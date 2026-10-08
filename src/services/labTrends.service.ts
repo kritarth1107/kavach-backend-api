@@ -42,7 +42,7 @@ export async function getLabTrends(
     limit = 12,
 ) {
     await getFamilyForActor(familyId, actorUserId);
-    const docs = await LabDocument.find({ familyId, recipientUserId })
+    const docs = await LabDocument.find({ familyId, recipientUserId, reviewStatus: { $nin: ["needs_review", "file_only"] } })
         .sort({ createdAt: 1 })
         .lean();
 

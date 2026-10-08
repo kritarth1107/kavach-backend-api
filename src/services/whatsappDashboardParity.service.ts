@@ -748,6 +748,7 @@ export async function tryHandleLabsQuery(input: {
     const labs = await LabDocument.find({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
+        reviewStatus: { $nin: ["needs_review", "file_only"] },
     })
         .sort({ createdAt: -1 })
         .limit(5)

@@ -4,34 +4,15 @@ import { AppError } from "../middleware/error.middleware";
 import LabDocument from "../models/labDocument.model";
 import {
     buildFamilyObjectKey,
-    deleteFamilyFile,
     extractTextFromUpload,
     getFamilyFileBuffer,
     isAllowedUpload,
     isR2Configured,
     uploadFamilyFile,
 } from "./r2Storage.service";
-import {
-    analyzeUploadedDocument,
-    syncDocumentToFamilyMemory,
-} from "./documentMemorySync.service";
-import { enrichLabStructuredValues } from "./labTrends.service";
-import { createFamilyNotification } from "./notification.service";
-import { appendCareRecordEvent } from "./careRecord.service";
-import {
-    CareRecordEventType,
-    CareRecordSource,
-    ChannelType,
-} from "../types/careRecord.types";
+import { analyzeUploadedDocument } from "./documentMemorySync.service";
 import { getFamilyForActor, requirePermission, requireCareSubject } from "./careRecordAuth.service";
-import {
-    applyExtraction,
-    contentHash,
-    extractMedicalRecord,
-    isSameSavedFile,
-    medicalUploadProblem,
-    type SavedExtraction,
-} from "./medicalRecordExtract.service";
+import { contentHash, isSameSavedFile, medicalUploadProblem } from "./medicalRecordExtract.service";
 
 async function assertRecipientAccess(
     familyId: string,
@@ -42,37 +23,6 @@ async function assertRecipientAccess(
     requireCareSubject(family, recipientUserId, actorUserId);
     requirePermission(family, actorUserId, "upload_document");
     return family;
-}
-
-async function recordDocumentEvent(
-    familyId: string,
-    recipientUserId: string,
-    actorUserId: string,
-    doc: { documentId: string; title: string; kind: string; rawText: string },
-) {
-    const eventType =
-        doc.kind === "vitals"
-            ? CareRecordEventType.VITAL
-            : doc.kind === "symptom"
-              ? CareRecordEventType.SYMPTOM
-              : CareRecordEventType.DOCUMENT;
-
-    await appendCareRecordEvent({
-        familyId,
-        subjectUserId: recipientUserId,
-        actorUserId,
-        type: eventType,
-        source: CareRecordSource.DASHBOARD,
-        channel: ChannelType.DASHBOARD,
-        title: doc.title,
-        detail: doc.rawText.slice(0, 500),
-        payload: {
-            documentId: doc.documentId,
-            rawText: doc.rawText,
-            kind: doc.kind,
-        },
-        status: "logged",
-    });
 }
 
 function serializeDocument(doc: {
@@ -97,7 +47,14 @@ function serializeDocument(doc: {
     medicines?: Array<{ name: string; dose?: string }>;
     unreadParts?: string[];
     extractionStatus?: string;
-    structuredValues?: Array<{ name: string; value: string; unit?: string }>;
+    structuredValues?: Array<{ name: string; value: string; unit?: string; refRange?: string; flag?: string; date?: string }>;
+    reviewStatus?: string;
+    via?: string;
+    reading?: Record<string, unknown>;
+    personCheck?: Record<string, unknown>;
+    decision?: Record<string, unknown>;
+    readError?: string;
+    recipientUserId?: string;
 }) {
     const text = doc.rawText?.replace(/\s+/g, " ").trim() ?? "";
     const snippet =
@@ -129,28 +86,21 @@ function serializeDocument(doc: {
             name: v.name,
             value: v.value,
             unit: v.unit ?? null,
+            range: v.refRange ?? null,
+            flag: v.flag ?? null,
+            date: v.date ?? null,
         })),
         unread: doc.unreadParts ?? [],
         extraction_status: doc.extractionStatus ?? null,
+        // Records from before the review step count as saved.
+        review_status: doc.reviewStatus ?? "saved",
+        via: doc.via ?? "dashboard",
+        reading: doc.reviewStatus === "needs_review" ? doc.reading ?? null : null,
+        person_check: doc.personCheck ?? null,
+        decision: doc.decision ?? null,
+        read_error: doc.readError ?? null,
+        recipient_user_id: doc.recipientUserId ?? null,
     };
-}
-
-async function finalizeDocumentMemory(payload: {
-    familyId: string;
-    recipientUserId: string;
-    documentId: string;
-    title: string;
-    rawText: string;
-    fileName?: string;
-    kind?: string;
-    recordDate?: string;
-}) {
-    try {
-        const { analysis } = await syncDocumentToFamilyMemory(payload);
-        return analysis;
-    } catch {
-        return null;
-    }
 }
 
 export async function ingestRecipientDocument(
@@ -168,56 +118,29 @@ export async function ingestRecipientDocument(
         rawText.split("\n").find((line) => line.trim())?.slice(0, 200) ||
         "Health record";
 
+    // Read it, show it, ask: nothing reaches Saheli, schedules or trends before the person chooses.
+    const { readHealthRecord } = await import("./healthRecordReader.service");
+    const { buildDraft, draftFields } = await import("./healthRecordReview.service");
+    const read = await readHealthRecord({ text: rawText });
+    const draft = await buildDraft(familyId, recipientUserId, read);
+    // Every record carries a fingerprint: the store's unique index treats a missing one as a duplicate of every other.
+    const hash = contentHash(Buffer.from(`text:${rawText}`));
+    const same = await LabDocument.findOne({ familyId, recipientUserId, contentHash: hash }).lean();
+    if (same) return { ...serializeDocument(same), already_on_file: true };
     const doc = await LabDocument.create({
         documentId: randomUUID(),
         familyId,
         recipientUserId,
-        title: provisionalTitle,
         rawText,
-        kind: payload.kind || "lab",
-        recordDate: payload.recordDate,
         createdBy: actorUserId,
         source: "text",
-        analysisStatus: "pending",
+        via: "dashboard",
+        contentHash: hash,
+        ...draftFields(read, draft, provisionalTitle),
+        ...(payload.kind && read.status === "failed" ? { kind: payload.kind } : {}),
+        ...(payload.recordDate && !draft.reading.recordDate ? { recordDate: payload.recordDate } : {}),
     });
-
-    const analysis = await finalizeDocumentMemory({
-        familyId,
-        recipientUserId,
-        documentId: doc.documentId,
-        title: provisionalTitle,
-        rawText,
-        kind: payload.kind,
-        recordDate: payload.recordDate,
-    });
-
-    const updated = await LabDocument.findOne({ documentId: doc.documentId }).lean();
-
-    await recordDocumentEvent(familyId, recipientUserId, actorUserId, {
-        documentId: doc.documentId,
-        title: updated?.title ?? provisionalTitle,
-        kind: analysis?.kind ?? doc.kind,
-        rawText,
-    });
-
-    void enrichLabStructuredValues(doc.documentId);
-    void createFamilyNotification(familyId, {
-        kind: "lab_new",
-        title: "New report uploaded",
-        body: updated?.title ?? provisionalTitle,
-        actionUrl: "/dashboard/reports",
-        recipientUserId,
-        dedupeKey: `lab:${doc.documentId}`,
-    });
-
-    return {
-        document_id: doc.documentId,
-        title: updated?.title ?? provisionalTitle,
-        kind: analysis?.kind ?? doc.kind,
-        ai_summary: analysis?.summary ?? null,
-        tags: analysis?.tags ?? [],
-        analysis_status: analysis ? "ready" : "pending",
-    };
+    return serializeDocument(doc.toObject());
 }
 
 export async function ingestRecipientFile(
@@ -254,101 +177,80 @@ export async function ingestRecipientFile(
 
     const storageKey = buildFamilyObjectKey(familyId, originalName);
     const fileUrl = await uploadFamilyFile(storageKey, file.buffer, mimeType);
-    const saved = await readUpload(file.buffer, mimeType, originalName);
+    const { doc, existing: again } = await createDraftFromFile({
+        familyId, recipientUserId, actorUserId, buffer: file.buffer, mimeType, originalName, storageKey, fileUrl, hash,
+        fileSize: file.size, fallbackTitle, via: "dashboard",
+    });
+    if (again) return { ...serializeDocument(again), already_on_file: true };
+    return { ...serializeDocument(doc!), already_on_file: false };
+}
 
-    const title = (saved.status === "failed" ? fallbackTitle : titleFromExtract(saved, fallbackTitle)).slice(0, 200);
-    const fields = {
-        documentId: randomUUID(),
-        familyId,
-        recipientUserId,
-        title,
-        rawText: saved.rawText.slice(0, 48_000),
-        kind: payload.kind || saved.extract.kind || "lab",
-        recordDate: payload.recordDate || saved.extract.recordDate || undefined,
-        createdBy: actorUserId,
-        source: "file" as const,
-        storageKey,
-        fileUrl,
-        fileName: originalName,
-        mimeType,
-        fileSize: file.size,
-        contentHash: hash,
-        patientName: saved.extract.patientName || undefined,
-        provider: saved.extract.provider || undefined,
-        medicines: saved.extract.medicines.map((m) => ({ name: m.name, dose: m.dose || undefined })),
-        unreadParts: saved.extract.unread,
-        extractionStatus: saved.status,
-        structuredValues: saved.extract.labs.map((l) => ({
-            name: l.name,
-            value: l.value,
-            unit: l.unit || undefined,
-            date: saved.extract.recordDate || undefined,
-        })),
-        aiSummary: saved.extract.summary.slice(0, 500),
-        analysisStatus: saved.status === "failed" ? ("failed" as const) : ("ready" as const),
-    };
-
-    let doc;
+/** Read a stored file and keep it as a draft waiting for the person's choice (dashboard upload and WhatsApp). */
+export async function createDraftFromFile(input: {
+    familyId: string; recipientUserId: string; actorUserId: string; buffer: Buffer; mimeType: string; originalName: string;
+    storageKey: string; fileUrl?: string; hash: string; fileSize?: number; fallbackTitle: string; via: "dashboard" | "whatsapp";
+}): Promise<{ doc?: Parameters<typeof serializeDocument>[0]; existing?: Parameters<typeof serializeDocument>[0] }> {
+    const { readHealthRecord } = await import("./healthRecordReader.service");
+    const { buildDraft, draftFields } = await import("./healthRecordReview.service");
+    let text = "";
+    if (!input.mimeType.startsWith("image/") && input.mimeType !== "application/pdf") {
+        text = await extractTextFromUpload(input.buffer, input.mimeType, input.originalName).catch(() => "");
+    }
+    const read = await readHealthRecord(text ? { text, fileName: input.originalName } : { buffer: input.buffer, mimeType: input.mimeType, fileName: input.originalName });
+    const draft = await buildDraft(input.familyId, input.recipientUserId, read);
     try {
-        doc = await LabDocument.create(fields);
+        const doc = await LabDocument.create({
+            documentId: randomUUID(),
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            rawText: text.slice(0, 48_000),
+            createdBy: input.actorUserId,
+            source: "file" as const,
+            via: input.via,
+            storageKey: input.storageKey,
+            fileUrl: input.fileUrl,
+            fileName: input.originalName,
+            mimeType: input.mimeType,
+            fileSize: input.fileSize,
+            contentHash: input.hash,
+            ...draftFields(read, draft, input.fallbackTitle),
+        });
+        return { doc: doc.toObject() };
     } catch (err) {
         const code = err && typeof err === "object" && "code" in err ? (err as { code?: number }).code : 0;
         if (code === 11000) {
-            const again = await LabDocument.findOne({ familyId, recipientUserId, contentHash: hash }).lean();
-            if (again) return { ...serializeDocument(again), already_on_file: true };
+            const existing = await LabDocument.findOne({ familyId: input.familyId, recipientUserId: input.recipientUserId, contentHash: input.hash }).lean();
+            if (existing) return { existing };
         }
         throw err;
     }
-
-    // Memory sync can take a long time. The file and the printed fields are already saved.
-    void syncDocumentToFamilyMemory({
-        familyId,
-        recipientUserId,
-        documentId: doc.documentId,
-        title,
-        rawText: saved.rawText,
-        fileName: originalName,
-        kind: doc.kind,
-        recordDate: doc.recordDate,
-        keepExtracted: true,
-    }).catch(() => null);
-
-    await recordDocumentEvent(familyId, recipientUserId, actorUserId, {
-        documentId: doc.documentId,
-        title,
-        kind: doc.kind,
-        rawText: saved.rawText,
-    });
-
-    return { ...serializeDocument(doc.toObject()), already_on_file: false };
 }
 
-async function readUpload(buffer: Buffer, mimeType: string, originalName: string): Promise<SavedExtraction> {
-    let text = "";
-    try {
-        text = await extractTextFromUpload(buffer, mimeType, originalName);
-    } catch {
-        text = "";
-    }
-    const printed = extractMedicalRecord(text);
-    const useful = Boolean(
-        printed.patientName || printed.recordDate || printed.provider || printed.medicines.length || printed.labs.length,
-    );
-    const image = mimeType.startsWith("image/");
-    let vision = null;
-    if (!useful && (image || mimeType === "application/pdf" || originalName.toLowerCase().endsWith(".pdf"))) {
-        const { readMedicalPage } = await import("./medicalRecordVision.service");
-        vision = await readMedicalPage(buffer, image ? mimeType : "application/pdf");
-    }
-    return applyExtraction({ text, vision, pageWasImage: image || !text.trim() });
+/** Read a record again (after a failed read, or to refresh a draft). Saved records are not re-read. */
+export async function rereadRecipientDocument(familyId: string, recipientUserId: string, documentId: string, actorUserId: string) {
+    await assertRecipientAccess(familyId, recipientUserId, actorUserId);
+    return rereadDocument(familyId, recipientUserId, documentId);
 }
 
-function titleFromExtract(saved: SavedExtraction, fallback: string): string {
-    const ex = saved.extract;
-    if (ex.kind === "prescription" && ex.medicines[0]) return `Prescription — ${ex.medicines[0].name}`;
-    if (ex.kind === "lab" && ex.provider) return `Lab — ${ex.provider}`;
-    if (ex.kind === "discharge") return ex.patientName ? `Discharge — ${ex.patientName}` : "Discharge summary";
-    return fallback;
+/** Read again without an access check (WhatsApp: the sender is already known to own this record's family). */
+export async function rereadDocument(familyId: string, recipientUserId: string, documentId: string) {
+    const doc = await LabDocument.findOne({ familyId, recipientUserId, documentId });
+    if (!doc) throw new AppError("Health record not found", 404);
+    if (doc.reviewStatus === "saved" && doc.extractionStatus !== "failed") throw new AppError("This record is already saved", 409);
+    const { readHealthRecord } = await import("./healthRecordReader.service");
+    const { buildDraft, draftFields } = await import("./healthRecordReview.service");
+    let read;
+    if (doc.storageKey && (doc.mimeType?.startsWith("image/") || doc.mimeType === "application/pdf")) {
+        const { buffer } = await getFamilyFileBuffer(doc.storageKey);
+        read = await readHealthRecord({ buffer, mimeType: doc.mimeType, fileName: doc.fileName });
+    } else {
+        read = await readHealthRecord({ text: doc.rawText, fileName: doc.fileName });
+    }
+    const draft = await buildDraft(familyId, recipientUserId, read, documentId);
+    Object.assign(doc, draftFields(read, draft, doc.title));
+    if (!doc.contentHash) doc.contentHash = contentHash(Buffer.from(`text:${doc.documentId}:${doc.rawText}`));
+    await doc.save();
+    return serializeDocument(doc.toObject());
 }
 
 export async function ingestRecipientFiles(
@@ -429,15 +331,8 @@ export async function deleteRecipientDocument(
     const doc = await LabDocument.findOne({ familyId, recipientUserId, documentId }).lean();
     if (!doc) throw new AppError("Health record not found", 404);
 
-    if (doc.storageKey) {
-        try {
-            await deleteFamilyFile(doc.storageKey);
-        } catch {
-            /* object may already be gone */
-        }
-    }
-
-    await LabDocument.deleteOne({ familyId, recipientUserId, documentId });
+    const { removeRecord } = await import("./healthRecordReview.service");
+    await removeRecord(doc);
     return { deleted: true };
 }
 
@@ -477,3 +372,45 @@ export async function downloadRecipientDocument(
 }
 
 export { analyzeUploadedDocument };
+
+/* ── review before save ─────────────────────────────────────────────────── */
+
+async function actorName(userId: string): Promise<string> {
+    const { default: User } = await import("../models/users.model");
+    const u = await User.findOne({ userId }, { firstName: 1, lastName: 1 }).lean<{ firstName?: string; lastName?: string }>();
+    return [u?.firstName, u?.lastName].filter(Boolean).join(" ") || "Family";
+}
+
+/** The person's choice for a record waiting for review: save (with what to do), keep only the file, or discard. */
+export async function decideRecipientDocument(familyId: string, recipientUserId: string, documentId: string, actorUserId: string, body: unknown) {
+    await assertRecipientAccess(familyId, recipientUserId, actorUserId);
+    const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+    const action = b.action === "save" || b.action === "file_only" || b.action === "discard" ? b.action : null;
+    if (!action) throw new AppError("Choose save, file_only or discard", 400);
+    const { applyDecision } = await import("./healthRecordReview.service");
+    const result = await applyDecision(familyId, recipientUserId, documentId, { id: actorUserId, name: await actorName(actorUserId) }, {
+        action, reading: b.reading, saveValues: b.saveValues !== false, remember: b.remember === true, addMedicines: b.addMedicines !== false,
+        nextVisitReminder: b.nextVisitReminder === true, notifyFamily: b.notifyFamily === true,
+    });
+    const doc = result.deleted ? null : await LabDocument.findOne({ familyId, recipientUserId, documentId }).lean();
+    return { ...result, document: doc ? serializeDocument(doc) : null };
+}
+
+/** "It is hers" / "it's for someone else in the family" for a record whose name did not match. */
+export async function personRecipientDocument(familyId: string, recipientUserId: string, documentId: string, actorUserId: string, body: unknown) {
+    await assertRecipientAccess(familyId, recipientUserId, actorUserId);
+    const b = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+    const action = b.action === "theirs" || b.action === "move" ? b.action : null;
+    if (!action) throw new AppError("Choose theirs or move", 400);
+    const { resolvePerson } = await import("./healthRecordReview.service");
+    const moved = await resolvePerson(familyId, recipientUserId, documentId, actorUserId, { action, toUserId: b.toUserId ? String(b.toUserId) : undefined });
+    const doc = await LabDocument.findOne({ familyId, recipientUserId: moved.recipientUserId, documentId }).lean();
+    return { recipient_user_id: moved.recipientUserId, document: doc ? serializeDocument(doc) : null };
+}
+
+/** The important numbers from this person's saved reports (cards chosen from what they have, not a fixed list). */
+export async function highlightsForRecipient(familyId: string, recipientUserId: string, actorUserId: string) {
+    await assertRecipientAccess(familyId, recipientUserId, actorUserId);
+    const { recordHighlights } = await import("./healthRecordReview.service");
+    return recordHighlights(familyId, recipientUserId);
+}

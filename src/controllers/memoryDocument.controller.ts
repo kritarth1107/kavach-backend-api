@@ -1,8 +1,12 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../middleware/error.middleware";
 import {
+    decideRecipientDocument,
     deleteRecipientDocument,
     downloadRecipientDocument,
+    highlightsForRecipient,
+    personRecipientDocument,
+    rereadRecipientDocument,
     getRecipientDocument,
     ingestRecipientDocument,
     ingestRecipientFile,
@@ -170,8 +174,9 @@ export const downloadRecipientLab = async (
         res.setHeader("Content-Type", file.contentType);
         res.setHeader(
             "Content-Disposition",
-            `attachment; filename="${encodeURIComponent(file.fileName).replace(/%22/g, "")}"`,
+            `${req.query.inline === "1" ? "inline" : "attachment"}; filename="${encodeURIComponent(file.fileName).replace(/%22/g, "")}"`,
         );
+        res.setHeader("Cache-Control", "private, max-age=300");
         res.send(file.buffer);
     } catch (error) {
         next(error);
@@ -194,3 +199,22 @@ export const getRecipientLabTrends = async (
         next(error);
     }
 };
+
+type Handler = (req: Request, res: Response, next: NextFunction) => Promise<void>;
+const withUser = (fn: (req: Request, userId: string) => Promise<unknown>): Handler => async (req, res, next) => {
+    try {
+        if (!req.user) throw new AppError("Not authenticated", 401);
+        res.json({ success: true, data: await fn(req, req.user.userId) });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const postRecipientLabDecision = withUser((req, userId) =>
+    decideRecipientDocument(req.params.familyId, req.params.recipientUserId, req.params.documentId, userId, req.body));
+export const postRecipientLabPerson = withUser((req, userId) =>
+    personRecipientDocument(req.params.familyId, req.params.recipientUserId, req.params.documentId, userId, req.body));
+export const postRecipientLabReread = withUser((req, userId) =>
+    rereadRecipientDocument(req.params.familyId, req.params.recipientUserId, req.params.documentId, userId));
+export const getRecipientLabHighlights = withUser((req, userId) =>
+    highlightsForRecipient(req.params.familyId, req.params.recipientUserId, userId));

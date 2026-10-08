@@ -93,6 +93,8 @@ export async function vertexGenerateText(input: {
     timeoutMs?: number;
     /** Gemini 3 thinking level ("minimal" | "low" | …) — lower = faster; dropped automatically if the model rejects it. */
     thinkingLevel?: string;
+    /** A file the model reads with the prompt (a photo or a PDF page). */
+    inlineData?: { mimeType: string; data: string };
     /** Internal: location override for the capacity retry. */
     location?: string;
     /** Internal: retry depth. */
@@ -120,7 +122,7 @@ export async function vertexGenerateText(input: {
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
             body: JSON.stringify({
                 ...(input.system ? { systemInstruction: { parts: [{ text: input.system }] } } : {}),
-                contents: [{ role: "user", parts: [{ text: input.prompt }] }],
+                contents: [{ role: "user", parts: [{ text: input.prompt }, ...(input.inlineData ? [{ inlineData: input.inlineData }] : [])] }],
                 generationConfig: {
                     temperature: input.temperature ?? 0.1,
                     maxOutputTokens: input.maxOutputTokens ?? 512,

@@ -84,6 +84,10 @@ import {
     getRecipientLabDetail,
     getRecipientLabs,
     getRecipientLabTrends,
+    getRecipientLabHighlights,
+    postRecipientLabDecision,
+    postRecipientLabPerson,
+    postRecipientLabReread,
     postRecipientLab,
     postRecipientLabUpload,
 } from "../controllers/memoryDocument.controller";
@@ -263,6 +267,10 @@ router.post("/:familyId/saheli/orders/place-cod", protect, postPlaceCodOrderHand
 router.get("/:familyId/recipients/:recipientUserId/briefing", protect, getBriefing);
 router.get("/:familyId/recipients/:recipientUserId/labs", protect, getRecipientLabs);
 router.get("/:familyId/recipients/:recipientUserId/labs/trends", protect, getRecipientLabTrends);
+router.get("/:familyId/recipients/:recipientUserId/labs/highlights", protect, getRecipientLabHighlights);
+router.post("/:familyId/recipients/:recipientUserId/labs/:documentId/decision", protect, postRecipientLabDecision);
+router.post("/:familyId/recipients/:recipientUserId/labs/:documentId/person", protect, postRecipientLabPerson);
+router.post("/:familyId/recipients/:recipientUserId/labs/:documentId/reread", protect, postRecipientLabReread);
 router.post("/:familyId/recipients/:recipientUserId/labs", protect, postRecipientLab);
 router.post(
     "/:familyId/recipients/:recipientUserId/labs/upload",

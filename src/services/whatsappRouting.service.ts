@@ -584,6 +584,28 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         profileHint = await profileSummary(w, true).catch(() => "");
     }
 
+    // ── Health records: a report or prescription sent as a photo/PDF is read, shown and asked about before anything
+    // is saved; its buttons ("rec:…") carry the answer. Not a record (a meal, a selfie) → the usual media flow below.
+    if (body.interactiveId?.startsWith("rec:")) {
+        const HR = await import("./whatsappHealthRecord.service");
+        const r = await HR.handleRecordButton({ sender: identity, interactiveId: body.interactiveId }).catch((err) => {
+            console.warn("[records] button failed:", err instanceof Error ? err.message : err);
+            return { text: "🙏" } as { text: string; buttons?: Array<{ id: string; title: string }> };
+        });
+        return r.buttons?.length ? outbound(phone, r.text, { kind: "saheli_buttons", buttons: r.buttons }) : outbound(phone, r.text);
+    }
+    if ((body.mediaType === "image" || body.mediaType === "document") && body.mediaUrl && !messageLooksLikeEmergency(text)) {
+        const HR = await import("./whatsappHealthRecord.service");
+        const r = await HR.handleRecordMedia({
+            sender: identity, mediaId: body.mediaUrl, mediaType: body.mediaType,
+            caption: body.mediaCaption ?? (MEDIA_PLACEHOLDER.test(text) ? "" : text),
+        }).catch((err) => {
+            console.warn("[records] media failed:", err instanceof Error ? err.message : err);
+            return null;
+        });
+        if (r) return r.buttons?.length ? outbound(phone, r.text, { kind: "saheli_buttons", buttons: r.buttons }) : outbound(phone, r.text);
+    }
+
     // ── Saheli Brain v2: shadow beside this path on real traffic, or live for switched-over
     // families. Runs after the emergency and scam backstops; a v2 failure falls through to v1.
     // A tapped Saheli v2 button ("v2:…" id) goes to the v2 brain, which records it without a model call.
