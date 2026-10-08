@@ -299,9 +299,18 @@ export async function listRecipientDocuments(
     const docs = await LabDocument.find({ familyId, recipientUserId })
         .sort({ createdAt: -1 })
         .lean();
+    const { default: User } = await import("../models/users.model");
+    const uploaders = new Map(
+        (await User.find({ userId: { $in: [...new Set(docs.map((d) => d.createdBy).filter(Boolean))] } }, { userId: 1, firstName: 1 }).lean<Array<{ userId: string; firstName?: string }>>())
+            .map((u) => [u.userId, u.firstName || "family"]),
+    );
 
     return {
-        documents: docs.map((d) => serializeDocument(d)),
+        documents: docs.map((d) => ({
+            ...serializeDocument(d),
+            uploaded_by_you: d.createdBy === actorUserId,
+            uploaded_by_name: uploaders.get(d.createdBy) ?? null,
+        })),
     };
 }
 
