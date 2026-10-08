@@ -552,7 +552,7 @@ function duplicateContactError(error: unknown): never {
     throw error;
 }
 
-async function ensureMemberUserAccount(input: {
+export async function ensureMemberUserAccount(input: {
     userId: string;
     email: string;
     memberName: string;

@@ -154,6 +154,19 @@ async function assertDashboardLoginAllowed(userId: string) {
   }
 }
 
+/**
+ * Last guard before a code goes out or an account is created: a number someone in a family already has (on an
+ * invitation or WhatsApp link) is never a new account, even if their own account record could not be found.
+ */
+async function assertNumberFree(context: OtpContext) {
+  if (context.channel !== "phone") return;
+  const { findPhoneHolder } = await import("../services/phoneOwner.service");
+  const holder = await findPhoneHolder(context.phone.countryCode, context.phone.number);
+  if (!holder) return;
+  await assertDashboardLoginAllowed(holder.userId);
+  throw new AppError("This number is already linked to someone in a family on Kavach. Sign in with your own number or email.", 409);
+}
+
 export const googleAuth = async (
   req: Request,
   res: Response,
@@ -195,6 +208,8 @@ export const sendOtp = async (
     const existingUser = await findExistingUser(context);
     if (existingUser) {
       await assertDashboardLoginAllowed(existingUser.userId);
+    } else {
+      await assertNumberFree(context);
     }
 
     if (context.channel === "email") {
@@ -334,6 +349,7 @@ export const registerWithOtp = async (
     let isNewUser = false;
 
     if (!user) {
+      await assertNumberFree(context);
       if (context.channel === "email") {
         user = await findOrCreateEmailUser(context.email, fullName);
       } else {
