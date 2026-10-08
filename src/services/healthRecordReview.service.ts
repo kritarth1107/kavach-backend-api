@@ -546,8 +546,12 @@ export async function recordHighlights(familyId: string, recipientUserId: string
         return off + key + Math.min(c.count, 6) * 20 - Math.min(ageDays, 3650) / 10;
     };
     const ranked = [...cards].sort((a, b) => score(b) - score(a));
-    const top = ranked.slice(0, 4);
     const latestDate = cards.reduce<string | null>((m, c) => (c.date && (!m || c.date > m) ? c.date : m), null);
+    // A value last measured more than a year before the newest report (a one-off test in 2023) stays in "all values"
+    // but does not take a card, unless there is not enough recent to fill them.
+    const yearBefore = latestDate ? new Date(new Date(`${latestDate}T00:00:00Z`).getTime() - 365 * 86_400_000).toISOString().slice(0, 10) : null;
+    const recent = ranked.filter((c) => !yearBefore || (c.date != null && c.date >= yearBefore));
+    const top = [...recent, ...ranked.filter((c) => !recent.includes(c))].slice(0, 4);
     return { cards: top, all: ranked, reports, latestDate, noticed: noticedFor(top, groups) };
 }
 
