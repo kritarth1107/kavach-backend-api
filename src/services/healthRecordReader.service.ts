@@ -60,7 +60,9 @@ Never guess a name, date, value, range, medicine, dose or timing. If something i
 - title: 2–6 words a family would use, e.g. "Blood count, kidney, liver", "Prescription · Dr. Mehta", "PET-CT whole body", "Discharge summary".
 - tests (lab reports): the panels in a few words.
 - values: every result with a number: name as printed (expand only obvious short forms like "Hb" → "Haemoglobin"), value exactly,
-  unit, range = the printed reference/normal range, flag = low | high | normal from the printed H/L mark or the range (null if neither).
+  unit, range = the printed reference/normal range (when it lists several bands by age, sex or category, give only the band
+  that applies to this patient, e.g. "8.8–10" for a 63-year-old from "18–60 years: 8.6–10; 60–90 years: 8.8–10"; the normal /
+  non-diabetic band for categories), flag = low | high | normal from the printed H/L mark or that range (null if neither).
   Blood pressure as one value "142/88" with unit "mmHg".
 - medicines: name as on the paper (brand), strength ("40 mg"), dose ("1 tablet"), frequency as written ("1-0-1", "BD", "after dinner"),
   slots from the frequency: "1-0-0" → morning, "0-1-0" → afternoon, "0-0-1" → night, "1-0-1"/BD → morning+night, TDS → morning+afternoon+night,

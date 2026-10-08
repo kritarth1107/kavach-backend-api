@@ -1,7 +1,7 @@
 /** Health records: reading → review → decision helpers (whose record, flags, dates, what Saheli remembers, cards). */
 import { readingFromModel, timesFor, type Reading } from "../src/services/healthRecordReader.service";
 import { buttonsFor, factLines } from "../src/services/whatsappHealthRecord.service";
-import { applyCorrections, cleanEdited, computeFlag, deviation, dateLabel, isoOf, medicineWord, memoryPoints, nameTokens, namesMatch, nextVisitDate, testKey, endsOn, type DraftReading } from "../src/services/healthRecordReview.service";
+import { applyCorrections, cleanEdited, computeFlag, deviation, effectiveRange, dateLabel, isoOf, medicineWord, memoryPoints, nameTokens, namesMatch, nextVisitDate, testKey, endsOn, type DraftReading } from "../src/services/healthRecordReview.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -24,6 +24,15 @@ ok("> limit → low when below", computeFlag("39", ">40", null) === "low");
 ok("upto", computeFlag("40", "upto 35", null) === "high");
 ok("BP against 130/80", computeFlag("142/88", "<130/80", null) === "high" && computeFlag("120/76", "<130/80", null) === "normal");
 ok("no range keeps the reader's flag", computeFlag("142/88", null, "high") === "high" && computeFlag("5", "", null) === null);
+
+// Ranges printed in bands (live 2026-10-09: calcium 9.2 flagged low because "18–60" was read as the range)
+const calcium = "18–60 years: 8.6–10; 60–90 years: 8.8–10";
+ok("age picks the band", effectiveRange(calcium, 63) === "8.8–10" && effectiveRange(calcium, 40) === "8.6–10");
+ok("no age → first band", effectiveRange(calcium, null) === "8.6–10");
+ok("calcium 9.2 is normal for 63", computeFlag("9.2", calcium, null, 63) === "normal" && computeFlag("8.7", calcium, null, 63) === "low");
+ok("category bands → the normal one", effectiveRange("Non-Diabetic: < 100; Prediabetes: 100-125; Diabetic: >= 126", null) === "< 100" && computeFlag("102", "Non-Diabetic: < 100; Prediabetes: 100-125", null) === "high");
+ok("label without bands", effectiveRange("Adults: 0.27-4.2", null) === "0.27-4.2" && computeFlag("6.12", "Adults: 0.27-4.2", null) === "high");
+ok("plain range untouched", effectiveRange("12-15", 63) === "12-15");
 
 // How far outside normal (ranks the cards)
 ok("Hb 9.8 vs 12–15 is further out than RDW 14.5 vs 11.5–14", deviation("9.8", "12-15", "low") > deviation("14.5", "11.5-14", "high"));

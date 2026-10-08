@@ -103,9 +103,37 @@ const num = (s: string | null | undefined): number | null => {
     return m ? Number(m[0]) : null;
 };
 
+/**
+ * The band of a printed range that applies: "18–60 years: 8.6–10; 60–90 years: 8.8–10" → "8.8–10" for a 63-year-old
+ * (the first band when the age is unknown or no band names an age); a plain range is returned as is.
+ */
+export function effectiveRange(range: string | null | undefined, age?: number | null): string | null {
+    const r = String(range || "").trim();
+    if (!r) return null;
+    const bands = r.split(/\s*[;\n|]\s*/).filter(Boolean);
+    if (bands.length < 2 && !/:/.test(r)) return r;
+    const valueOf = (b: string) => (b.includes(":") ? b.slice(b.lastIndexOf(":") + 1).trim() : b.trim());
+    if (age != null) {
+        for (const b of bands) {
+            const label = b.includes(":") ? b.slice(0, b.lastIndexOf(":")).toLowerCase().replace(/[–—]/g, "-") : "";
+            const span = label.match(/(\d+)\s*-\s*(\d+)\s*(?:y|yr|yrs|years?)\b/);
+            const over = label.match(/(?:>|≥|above|over)\s*=?\s*(\d+)\s*(?:y|yr|yrs|years?)/) ?? label.match(/(\d+)\s*(?:y|yr|yrs|years?)\s*(?:and above|\+|or more)/);
+            if (span && age >= Number(span[1]) && age <= Number(span[2])) return valueOf(b);
+            if (over && age >= Number(over[1])) return valueOf(b);
+        }
+    }
+    return valueOf(bands[0]);
+}
+
+export function ageOf(text: string | null | undefined): number | null {
+    const m = String(text || "").match(/(\d{1,3})/);
+    const n = m ? Number(m[1]) : NaN;
+    return n > 0 && n < 120 ? n : null;
+}
+
 /** low / high / normal from the printed range ("12-15", "< 5.7", "> 40", "upto 35", "130/80"); else the reader's flag. */
-export function computeFlag(value: string, range: string | null | undefined, given: Flag | null | undefined): Flag | null {
-    const r = String(range || "").toLowerCase().replace(/,/g, "").replace(/[–—]/g, "-").trim();
+export function computeFlag(value: string, range: string | null | undefined, given: Flag | null | undefined, age?: number | null): Flag | null {
+    const r = String(effectiveRange(range, age) || "").toLowerCase().replace(/,/g, "").replace(/[–—]/g, "-").trim();
     if (/\//.test(value) && /\//.test(r)) {
         const [s, d] = value.split("/").map((x) => num(x));
         const [rs, rd] = r.replace(/[<≤>≥]|upto|up to|below/g, "").split("/").map((x) => num(x));
@@ -220,7 +248,11 @@ export async function buildDraft(familyId: string, recipientUserId: string, read
         return { ...m, alreadyOnSchedule: already, add: !already && m.times.length > 0 };
     });
     const prior = await priorValues(familyId, recipientUserId, r.recordDate, excludeId);
-    const values = r.values.map((v) => ({ ...v, flag: computeFlag(v.value, v.range, v.flag) }));
+    const age = ageOf(r.patientAge);
+    const values = r.values.map((v) => {
+        const range = effectiveRange(v.range, age);
+        return { ...v, range, flag: computeFlag(v.value, range, v.flag) };
+    });
     const reading: DraftReading = { ...r, values, medicines, memoryPoints: [] };
     reading.memoryPoints = memoryPoints(reading, prior);
     return { reading, personCheck: await checkPerson(familyId, recipientUserId, r.patientName) };
