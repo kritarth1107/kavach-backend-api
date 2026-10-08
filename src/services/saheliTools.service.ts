@@ -557,8 +557,18 @@ export async function executeSaheliTool(input: {
             const ident = await ChannelIdentity.findOne({ userId: input.actorUserId, channelType: ChannelType.WHATSAPP, active: true })
                 .lean<{ channelIdentifier?: string }>()
                 .catch(() => null);
-            const digits = String(ident?.channelIdentifier ?? "").replace(/\D/g, "");
-            const loginPhone = /^91[6-9]\d{9}$/.test(digits) ? digits.slice(2) : /^[6-9]\d{9}$/.test(digits) ? digits : null;
+            const indian = (raw: unknown) => {
+                const d = String(raw ?? "").replace(/\D/g, "");
+                return /^91[6-9]\d{9}$/.test(d) ? d.slice(2) : /^[6-9]\d{9}$/.test(d) ? d : null;
+            };
+            let loginPhone = indian(ident?.channelIdentifier);
+            if (!loginPhone) {
+                // Most people (parents who joined by invite) have their WhatsApp number only on their account
+                // (live 2026-10-08: Maa had no channel identity, so the agent got no number).
+                const User = (await import("../models/users.model")).default;
+                const u = await User.findOne({ userId: input.actorUserId }, { phone: 1 }).lean<{ phone?: { countryCode?: string; number?: string } }>();
+                if (u?.phone?.countryCode === "+91") loginPhone = indian(u.phone.number);
+            }
             return { profileId: (await profileFor(input.familyId, partner)) ?? null, loginPhone };
         }
         case "delivery_place": {
