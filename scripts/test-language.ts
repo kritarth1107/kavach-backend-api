@@ -1,5 +1,5 @@
 /** Languages, dialects and scripts: what Saheli writes and speaks to each person. */
-import { buildCareNudgeText, nudgeLanguage } from "../src/services/saheliNudgeCopy.service";
+import { buildCareNudgeText, doseTakenLine, nudgeLanguage } from "../src/services/saheliNudgeCopy.service";
 import { DIALECTS, LANGUAGES, dialectBase, normaliseSpeech, replyScript, speechLabel, voiceHint } from "../src/services/language.service";
 
 let fail = 0;
@@ -34,6 +34,9 @@ for (const kind of ["dose_due", "pre_reminder", "missed_followup", "completion_p
     }
 }
 ok("all reminder kinds × 11 languages fill in name and item", true);
+
+ok("Done reply in their language: Marwari → Devanagari, Tamil script, English default", doseTakenLine("Shelcal 500mg", { language: "hi", dialect: "mwr" }).startsWith("हो गया ✅ Shelcal 500mg")
+    && /[\u0B80-\u0BFF]/.test(doseTakenLine("Telma", { language: "ta" })) && doseTakenLine("Telma", {}) === "Done ✅ Telma is marked taken.");
 
 if (fail) {
     console.error(`${fail} failed`);

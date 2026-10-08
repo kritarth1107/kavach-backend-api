@@ -45,11 +45,33 @@ export async function getSpeechProfile(userId: string): Promise<SpeechProfile> {
     try {
         const { default: VP } = await import("../models/voicePreference.model");
         const row = (await VP.findOne({ userId }, { language: 1, dialect: 1, script: 1 }).lean()) as SpeechProfile | null;
-        const p = normaliseSpeech({ language: row?.language, dialect: row?.dialect, script: row?.script });
+        let p = normaliseSpeech({ language: row?.language, dialect: row?.dialect, script: row?.script });
+        if (!p.language) p = (await speechFromCareRecord(userId)) ?? p;
         speechCache.set(userId, { p, at: Date.now() });
         return p;
     } catch {
         return {};
+    }
+}
+
+/**
+ * Saheli may already know how someone speaks (their care record in the engine) while this copy is empty: languages
+ * saved before the two were kept in sync. Read it from there and save it here, so reminders and voice notes stop
+ * falling back to English.
+ */
+async function speechFromCareRecord(userId: string): Promise<SpeechProfile | null> {
+    try {
+        const { default: Family } = await import("../models/family.model");
+        const fam = await Family.findOne({ status: "ACTIVE", members: { $elemMatch: { userId, status: { $nin: ["REMOVED", "REJECTED"] } } } }).lean<{ familyId: string }>();
+        if (!fam) return null;
+        const { aiEngineJson } = await import("../clients/aiEngine.client");
+        const got = await aiEngineJson<{ language?: string; dialect?: string; script?: string }>("GET", `/v2/dash/${encodeURIComponent(fam.familyId)}/${encodeURIComponent(userId)}/speech`, undefined, 4000);
+        const p = normaliseSpeech(got ?? {});
+        if (!p.language) return null;
+        await setSpeechProfile({ userId, familyId: fam.familyId, by: "system:care-record", ...p });
+        return p;
+    } catch {
+        return null;
     }
 }
 

@@ -133,6 +133,26 @@ export function nudgeLanguage(speech?: SpeechProfile | null, preferredLanguage?:
     return COPY[lang] ? lang : "en";
 }
 
+/** After the Done button under a reminder: short, in their language and script (the medicine name stays as written). */
+const TAKEN: Record<string, (title: string) => string> = {
+    en: (t) => `Done ✅ ${t} is marked taken.`,
+    roman_hi: (t) => `Ho gaya ✅ ${t} le li, maine likh liya.`,
+    hi: (t) => `हो गया ✅ ${t} ले ली, मैंने लिख लिया।`,
+    mr: (t) => `झालं ✅ ${t} घेतलं, मी नोंद केली.`,
+    bn: (t) => `হয়ে গেছে ✅ ${t} খাওয়া হয়েছে, লিখে রাখলাম।`,
+    ta: (t) => `சரி ✅ ${t} எடுத்துக்கொண்டீர்கள், குறித்துக்கொண்டேன்.`,
+    te: (t) => `అయిపోయింది ✅ ${t} వేసుకున్నారు, నోట్ చేసుకున్నాను.`,
+    kn: (t) => `ಆಯ್ತು ✅ ${t} ತೆಗೆದುಕೊಂಡಿದ್ದೀರಿ, ಬರೆದುಕೊಂಡೆ.`,
+    ml: (t) => `ശരി ✅ ${t} കഴിച്ചു, ഞാൻ കുറിച്ചുവെച്ചു.`,
+    gu: (t) => `થઈ ગયું ✅ ${t} લઈ લીધી, મેં નોંધી લીધું.`,
+    pa: (t) => `ਹੋ ਗਿਆ ✅ ${t} ਲੈ ਲਈ, ਮੈਂ ਲਿਖ ਲਿਆ।`,
+    or: (t) => `ହୋଇଗଲା ✅ ${t} ଖାଇଦେଲେ, ମୁଁ ଲେଖି ରଖିଲି।`,
+};
+
+export function doseTakenLine(title: string, speech?: SpeechProfile | null, preferredLanguage?: string): string {
+    return (TAKEN[nudgeLanguage(speech, preferredLanguage)] ?? TAKEN.en)(title);
+}
+
 export function buildCareNudgeText(input: {
     nudgeKind: SaheliNudgeKind;
     title: string;

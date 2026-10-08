@@ -42,6 +42,8 @@ export async function markScheduleCompleted(input: {
     note?: string;
     channel?: ChannelType;
     source?: CareRecordSource;
+    /** Saheli's brain marked it (it has logged this itself). */
+    fromBrain?: boolean;
 }): Promise<Record<string, unknown>> {
     let scheduleId = input.scheduleId;
     const dateKey = input.dateKey ?? toDateKeyIST();
@@ -77,7 +79,7 @@ export async function markScheduleCompleted(input: {
         input.recipientUserId,
         scheduleId,
         input.actorUserId,
-        { status: "completed", dateKey, note: input.note },
+        { status: "completed", dateKey, note: input.note, ledger: !input.fromBrain },
     );
 
     await appendCareRecordEvent({
@@ -111,6 +113,7 @@ export async function markScheduleMissed(input: {
     titleHint?: string;
     dateKey?: string;
     note?: string;
+    fromBrain?: boolean;
 }): Promise<Record<string, unknown>> {
     let scheduleId = input.scheduleId;
     const dateKey = input.dateKey ?? toDateKeyIST();
@@ -134,7 +137,7 @@ export async function markScheduleMissed(input: {
         input.recipientUserId,
         scheduleId,
         input.actorUserId,
-        { status: "missed", dateKey, note: input.note },
+        { status: "missed", dateKey, note: input.note, ledger: !input.fromBrain },
     );
 
     return {
@@ -402,8 +405,14 @@ export async function closeRemindedDose(input: {
         channel: ChannelType.WHATSAPP,
     });
     const title = typeof marked.title === "string" ? marked.title : "";
-    if (!title) return "I could not mark that dose. Tell me the medicine name and I will mark it taken.";
-    return `Done — ${title} is taken. It is not missed.`;
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.recipientUserId)).catch(() => null);
+    const { doseTakenLine, nudgeLanguage } = await import("./saheliNudgeCopy.service");
+    if (!title) {
+        return nudgeLanguage(speech) === "en"
+            ? "I could not mark that dose. Tell me the medicine name and I will mark it taken."
+            : "वह दवाई मैं लिख नहीं पाई। दवाई का नाम बता दीजिए, मैं ली हुई लिख दूँगी।";
+    }
+    return doseTakenLine(title, speech);
 }
 
 export async function tryApplyElderCareActionFromMessage(input: {

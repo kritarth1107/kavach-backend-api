@@ -808,6 +808,7 @@ export async function executeSaheliTool(input: {
                 titleHint: input.args.title ? String(input.args.title) : undefined,
                 dateKey: input.args.dateKey ? String(input.args.dateKey) : undefined,
                 note: input.args.note ? String(input.args.note) : undefined,
+                fromBrain: true, // the brain's log_dose writes its own ledger line
             });
         }
         case "mark_schedule_missed": {
@@ -820,6 +821,7 @@ export async function executeSaheliTool(input: {
                 titleHint: input.args.title ? String(input.args.title) : undefined,
                 dateKey: input.args.dateKey ? String(input.args.dateKey) : undefined,
                 note: input.args.note ? String(input.args.note) : undefined,
+                fromBrain: true,
             });
         }
         case "log_vitals": {

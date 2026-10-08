@@ -216,6 +216,8 @@ export async function markScheduleItemCompletion(
         status: CareScheduleCompletionStatus;
         dateKey?: string;
         note?: string;
+        /** false when Saheli's brain marked it: it has already written this to its own ledger. */
+        ledger?: boolean;
     },
 ) {
     const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
@@ -258,7 +260,50 @@ export async function markScheduleItemCompletion(
         });
     }
 
+    if (payload.ledger !== false) {
+        void pushCompletionToLedger({ familyId, recipientUserId, actorUserId, schedule: schedule.toObject(), dateKey, status: payload.status, note: payload.note, family });
+    }
     return getScheduleDayStatuses(familyId, recipientUserId, actorUserId, dateKey);
+}
+
+/**
+ * Saheli's ledger must know every dose marked outside a conversation (the Done button under a reminder, a tick on the
+ * dashboard): she reads "taken or missed" from it, and a reminder with no "taken" after it looks missed.
+ */
+async function pushCompletionToLedger(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    schedule: { scheduleId: string; title: string; type?: string; dosage?: string; time?: string };
+    dateKey: string;
+    status: CareScheduleCompletionStatus;
+    note?: string;
+    family: { members: Array<{ userId: string }> };
+}): Promise<void> {
+    try {
+        if (input.dateKey !== toDateKeyIST()) return; // the ledger is about today; an older day is fixed on the dashboard only
+        const s = input.schedule;
+        const medicine = String(s.type || "").toUpperCase() === "MEDICINE";
+        const what = `${s.title}${s.dosage ? ` ${s.dosage}` : ""}${s.time ? ` (${s.time})` : ""}`;
+        const done = input.status === "completed";
+        let who = "they marked it";
+        if (input.actorUserId !== input.recipientUserId) {
+            const { default: User } = await import("../models/users.model");
+            const u = await User.findOne({ userId: input.actorUserId }).lean<{ firstName?: string }>();
+            who = `marked by ${u?.firstName || "a caregiver"}`;
+        }
+        const { aiPushCareEvent } = await import("../clients/aiEngine.client");
+        await aiPushCareEvent({
+            family_id: input.familyId,
+            subject_id: input.recipientUserId,
+            kind: medicine ? (done ? "dose_taken" : "dose_missed") : done ? "routine_done" : "routine_missed",
+            summary: `${what}: ${done ? (medicine ? "taken" : "done") : "missed"} (${who}${input.note ? `; ${input.note.trim().slice(0, 120)}` : ""})`,
+            payload: { scheduleId: s.scheduleId, dateKey: input.dateKey, status: input.status, medicine: medicine ? s.title : undefined },
+            ref: `completion:${s.scheduleId}:${input.dateKey}:${input.status}:${Date.now()}`,
+        });
+    } catch (err) {
+        console.warn("completion → ledger failed:", err instanceof Error ? err.message : err);
+    }
 }
 
 export async function setScheduleCompletion(
