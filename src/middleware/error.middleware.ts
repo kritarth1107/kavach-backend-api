@@ -2,10 +2,15 @@ import { NextFunction, Request, Response } from "express";
 
 export class AppError extends Error {
   statusCode: number;
+  /** Optional machine-readable reason ("care_recipient") and details the screen can act on. */
+  code?: string;
+  data?: Record<string, unknown>;
 
-  constructor(message: string, statusCode = 500) {
+  constructor(message: string, statusCode = 500, extra?: { code?: string; data?: Record<string, unknown> }) {
     super(message);
     this.statusCode = statusCode;
+    this.code = extra?.code;
+    this.data = extra?.data;
   }
 }
 
@@ -56,6 +61,7 @@ export const errorHandler = (
   res.status(statusCode).json({
     success: false,
     message,
+    ...(err instanceof AppError && err.code ? { code: err.code, data: err.data } : {}),
     error:
       process.env.NODE_ENV === "development"
         ? { message: err.message, stack: err.stack }

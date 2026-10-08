@@ -40,6 +40,8 @@ import {
 } from "../services/familyMember.service";
 import { AuthProvider } from "../types/user.types";
 import { NormalizedPhone, normalizePhoneInput } from "../utils/phone.util";
+import { findPhoneOwner } from "../services/phoneOwner.service";
+import appConfig from "../config/app.config";
 
 type EmailOtpContext = {
   channel: "email";
@@ -101,7 +103,8 @@ async function findExistingUser(context: OtpContext) {
     return findUserByContactEmail(context.email);
   }
 
-  return User.findByPhone(context.phone.countryCode, context.phone.number);
+  // A parent's number may be known only from their family invitation or WhatsApp link: still theirs.
+  return findPhoneOwner(context.phone.countryCode, context.phone.number);
 }
 
 function otpIdentifier(context: OtpContext): { channel: OtpChannel; identifier: string } {
@@ -133,7 +136,7 @@ const PHONE_LOGIN_DISABLED =
   "Mobile sign-in isn't available yet. Please use your email or Google.";
 
 const CARE_RECIPIENT_LOGIN_DENIED =
-  "This account belongs to someone Kavach cares for. Saheli talks to them on WhatsApp; only caregivers can sign in to the dashboard.";
+  "This number belongs to someone Saheli looks after. There's nothing to sign in to: just message Saheli on WhatsApp. Family caregivers sign in here with their own number or email.";
 
 async function assertDashboardLoginAllowed(userId: string) {
   const families = await Family.find({
@@ -147,7 +150,7 @@ async function assertDashboardLoginAllowed(userId: string) {
     .select("members")
     .lean();
   if (isCareRecipientOnly(userId, families.flatMap((family) => family.members))) {
-    throw new AppError(CARE_RECIPIENT_LOGIN_DENIED, 403);
+    throw new AppError(CARE_RECIPIENT_LOGIN_DENIED, 403, { code: "care_recipient", data: { saheliNumber: appConfig.whatsapp.kavachNumber } });
   }
 }
 

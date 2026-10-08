@@ -281,7 +281,8 @@ export async function findOrCreatePhoneUser(
   number: string,
   fullName: string,
 ) {
-  let user = await User.findByPhone(countryCode, number);
+  const { findPhoneOwner } = await import("./phoneOwner.service");
+  let user = await findPhoneOwner(countryCode, number);
 
   if (user) {
     await ensureInternalPassword(user.userId);

@@ -1,5 +1,6 @@
 /** Onboarding: prescription timings, answers → care record entries and notes, verification replies, limits. */
 import { sanitizeUnderstood, toHHMM, toPhone } from "../src/services/onboardingChat.service";
+import { phoneVariants } from "../src/services/phoneOwner.service";
 import { AnswersSchema, VERIFY_RE, allow, factsFor, noteFor, quietHours, scheduleFromText, splitPhone, verifiedThanks, type Answers } from "../src/services/onboarding.service";
 
 let fail = 0;
@@ -81,6 +82,9 @@ ok("understood: an ack with a link is dropped; follow-up kept when allowed", u.a
 ok("understood: no follow-up when none are left; unknown enum dropped", sanitizeUnderstood({ answered: true, ack: "Lovely", careFor: "cousin", followup: { q: "Anything about her knees at all?" } }, { followupsLeft: 0 }).followup === undefined
     && sanitizeUnderstood({ careFor: "cousin", ack: "" }, { followupsLeft: 0 }).updates.careFor === undefined);
 ok("understood: a question to Saheli is not an answer", sanitizeUnderstood({ answered: false, ack: "", reply: "I talk to her on WhatsApp." }, { followupsLeft: 0 }).answered === false);
+
+// One number, one person: every way the number may have been saved is looked up
+ok("phone variants (+91 also bare 10 digits; other codes never bare)", phoneVariants("+91", "98290 41123").join() === "+919829041123,919829041123,9829041123" && phoneVariants("+971", "501234567").join() === "+971501234567,971501234567");
 
 // Model-call limits
 ok("limit per caregiver per hour", [1, 2, 3].every(() => allow("u1", "rx", 3, 1000)) && !allow("u1", "rx", 3, 1000) && allow("u2", "rx", 3, 1000) && allow("u1", "rx", 3, 1000 + 3_600_001));

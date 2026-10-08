@@ -320,7 +320,7 @@ export async function createInvitedUser(
 
     const userByEmail = await User.findOne({ email: normalizedEmail });
     const userByPhone = phoneForUser
-        ? await User.findByPhone(phoneForUser.countryCode, phoneForUser.number)
+        ? await (await import("./phoneOwner.service")).findPhoneOwner(phoneForUser.countryCode, phoneForUser.number)
         : null;
 
     if (

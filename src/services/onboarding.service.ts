@@ -424,7 +424,8 @@ async function addPerson(familyId: string, inviter: InstanceType<typeof User>, p
     const key = normalizePhoneInput(cc, number).key;
     const family = await Family.findOne({ familyId }).lean<{ members: Member[] }>();
     const members = (family?.members || []).filter(LIVE);
-    const existing = await User.findOne({ phoneKey: key }).lean<{ userId: string; firstName?: string; lastName?: string }>();
+    const { findPhoneOwner } = await import("./phoneOwner.service");
+    const existing = await findPhoneOwner(cc, number);
     const otherFamilies = async (id: string) => Boolean(await Family.exists({ familyId: { $ne: familyId }, status: "ACTIVE", members: { $elemMatch: { userId: id, status: { $nin: ["REMOVED", "REJECTED"] } } } }));
     if (existing) {
         const here = members.find((m) => m.userId === existing.userId);
@@ -539,8 +540,9 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
         try {
             const { cc, number } = splitPhone(myPhone);
             const f = phoneFieldsFromNormalized(normalizePhoneInput(cc, number));
-            const taken = await User.findOne({ phoneKey: f.phoneKey, userId: { $ne: userId } }).lean();
-            if (!taken) {
+            const { findPhoneOwner } = await import("./phoneOwner.service");
+            const owner = await findPhoneOwner(cc, number);
+            if (!owner || owner.userId === userId) {
                 user.set("phone", f.phone);
                 user.set("phoneKey", f.phoneKey);
                 phoneVerified = true;
