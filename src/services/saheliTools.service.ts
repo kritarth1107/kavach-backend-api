@@ -549,8 +549,17 @@ export async function executeSaheliTool(input: {
             // The family's own logged-in browser profile for this store (one per family + store).
             const { profileFor } = await import("./commerceAutomation/remoteBrowser");
             const partner = String(input.args.partner ?? "").toLowerCase();
-            if (!partner) return { profileId: null };
-            return { profileId: (await profileFor(input.familyId, partner)) ?? null };
+            if (!partner) return { profileId: null, loginPhone: null };
+            // If the store asks for a login, the agent uses the WhatsApp number of the person who asked (Indian
+            // numbers only), so the code arrives on the phone they are chatting from and they can pass it to Saheli.
+            const ChannelIdentity = (await import("../models/channelIdentity.model")).default;
+            const { ChannelType } = await import("../types/careRecord.types");
+            const ident = await ChannelIdentity.findOne({ userId: input.actorUserId, channelType: ChannelType.WHATSAPP, active: true })
+                .lean<{ channelIdentifier?: string }>()
+                .catch(() => null);
+            const digits = String(ident?.channelIdentifier ?? "").replace(/\D/g, "");
+            const loginPhone = /^91[6-9]\d{9}$/.test(digits) ? digits.slice(2) : /^[6-9]\d{9}$/.test(digits) ? digits : null;
+            return { profileId: (await profileFor(input.familyId, partner)) ?? null, loginPhone };
         }
         case "delivery_place": {
             // The saved place an order for this person must go to (the engine puts it in the task's limits).
