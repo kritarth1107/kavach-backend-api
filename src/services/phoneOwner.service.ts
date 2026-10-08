@@ -88,9 +88,12 @@ export async function findPhoneOwner(countryCode: string, number: string): Promi
     if (!(await User.exists({ userId: holder.userId }))) {
         try {
             const { ensureMemberUserAccount } = await import("./familyMember.service");
+            // The invitation's email may be the caregiver's own (it was the contact address): never reuse someone's.
+            const email = holder.email?.toLowerCase().trim();
+            const free = email && !(await User.exists({ email }));
             await ensureMemberUserAccount({
                 userId: holder.userId,
-                email: holder.email || `${randomBytes(16).toString("hex")}@pending.kavach`,
+                email: free ? email : `${randomBytes(16).toString("hex")}@pending.kavach`,
                 memberName: holder.name || "Family member",
                 namePrefix: holder.namePrefix,
                 phone: digits,
