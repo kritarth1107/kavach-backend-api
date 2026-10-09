@@ -78,6 +78,7 @@ export type SaheliToolName =
     | "emergency_link"
     | "delivery_place"
     | "connector_status"
+    | "ride_place"
     | "connector_search"
     | "connector_prepare"
     | "connector_place"
@@ -590,6 +591,23 @@ export async function executeSaheliTool(input: {
             const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
             const at = await coordsForPlace(input.familyId, place).catch(() => null);
             return { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full, lat: at?.lat ?? null, lng: at?.lng ?? null };
+        }
+        case "ride_place": {
+            // Coordinates for a ride end ("Home", a saved place, or a named place in the family's city), for fast fares.
+            const { defaultPlaceFor, findPlaceByWords } = await import("./familyAddressBook.service");
+            const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const { geocodePlace, GENERIC_PLACE } = await import("./rideBooking/geoResolve.service");
+            const words = String(input.args.words ?? "").trim();
+            const home = await defaultPlaceFor(input.familyId, input.recipientUserId);
+            const saved = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (GENERIC_PLACE.test(words) ? home : null);
+            if (saved) {
+                const at = await coordsForPlace(input.familyId, saved).catch(() => null);
+                return at ? { lat: at.lat, lng: at.lng, label: `${saved.nickname}, ${saved.short || saved.full}` } : { lat: null, lng: null };
+            }
+            if (!words) return { lat: null, lng: null };
+            const city = home?.city && !words.toLowerCase().includes(home.city.toLowerCase()) ? `, ${home.city}` : "";
+            const g = await geocodePlace(`${words}${city}`).catch(() => null);
+            return g?.ok && g.place.lat != null ? { lat: g.place.lat, lng: g.place.lng, label: g.place.shortLabel || words } : { lat: null, lng: null };
         }
         case "connector_status": {
             // Can the engine's shopping agent order this store through its official connector?
