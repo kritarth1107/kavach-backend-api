@@ -345,6 +345,12 @@ export async function getSpending(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/spending${qs({ month })}`) });
 }
 
+/** Everything the family handed over: state, who acts next, next action, deadline, stuck (all=1 adds the last 14 days). */
+export async function getWork(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/work${req.query.all === "1" ? "?all=true" : ""}`) });
+}
+
 /** The family's limits for orders and rides (boundaries); changing them is for the family's approver (engine checks). */
 export async function getBoundaries(req: Request, res: Response) {
     const { base } = await caregiverScope(req);

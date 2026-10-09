@@ -31,6 +31,11 @@ export function aiRoutes(): RouteDef[] {
             },
         },
         {
+            method: "get", path: "/ai/flywheel", perm: "overview.read", action: "ai.flywheel",
+            // numbers only (no conversation text): tasks, conversations, check-ins, per-family adherence/delegation, learning, credit
+            handler: async ({ query }) => ({ data: await engine("GET", `/flywheel?days=${Math.min(Math.max(Number(query.days) || 14, 1), 90)}`, undefined, 45_000) }),
+        },
+        {
             method: "post", path: "/ai/playbooks/:version", perm: "learning.manage", action: "ai.playbook",
             handler: async ({ admin, params, body }) => {
                 const version = Number(params.version);
