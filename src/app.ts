@@ -16,6 +16,7 @@ import publicRoutes from "./routes/public.routes";
 import careRecordRoutes from "./routes/careRecord.routes";
 import learningRoutes from "./routes/learning.routes";
 import webhookRoutes from "./routes/webhook.routes";
+import callsRoutes from "./routes/calls.routes";
 import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.routes";
 import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
@@ -44,7 +45,8 @@ app.use(
     express.json({
         // Keep the raw bytes for the Meta webhook so its X-Hub-Signature-256 can be verified.
         verify: (req, _res, buf) => {
-            if ((req as { url?: string }).url?.startsWith("/api/webhooks/whatsapp/meta")) {
+            const url = (req as { url?: string }).url ?? "";
+            if (url.startsWith("/api/webhooks/whatsapp/meta") || url.startsWith("/api/calls/post-call")) {
                 (req as unknown as { rawBody?: Buffer }).rawBody = Buffer.from(buf);
             }
         },
@@ -62,6 +64,7 @@ app.use("/api/families", familyZeptoRouter);
 app.use("/api/families", familyMcpRouter);
 app.use("/api/families", delegateRoutes);
 app.use("/api/webhooks", webhookRoutes);
+app.use("/api/calls", callsRoutes);
 app.use("/api/integrations", zeptoPublicRoutes);
 app.use("/api/integrations", mcpPublicRoutes);
 app.use("/api/documents", documentRoutes);
