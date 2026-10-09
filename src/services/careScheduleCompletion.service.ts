@@ -281,7 +281,9 @@ async function pushCompletionToLedger(input: {
     family: { members: Array<{ userId: string }> };
 }): Promise<void> {
     try {
-        if (input.dateKey !== toDateKeyIST()) return; // the ledger is about today; an older day is fixed on the dashboard only
+        // A correction of an earlier day reaches Saheli too (the engine files it under that day and drops the older answer).
+        const back = (Date.parse(`${toDateKeyIST()}T12:00:00+05:30`) - Date.parse(`${input.dateKey}T12:00:00+05:30`)) / 86400000;
+        if (!(back >= 0 && back <= 7)) return;
         const s = input.schedule;
         const medicine = String(s.type || "").toUpperCase() === "MEDICINE";
         const what = `${s.title}${s.dosage ? ` ${s.dosage}` : ""}${s.time ? ` (${s.time})` : ""}`;
@@ -298,7 +300,7 @@ async function pushCompletionToLedger(input: {
             subject_id: input.recipientUserId,
             kind: medicine ? (done ? "dose_taken" : "dose_missed") : done ? "routine_done" : "routine_missed",
             summary: `${what}: ${done ? (medicine ? "taken" : "done") : "missed"} (${who}${input.note ? `; ${input.note.trim().slice(0, 120)}` : ""})`,
-            payload: { scheduleId: s.scheduleId, dateKey: input.dateKey, status: input.status, medicine: medicine ? s.title : undefined },
+            payload: { scheduleId: s.scheduleId, dateKey: input.dateKey, time: s.time, status: input.status, medicine: medicine ? s.title : undefined },
             ref: `completion:${s.scheduleId}:${input.dateKey}:${input.status}:${Date.now()}`,
         });
     } catch (err) {

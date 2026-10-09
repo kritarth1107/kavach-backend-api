@@ -9,6 +9,7 @@ import { appendCareRecordEvent } from "./careRecord.service";
 import {
     getScheduleDayStatuses,
     markScheduleItemCompletion,
+    parseTimeToMinutes,
 } from "./careScheduleCompletion.service";
 import { toDateKeyIST } from "../utils/istTime.util";
 
@@ -25,11 +26,30 @@ export function isDoseDoneReply(text: string): boolean {
 
 function fuzzyMatchScheduleTitle(title: string, query: string): boolean {
     const t = title.toLowerCase();
-    const q = query.toLowerCase().trim();
+    const q = query.toLowerCase().replace(/[_:]+/g, " ").trim(); // the brain may pass a key (vitamin_d3_60)
     if (!q || q.length < 2) return false;
     if (t.includes(q) || q.includes(t)) return true;
     const tokens = q.split(/\s+/).filter((w) => w.length >= 3);
     return tokens.some((w) => t.includes(w));
+}
+
+/**
+ * The day's item the brain means: same title, at the dose time it named if any. A correction re-marks an item that is
+ * already marked, so marked items match too (an unmarked one first).
+ */
+export function pickScheduleItem<T extends { title: string; time?: string; status: string }>(
+    items: T[],
+    titleHint: string,
+    timeHint: string | undefined,
+    prefer: (i: T) => boolean,
+): T | undefined {
+    let found = items.filter((i) => fuzzyMatchScheduleTitle(i.title, titleHint));
+    const want = timeHint ? parseTimeToMinutes(timeHint) : null;
+    if (want !== null) {
+        const atTime = found.filter((i) => (i.time ? parseTimeToMinutes(i.time) : null) === want);
+        if (atTime.length) found = atTime;
+    }
+    return found.find(prefer) ?? found[0];
 }
 
 export async function markScheduleCompleted(input: {
@@ -38,6 +58,7 @@ export async function markScheduleCompleted(input: {
     actorUserId: string;
     scheduleId?: string;
     titleHint?: string;
+    timeHint?: string;
     dateKey?: string;
     note?: string;
     channel?: ChannelType;
@@ -55,11 +76,7 @@ export async function markScheduleCompleted(input: {
             input.actorUserId,
             dateKey,
         );
-        const match = day.items.find(
-            (i) =>
-                fuzzyMatchScheduleTitle(i.title, input.titleHint!) &&
-                i.status !== "completed",
-        );
+        const match = pickScheduleItem(day.items, input.titleHint, input.timeHint, (i) => i.status !== "completed");
         scheduleId = match?.scheduleId;
     }
 
@@ -111,6 +128,7 @@ export async function markScheduleMissed(input: {
     actorUserId: string;
     scheduleId?: string;
     titleHint?: string;
+    timeHint?: string;
     dateKey?: string;
     note?: string;
     fromBrain?: boolean;
@@ -125,7 +143,7 @@ export async function markScheduleMissed(input: {
             input.actorUserId,
             dateKey,
         );
-        const match = day.items.find((i) => fuzzyMatchScheduleTitle(i.title, input.titleHint!));
+        const match = pickScheduleItem(day.items, input.titleHint, input.timeHint, (i) => i.status !== "missed");
         scheduleId = match?.scheduleId;
     }
 
