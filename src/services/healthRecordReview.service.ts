@@ -353,12 +353,23 @@ export type DecisionResult = {
 
 const ACTOR = (id: string, name: string) => ({ id, name: name || "Family" });
 
+/** Saheli's brain saw "asked what to do" for this record (record_review); tell it the question is answered. */
+async function recordDecided(familyId: string, subjectId: string, documentId: string, what: string): Promise<void> {
+    const { aiPushCareEvent } = await import("../clients/aiEngine.client");
+    await aiPushCareEvent({
+        family_id: familyId, subject_id: subjectId, kind: "record_decided",
+        summary: `Health record ${documentId} is decided: ${what}. Do not ask about it again.`,
+        payload: { document_id: documentId }, ref: `record_decided:${documentId}:${Date.now()}`,
+    }).catch(() => null);
+}
+
 export async function applyDecision(familyId: string, recipientUserId: string, documentId: string, actor: { id: string; name: string }, input: Decision): Promise<DecisionResult> {
     const doc = await LabDocument.findOne({ familyId, recipientUserId, documentId });
     if (!doc) throw new AppError("Health record not found", 404);
     const out: DecisionResult = { scheduled: [], scheduleProblems: [], remembered: 0, reminder: false, notified: false };
     if (input.action === "discard") {
         await removeRecord(doc);
+        void recordDecided(familyId, recipientUserId, documentId, `deleted by ${actor.name}; nothing from it is kept`);
         return { ...out, deleted: true };
     }
     if (doc.reviewStatus === "saved") throw new AppError("This record is already saved", 409);
@@ -370,6 +381,7 @@ export async function applyDecision(familyId: string, recipientUserId: string, d
         doc.structuredValues = [];
         doc.decision = { action: "file_only", by: actor.id, at: new Date().toISOString() };
         await doc.save();
+        void recordDecided(familyId, recipientUserId, documentId, `${actor.name} kept only the file; nothing from it is remembered`);
         return { ...out, reviewStatus: "file_only" };
     }
     if (!original || doc.extractionStatus === "failed") throw new AppError("Nothing could be read from this record yet. Read it again, or keep only the file.", 409, { code: "not_read" });
@@ -461,6 +473,8 @@ export async function applyDecision(familyId: string, recipientUserId: string, d
     }).catch(() => null);
     doc.decision = { action: "save", by: actor.id, at: new Date().toISOString(), remembered: out.remembered, scheduled: out.scheduled, reminder: out.reminder, notified: out.notified };
     await doc.save();
+    void recordDecided(familyId, recipientUserId, documentId,
+        `saved to the records by ${actor.name}${out.scheduled.length ? `; reminders added for ${out.scheduled.join(", ")}` : ""}`);
     return { ...out, reviewStatus: "saved" };
 }
 
