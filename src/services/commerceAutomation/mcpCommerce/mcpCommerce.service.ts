@@ -187,7 +187,7 @@ export function placeParts(place: Pick<Place, "line1" | "line2" | "landmark" | "
     return { flat, building, locality, city: place.city || "", pincode: place.pincode, full: place.full, landmark: place.landmark || "" };
 }
 
-async function coordsForPlace(familyId: string, place: Place): Promise<{ lat: number; lng: number; source: string } | null> {
+export async function coordsForPlace(familyId: string, place: Place): Promise<{ lat: number; lng: number; source: string } | null> {
     if (typeof place.lat === "number" && typeof place.lng === "number") return { lat: place.lat, lng: place.lng, source: "address_book" };
     // Swiggy geocodes the same family address server-side; reuse those coordinates for Zepto.
     const swiggy = await McpStoreAddress.findOne({

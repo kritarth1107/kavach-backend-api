@@ -585,9 +585,11 @@ export async function executeSaheliTool(input: {
             const { defaultPlaceFor, findPlaceByWords } = await import("./familyAddressBook.service");
             const words = String(input.args.words ?? "").trim();
             const place = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (await defaultPlaceFor(input.familyId, input.recipientUserId));
-            return place
-                ? { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full, lat: place.lat ?? null, lng: place.lng ?? null }
-                : { addressId: null };
+            if (!place) return { addressId: null };
+            // Coordinates for fast store look-ups: the address book's, else the ones the store connectors geocoded, else a geocode.
+            const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const at = await coordsForPlace(input.familyId, place).catch(() => null);
+            return { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full, lat: at?.lat ?? null, lng: at?.lng ?? null };
         }
         case "connector_status": {
             // Can the engine's shopping agent order this store through its official connector?
