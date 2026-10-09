@@ -71,25 +71,14 @@ Never guess a name, date, value, range, medicine, dose or timing. If something i
 - summary: 1–2 plain sentences of what the record says (for a scan or discharge: the impression or diagnosis). No advice.
 - unread may contain only: "patient name", "date", "doctor or lab", "values", "medicines", "the page".`;
 
-const STR = { type: "STRING", nullable: true };
-const SCHEMA = {
-    type: "OBJECT",
-    properties: {
-        patientName: STR, patientAge: STR, patientSex: STR, recordDate: STR, recordDateText: STR, provider: STR, doctor: STR,
-        kind: { type: "STRING", enum: KINDS }, title: { type: "STRING" }, tests: STR,
-        values: { type: "ARRAY", items: { type: "OBJECT", properties: { name: { type: "STRING" }, value: { type: "STRING" }, unit: STR, range: STR, flag: { type: "STRING", nullable: true, enum: ["low", "high", "normal"] } }, required: ["name", "value"] } },
-        medicines: { type: "ARRAY", items: { type: "OBJECT", properties: {
-            name: { type: "STRING" }, strength: STR, dose: STR, frequency: STR,
-            slots: { type: "ARRAY", items: { type: "STRING", enum: SLOTS } },
-            food: { type: "STRING", nullable: true, enum: FOODS }, durationDays: { type: "INTEGER", nullable: true }, instructions: STR,
-        }, required: ["name"] } },
-        nextVisit: { type: "OBJECT", nullable: true, properties: { text: { type: "STRING" }, date: STR } },
-        followUps: { type: "ARRAY", items: { type: "STRING" } },
-        summary: { type: "STRING" },
-        unread: { type: "ARRAY", items: { type: "STRING" } },
-    },
-    required: ["kind", "title", "values", "medicines", "summary", "unread"],
-};
+/** The JSON the reader returns (null where not printed). */
+const SHAPE = `{"patientName": str|null, "patientAge": str|null, "patientSex": str|null, "recordDate": "YYYY-MM-DD"|null, "recordDateText": str|null,
+ "provider": str|null, "doctor": str|null, "kind": "lab"|"prescription"|"discharge"|"scan"|"other", "title": str, "tests": str|null,
+ "values": [{"name": str, "value": str, "unit": str|null, "range": str|null, "flag": "low"|"high"|"normal"|null}],
+ "medicines": [{"name": str, "strength": str|null, "dose": str|null, "frequency": str|null, "slots": ["morning"|"afternoon"|"evening"|"night"],
+   "food": "before_food"|"after_food"|"with_food"|"empty_stomach"|null, "durationDays": number|null, "instructions": str|null}],
+ "nextVisit": {"text": str, "date": "YYYY-MM-DD"|null}|null, "followUps": [str], "summary": str,
+ "unread": ["patient name"|"date"|"doctor or lab"|"values"|"medicines"|"the page"]}`;
 
 const clip = (v: unknown, max = 120): string | null => {
     const t = typeof v === "string" ? v.replace(/\s+/g, " ").trim() : typeof v === "number" ? String(v) : "";
@@ -184,19 +173,28 @@ export async function readHealthRecord(input: { buffer?: Buffer; mimeType?: stri
     const prompt = asFile
         ? `Read this ${mime === "application/pdf" ? "PDF" : "photo"}${input.fileName ? ` (${input.fileName})` : ""} and return the JSON.`
         : `Read this health record text and return the JSON.\n\n<<<\n${text.slice(0, 60_000)}\n>>>`;
-    const raw = await vertexGenerateText({
-        model: GEMINI_PRO_MODEL,
-        system: SYSTEM,
-        prompt,
-        responseSchema: SCHEMA,
-        temperature: 0,
-        maxOutputTokens: 16_384,
-        thinkingLevel: "low",
-        timeoutMs: 75_000,
-        ...(asFile ? { inlineData: { mimeType: mime, data: input.buffer!.toString("base64") } } : {}),
-    });
+    // Plain JSON mode with the shape spelled out, not Vertex's responseSchema: with the schema every read hung until the
+    // 75 s timeout or came back HTTP 500 (live 2026-10-09: Maa's clear prescription photo got "couldn't read"); without it
+    // the same model reads it in ~8 s. One more try if the first answer is missing or not JSON.
+    let raw = "";
+    let reading: Reading | null = null;
+    for (const timeoutMs of [50_000, 50_000]) {
+        raw = (await vertexGenerateText({
+            model: GEMINI_PRO_MODEL,
+            system: `${SYSTEM}\n\nReturn one JSON object with exactly these keys:\n${SHAPE}`,
+            prompt,
+            json: true,
+            temperature: 0,
+            maxOutputTokens: 16_384,
+            thinkingLevel: "low",
+            timeoutMs,
+            ...(asFile ? { inlineData: { mimeType: mime, data: input.buffer!.toString("base64") } } : {}),
+        })) ?? "";
+        reading = readingFromModel(parseJsonLoose(raw));
+        if (reading) break;
+        console.warn(`health record read attempt failed (${Date.now() - started} ms): ${lastVertexError || "bad JSON"}`);
+    }
     const ms = Date.now() - started;
-    const reading = readingFromModel(parseJsonLoose(raw));
     if (!reading) {
         const error = raw ? `unreadable answer (${lastVertexError || "bad JSON"})` : lastVertexError || "no answer";
         console.warn(`health record read failed (${ms} ms): ${error}`);
