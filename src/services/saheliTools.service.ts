@@ -69,6 +69,7 @@ export type SaheliToolName =
     | "ride_status"
     | "cancel_ride"
     | "sync_medicine_schedule"
+    | "ops_alert"
     | "get_reminder_log"
     | "export_care_record"
     | "claim_schedule_rows"
@@ -92,6 +93,12 @@ export async function executeSaheliTool(input: {
     recipientUserId: string;
     actorUserId: string;
 }): Promise<Record<string, unknown>> {
+    if (input.tool === "ops_alert") {
+        // Internal only (the engine, behind the shared secret) → the founder: e.g. the browser service is low on credit.
+        // Not about a family, so no family check.
+        const { sendOpsAlert } = await import("./email.service");
+        return sendOpsAlert(String(input.args.subject ?? "Alert"), String(input.args.text ?? ""));
+    }
     await getFamilyForActor(input.familyId, input.actorUserId);
 
     switch (input.tool) {

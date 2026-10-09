@@ -58,3 +58,16 @@ export async function sendFamilyInviteEmail(params: {
     throw new AppError(error.message || "Failed to send invitation email", 502);
   }
 }
+
+/** An operations alert to the founder (credits running out, a vendor down). OPS_ALERT_TO overrides the recipient. */
+export async function sendOpsAlert(subject: string, text: string) {
+  const to = (process.env.OPS_ALERT_TO || "kritarth@kavach.care").split(",").map((x) => x.trim()).filter(Boolean);
+  const { error } = await resend().emails.send({
+    from: process.env.OPS_ALERT_FROM || "Kavach monitor <alerts@emails.kavach.care>",
+    to,
+    subject: `[Kavach] ${subject}`.slice(0, 160),
+    text: text.slice(0, 4000),
+  });
+  if (error) throw new AppError(error.message || "Failed to send ops alert", 502);
+  return { sent: true, to: to.length };
+}
