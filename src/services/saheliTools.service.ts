@@ -1094,7 +1094,7 @@ case "notify_caregivers": {
                 phone = String((ident as { channelIdentifier?: string } | null)?.channelIdentifier ?? "");
             }
             if (!phone) {
-                const user = await User.findById(input.actorUserId).lean();
+                const user = await User.findOne({ userId: input.actorUserId }).lean(); // userId is a UUID, not the Mongo _id
                 const cc = (user as { phone?: { countryCode?: string; number?: string } } | null)?.phone?.countryCode;
                 const num = (user as { phone?: { countryCode?: string; number?: string } } | null)?.phone?.number;
                 if (cc && num) phone = `${cc}${num}`.replace(/^\+/, "");
@@ -1281,7 +1281,9 @@ async function connectorCtx(familyId: string, recipientUserId: string, placeId: 
     const { default: User } = await import("../models/users.model");
     const place = (placeId && (await getPlace(familyId, placeId))) || (await defaultPlaceFor(familyId, recipientUserId));
     if (!place) return null;
-    const user = await User.findById(recipientUserId).select("phone phoneKey").lean<{ phoneKey?: string; phone?: { countryCode?: string; number?: string } }>();
+    // Users are keyed by userId (a UUID), not Mongo _id: findById threw a CastError and every connector call failed
+    // with a 500 (live 2026-10-09: Instamart and Zepto fell back to the slow browser).
+    const user = await User.findOne({ userId: recipientUserId }).select("phone phoneKey").lean<{ phoneKey?: string; phone?: { countryCode?: string; number?: string } }>();
     const recipientPhone = user?.phoneKey || `${user?.phone?.countryCode ?? ""}${user?.phone?.number ?? ""}`;
     return { familyId, recipientUserId, recipientPhone, place };
 }
