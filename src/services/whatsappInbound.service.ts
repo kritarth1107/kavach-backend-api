@@ -53,8 +53,35 @@ async function shouldSkipStillWorking(from: string | undefined): Promise<boolean
 }
 
 /**
+ * The real answer finished after the "still on it" line already went out: send it now instead of dropping it
+ * (live 2026-10-09 15:47: the model was rate-limited, the reply came after 75 s and Maa never got it).
+ */
+async function deliverLate(msg: OutboundMessage | undefined): Promise<void> {
+    if (!msg || !msg.channelIdentifier || !(msg.content || msg.audioBuffer || msg.audioBase64)) return;
+    try {
+        const meta = await import("../clients/metaWhatsApp.client");
+        if (!meta.isMetaWhatsAppEnabled()) return;
+        if (msg.audioBuffer || msg.audioBase64) {
+            await meta.sendMetaWhatsAppVoice({
+                to: msg.channelIdentifier,
+                audioBuffer: msg.audioBuffer || Buffer.from(msg.audioBase64 || "", "base64"),
+                mimeType: msg.audioMimeType || "audio/mpeg",
+                caption: msg.content,
+                payloads: msg.whatsappPayloads,
+            });
+        } else {
+            await meta.sendViaMetaWhatsApp(msg.channelIdentifier, msg.content, msg.whatsappPayloads);
+        }
+        console.log(`Meta WhatsApp late reply sent to ${msg.channelIdentifier.slice(0, 6)}…`);
+    } catch (err) {
+        console.error("late WhatsApp reply failed:", err instanceof Error ? err.message : err);
+    }
+}
+
+/**
  * WhatsApp inbound with a hard reply SLA so typing indicators are never left forever
- * when Playwright / Gemini / partner APIs hang.
+ * when Playwright / Gemini / partner APIs hang. If the SLA line went out, the real answer
+ * is still sent when it arrives.
  *
  * Still-working fallback is suppressed while pharmacy OTP is pending or after cancel,
  * so we never spam "still working" + re-ask OTP loops.
@@ -73,9 +100,13 @@ export async function handleWhatsAppInbound(body: {
     const slaMs = replySlaMs();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
+    let fellBack = false;
+    const real = routeWhatsAppInbound(body);
+    // After the SLA line was sent, the real answer goes out on its own when it is ready.
+    real.then((msg) => (fellBack ? deliverLate(msg) : undefined)).catch(() => undefined);
     try {
         return await Promise.race([
-            routeWhatsAppInbound(body).then((msg) => {
+            real.then((msg) => {
                 settled = true;
                 return msg;
             }),
@@ -94,7 +125,10 @@ export async function handleWhatsAppInbound(body: {
                             `WhatsApp reply SLA hit after ${slaMs}ms — sending progress fallback`,
                         );
                         const fb = await slaFallback(body.from);
-                        if (!settled) resolve(fb);
+                        if (!settled) {
+                            fellBack = true;
+                            resolve(fb);
+                        }
                     })();
                 }, slaMs);
             }),
