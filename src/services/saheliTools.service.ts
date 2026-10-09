@@ -78,6 +78,7 @@ export type SaheliToolName =
     | "emergency_link"
     | "delivery_place"
     | "connector_status"
+    | "connector_search"
     | "connector_prepare"
     | "connector_place"
     | "set_voice_preference"
@@ -598,13 +599,36 @@ export async function executeSaheliTool(input: {
             }
             return { connected, enabled: true };
         }
-        case "connector_prepare": {
+        case "connector_search": {
+            // A look-up through the family's linked store (no browser, no login code): the options to offer.
             const mcp = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
             const ctx = await connectorCtx(input.familyId, input.recipientUserId, input.args.placeId ? String(input.args.placeId) : null);
             if (!ctx) return { ok: false, kind: "no_place", detail: "No saved delivery place for this person." };
             const store = String(input.args.store ?? "").toLowerCase() as "swiggy" | "instamart" | "zepto";
             try {
                 const found = await mcp.searchStore(ctx, store, String(input.args.item ?? ""), { restaurantName: input.args.restaurant ? String(input.args.restaurant) : null });
+                if (found.error) {
+                    const kind = found.error === "not_connected" ? "not_connected" : found.error === "unserviceable" ? "unserviceable" : "store_error";
+                    return { ok: false, kind, detail: found.message || found.error };
+                }
+                const rs = (paise?: number) => (paise ? `₹${Math.round(paise / 100)}` : undefined);
+                return { ok: true, items: found.hits.slice(0, 4).map((h) => ({ name: h.name, price: rs(h.pricePaise), ref: h })) };
+            } catch (err) {
+                const code = err instanceof mcp.McpStoreError ? err.code : "error";
+                return { ok: false, kind: code, detail: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+            }
+        }
+        case "connector_prepare": {
+            const mcp = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const ctx = await connectorCtx(input.familyId, input.recipientUserId, input.args.placeId ? String(input.args.placeId) : null);
+            if (!ctx) return { ok: false, kind: "no_place", detail: "No saved delivery place for this person." };
+            const store = String(input.args.store ?? "").toLowerCase() as "swiggy" | "instamart" | "zepto";
+            try {
+                // The exact product the person picked from connector_search, else the best match for the words.
+                const chosen = input.args.pick as import("./commerceAutomation/mcpCommerce/mcpParse").McpPick | undefined;
+                const found = chosen?.name && chosen.store === store
+                    ? { hits: [chosen], error: undefined as string | undefined, message: undefined as string | undefined }
+                    : await mcp.searchStore(ctx, store, String(input.args.item ?? ""), { restaurantName: input.args.restaurant ? String(input.args.restaurant) : null });
                 if (found.error) return { ok: false, kind: found.error === "not_connected" ? "not_connected" : "store_error", detail: found.message || found.error };
                 const pick = found.hits[0];
                 if (!pick) return { ok: false, kind: "not_found", detail: `Nothing matching "${input.args.item}" on ${mcp.MCP_STORE_LABEL[store]}.` };
