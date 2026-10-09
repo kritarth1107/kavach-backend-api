@@ -126,6 +126,8 @@ router.get(`${cm}/family-tasks`, protect, wrap(careMemory.getFamilyTasks));
 router.post(`${cm}/family-tasks`, protect, wrap(careMemory.postFamilyTask));
 router.post(`${cm}/family-tasks/:taskId/done`, protect, wrap(careMemory.postFamilyTaskDone));
 router.get(`${cm}/spending`, protect, wrap(careMemory.getSpending));
+router.get(`${cm}/boundaries`, protect, wrap(careMemory.getBoundaries));
+router.put(`${cm}/boundaries`, protect, wrap(careMemory.putBoundaries));
 router.get(`${cm}/emergency-link`, protect, wrap(careMemory.getEmergencyLink));
 router.post(`${cm}/emergency-link`, protect, wrap(careMemory.postEmergencyLink));
 router.delete(`${cm}/emergency-link`, protect, wrap(careMemory.deleteEmergencyLink));

@@ -345,6 +345,22 @@ export async function getSpending(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/spending${qs({ month })}`) });
 }
 
+/** The family's limits for orders and rides (boundaries); changing them is for the family's approver (engine checks). */
+export async function getBoundaries(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/boundaries`) });
+}
+
+const BOUNDARY_KEYS = new Set(["elder_order_limit", "elder_ride_limit", "anyone_over", "monthly_cap", "approval_categories", "approvers", "members"]);
+
+export async function putBoundaries(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const raw = (req.body?.changes ?? {}) as Record<string, unknown>;
+    const changes = Object.fromEntries(Object.entries(raw).filter(([k]) => BOUNDARY_KEYS.has(k)));
+    if (!Object.keys(changes).length) throw new AppError("Nothing to change", 400);
+    res.json({ success: true, data: await aiEngineJson("PUT", `${base}/boundaries`, { actor, changes }) });
+}
+
 export async function getEmergencyLink(req: Request, res: Response) {
     await caregiverScope(req);
     const { currentEmergencyLink } = await import("../services/emergencyCard.service");
