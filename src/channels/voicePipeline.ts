@@ -656,10 +656,10 @@ export async function prepareSpeech(text: string, opts: { languageHint?: string 
     const fallback = { script: text, mood: moodFromText(text), prepared: false };
     if (process.env.TTS_PREPARE === "off" || text.length > 1500) return fallback;
     try {
-        // The engine writes it with a fast model (Gemini 3.8 Flash, ~3 s); this client is Pro-only and took 5–7 s.
+        // The engine writes it with fast models raced (2–4 s, at most 6 s); this client is Pro-only and took 5–7 s.
         const { aiEngineJson } = await import("../clients/aiEngine.client");
         const out = await aiEngineJson<{ script?: string; mood?: string; prepared?: boolean }>(
-            "POST", "/v2/voice/prepare", { text, language: languageName(opts.languageHint, opts.locale) }, 6_000);
+            "POST", "/v2/voice/prepare", { text, language: languageName(opts.languageHint, opts.locale) }, 7_500);
         const script = String(out?.script ?? "").trim();
         if (!out?.prepared || !script || !samePoints(text, script)) return fallback;
         return { script, mood: (MOODS as string[]).includes(String(out.mood)) ? (out.mood as Mood) : fallback.mood, prepared: true };
