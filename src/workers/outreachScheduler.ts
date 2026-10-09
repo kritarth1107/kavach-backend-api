@@ -137,6 +137,12 @@ export async function runOutreachTick() {
                 );
             }
 
+            // Saheli v2 families: check-ins come from the engine (today's unmarked schedule after a chat, how they feel,
+            // readings, reports, weight), written with the person's whole context and only by day. The generic random /
+            // memory / lonely / symptom messages here are off for them (founder 2026-10-09). Medicine reminders stay.
+            const { brainV2Mode } = await import("../services/brainV2.service");
+            if (brainV2Mode(companion.familyId) === "live") continue;
+
             try {
                 if (!isWithinQuietHours(companion, now)) {
                     const symptomFollowed = await maybeSymptomEveningFollowup(companion);
