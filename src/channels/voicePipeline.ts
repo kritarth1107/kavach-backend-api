@@ -1,14 +1,18 @@
 /**
  * Voice pipeline — STT (Chirp 3 preferred, Gemini audio fallback) + TTS.
- * TTS: Google Chirp 3 HD first (one native Indian voice across Hindi, Bengali, Tamil, Telugu, Marathi, Gujarati, Kannada,
- * Malayalam, Punjabi and Indian English; OGG/Opus straight from Google), ElevenLabs for the rest and as a fallback.
- * Chosen 2026-10-08 after a round-trip test (speak → transcribe → compare): the old ElevenLabs setup misread Bengali
- * completely; Chirp 3 HD made no errors in Tamil, Bengali or Marathi.
+ * TTS (2026-10-09, founder: "non-English voices sound like reading a script, no emotion, accent unclear"):
+ * 1. prepareSpeech turns the WhatsApp text into what Saheli would *say* (short spoken sentences, a natural filler, pauses)
+ *    and picks a mood (concerned, reassuring, cheerful, gentle, neutral). Facts and numbers stay exactly as written.
+ * 2. ElevenLabs v4 first (emotion tags, every Indian language incl. Bengali, Odia, Assamese, Urdu; ~4 s), Gemini 2.5 Pro
+ *    TTS next (style prompt per mood; no bn-IN), Google Chirp 3 HD last (no emotion control; it was the flat voice).
+ * Chosen after an A/B of 6 engines × 5 languages (agent workspace voice/ab): a Gemini audio judge rated Chirp 4/5 for
+ * naturalness and emotion and ElevenLabs v4 / Gemini 2.5 Pro 5/5; ElevenLabs was ~2.5× faster than Gemini Pro TTS.
+ * TTS_ORDER (eleven,gemini,google) and TTS_ORDER_BY_LANG ('{"bn":"eleven,google"}') change the order.
  */
 import { spawn } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
-import { dialectBase } from "../services/language.service";
+import { dialectBase, speechLabel } from "../services/language.service";
 
 export type SttInput = {
     audioBase64?: string;
@@ -383,7 +387,8 @@ export function speakable(text: string): string {
 
 /** Saheli default voice: "Anika – Natural Conversations" (Indian female, Hindi/Hinglish). */
 export const DEFAULT_ELEVENLABS_VOICE_ID = "A5W9pR9OjIbu80J0WuDW";
-export const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
+/** v4 speaks every Indian language Saheli needs and follows emotion tags ([warmly], [gently]); v2 spoke only hi/ta. */
+export const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_v4";
 
 function envNumber(name: string, fallback: number): number {
     const raw = process.env[name]?.trim();
@@ -408,8 +413,6 @@ export function speechLanguage(text: string): string {
     return most >= 3 ? best : "latin";
 }
 
-/** Languages ElevenLabs' multilingual v2 voice speaks; others use the wider model (ELEVENLABS_WIDE_MODEL_ID). */
-const V2_LANGS = new Set(["latin", "hi", "ta"]);
 
 function jsonEnv(name: string): Record<string, string> {
     try {
@@ -430,13 +433,13 @@ export function getTtsVoiceConfig(lang = "latin") {
     const baseModel = process.env.ELEVENLABS_MODEL_ID?.trim() || DEFAULT_ELEVENLABS_MODEL_ID;
     return {
         voiceId: voices[lang] || process.env.ELEVENLABS_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE_ID,
-        modelId: models[lang] || (V2_LANGS.has(lang) ? baseModel : process.env.ELEVENLABS_WIDE_MODEL_ID?.trim() || "eleven_v3"),
+        modelId: models[lang] || baseModel,
         voiceSettings: {
-            stability: envNumber("ELEVENLABS_STABILITY", 0.45),
+            stability: envNumber("ELEVENLABS_STABILITY", 0.4),
             similarity_boost: envNumber("ELEVENLABS_SIMILARITY", 0.75),
-            style: envNumber("ELEVENLABS_STYLE", 0.2),
+            style: envNumber("ELEVENLABS_STYLE", 0.35),
             use_speaker_boost: process.env.ELEVENLABS_SPEAKER_BOOST?.trim() !== "false",
-            speed: Math.min(1.2, Math.max(0.7, envNumber("ELEVENLABS_SPEED", 0.9))),
+            speed: Math.min(1.2, Math.max(0.7, envNumber("ELEVENLABS_SPEED", 0.92))),
         },
     };
 }
@@ -473,10 +476,16 @@ function looksHinglish(text: string): boolean {
     return (text.match(HINGLISH_WORDS) || []).length >= 2;
 }
 
-export function ttsOrder(): Array<"google" | "eleven"> {
-    const raw = (process.env.TTS_ORDER || "google,eleven").split(",").map((x) => x.trim().toLowerCase());
-    const out = raw.filter((x): x is "google" | "eleven" => x === "google" || x === "eleven");
-    return out.length ? [...new Set(out)] : ["google", "eleven"];
+type Provider = "eleven" | "gemini" | "google";
+const PROVIDERS: Provider[] = ["eleven", "gemini", "google"];
+
+/** Which engines speak, in order: TTS_ORDER_BY_LANG for this locale's language, else TTS_ORDER, else eleven,gemini,google. */
+export function ttsOrder(locale?: string): Provider[] {
+    const byLang = jsonEnv("TTS_ORDER_BY_LANG");
+    const lang = (locale || "").split("-")[0];
+    const raw = (byLang[lang] || process.env.TTS_ORDER || PROVIDERS.join(",")).split(",").map((x) => x.trim().toLowerCase());
+    const out = raw.filter((x): x is Provider => (PROVIDERS as string[]).includes(x));
+    return out.length ? [...new Set(out)] : PROVIDERS;
 }
 
 /** Saheli's Google voice (Chirp 3 HD name, same in every language) and pace. */
@@ -490,13 +499,13 @@ export function googleVoiceFor(locale: string) {
 }
 
 let lastTts:
-    | { at: string; provider: "google" | "eleven"; voiceId: string; modelId: string; locale?: string; ok: boolean; bytes?: number; status?: number }
+    | { at: string; provider: Provider; voiceId: string; modelId: string; locale?: string; mood?: string; ok: boolean; bytes?: number; status?: number }
     | null = null;
 
 /** Non-secret TTS runtime snapshot (for /meta/debug). */
 export function getTtsDebugSnapshot() {
     const cfg = getTtsVoiceConfig();
-    return { order: ttsOrder(), google: googleVoiceFor("hi-IN"), elevenConfigured: Boolean(elevenLabsApiKey()), ...cfg, lastTts };
+    return { order: ttsOrder(), google: googleVoiceFor("hi-IN"), gemini: geminiVoice(), elevenConfigured: Boolean(elevenLabsApiKey()), ...cfg, lastTts };
 }
 
 type Spoken = { audioBase64?: string; audioBuffer?: Buffer; mimeType?: string; text: string; voiceNote?: boolean };
@@ -524,7 +533,7 @@ async function googleTts(spoken: string, locale: string): Promise<Spoken | null>
             method: "POST",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "x-goog-user-project": gcpProjectId() },
             body: JSON.stringify({
-                input: { text: withinBytes(spoken, 4800) }, // the API takes at most 5000 bytes; Indic letters are 3 each
+                input: { text: withinBytes(plainSpeech(spoken), 4800) }, // the API takes at most 5000 bytes; Indic letters are 3 each
                 voice: { languageCode: locale, name: v.name },
                 // OGG/Opus at 48 kHz is exactly what WhatsApp plays as a voice note: no conversion needed.
                 audioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 48000, speakingRate: v.speakingRate },
@@ -549,10 +558,12 @@ async function googleTts(spoken: string, locale: string): Promise<Spoken | null>
     }
 }
 
-async function elevenTts(spoken: string, locale: string): Promise<Spoken | null> {
+async function elevenTts(spoken: string, locale: string, mood: Mood = "neutral"): Promise<Spoken | null> {
     const apiKey = elevenLabsApiKey();
     if (!apiKey) return null;
     const lang = speechLanguage(spoken);
+    // v3/v4 read emotion from an audio tag and pauses from ellipses (no SSML breaks).
+    const tagged = `${ELEVEN_TAG[mood]} ${spoken.replace(/\[(short|medium|long) pause\]/g, (_, n) => (n === "short" ? "…" : "… …"))}`;
     const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig(lang === "hi" && locale === "mr-IN" ? "mr" : lang);
     // Telling ElevenLabs the language stops it guessing (it read Bengali as Gujarati without this).
     const languageCode = locale === "en-IN" ? "en" : locale.split("-")[0];
@@ -561,7 +572,7 @@ async function elevenTts(spoken: string, locale: string): Promise<Spoken | null>
         const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
             method: "POST",
             headers: { "xi-api-key": apiKey, "Content-Type": "application/json", Accept: "audio/mpeg" },
-            body: JSON.stringify({ text: spoken.replace(/₹\s*(\d[\d,]*)/g, "$1 rupaye").slice(0, 2500), model_id: modelId, language_code: languageCode, voice_settings: voiceSettings }),
+            body: JSON.stringify({ text: tagged.replace(/₹\s*(\d[\d,]*)/g, "$1 rupaye").slice(0, 2500), model_id: modelId, language_code: languageCode, voice_settings: voiceSettings }),
             signal: AbortSignal.timeout(30_000),
         });
         if (!res.ok) {
@@ -583,20 +594,135 @@ async function elevenTts(spoken: string, locale: string): Promise<Spoken | null>
 
 /**
  * Speak a reply. `languageHint` is the listener's language or dialect ("mr", "marwari", "hinglish"…): it picks the
- * right accent for Devanagari and Roman text. Google first, ElevenLabs next; text only if neither answers.
+ * right accent for Devanagari and Roman text. The text is first turned into what Saheli would say (prepareSpeech), then
+ * spoken by the first engine that answers (ttsOrder); text only if none does.
  */
 export async function textToSpeech(text: string, opts: { languageHint?: string | null } = {}): Promise<Spoken> {
     const trimmed = text.trim();
     if (!trimmed) return { text };
-    const spoken = speakable(trimmed);
-    if (!spoken) return { text: trimmed };
-    const locale = ttsLocale(spoken, baseLanguageOf(opts.languageHint));
-    for (const provider of ttsOrder()) {
-        const out = provider === "google" ? await googleTts(spoken, locale) : await elevenTts(spoken, locale);
+    const plain = speakable(trimmed);
+    if (!plain) return { text: trimmed };
+    const locale = ttsLocale(plain, baseLanguageOf(opts.languageHint));
+    const { script, mood } = await prepareSpeech(plain, { languageHint: opts.languageHint, locale });
+    const spoken = speakable(script) || plain;
+    for (const provider of ttsOrder(locale)) {
+        const out = provider === "eleven" ? await elevenTts(spoken, locale, mood)
+            : provider === "gemini" ? await geminiTts(spoken, locale, mood, languageName(opts.languageHint, locale))
+            : await googleTts(spoken, locale);
         if (out) return { ...out, text: trimmed };
     }
     if (!elevenLabsApiKey()) console.log("TTS: no voice available — text-only reply");
     return { text: trimmed };
+}
+
+export type Mood = "concerned" | "reassuring" | "cheerful" | "gentle" | "neutral";
+const MOODS: Mood[] = ["concerned", "reassuring", "cheerful", "gentle", "neutral"];
+const ELEVEN_TAG: Record<Mood, string> = { concerned: "[gently]", reassuring: "[warmly]", cheerful: "[cheerfully]", gentle: "[softly]", neutral: "[warmly]" };
+const MOOD_STYLE: Record<Mood, string> = {
+    concerned: "soft, slow and gently concerned, calm and reassuring, like comforting a worried parent",
+    reassuring: "warm, calm and reassuring, unhurried, with a gentle smile in the voice",
+    cheerful: "bright, warm and happy, proud of them, with a smile in the voice",
+    gentle: "gentle and affectionate, relaxed and caring",
+    neutral: "warm and friendly, relaxed",
+};
+
+/** Pause tags out (for engines that would read them). */
+export function plainSpeech(text: string): string {
+    return text.replace(/\s*\[(short|medium|long) pause\]\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+}
+
+/** The listener's language for prompts: "Marwari (मारवाड़ी)", "Tamil (தமிழ்)", or from the voice locale. */
+function languageName(hint: string | null | undefined, locale: string): string {
+    const byLocale: Record<string, string> = { "hi-IN": "Hindi", "mr-IN": "Marathi", "ta-IN": "Tamil", "te-IN": "Telugu", "bn-IN": "Bengali (Kolkata)",
+        "gu-IN": "Gujarati", "kn-IN": "Kannada", "ml-IN": "Malayalam", "pa-IN": "Punjabi", "or-IN": "Odia", "en-IN": "Indian English" };
+    if (hint) {
+        const label = speechLabel({ dialect: hint, language: hint } as Parameters<typeof speechLabel>[0]);
+        if (label && label !== "not set") return label;
+    }
+    return byLocale[locale] || "Hindi";
+}
+
+/** A guess at the mood without a model: worry words → concerned. */
+export function moodFromText(text: string): Mood {
+    if (/घबरा|चिंता|दर्द|तकलीफ|चक्कर|डॉक्टर|अस्पताल|worr|pain|dizz|doctor|hospital|சரியில்ல|வலி|চিন্তা|ব্যথা|काळजी करू/i.test(text)) return "concerned";
+    return "neutral";
+}
+
+/**
+ * What Saheli would say in a voice note, not read out: short spoken sentences, at most one natural filler, pauses where a
+ * person breathes, and the mood. Every number stays as written (checked); on any doubt or after 7 s, the text as is.
+ */
+export async function prepareSpeech(text: string, opts: { languageHint?: string | null; locale: string }): Promise<{ script: string; mood: Mood; prepared: boolean }> {
+    const fallback = { script: text, mood: moodFromText(text), prepared: false };
+    if (process.env.TTS_PREPARE === "off" || text.length > 1500) return fallback;
+    try {
+        // The engine writes it with a fast model (Gemini 3.8 Flash, ~3 s); this client is Pro-only and took 5–7 s.
+        const { aiEngineJson } = await import("../clients/aiEngine.client");
+        const out = await aiEngineJson<{ script?: string; mood?: string; prepared?: boolean }>(
+            "POST", "/v2/voice/prepare", { text, language: languageName(opts.languageHint, opts.locale) }, 6_000);
+        const script = String(out?.script ?? "").trim();
+        if (!out?.prepared || !script || !samePoints(text, script)) return fallback;
+        return { script, mood: (MOODS as string[]).includes(String(out.mood)) ? (out.mood as Mood) : fallback.mood, prepared: true };
+    } catch {
+        return fallback;
+    }
+}
+
+/** The spoken script keeps every number of the text and is not much longer or shorter (no invented facts). */
+export function samePoints(text: string, script: string): boolean {
+    const nums = (s: string) => (s.match(/\d+(?:[.:]\d+)?/g) ?? []).sort().join(",");
+    const len = plainSpeech(script).length;
+    return nums(asciiDigits(text)) === nums(asciiDigits(plainSpeech(script))) && len >= text.length * 0.6 && len <= text.length * 1.8 + 40;
+}
+
+function asciiDigits(s: string): string {
+    return s.replace(/[\u0966-\u096F\u09E6-\u09EF\u0A66-\u0A6F\u0AE6-\u0AEF\u0B66-\u0B6F\u0BE6-\u0BEF\u0C66-\u0C6F\u0CE6-\u0CEF\u0D66-\u0D6F]/g,
+        (d) => String((d.charCodeAt(0) - 6) & 0xf)); // every Indic digit block starts at …6
+}
+
+/** Locales Gemini TTS speaks (no bn-IN: it has only Bangladeshi Bengali). */
+const GEMINI_TTS_LOCALES = new Set(["hi-IN", "mr-IN", "ta-IN", "te-IN", "en-IN", "gu-IN", "kn-IN", "ml-IN", "pa-IN", "or-IN"]);
+
+export function geminiVoice() {
+    return { name: process.env.TTS_GEMINI_VOICE?.trim() || "Sulafat", model: process.env.TTS_GEMINI_MODEL?.trim() || "gemini-2.5-pro-tts" };
+}
+
+async function geminiTts(spoken: string, locale: string, mood: Mood, language: string): Promise<Spoken | null> {
+    if (!GEMINI_TTS_LOCALES.has(locale)) return null;
+    const token = await getAccessToken();
+    if (!token) return null;
+    const v = geminiVoice();
+    const started = Date.now();
+    const prompt = `You are Saheli, a caring young Indian woman sending a WhatsApp voice note to a family member, often an elderly parent. `
+        + `Speak natural ${language} with a native accent, ${MOOD_STYLE[mood]}. Talk the way people really talk, with small natural pauses `
+        + `between thoughts; never sound like reading a script. Slightly slower than usual, every word clear.`;
+    try {
+        const res = await fetch("https://texttospeech.googleapis.com/v1/text:synthesize", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", "x-goog-user-project": gcpProjectId() },
+            body: JSON.stringify({
+                input: { text: withinBytes(spoken, 3600), prompt },
+                voice: { languageCode: locale, name: v.name, modelName: v.model },
+                audioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 48000 },
+            }),
+            signal: AbortSignal.timeout(25_000),
+        });
+        if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            lastTts = { at: new Date().toISOString(), provider: "gemini", voiceId: v.name, modelId: v.model, locale, mood, ok: false, status: res.status };
+            console.warn(`Gemini TTS failed (${res.status}) voice=${v.name}: ${body.slice(0, 200)}`);
+            return null;
+        }
+        const json = (await res.json()) as { audioContent?: string };
+        if (!json.audioContent) return null;
+        const note = await toVoiceNote(Buffer.from(json.audioContent, "base64"), "audio/ogg");
+        lastTts = { at: new Date().toISOString(), provider: "gemini", voiceId: v.name, modelId: v.model, locale, mood, ok: true, bytes: note.buffer.length };
+        console.log(`TTS: Gemini ok voice=${v.name} mood=${mood} bytes=${note.buffer.length} ms=${Date.now() - started}`);
+        return { text: spoken, audioBuffer: note.buffer, audioBase64: note.buffer.toString("base64"), mimeType: note.mimeType, voiceNote: note.voice };
+    } catch (err) {
+        console.warn("Gemini TTS error:", err instanceof Error ? err.message : err);
+        return null;
+    }
 }
 
 /** A dialect's base language for the voice (Marwari → hi, Tulu → kn), or the hint itself. */

@@ -3,7 +3,7 @@ import { languageCodeFor, parseScribe, speakable, sttLanguageCodes, sttOrder } f
 import { shouldVoiceReply } from "../src/services/whatsappRouting.service";
 import { VOICE_NOT_CAUGHT_REPLY } from "../src/services/saheliElderFacts.service";
 import { isVoiceMode, wantsVoice } from "../src/services/voicePreference.service";
-import { baseLanguageOf, convertToOpus, getTtsVoiceConfig, googleVoiceFor, isOggOpus, speechLanguage, toVoiceNote, ttsLocale, ttsOrder, withinBytes } from "../src/channels/voicePipeline";
+import { baseLanguageOf, convertToOpus, getTtsVoiceConfig, googleVoiceFor, isOggOpus, moodFromText, plainSpeech, samePoints, speechLanguage, toVoiceNote, ttsLocale, ttsOrder, withinBytes } from "../src/channels/voicePipeline";
 import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
 import { spawnSync } from "node:child_process";
 
@@ -69,8 +69,8 @@ ok("script → language", speechLanguage("நான் மாத்திரை 
     && speechLanguage("दवाई ले ली") === "hi" && speechLanguage("Dawai le li") === "latin");
 process.env.ELEVENLABS_VOICE_IDS = JSON.stringify({ bn: "voice-bn" });
 ok("per-language voice", getTtsVoiceConfig("bn").voiceId === "voice-bn" && getTtsVoiceConfig("hi").voiceId !== "voice-bn");
-ok("wide model for languages v2 lacks", getTtsVoiceConfig("bn").modelId !== getTtsVoiceConfig("hi").modelId, [getTtsVoiceConfig("bn").modelId, getTtsVoiceConfig("hi").modelId]);
-ok("elder pace, clamped", getTtsVoiceConfig().voiceSettings.speed === 0.9);
+ok("one model that speaks every Indian language (v4)", getTtsVoiceConfig("bn").modelId === "eleven_v4" && getTtsVoiceConfig("hi").modelId === "eleven_v4", [getTtsVoiceConfig("bn").modelId]);
+ok("elder pace, clamped", getTtsVoiceConfig().voiceSettings.speed === 0.92);
 // Google voice: locale from script + the listener's language
 ok("Tamil script → Tamil voice", ttsLocale("வணக்கம் அம்மா! மருந்து சாப்பிட்டீங்களா?") === "ta-IN");
 ok("Bengali script → Bengali voice (not Gujarati)", ttsLocale("নমস্কার মা! ওষুধ খেয়েছেন?") === "bn-IN");
@@ -84,7 +84,16 @@ ok("English from a Tamil listener → Indian English voice (not Hindi)", ttsLoca
 const long = "दवाई ले लीजिए। ".repeat(400);
 const cut = withinBytes(long, 4800);
 ok("Google TTS input kept under 5000 bytes, ending at a sentence", Buffer.byteLength(cut, "utf8") <= 4800 && cut.endsWith("।") && withinBytes("short", 4800) === "short", Buffer.byteLength(cut, "utf8"));
-ok("Google first, ElevenLabs next", ttsOrder().join() === "google,eleven");
+ok("ElevenLabs first, then Gemini, then Google", ttsOrder().join() === "eleven,gemini,google");
+process.env.TTS_ORDER_BY_LANG = JSON.stringify({ bn: "eleven,google" });
+ok("order per language", ttsOrder("bn-IN").join() === "eleven,google" && ttsOrder("hi-IN").join() === "eleven,gemini,google");
+delete process.env.TTS_ORDER_BY_LANG;
+// spoken script: same facts, pauses only for engines that use them, mood
+ok("pause tags out for Chirp", plainSpeech("अच्छा [short pause] दवाई ले ली? [medium pause] ठीक है") === "अच्छा दवाई ले ली? ठीक है");
+ok("spoken script keeps every number", samePoints("BP 130 by 80 hai, 8:00 baje", "देखिए [short pause] BP 130 by 80 है, 8:00 बजे") &&
+    !samePoints("BP 130 by 80 hai", "BP 130 by 90 है") && samePoints("बीपी १२८ बाय ८० है", "अच्छा, बीपी 128 बाय 80 है"));
+ok("spoken script not padded with new content", !samePoints("दवाई ले ली?", "दवाई ले ली? " + "और भी बहुत सारी बातें जो उसने नहीं कही थीं ".repeat(3)));
+ok("worry → concerned mood without a model", moodFromText("घबराइए मत, सीने में दर्द तो नहीं?") === "concerned" && moodFromText("दवाई ले ली?") === "neutral");
 ok("one Saheli voice in every language", googleVoiceFor("ta-IN").name === "ta-IN-Chirp3-HD-Kore" && googleVoiceFor("hi-IN").speakingRate === 0.95);
 
 // pronunciation table: built-ins and TTS_SAY_AS, whole words only, any case
