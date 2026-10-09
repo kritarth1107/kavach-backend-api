@@ -585,7 +585,9 @@ export async function executeSaheliTool(input: {
             const { defaultPlaceFor, findPlaceByWords } = await import("./familyAddressBook.service");
             const words = String(input.args.words ?? "").trim();
             const place = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (await defaultPlaceFor(input.familyId, input.recipientUserId));
-            return place ? { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full } : { addressId: null };
+            return place
+                ? { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full, lat: place.lat ?? null, lng: place.lng ?? null }
+                : { addressId: null };
         }
         case "connector_status": {
             // Can the engine's shopping agent order this store through its official connector?
