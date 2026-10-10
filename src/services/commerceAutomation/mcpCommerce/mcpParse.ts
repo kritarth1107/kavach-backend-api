@@ -261,9 +261,32 @@ export function parseZeptoPayment(text: string): { cod: boolean; totalPaise?: nu
 /** Upsell / membership / add-on charges we never accept on an elder's order. */
 export const UPSELL_RE = /\b(swiggy\s*one|one\s*lite|membership|super\s*saver|zepto\s*pass|pass\s*fee|donation|feeding\s*india|tip|insurance|protect|priority)\b/i;
 
-export type CartCheck = { ok: true } | { ok: false; reason: "empty" | "extra_items" | "qty_mismatch" | "item_mismatch" | "upsell" | "no_total" };
+export type CartCheck = { ok: true } | { ok: false; reason: "empty" | "extra_items" | "missing_items" | "qty_mismatch" | "item_mismatch" | "upsell" | "no_total" };
 
 /** Exactly the picked item(s) at the picked qty, no upsell lines, and a readable total. */
+function lineFits(line: CartLine, expect: { id?: string; name: string }): boolean {
+    if (expect.id && line.id) return line.id === expect.id;
+    const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const a = norm(line.name), b = norm(expect.name.split(" — ")[0] || expect.name);
+    return !(a && b && !a.includes(b.slice(0, 12)) && !b.includes(a.slice(0, 12)));
+}
+
+/** Several items in one cart: exactly these lines, each at its qty (order lab 2026-10-10: "biscuits and munchies"). */
+export function checkCartLines(cart: ParsedCart | null, expects: Array<{ id?: string; name: string; qty: number }>, opts: { needTotal?: boolean } = {}): CartCheck {
+    if (expects.length === 1) return checkCart(cart, expects[0]!, opts);
+    if (!cart || !cart.lines.length) return { ok: false, reason: "empty" };
+    if (cart.lines.length > expects.length) return { ok: false, reason: "extra_items" };
+    if (cart.lines.length < expects.length) return { ok: false, reason: "missing_items" };
+    for (const e of expects) {
+        const line = cart.lines.find((l) => lineFits(l, e));
+        if (!line) return { ok: false, reason: "item_mismatch" };
+        if (line.qty !== e.qty) return { ok: false, reason: "qty_mismatch" };
+    }
+    if (cart.feeLines.some((f) => UPSELL_RE.test(f.label) && (f.paise ?? 0) > 0)) return { ok: false, reason: "upsell" };
+    if (opts.needTotal && !(typeof cart.totalPaise === "number" && cart.totalPaise > 0)) return { ok: false, reason: "no_total" };
+    return { ok: true };
+}
+
 export function checkCart(cart: ParsedCart | null, expect: { id?: string; name: string; qty: number }, opts: { needTotal?: boolean } = {}): CartCheck {
     if (!cart || !cart.lines.length) return { ok: false, reason: "empty" };
     if (cart.lines.length !== 1) return { ok: false, reason: "extra_items" };

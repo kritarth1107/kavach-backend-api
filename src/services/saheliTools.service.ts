@@ -668,11 +668,15 @@ export async function executeSaheliTool(input: {
                 if (found.error) return { ok: false, kind: found.error === "not_connected" ? "not_connected" : "store_error", detail: found.message || found.error };
                 const pick = found.hits[0];
                 if (!pick) return { ok: false, kind: "not_found", detail: `Nothing matching "${input.args.item}" on ${mcp.MCP_STORE_LABEL[store]}.` };
-                const card = await mcp.prepareMcpOrder(ctx, pick, Math.max(1, Number(input.args.qty ?? 1)));
+                // More items in the same cart (order lab 2026-10-10: "biscuits and munchies"): each one picked from its own look-up.
+                const more = (Array.isArray(input.args.more) ? input.args.more : [])
+                    .map((m: { pick?: import("./commerceAutomation/mcpCommerce/mcpParse").McpPick; qty?: number }) => ({ pick: m?.pick, qty: Math.max(1, Number(m?.qty ?? 1)) }))
+                    .filter((m): m is { pick: import("./commerceAutomation/mcpCommerce/mcpParse").McpPick; qty: number } => Boolean(m.pick?.name && m.pick.store === store));
+                const card = await mcp.prepareMcpOrder(ctx, pick, Math.max(1, Number(input.args.qty ?? 1)), more);
                 const rs = (paise?: number) => (paise ? `₹${Math.round(paise / 100)}` : undefined);
                 return {
                     ok: true,
-                    items: [{ name: pick.name, qty: card.qty, price: rs(pick.pricePaise) }],
+                    items: mcp.cardLines(card).map((l) => ({ name: l.pick.name, qty: l.qty, price: rs(l.pick.pricePaise) })),
                     total: rs(card.totalPaise),
                     fees: card.feesLabel,
                     cod_available: true,

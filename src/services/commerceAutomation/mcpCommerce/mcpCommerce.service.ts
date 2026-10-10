@@ -22,6 +22,7 @@ import { withMcpClient } from "../../../partners/mcp/mcpClient.service";
 import { storeAddressMatchesPlace, type Place } from "../../familyAddressBook.service";
 import {
     checkCart,
+    checkCartLines,
     extractOrderId,
     parseFoodCart,
     parseFoodMenu,
@@ -515,18 +516,28 @@ export function reconnectAccountCopy(labels: string[], elder: boolean): string {
 
 type BuiltCart = { cart: ParsedCart; totalPaise: number; cod: boolean; storeAddressId: string; addressVia: string };
 
-async function buildCart(client: Client, ctx: McpCtx, store: McpStore, pick: McpPick, qty: number, userId: string): Promise<BuiltCart> {
+export type McpLine = { pick: McpPick; qty: number };
+
+/** The card's items: several when the order has more than one (older cards carry only pick + qty). */
+export function cardLines(card: Pick<McpCard, "pick" | "qty" | "lines">): McpLine[] {
+    return card.lines?.length ? card.lines : [{ pick: card.pick, qty: card.qty }];
+}
+
+async function buildCart(client: Client, ctx: McpCtx, store: McpStore, lines: McpLine[], userId: string): Promise<BuiltCart> {
+    const pick = lines[0]!.pick, qty = lines[0]!.qty;
+    if (store === "swiggy" && lines.length > 1) throw new McpStoreError("cart_failed", "Swiggy Food orders take one dish at a time here.");
     const contact = await contactFor(ctx, userId);
     const addr = await ensureStoreAddress(client, { familyId: ctx.familyId, store, place: ctx.place, contact, connectionUserId: userId });
-    const expect = { id: store === "instamart" ? pick.spinId : store === "zepto" ? pick.pvid : pick.menuItemId, name: pick.name, qty };
+    const expects = lines.map((l) => ({ id: store === "instamart" ? l.pick.spinId : store === "zepto" ? l.pick.pvid : l.pick.menuItemId, name: l.pick.name, qty: l.qty }));
+    const expect = expects[0]!;
     if (store === "instamart") {
-        // update_cart REPLACES the whole cart → only this item.
-        const r = await call(client, "update_cart", { selectedAddressId: addr.storeAddressId, items: [{ spinId: pick.spinId, skuId: pick.skuId, quantity: qty }] });
+        // update_cart REPLACES the whole cart → exactly these items.
+        const r = await call(client, "update_cart", { selectedAddressId: addr.storeAddressId, items: lines.map((l) => ({ spinId: l.pick.spinId, skuId: l.pick.skuId, quantity: l.qty })) });
         if (r.isError) throw new McpStoreError("cart_failed", r.text.slice(0, 200));
         void rememberCoords(ctx.familyId, store, addr.storeAddressId, r.text);
         const got = await call(client, "get_cart", {});
         const cart = parseInstamartCart(got.text);
-        const chk = checkCart(cart, expect, { needTotal: true });
+        const chk = checkCartLines(cart, expects, { needTotal: true });
         if (!chk.ok) throw new McpStoreError("cart_check", `Instamart cart check failed: ${chk.reason}`);
         if (!new RegExp(`"selectedAddress"\\s*:\\s*"${addr.storeAddressId.split("__")[0]}`).test(got.text)) {
             throw new McpStoreError("cart_check", "Instamart cart isn't on the family address.");
@@ -556,11 +567,11 @@ async function buildCart(client: Client, ctx: McpCtx, store: McpStore, pick: Mcp
     const r = await call(client, "update_cart", {
         deviceId: `kavach-${ctx.familyId.slice(0, 8)}`,
         replaceCart: true,
-        cartItems: [{ productVariantId: pick.pvid, storeProductId: pick.spid, quantity: qty }],
+        cartItems: lines.map((l) => ({ productVariantId: l.pick.pvid, storeProductId: l.pick.spid, quantity: l.qty })),
     });
     if (r.isError) throw new McpStoreError("cart_failed", r.text.slice(0, 200));
     const cart = parseZeptoCart((await call(client, "view_cart", {})).text);
-    const chk = checkCart(cart, expect);
+    const chk = checkCartLines(cart, expects);
     if (!chk.ok) throw new McpStoreError("cart_check", `Zepto cart check failed: ${chk.reason}`);
     const pay = parseZeptoPayment((await call(client, "get_payment_methods", {})).text);
     if (!pay.totalPaise) throw new McpStoreError("cart_check", "Zepto didn't show an order total.");
@@ -568,12 +579,14 @@ async function buildCart(client: Client, ctx: McpCtx, store: McpStore, pick: Mcp
     return { cart: cart!, totalPaise: pay.totalPaise, cod: pay.cod, storeAddressId: addr.storeAddressId, addressVia: addr.via };
 }
 
-async function clearCart(client: Client, store: McpStore, pick?: McpPick, familyId?: string): Promise<void> {
+async function clearCart(client: Client, store: McpStore, pick?: McpPick | McpLine[], familyId?: string): Promise<void> {
     try {
+        const picks = Array.isArray(pick) ? pick.map((l) => l.pick) : pick ? [pick] : [];
         if (store === "instamart") await call(client, "clear_cart", {});
         else if (store === "swiggy") await call(client, "flush_food_cart", {});
-        else if (pick?.pvid && pick.spid) {
-            await call(client, "update_cart", { deviceId: `kavach-${String(familyId || "").slice(0, 8)}`, cartItems: [{ productVariantId: pick.pvid, storeProductId: pick.spid, quantity: 0 }] });
+        else if (picks.some((p) => p.pvid && p.spid)) {
+            await call(client, "update_cart", { deviceId: `kavach-${String(familyId || "").slice(0, 8)}`,
+                cartItems: picks.filter((p) => p.pvid && p.spid).map((p) => ({ productVariantId: p.pvid, storeProductId: p.spid, quantity: 0 })) });
         }
     } catch (err) {
         console.warn(`[mcp-order] clear ${store} cart failed:`, err instanceof Error ? err.message : err);
@@ -587,6 +600,8 @@ export type McpCard = {
     store: McpStore;
     pick: McpPick;
     qty: number;
+    /** Every item when the order has more than one (pick + qty are the first). */
+    lines?: McpLine[];
     itemLine: string;
     totalPaise: number;
     storeAddressId: string;
@@ -602,7 +617,8 @@ export type McpCard = {
 export const MCP_CARD_TTL_MS = Math.max(5, Number(process.env.MCP_CARD_TTL_MIN || 90)) * 60_000;
 
 /** Build the real cart for exactly this pick → confirm card (then empty the cart again). */
-export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1): Promise<McpCard> {
+export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1, more: McpLine[] = []): Promise<McpCard> {
+    const lines: McpLine[] = [{ pick, qty }, ...more];
     if (process.env.SAHELI_TRAIN === "1") {
         return {
             cardId: "train-card",
@@ -621,7 +637,7 @@ export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1): Prom
     if (!mcpOrderStores().includes(pick.store)) throw new McpStoreError("not_connected", `${MCP_STORE_LABEL[pick.store]} ordering is off.`);
     return withFamilyStore(ctx.familyId, pick.store, async (client, userId) => {
         try {
-            const built = await buildCart(client, ctx, pick.store, pick, qty, userId);
+            const built = await buildCart(client, ctx, pick.store, lines, userId);
             if (!built.cod) throw new McpStoreError("cod_unavailable", `${MCP_STORE_LABEL[pick.store]} isn't offering Cash on Delivery for this order.`);
             const line = built.cart.lines[0]!;
             const fees = built.cart.feeLines.filter((f) => !/item total/i.test(f.label) && (f.paise ?? 0) > 0);
@@ -630,7 +646,9 @@ export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1): Prom
                 store: pick.store,
                 pick,
                 qty,
-                itemLine: `${qty} × ${line.name || pick.name}${pick.restaurantName ? ` (${pick.restaurantName})` : ""}`,
+                ...(lines.length > 1 ? { lines } : {}),
+                itemLine: lines.length > 1 ? lines.map((l) => `${l.qty} × ${l.pick.name}`).join(", ")
+                    : `${qty} × ${line.name || pick.name}${pick.restaurantName ? ` (${pick.restaurantName})` : ""}`,
                 totalPaise: built.totalPaise,
                 storeAddressId: built.storeAddressId,
                 placeAddressId: ctx.place.addressId,
@@ -640,7 +658,7 @@ export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1): Prom
                 createdAt: Date.now(),
             };
         } finally {
-            await clearCart(client, pick.store, pick, ctx.familyId);
+            await clearCart(client, pick.store, lines, ctx.familyId);
         }
     });
 }
@@ -671,24 +689,24 @@ export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: str
         return await withFamilyStore(ctx.familyId, card.store, async (client, userId) => {
             let built: BuiltCart;
             try {
-                built = await buildCart(client, ctx, card.store, card.pick, card.qty, userId);
+                built = await buildCart(client, ctx, card.store, cardLines(card), userId);
             } catch (err) {
-                await clearCart(client, card.store, card.pick, ctx.familyId);
+                await clearCart(client, card.store, cardLines(card), ctx.familyId);
                 await setLock("refused", { detail: err instanceof Error ? err.message : String(err) });
                 return { status: "refused" as const, detail: err instanceof Error ? err.message : String(err) };
             }
             if (built.storeAddressId !== card.storeAddressId) {
-                await clearCart(client, card.store, card.pick, ctx.familyId);
+                await clearCart(client, card.store, cardLines(card), ctx.familyId);
                 await setLock("refused", { detail: "store address changed" });
                 return { status: "refused" as const, detail: "The store address changed since the card." };
             }
             if (!built.cod) {
-                await clearCart(client, card.store, card.pick, ctx.familyId);
+                await clearCart(client, card.store, cardLines(card), ctx.familyId);
                 await setLock("refused", { detail: "cod_unavailable" });
                 return { status: "refused" as const, detail: `${MCP_STORE_LABEL[card.store]} isn't offering Cash on Delivery for this order now.` };
             }
             if (!totalMatchesCard(card.totalPaise, built.totalPaise)) {
-                await clearCart(client, card.store, card.pick, ctx.familyId);
+                await clearCart(client, card.store, cardLines(card), ctx.familyId);
                 await setLock("refused", { detail: `total changed ${card.totalPaise}→${built.totalPaise}` });
                 const newCard: McpCard = { ...card, cardId: randomUUID(), totalPaise: built.totalPaise, createdAt: Date.now() };
                 return { status: "refused" as const, detail: "total_changed", newCard };
@@ -711,7 +729,7 @@ export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: str
             const orderId = extractOrderId(r.text);
             if (failed && !orderId) {
                 await setLock("failed", { detail: r.text.slice(0, 500) });
-                await clearCart(client, card.store, card.pick, ctx.familyId);
+                await clearCart(client, card.store, cardLines(card), ctx.familyId);
                 return { status: "failed" as const, detail: r.text.slice(0, 300) };
             }
             await setLock("placed", { orderId, detail: r.text.slice(0, 500) });

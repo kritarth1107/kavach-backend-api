@@ -5,11 +5,12 @@
  * 3. "retry" after a stuck Instamart order stays on that order.
  */
 import assert from "node:assert/strict";
-import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, receiverMatches, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, cardLines, receiverMatches, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry, isMoreOptionsRequest, shouldPageCatalog } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
 import { isLiteralConfirm } from "../src/services/commerceAutomation/literalConfirm";
+import { checkCartLines } from "../src/services/commerceAutomation/mcpCommerce/mcpParse";
 import { classifyOrderInterruptRules } from "../src/services/commerceAutomation/orderInterrupt.service";
 import { isChatNotAPlace, isClockPhrase, parseFromTo } from "../src/services/rideBooking/slotParse";
 
@@ -276,6 +277,18 @@ t("a place with its own receiver uses only a store address in that receiver's na
     assert.equal(receiverMatches("Kritarth Agrawal: 74, K NO 398/348/74, Amruthahalli, Bangalore 560092", vish), false);
     assert.equal(receiverMatches("Vish: 74, K NO 398/348/74, Amruthahalli, Bangalore 560092", vish), true);
     assert.equal(receiverMatches("Kritarth Agrawal: C504 Sunita Park, Raipur 492001", {}), true);
+});
+
+t("several items in one connector cart: exactly those lines at their qty (biscuits and munchies)", () => {
+    const want = [{ id: "B1", name: "Parle-G 475 g", qty: 1 }, { id: "K1", name: "Kurkure Masala Munch", qty: 2 }];
+    const cart = (lines: Array<{ id: string; name: string; qty: number }>) => ({ lines, totalPaise: 15000, feeLines: [] });
+    assert.deepEqual(checkCartLines(cart([{ id: "K1", name: "Kurkure", qty: 2 }, { id: "B1", name: "Parle-G", qty: 1 }]), want, { needTotal: true }), { ok: true });
+    assert.equal((checkCartLines(cart([{ id: "B1", name: "Parle-G", qty: 1 }]), want) as { reason: string }).reason, "missing_items");
+    assert.equal((checkCartLines(cart([{ id: "B1", name: "Parle-G", qty: 1 }, { id: "K1", name: "Kurkure", qty: 1 }]), want) as { reason: string }).reason, "qty_mismatch");
+    assert.equal((checkCartLines(cart([{ id: "B1", name: "a", qty: 1 }, { id: "X9", name: "b", qty: 2 }]), want) as { reason: string }).reason, "item_mismatch");
+    const p = { store: "instamart" as const, name: "Parle-G" };
+    assert.equal(cardLines({ pick: p, qty: 3 }).length, 1);
+    assert.equal(cardLines({ pick: p, qty: 1, lines: [{ pick: p, qty: 1 }, { pick: { ...p, name: "Kurkure" }, qty: 2 }] }).length, 2);
 });
 
 console.log(`all ${n} passed`);
