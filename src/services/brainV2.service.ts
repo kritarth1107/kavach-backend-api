@@ -34,6 +34,9 @@ export async function runBrainV2(input: {
     mode: Exclude<BrainMode, "off">;
     /** The message was a voice note: `text` is its transcript (confidence 0..1 when the speech engine reported one). */
     voice?: { confidence?: number; language?: string; engine?: string };
+    /** A photo, video, PDF or sticker they sent (base64), for the brain to look at; mediaNote when it could not be opened. */
+    media?: Array<{ mime: string; data: string }>;
+    mediaNote?: string;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }> } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
@@ -70,6 +73,8 @@ export async function runBrainV2(input: {
         ...(input.voice
             ? { modality: "voice", voice_confidence: input.voice.confidence ?? null, voice_language: input.voice.language ?? null }
             : {}),
+        ...(input.media?.length ? { images: input.media } : {}),
+        ...(input.mediaNote ? { media_note: input.mediaNote } : {}),
     });
     console.log(
         `[brain-v2] ${JSON.stringify({

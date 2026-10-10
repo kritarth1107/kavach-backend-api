@@ -276,6 +276,15 @@ async function buildFlowState(phone: string, doc: FlowDoc, who?: { familyId: str
 }
 
 const MEDIA_PLACEHOLDER = /^\[(image|document|video|audio|voice|sticker) (message|shared)\]$/i;
+/** Media Saheli's model can look at directly (Gemini: images, video, audio, PDF, plain text), up to this size. */
+const BRAIN_MEDIA_MAX_BYTES = 14 * 1024 * 1024;
+function brainMime(mimeType: string | undefined, mediaType: string): string | null {
+    const m = String(mimeType || "").split(";")[0].trim().toLowerCase().replace("image/jpg", "image/jpeg");
+    if (/^(image|video|audio)\//.test(m) || m === "application/pdf" || m === "text/plain") return m;
+    if (!m && mediaType === "image") return "image/jpeg";
+    if (!m && mediaType === "sticker") return "image/webp";
+    return null;
+}
 
 async function withVoiceReply(out: OutboundMessage, listenerUserId?: string): Promise<OutboundMessage> {
     if (!out.content?.trim() || isSaheliFallbackCopy(out.content)) return out;
@@ -594,23 +603,43 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         });
         return r.buttons?.length ? outbound(phone, r.text, { kind: "saheli_buttons", buttons: r.buttons }) : outbound(phone, r.text);
     }
-    if ((body.mediaType === "image" || body.mediaType === "document") && body.mediaUrl && !messageLooksLikeEmergency(text)) {
-        const HR = await import("./whatsappHealthRecord.service");
-        const r = await HR.handleRecordMedia({
-            sender: identity, mediaId: body.mediaUrl, mediaType: body.mediaType,
-            caption: body.mediaCaption ?? (MEDIA_PLACEHOLDER.test(text) ? "" : text),
-        }).catch((err) => {
-            console.warn("[records] media failed:", err instanceof Error ? err.message : err);
+    // ── Media (photo, video, document, sticker): downloaded once. A health record goes to the record review; anything
+    // else goes to Saheli's brain WITH the media so she looks at it herself (live 2026-10-10: an air-cooler photo with
+    // "ye kya h" reached the brain as text only, and she called it a prescription). Voice notes are transcribed above.
+    let brainMedia: Array<{ mime: string; data: string }> | undefined;
+    let brainMediaNote: string | undefined;
+    if (body.mediaUrl && body.mediaType && !isVoiceMedia) {
+        const caption = body.mediaCaption ?? (MEDIA_PLACEHOLDER.test(text) ? "" : text);
+        const { downloadMedia } = await import("../clients/metaWhatsApp.client");
+        const media = await downloadMedia(body.mediaUrl).catch((err) => {
+            console.warn("[media] download failed:", err instanceof Error ? err.message : err);
             return null;
         });
-        if (r) return r.buttons?.length ? outbound(phone, r.text, { kind: "saheli_buttons", buttons: r.buttons }) : outbound(phone, r.text);
+        if (!media) {
+            brainMediaNote = `They sent a ${body.mediaType}, but it could not be downloaded.`;
+        } else {
+            if ((body.mediaType === "image" || body.mediaType === "document") && !messageLooksLikeEmergency(text)) {
+                const HR = await import("./whatsappHealthRecord.service");
+                const r = await HR.handleRecordMedia({ sender: identity, media, caption }).catch((err) => {
+                    console.warn("[records] media failed:", err instanceof Error ? err.message : err);
+                    return null;
+                });
+                if (r) return r.buttons?.length ? outbound(phone, r.text, { kind: "saheli_buttons", buttons: r.buttons }) : outbound(phone, r.text);
+            }
+            const mime = brainMime(media.mimeType, body.mediaType);
+            if (!mime) brainMediaNote = `They sent a file of type ${media.mimeType || body.mediaType} that cannot be opened.`;
+            else if (media.buffer.length > BRAIN_MEDIA_MAX_BYTES) brainMediaNote = `They sent a ${body.mediaType} too large to look at (${Math.round(media.buffer.length / 1e6)} MB).`;
+            else brainMedia = [{ mime, data: media.buffer.toString("base64") }];
+        }
+        if (MEDIA_PLACEHOLDER.test(text)) text = caption;
     }
 
     // ── Saheli Brain v2: shadow beside this path on real traffic, or live for switched-over
     // families. Runs after the emergency and scam backstops; a v2 failure falls through to v1.
     // A tapped Saheli v2 button ("v2:…" id) goes to the v2 brain, which records it without a model call.
     const v2Button = Boolean(body.interactiveId?.startsWith("v2:"));
-    if (text && (!body.interactiveId || v2Button) && !MEDIA_PLACEHOLDER.test(text)) {
+    const hasMedia = Boolean(brainMedia || brainMediaNote);
+    if ((hasMedia || (text && !MEDIA_PLACEHOLDER.test(text))) && (!body.interactiveId || v2Button)) {
         const V2 = await import("./brainV2.service");
         const mode = V2.brainV2Mode(identity.familyId);
         if (mode === "live") {
@@ -618,6 +647,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             const v2 = await V2.runBrainV2({
                 identity, text: v2Text, messageRef: body.messageId, mode,
                 voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
+                media: brainMedia, mediaNote: brainMediaNote,
             }).catch((err) => {
                 console.warn("[brain-v2] live turn failed, using v1:", err instanceof Error ? err.message : err);
                 return null;
@@ -629,7 +659,8 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             }
             if (v2Button) return outbound(phone, "🙏");
         } else if (mode === "shadow") {
-            void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode, voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined }).catch((err) =>
+            void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode, voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
+                media: brainMedia, mediaNote: brainMediaNote }).catch((err) =>
                 console.warn("[brain-v2] shadow turn failed:", err instanceof Error ? err.message : err),
             );
         }

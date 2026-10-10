@@ -146,12 +146,14 @@ async function subjectFor(sender: Sender, nameOnReport: string | null): Promise<
 
 /** Is this photo a health record (not a meal, a selfie, a medicine strip on its own)? */
 async function looksLikeRecord(buffer: Buffer, mimeType: string, caption: string): Promise<boolean> {
-    if (/\b(report|prescription|parcha|पर्चा|रिपोर्ट|discharge|lab|test|scan|x-?ray|mri|ct)\b/i.test(caption)) return true;
+    // The AI looks at the picture and their words together (founder 2026-10-10: no word lists for people's words).
     if (buffer.length > 18 * 1024 * 1024) return false; // too large to look at; the usual media flow handles it
     const { vertexGenerateText, GEMINI_PRO_MODEL, parseJsonLoose } = await import("../clients/vertexGemini.client");
     const raw = await vertexGenerateText({
         model: GEMINI_PRO_MODEL,
-        prompt: 'Is this a medical document with printed or handwritten text: a prescription, a lab or test report, a discharge summary, a scan report, a doctor\'s note? A meal, a person, a medicine strip or bottle alone, a bill, a ticket or any other paper is NOT. Answer JSON {"record": true|false}.',
+        prompt:
+            'Is this a medical document with printed or handwritten text: a prescription, a lab or test report, a discharge summary, a scan report, a doctor\'s note? A meal, a person, a medicine strip or bottle alone, a bill, a ticket, an appliance or any other thing is NOT. ' +
+            `What they wrote with it (any language; may be empty): ${JSON.stringify(caption.slice(0, 300))}. Answer JSON {"record": true|false}.`,
         json: true, temperature: 0, maxOutputTokens: 1024, thinkingLevel: "low", timeoutMs: 12_000,
         inlineData: { mimeType: mimeType.replace("image/jpg", "image/jpeg"), data: buffer.toString("base64") },
     });
@@ -159,9 +161,8 @@ async function looksLikeRecord(buffer: Buffer, mimeType: string, caption: string
 }
 
 /** A photo or PDF arrived. Returns the reply, or null when it is not a health record (the usual media flow continues). */
-export async function handleRecordMedia(input: { sender: Sender; mediaId: string; mediaType: string; caption?: string }): Promise<RecordReply | null> {
-    const { downloadMedia } = await import("../clients/metaWhatsApp.client");
-    const media = await downloadMedia(input.mediaId);
+export async function handleRecordMedia(input: { sender: Sender; media: { buffer: Buffer; mimeType: string }; caption?: string }): Promise<RecordReply | null> {
+    const media = input.media;
     const mime = (media.mimeType || "").split(";")[0].trim().toLowerCase();
     const isImage = mime.startsWith("image/");
     const isPdf = mime === "application/pdf";
