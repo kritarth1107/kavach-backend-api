@@ -720,9 +720,16 @@ export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: str
                       ? { name: "place_food_order", a: { addressId: card.storeAddressId, paymentMethod: "Cash" } }
                       : { name: "create_order", a: { confirmOrder: true, userAddressId: card.storeAddressId, riderTip: 0, useZeptoCash: false } };
             let r: { text: string; isError: boolean };
+            const sentAt = Date.now();
             try {
                 r = await call(client, args.name, args.a);
             } catch (err) {
+                // No answer after sending: look in the account's order list before calling it unclear (never placed twice).
+                const found = card.store === "instamart" ? await findRecentOrder(client, built.totalPaise ?? card.totalPaise, sentAt) : null;
+                if (found) {
+                    await setLock("placed", { orderId: found.orderId, detail: "found in the order list after no answer" });
+                    return { status: "placed" as const, orderId: found.orderId, totalPaise: built.totalPaise ?? card.totalPaise, detail: "found in the order list", eta: found.eta };
+                }
                 await setLock("unknown", { detail: err instanceof Error ? err.message : String(err) });
                 return { status: "unknown" as const, detail: "The store didn't answer after the order was sent." };
             }
@@ -742,6 +749,51 @@ export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: str
         await setLock("failed", { detail: err instanceof Error ? err.message : String(err) });
         return { status: "failed", detail: err instanceof Error ? err.message : String(err) };
     }
+}
+
+/** An Instamart order placed since `sinceMs` for this total (±₹1), from the account's order list (get_orders). */
+export async function findRecentOrder(client: Client, totalPaise: number, sinceMs: number): Promise<{ orderId: string; eta?: string } | null> {
+    for (const wait of [3000, 8000]) {
+        await new Promise((ok) => setTimeout(ok, wait));
+        try {
+            const r = await call(client, "get_orders", { count: 5 });
+            const data = (await import("./mcpParse")).jsonTail(r.text) as { orders?: Array<Record<string, unknown>> } | null;
+            const hits = (data?.orders || []).filter((o) => {
+                const at = Date.parse(String(o.createdAt || ""));
+                return Number.isFinite(at) && at >= sinceMs - 120_000 && Math.abs(Number(o.totalAmount) * 100 - totalPaise) <= 100
+                    && !/cancel|fail/i.test(String(o.status || ""));
+            });
+            if (hits.length === 1) {
+                const eta = typeof hits[0].estimatedDeliveryTime === "string" ? String(hits[0].estimatedDeliveryTime) : undefined;
+                return { orderId: String(hits[0].orderId), eta };
+            }
+        } catch {
+            /* try once more, then unclear */
+        }
+    }
+    return null;
+}
+
+/** For a place step outside the connector (the browser) that had no clear answer: look in the linked account's orders. */
+export async function recentOrderOnStore(familyId: string, store: McpStore, totalPaise: number, sinceMs: number) {
+    return withFamilyStore(familyId, store, (client) => findRecentOrder(client, totalPaise, sinceMs));
+}
+
+/**
+ * After an order: where it is now, from the store's own order list (read-only). The store's own words are passed on as
+ * they are (status, its status line, its delivery time); the engine's AI reads them.
+ */
+export async function orderStatusOnStore(familyId: string, store: McpStore, orderId: string): Promise<Record<string, unknown>> {
+    return withFamilyStore(familyId, store, async (client) => {
+        const r = await call(client, "get_orders", { count: 8 });
+        if (r.isError) return { found: false, detail: r.text.slice(0, 160) };
+        const data = (await import("./mcpParse")).jsonTail(r.text) as { orders?: Array<Record<string, unknown>> } | null;
+        const o = (data?.orders || []).find((x) => String(x.orderId) === orderId);
+        if (!o) return { found: false };
+        const pick = (k: string) => (typeof o[k] === "string" || typeof o[k] === "boolean" ? o[k] : undefined);
+        return { found: true, status: pick("status"), currentStatus: pick("currentStatus"), historyStatus: pick("historyStatus"),
+            estimatedDeliveryTime: pick("estimatedDeliveryTime"), isActive: pick("isActive"), updatedAt: pick("updatedAt") };
+    });
 }
 
 const ETA_LOOKUP_MS = 10_000;

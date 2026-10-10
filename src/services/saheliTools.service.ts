@@ -87,6 +87,8 @@ export type SaheliToolName =
     | "get_voice_preference"
     | "send_song"
     | "email_member"
+    | "connector_recent_order"
+    | "connector_order_status"
     | "list_places"
     | "save_place"
     | "remove_place";
@@ -616,6 +618,25 @@ export async function executeSaheliTool(input: {
                 matched: words ? !!hit : null,
                 saved: places.map((p) => `${p.nickname} (${p.city || ""} ${p.pincode})`.replace(/\s+/g, " ").replace("( ", "(")),
             };
+        }
+        case "connector_recent_order": {
+            // A browser place with no clear answer: is there a new order of this total in the linked account? (read-only)
+            const store = String(input.args.store ?? "") as import("./commerceAutomation/mcpCommerce/mcpCommerce.service").McpStore;
+            if (store !== "instamart") return { orderId: null };
+            const mcp = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            const totalPaise = Math.round(Number(input.args.total) * 100);
+            const since = Number(input.args.since_ms) || Date.now() - 15 * 60_000;
+            const found = await mcp.recentOrderOnStore(input.familyId, store, totalPaise, since).catch(() => null);
+            return { orderId: found?.orderId ?? null, eta: found?.eta ?? null };
+        }
+        case "connector_order_status": {
+            // Delivery tracking after an order: the store's own status words for this order (read-only).
+            const store = String(input.args.store ?? "") as import("./commerceAutomation/mcpCommerce/mcpCommerce.service").McpStore;
+            if (store !== "instamart" && store !== "swiggy") return { found: false };
+            const orderId = String(input.args.order_id ?? "");
+            if (!orderId) return { found: false };
+            const mcp = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
+            return mcp.orderStatusOnStore(input.familyId, store, orderId).catch(() => ({ found: false }));
         }
         case "email_member": {
             // Founder 2026-10-10: an order the caregiver did not answer about on WhatsApp in 5 minutes → an email too.
