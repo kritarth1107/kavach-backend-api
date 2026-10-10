@@ -96,6 +96,7 @@ export async function handleWhatsAppInbound(body: {
     mediaUrl?: string;
     mediaType?: string;
     mediaCaption?: string;
+    replyToId?: string;
 }): Promise<OutboundMessage> {
     const slaMs = replySlaMs();
     let timer: ReturnType<typeof setTimeout> | undefined;

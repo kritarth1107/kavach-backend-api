@@ -5,6 +5,7 @@
  * 3. "retry" after a stuck Instamart order stays on that order.
  */
 import assert from "node:assert/strict";
+import { parseMetaWebhookMessages } from "../src/clients/metaWhatsApp.client";
 import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, cardLines, liveEta, receiverMatches, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry, isMoreOptionsRequest, shouldPageCatalog } from "../src/services/commerceAutomation/orderChat/flowBind";
@@ -303,6 +304,17 @@ t("the delivery time is read from a store's order answer (lab 2026-10-10: connec
     assert.equal(etaFrom("Your order will be delivered in 30 minutes.", now), "30 min");
     assert.equal(etaFrom("Order ID: 9. Placed at 5:30 pm.", now), undefined);
     assert.equal(etaFrom('x\n{"status":{"statusMessage":"Order placed 2 mins ago"}}', now), undefined);
+});
+
+t("a WhatsApp reply quoting an earlier photo carries the quoted message id (live 2026-10-10 22:36)", () => {
+    const body = { object: "whatsapp_business_account", entry: [{ changes: [{ value: { messages: [
+        { from: "917694829888", id: "wamid.NEW", type: "text", text: { body: "ye kya hai?" }, context: { from: "919000000000", id: "wamid.PHOTO" } },
+        { from: "917694829888", id: "wamid.PHOTO2", type: "image", image: { id: "MEDIA1", caption: "Ye kya h" } },
+    ] } }] }] };
+    const [reply, photo] = parseMetaWebhookMessages(body);
+    assert.equal(reply.replyToId, "wamid.PHOTO");
+    assert.equal(photo.replyToId, undefined);
+    assert.equal(photo.mediaId, "MEDIA1");
 });
 
 (async () => {

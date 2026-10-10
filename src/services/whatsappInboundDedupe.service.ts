@@ -25,6 +25,7 @@ function rememberLocal(id: string): boolean {
 export async function claimWhatsAppInboundMessage(
     messageId: string | undefined,
     from?: string,
+    media?: { mediaId?: string; mediaType?: string },
 ): Promise<boolean> {
     const id = (messageId ?? "").trim();
     if (!id) return true;
@@ -33,7 +34,7 @@ export async function claimWhatsAppInboundMessage(
         // Ensure the unique index exists before the first claim (no-op afterwards).
         indexReady ??= WhatsappInboundDedupe.init().catch(() => undefined);
         await indexReady;
-        await WhatsappInboundDedupe.create({ messageId: id, from: from?.slice(-4) });
+        await WhatsappInboundDedupe.create({ messageId: id, from: from?.slice(-4), ...(media?.mediaId ? { mediaId: media.mediaId, mediaType: media.mediaType } : {}) });
         return true;
     } catch (err) {
         const code = (err as { code?: number } | null)?.code;
@@ -45,4 +46,12 @@ export async function claimWhatsAppInboundMessage(
         );
         return true;
     }
+}
+
+/** The media an earlier inbound message carried (for a reply that quotes it), or null. */
+export async function quotedMedia(messageId: string | undefined): Promise<{ mediaId: string; mediaType: string } | null> {
+    const id = (messageId ?? "").trim();
+    if (!id) return null;
+    const row = await WhatsappInboundDedupe.findOne({ messageId: id }, { mediaId: 1, mediaType: 1 }).lean<{ mediaId?: string; mediaType?: string }>().catch(() => null);
+    return row?.mediaId ? { mediaId: row.mediaId, mediaType: row.mediaType || "image" } : null;
 }

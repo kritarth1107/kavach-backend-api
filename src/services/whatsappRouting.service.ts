@@ -339,6 +339,8 @@ type WhatsAppInboundBody = {
     mediaUrl?: string;
     mediaType?: string;
     mediaCaption?: string;
+    /** The message this one replies to (quoted): a photo/video they sent earlier comes back to Saheli with it. */
+    replyToId?: string;
 };
 
 /**
@@ -632,6 +634,22 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             else brainMedia = [{ mime, data: media.buffer.toString("base64") }];
         }
         if (MEDIA_PLACEHOLDER.test(text)) text = caption;
+    } else if (body.replyToId && !isVoiceMedia) {
+        // A reply quoting a photo/video/document they sent earlier ("ye kya hai?" on an old photo): Saheli sees it again
+        // (live 2026-10-10 22:36: the reply came as text only and she repeated an earlier wrong answer).
+        const { quotedMedia } = await import("./whatsappInboundDedupe.service");
+        const q = await quotedMedia(body.replyToId);
+        if (q && q.mediaType !== "voice" && q.mediaType !== "audio") {
+            const { downloadMedia } = await import("../clients/metaWhatsApp.client");
+            const media = await downloadMedia(q.mediaId).catch(() => null);
+            const mime = media ? brainMime(media.mimeType, q.mediaType) : null;
+            if (media && mime && media.buffer.length <= BRAIN_MEDIA_MAX_BYTES) {
+                brainMedia = [{ mime, data: media.buffer.toString("base64") }];
+                brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier; it is attached again. Look at it fresh.`;
+            } else {
+                brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier, which can no longer be opened; ask them to send it again.`;
+            }
+        }
     }
 
     // ── Saheli Brain v2: shadow beside this path on real traffic, or live for switched-over

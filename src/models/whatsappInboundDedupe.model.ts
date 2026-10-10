@@ -8,6 +8,9 @@ import mongoose, { Schema } from "mongoose";
 export interface IWhatsappInboundDedupe {
     messageId: string;
     from?: string;
+    /** Media it carried (Meta media id + type): a later reply quoting this message brings the media back to Saheli. */
+    mediaId?: string;
+    mediaType?: string;
     createdAt: Date;
 }
 
@@ -15,6 +18,8 @@ const schema = new Schema<IWhatsappInboundDedupe>(
     {
         messageId: { type: String, required: true, unique: true },
         from: { type: String },
+        mediaId: { type: String },
+        mediaType: { type: String },
         createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 8 },
     },
     { versionKey: false, collection: "whatsapp_inbound_dedupe" },

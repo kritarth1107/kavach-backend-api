@@ -483,6 +483,8 @@ export type MetaInboundMessage = {
     mediaType?: string;
     mediaId?: string;
     mediaCaption?: string;
+    /** The message this one replies to (WhatsApp "reply" with a quote). */
+    replyToId?: string;
 };
 
 function normalizeInteractiveInboundId(id: string): string {
@@ -1143,6 +1145,7 @@ export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
                         from,
                         text: text || `[${media.mediaType ?? type} shared]`,
                         messageId: row.id ? String(row.id) : undefined,
+                        replyToId: String(((row.context as Record<string, unknown> | undefined)?.id as string | undefined) ?? "") || undefined,
                         inboundType: type,
                         interactiveId:
                             type === "interactive"

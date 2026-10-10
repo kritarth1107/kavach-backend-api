@@ -520,7 +520,7 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { claimWhatsAppInboundMessage } = await import("../services/whatsappInboundDedupe.service");
     const fresh: typeof messages = [];
     for (const inbound of messages) {
-        if (await claimWhatsAppInboundMessage(inbound.messageId, inbound.from)) {
+        if (await claimWhatsAppInboundMessage(inbound.messageId, inbound.from, { mediaId: inbound.mediaId, mediaType: inbound.mediaType })) {
             fresh.push(inbound);
         } else {
             console.log(
@@ -598,6 +598,7 @@ async function processMetaInboundMessages(
                 mediaType: inbound.mediaType,
                 mediaUrl: inbound.mediaId,
                 mediaCaption: inbound.mediaCaption,
+                replyToId: inbound.replyToId,
             });
             replyPreview = reply.content?.slice(0, 200);
             if (isMetaWhatsAppEnabled() && (reply.content || reply.audioBuffer || reply.audioBase64)) {
