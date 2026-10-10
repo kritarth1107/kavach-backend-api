@@ -353,3 +353,48 @@ export function parseRestaurantMenu(text: string, restaurantId: string, restaura
     }
     return out;
 }
+
+const ETA_KEY = /^(eta|eta_?(text|string|label|minutes?|mins?|in_?mins?)|delivery_?eta|sla(_?(string|text|min(utes)?))?|delivery_?time(_?range)?|estimated_?delivery(_?time)?|expected_?delivery(_?time)?|status_?message|arriving_?in)$/i;
+const BY_KEY = /^(deliver(y|ed)?_?by|eta_?epoch|expected_?at|estimated_?at)$/i;
+
+function clockIst(ms: number): string {
+    return new Date(ms).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true }).replace(/\s+/g, " ").toLowerCase();
+}
+
+function minutesIn(s: string): string | undefined {
+    if (/\bdelivered\b|\barrived\b|\bago\b/i.test(s)) return undefined; // already there, or a time past: not a time to come
+    const m = s.match(/(\d{1,3})(?:\s*(?:-|to)\s*(\d{1,3}))?\s*(min|mins|minutes|hr|hrs|hour|hours)\b/i);
+    if (!m) return undefined;
+    const unit = /^h/i.test(m[3]!) ? "hr" : "min";
+    return m[2] ? `${m[1]}-${m[2]} ${unit}` : `${m[1]} ${unit}`;
+}
+
+/**
+ * The delivery time a store's order answer gives, as Saheli should say it ("about 14 min (by 6:42 pm)", "10-15 min").
+ * Reads an absolute deliveryBy time, an ETA/SLA field, or "arriving in 12 mins" text; undefined when there is none
+ * (order lab 2026-10-10: connector orders came back without one).
+ */
+export function etaFrom(text: string, nowMs = Date.now()): string | undefined {
+    const j = jsonTail(text);
+    let found: string | undefined;
+    const walk = (o: unknown, depth: number): void => {
+        if (found || !o || typeof o !== "object" || depth > 6) return;
+        for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+            if (found) return;
+            if (BY_KEY.test(k) && (typeof v === "number" || /^\d{10,13}$/.test(String(v ?? "")))) {
+                const n = Number(v);
+                const ms = n > 1e12 ? n : n * 1000;
+                const mins = Math.round((ms - nowMs) / 60000);
+                if (mins >= 1 && mins <= 360) found = `about ${mins} min (by ${clockIst(ms)})`;
+            } else if (ETA_KEY.test(k) && typeof v === "number" && v >= 1 && v <= 240 && !/hour|hr/i.test(k)) {
+                found = `${Math.round(v)} min`;
+            } else if (ETA_KEY.test(k) && typeof v === "string") {
+                found = minutesIn(v);
+            } else if (typeof v === "object") walk(v, depth + 1);
+        }
+    };
+    walk(j, 0);
+    if (found) return found;
+    const m = text.match(/(?:arriv|deliver|reach|eta)[^.\n{}"]{0,30}?(\d{1,3}(?:\s*-\s*\d{1,3})?\s*(?:min|mins|minutes))\b/i);
+    return m ? minutesIn(m[1]!) : undefined;
+}

@@ -23,6 +23,7 @@ import { storeAddressMatchesPlace, type Place } from "../../familyAddressBook.se
 import {
     checkCart,
     checkCartLines,
+    etaFrom,
     extractOrderId,
     parseFoodCart,
     parseFoodMenu,
@@ -664,7 +665,7 @@ export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1, more:
 }
 
 export type PlaceResult =
-    | { status: "placed"; orderId?: string; totalPaise: number; detail: string }
+    | { status: "placed"; orderId?: string; totalPaise: number; detail: string; eta?: string }
     | { status: "duplicate" | "expired" | "refused"; detail: string; newCard?: McpCard }
     | { status: "failed" | "unknown"; detail: string };
 
@@ -732,13 +733,48 @@ export async function placeMcpOrder(ctx: McpCtx, card: McpCard, confirmText: str
                 await clearCart(client, card.store, cardLines(card), ctx.familyId);
                 return { status: "failed" as const, detail: r.text.slice(0, 300) };
             }
-            await setLock("placed", { orderId, detail: r.text.slice(0, 500) });
-            return { status: "placed" as const, orderId, totalPaise: built.totalPaise, detail: r.text.slice(0, 300) };
+            // When it comes: from the order answer, else the store's own delivery-status / tracking tool (never blocks the order).
+            const eta = etaFrom(r.text) ?? (orderId ? await liveEta(client, ctx, orderId, card.storeAddressId) : undefined);
+            await setLock("placed", { orderId, detail: r.text.slice(0, 2000) });
+            return { status: "placed" as const, orderId, totalPaise: built.totalPaise, detail: r.text.slice(0, 300), eta };
         });
     } catch (err) {
         await setLock("failed", { detail: err instanceof Error ? err.message : String(err) });
         return { status: "failed", detail: err instanceof Error ? err.message : String(err) };
     }
+}
+
+const ETA_LOOKUP_MS = 10_000;
+
+/**
+ * After an order: the delivery time from the store's own tools. Instamart: get_delivery_status (an absolute deliveryBy),
+ * then track_order (needs the place's coordinates). Other stores: any tracking tool that takes an orderId. Read-only,
+ * at most ETA_LOOKUP_MS; undefined when the store gives none.
+ */
+export async function liveEta(client: Client, ctx: McpCtx, orderId: string, storeAddressId: string): Promise<string | undefined> {
+    const work = (async () => {
+        const tools = (await client.listTools()).tools;
+        const names = ["get_delivery_status", ...tools.map((t) => t.name).filter((n) => /track/i.test(n) && n !== "get_delivery_status")];
+        for (const name of names) {
+            const t = tools.find((x) => x.name === name);
+            const props = Object.keys(((t?.inputSchema ?? {}) as { properties?: Record<string, unknown> }).properties ?? {});
+            if (!t || !props.includes("orderId")) continue;
+            const args: Record<string, unknown> = { orderId };
+            if (props.includes("addressId")) args.addressId = storeAddressId;
+            const latKey = props.find((p) => p === "lat" || p === "latitude");
+            if (latKey) {
+                const at = await coordsForPlace(ctx.familyId, ctx.place).catch(() => null);
+                if (!at) continue;
+                args[latKey] = at.lat;
+                args[latKey === "lat" ? "lng" : "longitude"] = at.lng;
+            }
+            const r = await call(client, name, args).catch(() => null);
+            const eta = r && !r.isError ? etaFrom(r.text) : undefined;
+            if (eta) return eta;
+        }
+        return undefined;
+    })().catch(() => undefined);
+    return Promise.race([work, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), ETA_LOOKUP_MS).unref?.())]);
 }
 
 /** Test/ops helper: empty the family's cart on a store. */

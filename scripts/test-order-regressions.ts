@@ -5,12 +5,12 @@
  * 3. "retry" after a stuck Instamart order stays on that order.
  */
 import assert from "node:assert/strict";
-import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, cardLines, receiverMatches, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, cardLines, liveEta, receiverMatches, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry, isMoreOptionsRequest, shouldPageCatalog } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
 import { isLiteralConfirm } from "../src/services/commerceAutomation/literalConfirm";
-import { checkCartLines } from "../src/services/commerceAutomation/mcpCommerce/mcpParse";
+import { checkCartLines, etaFrom } from "../src/services/commerceAutomation/mcpCommerce/mcpParse";
 import { classifyOrderInterruptRules } from "../src/services/commerceAutomation/orderInterrupt.service";
 import { isChatNotAPlace, isClockPhrase, parseFromTo } from "../src/services/rideBooking/slotParse";
 
@@ -291,5 +291,50 @@ t("several items in one connector cart: exactly those lines at their qty (biscui
     assert.equal(cardLines({ pick: p, qty: 1, lines: [{ pick: p, qty: 1 }, { pick: { ...p, name: "Kurkure" }, qty: 2 }] }).length, 2);
 });
 
-console.log(`all ${n} passed`);
-process.exit(0);
+t("the delivery time is read from a store's order answer (lab 2026-10-10: connector orders came back without one)", () => {
+    const now = Date.UTC(2026, 9, 10, 12, 0); // 5:30 pm IST
+    const placed = "🎉 Instamart order placed successfully! Order ID: 250596002955721\n{\n  \"orderId\": \"250596002955721\",\n  \"status\": \"CONFIRMED\",\n  \"liveEtaEligible\": true,\n  \"etaText\": \"Arriving in 12 mins\"\n}";
+    assert.equal(etaFrom(placed, now), "12 min");
+    assert.equal(etaFrom(`ok\n{"orderId":"1","deliveryBy":${now + 14 * 60_000},"serverNow":${now},"pollIntervalSec":45}`, now), "about 14 min (by 5:44 pm)");
+    assert.equal(etaFrom(`ok\n{"orderId":"1","deliveryBy":null,"serverNow":${now}}`, now), undefined);
+    assert.equal(etaFrom('done\n{"status":{"statusMessage":"Order Delivered"},"placedAt":"03:30 PM"}', now), undefined);
+    assert.equal(etaFrom('x\n{"status":{"statusMessage":"Arriving in 8-10 mins"}}', now), "8-10 min");
+    assert.equal(etaFrom('x\n{"order":{"sla_minutes":25}}', now), "25 min");
+    assert.equal(etaFrom("Your order will be delivered in 30 minutes.", now), "30 min");
+    assert.equal(etaFrom("Order ID: 9. Placed at 5:30 pm.", now), undefined);
+    assert.equal(etaFrom('x\n{"status":{"statusMessage":"Order placed 2 mins ago"}}', now), undefined);
+});
+
+(async () => {
+    // After an order with no time in the answer: the store's delivery-status tool, then its tracker (with the place's
+    // coordinates), and never longer than the lookup budget.
+    const now = Date.now();
+    const calls: string[] = [];
+    const client = (answers: Record<string, string>) => ({
+        listTools: async () => ({ tools: [
+            { name: "get_delivery_status", inputSchema: { properties: { orderId: {}, addressId: {} } } },
+            { name: "track_order", inputSchema: { properties: { orderId: {}, lat: {}, lng: {} } } },
+            { name: "checkout", inputSchema: { properties: { addressId: {} } } },
+        ] }),
+        callTool: async ({ name, arguments: a }: { name: string; arguments: Record<string, unknown> }) => {
+            calls.push(`${name}:${JSON.stringify(a)}`);
+            return { content: [{ type: "text", text: answers[name] ?? "{}" }] };
+        },
+    });
+    const ctx = { familyId: "f", recipientUserId: "u", recipientPhone: "", place: { addressId: "p", lat: 21.24, lng: 81.67 } } as never;
+    const a = await liveEta(client({ get_delivery_status: `ok\n{"deliveryBy":${now + 20 * 60_000}}` }) as never, ctx, "O1", "S1");
+    assert.match(a!, /^about (19|20) min \(by /);
+    assert.equal(calls[0], 'get_delivery_status:{"orderId":"O1","addressId":"S1"}');
+    calls.length = 0;
+    const b = await liveEta(client({ get_delivery_status: 'ok\n{"deliveryBy":null}', track_order: 'ok\n{"status":{"statusMessage":"Arriving in 9 mins"}}' }) as never, ctx, "O2", "S1");
+    assert.equal(b, "9 min");
+    assert.equal(calls[1], 'track_order:{"orderId":"O2","lat":21.24,"lng":81.67}');
+    assert.equal(await liveEta(client({}) as never, ctx, "O3", "S1"), undefined);
+    n++;
+    console.log("  ✓ after an order: delivery-status tool, then the tracker with the place's coordinates");
+    console.log(`all ${n} passed`);
+    process.exit(0);
+})().catch((err) => {
+    console.error(err);
+    process.exit(1);
+});

@@ -85,7 +85,10 @@ export type SaheliToolName =
     | "connector_place"
     | "set_voice_preference"
     | "get_voice_preference"
-    | "send_song";
+    | "send_song"
+    | "list_places"
+    | "save_place"
+    | "remove_place";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -590,15 +593,40 @@ export async function executeSaheliTool(input: {
             return { profileId: (await profileFor(input.familyId, partner)) ?? null, loginPhone };
         }
         case "delivery_place": {
-            // The saved place an order for this person must go to (the engine puts it in the task's limits).
-            const { defaultPlaceFor, findPlaceByWords } = await import("./familyAddressBook.service");
+            // The saved place an order for this person must go to (the engine puts it in the task's limits). Named words
+            // that match no saved place say so (matched: false), so Saheli asks instead of sending it to the default place.
+            const { listPlaces, pickDefault } = await import("./familyAddressBook.service");
+            const { findByWords } = await import("./placeTools.service");
             const words = String(input.args.words ?? "").trim();
-            const place = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (await defaultPlaceFor(input.familyId, input.recipientUserId));
-            if (!place) return { addressId: null };
+            const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId });
+            const hit = words ? findByWords(places, words, input.recipientUserId) : null;
+            const place = hit || pickDefault(places, input.recipientUserId);
+            if (!place) return { addressId: null, matched: words ? false : null, saved: [] };
             // Coordinates for fast store look-ups: the address book's, else the ones the store connectors geocoded, else a geocode.
             const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
             const at = await coordsForPlace(input.familyId, place).catch(() => null);
-            return { addressId: place.addressId, nickname: place.nickname, pincode: place.pincode, full: place.full, lat: at?.lat ?? null, lng: at?.lng ?? null };
+            return {
+                addressId: place.addressId,
+                nickname: place.nickname,
+                pincode: place.pincode,
+                full: place.full,
+                lat: at?.lat ?? null,
+                lng: at?.lng ?? null,
+                matched: words ? !!hit : null,
+                saved: places.map((p) => `${p.nickname} (${p.city || ""} ${p.pincode})`.replace(/\s+/g, " ").replace("( ", "(")),
+            };
+        }
+        case "list_places": {
+            const { listPlacesTool } = await import("./placeTools.service");
+            return listPlacesTool(input);
+        }
+        case "save_place": {
+            const { savePlaceTool } = await import("./placeTools.service");
+            return savePlaceTool(input, input.args);
+        }
+        case "remove_place": {
+            const { removePlaceTool } = await import("./placeTools.service");
+            return removePlaceTool(input, input.args);
         }
         case "ride_place": {
             // Coordinates for a ride end ("Home", a saved place, or a named place in the family's city), for fast fares.
@@ -699,7 +727,7 @@ export async function executeSaheliTool(input: {
             if (!ctx) return { status: "refused", detail: "The saved delivery place is gone." };
             const r = await mcp.placeMcpOrder(ctx, card, "confirm");
             const rs = (paise?: number) => (paise ? `₹${Math.round(paise / 100)}` : undefined);
-            if (r.status === "placed") return { status: "placed", orderId: r.orderId, total: rs(r.totalPaise), detail: r.detail };
+            if (r.status === "placed") return { status: "placed", orderId: r.orderId, total: rs(r.totalPaise), detail: r.detail, eta: r.eta ?? null };
             if (r.status === "refused" && r.newCard) return { status: "refused", detail: r.detail, newCard: r.newCard, newTotal: rs(r.newCard.totalPaise) };
             return { status: r.status, detail: r.detail };
         }
