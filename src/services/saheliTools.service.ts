@@ -84,7 +84,8 @@ export type SaheliToolName =
     | "connector_prepare"
     | "connector_place"
     | "set_voice_preference"
-    | "get_voice_preference";
+    | "get_voice_preference"
+    | "send_song";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -702,6 +703,18 @@ export async function executeSaheliTool(input: {
             }
             const link = await ensureEmergencyLink(input.familyId, input.recipientUserId, input.actorUserId);
             return { url: link.url };
+        }
+        case "send_song": {
+            const { sendSongNote } = await import("./songNote.service");
+            return sendSongNote({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                toUserId: String(input.args.to ?? input.recipientUserId),
+                actorUserId: input.actorUserId,
+                lyrics: String(input.args.lyrics ?? ""),
+                style: input.args.style ? String(input.args.style) : undefined,
+                title: input.args.title ? String(input.args.title) : undefined,
+            });
         }
         case "send_whatsapp": {
             const { sendSaheliWhatsApp } = await import("./careMemorySync.service");

@@ -5,6 +5,7 @@ import { VOICE_NOT_CAUGHT_REPLY } from "../src/services/saheliElderFacts.service
 import { isVoiceMode, wantsVoice } from "../src/services/voicePreference.service";
 import { baseLanguageOf, convertToOpus, getTtsVoiceConfig, googleVoiceFor, isOggOpus, moodFromText, plainSpeech, samePoints, speechLanguage, toVoiceNote, ttsLocale, ttsOrder, withinBytes } from "../src/channels/voicePipeline";
 import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
+import { singableLyrics, singPrompt, singToVoiceNote } from "../src/channels/voicePipeline";
 import { spawnSync } from "node:child_process";
 
 let fail = 0;
@@ -132,7 +133,19 @@ async function audioChecks() {
     }
 }
 
-void audioChecks().then(() => {
+// songs: lyrics are sung line by line as written (no spoken-script rewrite), and the prompt asks for a real tune
+const bhajan = "🎶 *पायो जी म्हणे राम रतन धन पायो।*\n\nवस्तु अमोलक दी म्हारे सतगुरु, किरपा कर अपणायो॥ 🙏";
+ok("lyrics keep their lines, no emoji or markdown", singableLyrics(bhajan) === "पायो जी म्हणे राम रतन धन पायो।\nवस्तु अमोलक दी म्हारे सतगुरु, किरपा कर अपणायो॥", singableLyrics(bhajan));
+ok("lyrics capped at 12 lines", singableLyrics(Array.from({ length: 30 }, (_, i) => `line ${i}`).join("\n")).split("\n").length === 12);
+ok("only emoji → nothing to sing", singableLyrics("🎶🙏") === "");
+ok("sing prompt asks for a melody, not reading", /melody/.test(singPrompt("Meera bhajan", "Marwari")) && /Do not read/.test(singPrompt("lullaby", "Hindi")) && singPrompt("lullaby", "Tamil").includes("Tamil"));
+
+async function songChecks() {
+    const none = await singToVoiceNote("🎶", { languageHint: "marwari" });
+    ok("nothing singable → no audio, text kept", !none.audioBuffer && none.text === "🎶");
+}
+
+void songChecks().then(audioChecks).then(() => {
     if (fail) {
         console.error(`${fail} failed`);
         process.exit(1);

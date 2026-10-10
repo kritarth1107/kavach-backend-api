@@ -159,6 +159,26 @@ export async function claimScheduleRows(input: { familyId: string; recipientUser
     return { claimed: res.modifiedCount };
 }
 
+/** A family member's WhatsApp number: from their account, else from the invitation they joined by (elders often). */
+export async function familyMemberPhone(familyId: string, userId: string): Promise<{ phone: string } | { reason: string }> {
+    const { default: Family } = await import("../models/family.model");
+    const { default: User } = await import("../models/users.model");
+    const family = await Family.findOne({ familyId, status: "ACTIVE" }).lean();
+    const member = family?.members.find((m) => m.userId === userId && m.status !== "REMOVED");
+    if (!member) return { reason: "not a family member" };
+    const user = await User.findOne({ userId }).lean();
+    let phone = user?.phone?.countryCode && user.phone.number ? `${user.phone.countryCode}${user.phone.number}` : "";
+    if (!phone) {
+        // Elders who joined by WhatsApp invite may only have the number on the accepted invitation.
+        const { default: FamilyInvitation } = await import("../models/familyInvitation.model");
+        const inv = await FamilyInvitation.findOne({ familyId, userId, phone: { $exists: true, $ne: "" } })
+            .sort({ updatedAt: -1 })
+            .lean();
+        if (inv?.phone) phone = `${inv.phoneCountryCode || "+91"}${String(inv.phone).replace(/\D/g, "").slice(-10)}`;
+    }
+    return phone ? { phone } : { reason: "no WhatsApp number" };
+}
+
 /** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */
 export async function sendSaheliWhatsApp(input: {
     familyId: string;
@@ -169,22 +189,9 @@ export async function sendSaheliWhatsApp(input: {
 }) {
     const text = input.text.trim();
     if (!text) return { delivered: false, reason: "empty" };
-    const { default: Family } = await import("../models/family.model");
-    const { default: User } = await import("../models/users.model");
-    const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" }).lean();
-    const member = family?.members.find((m) => m.userId === input.toUserId && m.status !== "REMOVED");
-    if (!member) return { delivered: false, reason: "not a family member" };
-    const user = await User.findOne({ userId: input.toUserId }).lean();
-    let phone = user?.phone?.countryCode && user.phone.number ? `${user.phone.countryCode}${user.phone.number}` : "";
-    if (!phone) {
-        // Elders who joined by WhatsApp invite may only have the number on the accepted invitation.
-        const { default: FamilyInvitation } = await import("../models/familyInvitation.model");
-        const inv = await FamilyInvitation.findOne({ familyId: input.familyId, userId: input.toUserId, phone: { $exists: true, $ne: "" } })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (inv?.phone) phone = `${inv.phoneCountryCode || "+91"}${String(inv.phone).replace(/\D/g, "").slice(-10)}`;
-    }
-    if (!phone) return { delivered: false, reason: "no WhatsApp number" };
+    const found = await familyMemberPhone(input.familyId, input.toUserId);
+    if ("reason" in found) return { delivered: false, reason: found.reason };
+    const { phone } = found;
     const { deliverOutboundMessage } = await import("./channelOutbound.service");
     const { scrubStack } = await import("./stackScrub");
     const buttons = (input.buttons || []).filter((b) => b && typeof b.id === "string" && b.id.startsWith("v2:") && b.title);

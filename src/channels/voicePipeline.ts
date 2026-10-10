@@ -558,12 +558,12 @@ async function googleTts(spoken: string, locale: string): Promise<Spoken | null>
     }
 }
 
-async function elevenTts(spoken: string, locale: string, mood: Mood = "neutral"): Promise<Spoken | null> {
+async function elevenTts(spoken: string, locale: string, mood: Mood = "neutral", tag?: string): Promise<Spoken | null> {
     const apiKey = elevenLabsApiKey();
     if (!apiKey) return null;
     const lang = speechLanguage(spoken);
     // v3/v4 read emotion from an audio tag and pauses from ellipses (no SSML breaks).
-    const tagged = `${ELEVEN_TAG[mood]} ${spoken.replace(/\[(short|medium|long) pause\]/g, (_, n) => (n === "short" ? "…" : "… …"))}`;
+    const tagged = `${tag || ELEVEN_TAG[mood]} ${spoken.replace(/\[(short|medium|long) pause\]/g, (_, n) => (n === "short" ? "…" : "… …"))}`;
     const { voiceId, modelId, voiceSettings } = getTtsVoiceConfig(lang === "hi" && locale === "mr-IN" ? "mr" : lang);
     // Telling ElevenLabs the language stops it guessing (it read Bengali as Gujarati without this).
     const languageCode = locale === "en-IN" ? "en" : locale.split("-")[0];
@@ -613,6 +613,39 @@ export async function textToSpeech(text: string, opts: { languageHint?: string |
     }
     if (!elevenLabsApiKey()) console.log("TTS: no voice available — text-only reply");
     return { text: trimmed };
+}
+
+/** Song lyrics as they are sung: line breaks kept, no emoji, markdown or links; at most ~12 lines. */
+export function singableLyrics(lyrics: string): string {
+    return String(lyrics ?? "")
+        .split(/\n+/)
+        .map((line) => speakable(line))
+        .filter(Boolean)
+        .slice(0, 12)
+        .join("\n");
+}
+
+export function singPrompt(style: string, language: string): string {
+    return `Sing this as a ${style}, in ${language} with a native accent. You are Saheli, a caring young Indian woman singing softly `
+        + `to a family member, often an elderly parent. Really sing it with a melody: held notes, a steady tune and rhythm, `
+        + `soothing and warm. Do not read it or speak it. Every word clear.`;
+}
+
+/**
+ * Saheli sings a short song as a voice note. Gemini TTS sings for real with a style prompt (judged 10/10 on a Meera
+ * bhajan); ElevenLabs v4 with a [sings] tag is the backup (6/10, closer to sing-song). The lyrics are sung as written:
+ * no spoken-script rewrite. Text only (no audio) if neither engine answers.
+ */
+export async function singToVoiceNote(lyrics: string, opts: { languageHint?: string | null; style?: string | null } = {}): Promise<Spoken> {
+    const words = singableLyrics(lyrics);
+    if (!words) return { text: lyrics };
+    const style = String(opts.style ?? "").replace(/[\[\]\n]/g, " ").trim().slice(0, 80) || "gentle devotional song";
+    const locale = ttsLocale(words, baseLanguageOf(opts.languageHint));
+    const language = languageName(opts.languageHint, locale);
+    const sung = await geminiTts(words, locale, "gentle", language, { prompt: singPrompt(style, language), timeoutMs: 45_000 })
+        ?? await elevenTts(words.split("\n").join(" … "), locale, "gentle", `[sings softly, ${style}]`);
+    if (sung) console.log(`TTS: song sung style="${style}" locale=${locale}`);
+    return sung ? { ...sung, text: lyrics } : { text: lyrics };
 }
 
 export type Mood = "concerned" | "reassuring" | "cheerful" | "gentle" | "neutral";
@@ -687,13 +720,13 @@ export function geminiVoice() {
     return { name: process.env.TTS_GEMINI_VOICE?.trim() || "Sulafat", model: process.env.TTS_GEMINI_MODEL?.trim() || "gemini-2.5-pro-tts" };
 }
 
-async function geminiTts(spoken: string, locale: string, mood: Mood, language: string): Promise<Spoken | null> {
+async function geminiTts(spoken: string, locale: string, mood: Mood, language: string, sing?: { prompt: string; timeoutMs: number }): Promise<Spoken | null> {
     if (!GEMINI_TTS_LOCALES.has(locale)) return null;
     const token = await getAccessToken();
     if (!token) return null;
     const v = geminiVoice();
     const started = Date.now();
-    const prompt = `You are Saheli, a caring young Indian woman sending a WhatsApp voice note to a family member, often an elderly parent. `
+    const prompt = sing?.prompt || `You are Saheli, a caring young Indian woman sending a WhatsApp voice note to a family member, often an elderly parent. `
         + `Speak natural ${language} with a native accent, ${MOOD_STYLE[mood]}. Talk the way people really talk, with small natural pauses `
         + `between thoughts; never sound like reading a script. Slightly slower than usual, every word clear.`;
     try {
@@ -705,7 +738,7 @@ async function geminiTts(spoken: string, locale: string, mood: Mood, language: s
                 voice: { languageCode: locale, name: v.name, modelName: v.model },
                 audioConfig: { audioEncoding: "OGG_OPUS", sampleRateHertz: 48000 },
             }),
-            signal: AbortSignal.timeout(25_000),
+            signal: AbortSignal.timeout(sing?.timeoutMs ?? 25_000),
         });
         if (!res.ok) {
             const body = await res.text().catch(() => "");
