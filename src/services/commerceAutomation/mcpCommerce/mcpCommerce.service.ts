@@ -186,8 +186,18 @@ export async function resolveOrderContact(input: {
 
 // ── Address mapping ─────────────────────────────────────────────────────────
 
-function placeFingerprint(p: Pick<Place, "line1" | "line2" | "landmark" | "city" | "pincode">): string {
-    return createHash("sha256").update([p.line1, p.line2, p.landmark, p.city, p.pincode].map((x) => String(x || "").trim().toLowerCase()).join("|")).digest("hex").slice(0, 16);
+function placeFingerprint(p: Pick<Place, "line1" | "line2" | "landmark" | "city" | "pincode"> & Partial<Pick<Place, "contactName" | "contactPhone">>): string {
+    const parts = [p.line1, p.line2, p.landmark, p.city, p.pincode];
+    // A place with its own receiver (Vish's number on Vish's Home) needs a store address carrying that receiver.
+    if (p.contactPhone) parts.push(p.contactName, p.contactPhone);
+    return createHash("sha256").update(parts.map((x) => String(x || "").trim().toLowerCase()).join("|")).digest("hex").slice(0, 16);
+}
+
+/** Swiggy lists an address as "Receiver Name: full address": with a receiver set on the place, only that receiver's address fits. */
+export function receiverMatches(shown: string, place: Partial<Pick<Place, "contactName" | "contactPhone">>): boolean {
+    if (!place.contactName || !place.contactPhone) return true;
+    const name = String(shown || "").split(":")[0]!.trim().toLowerCase();
+    return name === place.contactName.trim().toLowerCase();
 }
 
 async function listStoreAddresses(client: Client, store: McpStore): Promise<StoreAddressRow[]> {
@@ -267,7 +277,7 @@ export async function ensureStoreAddress(
             return { storeAddressId: hit.id, via: "matched" };
         }
     }
-    const match = listed.find((r) => storeAddressMatchesPlace(r.text, place));
+    const match = listed.find((r) => storeAddressMatchesPlace(r.text, place) && (store === "zepto" || receiverMatches(r.text, place)));
     if (match) {
         await McpStoreAddress.create({ ...key, storeAddressId: match.id, via: "matched" });
         return { storeAddressId: match.id, via: "matched" };

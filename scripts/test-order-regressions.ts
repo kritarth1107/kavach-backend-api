@@ -5,7 +5,7 @@
  * 3. "retry" after a stuck Instamart order stays on that order.
  */
 import assert from "node:assert/strict";
-import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, receiverMatches, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry, isMoreOptionsRequest, shouldPageCatalog } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
@@ -269,6 +269,13 @@ t("a late yes still places: the confirm card lasts 90 min (placing re-checks add
 
 t("a store login refused 3 times in a row stops counting as linked (lab 2026-10-10: 'Connected' while every call got 401)", () => {
     assert.equal(AUTH_FAILURES_TO_EXPIRE, 3);
+});
+
+t("a place with its own receiver uses only a store address in that receiver's name (Vish's Home with Vish's number)", () => {
+    const vish = { contactName: "Vish", contactPhone: "9980531439" };
+    assert.equal(receiverMatches("Kritarth Agrawal: 74, K NO 398/348/74, Amruthahalli, Bangalore 560092", vish), false);
+    assert.equal(receiverMatches("Vish: 74, K NO 398/348/74, Amruthahalli, Bangalore 560092", vish), true);
+    assert.equal(receiverMatches("Kritarth Agrawal: C504 Sunita Park, Raipur 492001", {}), true);
 });
 
 console.log(`all ${n} passed`);
