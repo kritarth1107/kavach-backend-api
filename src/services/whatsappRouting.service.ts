@@ -639,16 +639,21 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         // (live 2026-10-10 22:36: the reply came as text only and she repeated an earlier wrong answer).
         const { quotedMedia } = await import("./whatsappInboundDedupe.service");
         const q = await quotedMedia(body.replyToId);
-        if (q && q.mediaType !== "voice" && q.mediaType !== "audio") {
+        if (q?.mediaId && q.mediaType !== "voice" && q.mediaType !== "audio") {
             const { downloadMedia } = await import("../clients/metaWhatsApp.client");
             const media = await downloadMedia(q.mediaId).catch(() => null);
-            const mime = media ? brainMime(media.mimeType, q.mediaType) : null;
+            const mime = media ? brainMime(media.mimeType, q.mediaType || "image") : null;
             if (media && mime && media.buffer.length <= BRAIN_MEDIA_MAX_BYTES) {
                 brainMedia = [{ mime, data: media.buffer.toString("base64") }];
                 brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier; it is attached again. Look at it fresh.`;
             } else {
                 brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier, which can no longer be opened; ask them to send it again.`;
             }
+        } else if (q?.theirs) {
+            // (live 2026-10-10 22:46: a reply to a photo whose file was not kept; Saheli guessed it from a pending record)
+            brainMediaNote = "They are replying to an earlier message of theirs. If it was a photo, video or document, you cannot see it now: do not guess what it showed; ask them to send it again.";
+        } else if (q) {
+            brainMediaNote = "They are replying to one of your earlier messages.";
         }
     }
 

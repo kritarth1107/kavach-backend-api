@@ -48,10 +48,11 @@ export async function claimWhatsAppInboundMessage(
     }
 }
 
-/** The media an earlier inbound message carried (for a reply that quotes it), or null. */
-export async function quotedMedia(messageId: string | undefined): Promise<{ mediaId: string; mediaType: string } | null> {
+/** An earlier inbound message (for a reply that quotes it): whether it was theirs, and the media it carried if known. */
+export async function quotedMedia(messageId: string | undefined): Promise<{ theirs: boolean; mediaId?: string; mediaType?: string } | null> {
     const id = (messageId ?? "").trim();
     if (!id) return null;
     const row = await WhatsappInboundDedupe.findOne({ messageId: id }, { mediaId: 1, mediaType: 1 }).lean<{ mediaId?: string; mediaType?: string }>().catch(() => null);
-    return row?.mediaId ? { mediaId: row.mediaId, mediaType: row.mediaType || "image" } : null;
+    if (!row) return { theirs: false };
+    return row.mediaId ? { theirs: true, mediaId: row.mediaId, mediaType: row.mediaType || "image" } : { theirs: true };
 }
