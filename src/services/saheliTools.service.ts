@@ -86,6 +86,7 @@ export type SaheliToolName =
     | "set_voice_preference"
     | "get_voice_preference"
     | "send_song"
+    | "email_member"
     | "list_places"
     | "save_place"
     | "remove_place";
@@ -615,6 +616,20 @@ export async function executeSaheliTool(input: {
                 matched: words ? !!hit : null,
                 saved: places.map((p) => `${p.nickname} (${p.city || ""} ${p.pincode})`.replace(/\s+/g, " ").replace("( ", "(")),
             };
+        }
+        case "email_member": {
+            // Founder 2026-10-10: an order the caregiver did not answer about on WhatsApp in 5 minutes → an email too.
+            const family = await getFamilyForActor(input.familyId, input.actorUserId);
+            const to = String(input.args.to ?? "");
+            if (!family.hasJoinedMember(to)) return { sent: false, reason: "not a family member" };
+            const User = (await import("../models/users.model")).default;
+            const u = await User.findOne({ userId: to }, { email: 1, preferences: 1 }).lean<{ email?: string; preferences?: { emailAlerts?: boolean } }>();
+            const { isPlaceholderAccountEmail } = await import("./userContact.service");
+            if (!u?.email || isPlaceholderAccountEmail(u.email)) return { sent: false, reason: "no email on file" };
+            if (u.preferences?.emailAlerts === false) return { sent: false, reason: "email alerts off" };
+            const { sendFamilyEmail } = await import("./email.service");
+            await sendFamilyEmail(u.email, String(input.args.subject ?? "Saheli needs you"), String(input.args.text ?? ""));
+            return { sent: true };
         }
         case "list_places": {
             const { listPlacesTool } = await import("./placeTools.service");

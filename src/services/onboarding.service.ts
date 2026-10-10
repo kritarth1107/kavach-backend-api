@@ -58,6 +58,7 @@ export const PersonSchema = z.object({
     language: z.string().trim().max(40).optional(),
     dialect: z.string().trim().max(40).nullable().optional(),
     reads: z.enum(["text", "voice", "both"]).optional(),
+    codesFrom: z.enum(["self", "me"]).optional(),
     phone: optPhone,
     conditions:z.array(z.string().trim().max(60)).max(20).default([]),
     conditionsOther: z.string().trim().max(300).optional(),
@@ -645,6 +646,23 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
             userId: subject, name: p.name, addressAs, language: speechLabel(speech),
             reminders, checkins, verified: verifiedHere, welcomeSent: welcome === "sent", welcome, welcomeText: hello, problems: [...new Set(problems)],
         });
+    }
+
+    // Who gives store login codes for each person's orders (founder 2026-10-10: some elders cannot): the engine keeps it
+    // with the family's order limits; the store then logs in with that person's number.
+    const codes: Record<string, string> = {};
+    answers.persons.forEach((p, i) => {
+        const id = result.persons[i]?.userId;
+        if (id && p.codesFrom) codes[id] = p.codesFrom === "me" ? userId : "self";
+    });
+    if (self && result.persons[0]?.userId) codes[result.persons[0].userId] = "self";
+    if (Object.keys(codes).length) {
+        try {
+            const subject = Object.keys(codes)[0];
+            await aiEngineJson("PUT", `/v2/dash/${encodeURIComponent(familyId)}/${encodeURIComponent(subject)}/login-codes`, { actor, codes }, 30_000);
+        } catch {
+            result.persons.forEach((x) => x.userId && codes[x.userId] && x.problems.push("who gives login codes"));
+        }
     }
 
     // Nobody could be added: nothing is marked done, the answers stay, and they can try again.

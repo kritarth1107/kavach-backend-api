@@ -71,3 +71,15 @@ export async function sendOpsAlert(subject: string, text: string) {
   if (error) throw new AppError(error.message || "Failed to send ops alert", 502);
   return { sent: true, to: to.length };
 }
+
+/** A short care email to a family member (Saheli: an order is stuck and needs them). Plain text; the reply is on WhatsApp. */
+export async function sendFamilyEmail(to: string, subject: string, text: string) {
+  const { error } = await resend().emails.send({
+    from: process.env.FAMILY_EMAIL_FROM || "Saheli at Kavach <saheli@emails.kavach.care>",
+    to,
+    subject: subject.slice(0, 160),
+    text: `${text.slice(0, 3000)}\n\nReply to Saheli on WhatsApp. — Kavach`,
+  });
+  if (error) throw new AppError(error.message || "Failed to send email", 502);
+  return { sent: true };
+}

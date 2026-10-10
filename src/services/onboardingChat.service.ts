@@ -31,6 +31,7 @@ const RESPONSE_SCHEMA = {
                 name: STR, callThem: STR, addressAs: STR, gender: { type: "STRING", enum: ["female", "male"] }, age: { type: "INTEGER" },
                 city: STR, state: STR, livesWith: { type: "STRING", enum: [...LIVES] }, language: STR,
                 reads: { type: "STRING", enum: ["text", "voice", "both"] },
+                codesFrom: { type: "STRING", enum: ["self", "me"] },
                 conditions: arr(STR), noConditions: { type: "BOOLEAN" },
                 sugarCheck: { type: "STRING", enum: ["daily", "sometimes", "no"] }, bpMachine: { type: "BOOLEAN" },
                 allergies: arr(STR), noAllergies: { type: "BOOLEAN" },
@@ -63,6 +64,7 @@ Rules:
 - Health: "sugar" = Diabetes (sugar); "BP"/"pressure" = High BP. Use these condition labels when they match: ${CONDITIONS.join(", ")}; otherwise a short plain name. Something bothering them lately (pain, poor sleep, loneliness) goes in problems, not conditions.
 - Times are 24-hour HH:MM. Medicines: name as on the strip, dose like "500 mg"; times from what they said, using the person's meal times given below for "after breakfast" / "with dinner"; "1-0-1" = morning and night. When timing is vague, put it in frequency instead of times.
 - livesWith: alone, spouse, me (with the caregiver), family, care_home.
+- codesFrom: who gives store login codes (OTPs) for the person's orders: "self" (the person, on their own phone) or "me" (the caregiver answering, on their phone).
 - "none", "no", "nothing", "nahi" for a yes/no-style question set the matching no* flag.
 - answered: true when the message answers the current question at least partly (including "none", "skip", "don't know"); false when it is a question to Saheli or about something else.
 - ack: one short, warm, specific sentence (at most 22 words) reacting to what they shared, in simple English, like a caring young Indian woman. No question, no medical advice, no promises beyond Saheli's job. Gentle empathy for loss, illness or worry. Never list what you noted ("I have noted her age…"); react like a person would. Vary the wording; empty when there is nothing to react to.
@@ -143,6 +145,7 @@ export function sanitizeUnderstood(raw: Raw | null, ctx: { day?: Partial<Person[
         }
     }
     set("reads", oneOf(p.reads, ["text", "voice", "both"] as const));
+    set("codesFrom", oneOf(p.codesFrom, ["self", "me"] as const));
     set("conditions", list(p.conditions));
     if (p.noConditions === true) person.noConditions = true;
     set("sugarCheck", oneOf(p.sugarCheck, ["daily", "sometimes", "no"] as const));
