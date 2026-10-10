@@ -11,6 +11,9 @@ export interface IMcpConnection {
     clientInfoEnc?: string;
     connectedAt: Date;
     updatedAt?: Date;
+    /** The store keeps refusing this login (expired or revoked): not used until the family links it again. */
+    authExpiredAt?: Date;
+    authFailures?: number;
 }
 
 export interface IMcpConnectionDocument extends IMcpConnection, Document {}
@@ -24,6 +27,8 @@ const mcpConnectionSchema = new Schema<IMcpConnectionDocument>(
         tokensEnc: { type: String, required: true },
         clientInfoEnc: { type: String },
         connectedAt: { type: Date, default: Date.now },
+        authExpiredAt: { type: Date },
+        authFailures: { type: Number, default: 0 },
     },
     { timestamps: true },
 );

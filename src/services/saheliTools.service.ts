@@ -623,6 +623,12 @@ export async function executeSaheliTool(input: {
             const { isFoodGroceryBrowserOnly } = await import("./commerceAutomation/siteAllowlist");
             const store = String(input.args.store ?? "").toLowerCase() as "swiggy" | "instamart" | "zepto";
             const connected = (await familyStoreConnections(input.familyId)).has(store);
+            if (!connected) {
+                const { default: McpConnection } = await import("../models/mcpConnection.model");
+                if (await McpConnection.exists({ familyId: input.familyId, partner: store, authExpiredAt: { $exists: true } })) {
+                    return { connected: false, enabled: false, expired: true, why: "the store login expired: a caregiver links it again in Dashboard → Integrations" };
+                }
+            }
             if (!mcpOrderStores().includes(store)) return { connected, enabled: false, why: "connector ordering is off for this store" };
             if (isFoodGroceryBrowserOnly(store) && (await import("./featureFlags.service")).flaggedEnv().MCP_AGENT_CONNECTOR !== "on") {
                 return { connected, enabled: false, why: "food/grocery connector ordering is switched off (MCP_AGENT_CONNECTOR)" };

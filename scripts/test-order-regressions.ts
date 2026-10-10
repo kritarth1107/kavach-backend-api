@@ -5,7 +5,7 @@
  * 3. "retry" after a stuck Instamart order stays on that order.
  */
 import assert from "node:assert/strict";
-import { isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
+import { AUTH_FAILURES_TO_EXPIRE, MCP_CARD_TTL_MS, isMcpAuthError, isMcpSessionGlitch, reconnectAccountCopy, storeFailureKind, storeSearchTries } from "../src/services/commerceAutomation/mcpCommerce/mcpCommerce.service";
 import { applyFaithfulHits, catalogSearchQueries, refinePendingQuery, rewriteProductQuery } from "../src/services/commerceAutomation/orderChat/queryRewrite";
 import { bindLatestQuestion, bindOfferReply, browserPhaseResumesOnRetry, isMoreOptionsRequest, shouldPageCatalog } from "../src/services/commerceAutomation/orderChat/flowBind";
 import { catalogRetryNeeded, formatLinkedFailure, linkedFailurePlan, linkedGroceryTargets } from "../src/services/commerceAutomation/orderChat/searchPolicy";
@@ -261,6 +261,14 @@ t("show more pages the open list and is not a search for retry", () => {
     assert.equal(shouldPageCatalog("show more", "awaiting_sku_confirm", 12), true);
     assert.equal(shouldPageCatalog("retry", "awaiting_sku_confirm", 12), false);
     assert.equal(shouldPageCatalog("show more", "running", 12), false);
+});
+
+t("a late yes still places: the confirm card lasts 90 min (placing re-checks address, COD and total)", () => {
+    assert.equal(MCP_CARD_TTL_MS, 90 * 60_000);
+});
+
+t("a store login refused 3 times in a row stops counting as linked (lab 2026-10-10: 'Connected' while every call got 401)", () => {
+    assert.equal(AUTH_FAILURES_TO_EXPIRE, 3);
 });
 
 console.log(`all ${n} passed`);

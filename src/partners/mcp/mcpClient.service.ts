@@ -583,11 +583,15 @@ export async function getMcpConnectionStatus(
     userId: string,
 ) {
     const own = await readConnection(partner, familyId, userId);
+    if (own && (own as { authExpiredAt?: Date }).authExpiredAt) {
+        // The store keeps refusing this login: show it as not linked so the family can link it again.
+        return { connected: false, expired: true, connectedAt: null, connectedByMe: true, connectedByName: null as string | null };
+    }
     if (own) {
         return { connected: true, connectedAt: own.connectedAt?.toISOString?.() ?? own.connectedAt ?? null, connectedByMe: true, connectedByName: null as string | null };
     }
     const [rows, family] = await Promise.all([
-        McpConnection.find({ partner, familyId }, { userId: 1, connectedAt: 1 }).sort({ connectedAt: -1 }).lean(),
+        McpConnection.find({ partner, familyId, authExpiredAt: { $exists: false } }, { userId: 1, connectedAt: 1 }).sort({ connectedAt: -1 }).lean(),
         Family.findOne({ familyId, status: "ACTIVE" }),
     ]);
     const row = family ? rows.find((r) => family.hasJoinedMember(r.userId)) : undefined;
@@ -705,7 +709,9 @@ export async function completeMcpConnect(code: string, state: string) {
                 tokensEnc: encryptJson(savedTokens),
                 clientInfoEnc: savedClientInfo ? encryptJson(savedClientInfo) : undefined,
                 connectedAt: new Date(),
+                authFailures: 0,
             },
+            $unset: { authExpiredAt: 1 },
             $setOnInsert: {
                 connectionId: randomUUID(),
             },

@@ -35,7 +35,7 @@ export async function resolveFamilyMcpUserId(
             .map((m) => m.userId),
     );
 
-    const connections = await McpConnection.find({ familyId, partner })
+    const connections = await McpConnection.find({ familyId, partner, authExpiredAt: { $exists: false } })
         .sort({ connectedAt: -1 })
         .lean();
 

@@ -85,7 +85,8 @@ export async function familyStoreConnections(familyId: string): Promise<Map<McpS
     const out = new Map<McpStore, { userId: string; connectedAt?: Date }>();
     if (!familyId) return out;
     const [rows, family] = await Promise.all([
-        McpConnection.find({ familyId }, { partner: 1, familyId: 1, userId: 1, connectedAt: 1 }).lean(),
+        // A login the store keeps refusing is not a connection (live 2026-10-10: shown "Connected" for 10 days while every call got 401).
+        McpConnection.find({ familyId, authExpiredAt: { $exists: false } }, { partner: 1, familyId: 1, userId: 1, connectedAt: 1 }).lean(),
         Family.findOne({ familyId, status: "ACTIVE" }),
     ]);
     if (!family) return out;
@@ -102,7 +103,31 @@ export async function familyStoreConnections(familyId: string): Promise<Map<McpS
 async function withFamilyStore<T>(familyId: string, store: McpStore, fn: (client: Client, userId: string) => Promise<T>): Promise<T> {
     const conn = (await familyStoreConnections(familyId)).get(store);
     if (!conn) throw new McpStoreError("not_connected", `${MCP_STORE_LABEL[store]} isn't linked for this family.`);
-    return withMcpClient(store, familyId, conn.userId, (client) => fn(client, conn.userId));
+    const where = { partner: store, familyId, userId: conn.userId };
+    try {
+        const out = await withMcpClient(store, familyId, conn.userId, (client) => fn(client, conn.userId));
+        void McpConnection.updateOne({ ...where, authFailures: { $gt: 0 } }, { $set: { authFailures: 0 } }).catch(() => undefined);
+        return out;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (isMcpAuthError(message) || /returned 401/i.test(message)) await noteAuthFailure(where, message);
+        throw err;
+    }
+}
+
+/** AUTH_FAILURES_TO_EXPIRE refusals in a row (a 401 after the client already refreshed, or invalid_grant) mark the link expired. */
+export const AUTH_FAILURES_TO_EXPIRE = 3;
+
+async function noteAuthFailure(where: { partner: McpStore; familyId: string; userId: string }, message: string): Promise<void> {
+    try {
+        const row = await McpConnection.findOneAndUpdate(where, { $inc: { authFailures: 1 } }, { new: true }).lean();
+        if (row && (isMcpAuthError(message) || (row.authFailures ?? 0) >= AUTH_FAILURES_TO_EXPIRE)) {
+            await McpConnection.updateOne(where, { $set: { authExpiredAt: new Date() } });
+            console.warn(`[mcp] ${where.partner} link for family ${where.familyId} marked expired after: ${message.slice(0, 120)}`);
+        }
+    } catch {
+        /* bookkeeping only */
+    }
 }
 
 async function call(client: Client, name: string, args: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
@@ -562,7 +587,9 @@ export type McpCard = {
     createdAt: number;
 };
 
-export const MCP_CARD_TTL_MS = 15 * 60_000;
+/** How long a confirm card stays good. Placing rebuilds the cart and refuses on any change of address, COD or total, so this
+ *  only bounds how late a "yes" may come (lab 2026-10-10: a yes after 25 min had to be asked again). */
+export const MCP_CARD_TTL_MS = Math.max(5, Number(process.env.MCP_CARD_TTL_MIN || 90)) * 60_000;
 
 /** Build the real cart for exactly this pick → confirm card (then empty the cart again). */
 export async function prepareMcpOrder(ctx: McpCtx, pick: McpPick, qty = 1): Promise<McpCard> {
