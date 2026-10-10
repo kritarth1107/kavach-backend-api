@@ -526,7 +526,10 @@ export function cardLines(card: Pick<McpCard, "pick" | "qty" | "lines">): McpLin
 
 async function buildCart(client: Client, ctx: McpCtx, store: McpStore, lines: McpLine[], userId: string): Promise<BuiltCart> {
     const pick = lines[0]!.pick, qty = lines[0]!.qty;
-    if (store === "swiggy" && lines.length > 1) throw new McpStoreError("cart_failed", "Swiggy Food orders take one dish at a time here.");
+    // A food cart holds one restaurant: several dishes are fine when they all come from it (live run 2026-10-11).
+    if (store === "swiggy" && lines.some((l) => String(l.pick.restaurantId) !== String(pick.restaurantId))) {
+        throw new McpStoreError("cart_failed", "A Swiggy Food cart takes dishes from one restaurant only.");
+    }
     const contact = await contactFor(ctx, userId);
     const addr = await ensureStoreAddress(client, { familyId: ctx.familyId, store, place: ctx.place, contact, connectionUserId: userId });
     const expects = lines.map((l) => ({ id: store === "instamart" ? l.pick.spinId : store === "zepto" ? l.pick.pvid : l.pick.menuItemId, name: l.pick.name, qty: l.qty }));
@@ -552,14 +555,14 @@ async function buildCart(client: Client, ctx: McpCtx, store: McpStore, lines: Mc
             restaurantId: pick.restaurantId,
             addressId: addr.storeAddressId,
             restaurantName: pick.restaurantName,
-            cartItems: [{ menu_item_id: pick.menuItemId, quantity: qty }],
+            cartItems: lines.map((l) => ({ menu_item_id: l.pick.menuItemId, quantity: l.qty })),
         });
         if (r.isError || /closed|not accepting|unserviceable|not available/i.test(r.text.slice(0, 300))) {
             throw new McpStoreError(/closed|not accepting/i.test(r.text) ? "restaurant_closed" : "cart_failed", r.text.slice(0, 200));
         }
         const got = await call(client, "get_food_cart", { addressId: addr.storeAddressId, restaurantName: pick.restaurantName });
         const cart = parseFoodCart(got.text);
-        const chk = checkCart(cart, expect, { needTotal: true });
+        const chk = checkCartLines(cart, expects, { needTotal: true });
         if (!chk.ok) throw new McpStoreError("cart_check", `Swiggy cart check failed: ${chk.reason}`);
         const pay = await call(client, "get_payment_options", { addressId: addr.storeAddressId });
         return { cart: cart!, totalPaise: cart!.totalPaise!, cod: swiggyCodAvailable(pay.text), storeAddressId: addr.storeAddressId, addressVia: addr.via };

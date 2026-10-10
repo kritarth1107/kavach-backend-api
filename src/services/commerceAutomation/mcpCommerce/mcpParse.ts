@@ -210,10 +210,16 @@ export function parseFoodCart(text: string): ParsedCart | null {
     const lines: CartLine[] = [];
     const feeLines: ParsedCart["feeLines"] = [];
     let totalPaise: number | undefined;
+    // Swiggy's get_food_cart lists every item twice under "Items (N)" (live 2026-10-11: one Dal Khichdi printed on two
+    // lines → "extra_items" and every Swiggy Food cart failed). The same line again is the same item, not a second one.
+    const seen = new Set<string>();
+    const count = Number(text.match(/Items\s*\((\d+)\)/i)?.[1] ?? NaN);
     for (const raw of text.split("\n")) {
         const line = raw.trim();
         const item = line.match(/^-\s*(?:(\d+)\s*x\s*)?(.+?)\s+—\s+₹\s*([\d,.]+)(?:\s*\(ID:\s*(\d+)\))?(.*)$/i);
         if (item) {
+            if (seen.has(line) || (Number.isFinite(count) && lines.length >= count)) continue;
+            seen.add(line);
             const qtyTail = (item[5] || "").match(/(?:qty|quantity)\s*:?\s*(\d+)|x\s*(\d+)/i);
             const qty = Number(item[1] || qtyTail?.[1] || qtyTail?.[2] || 1);
             lines.push({ name: item[2]!.trim(), qty, pricePaise: rupeesToPaise(item[3]), id: item[4] });

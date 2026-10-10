@@ -88,6 +88,12 @@ ok("empty cart → refused", !checkCart({ lines: [], feeLines: [] }, { name: "x"
 const fc = parseFoodCart(`Items (1):\n  - Paneer Butter Masala — ₹200 (ID: 83192647)\n\nItem total: ₹200\nDelivery: ₹45\nTaxes & charges: ₹51.83\nTO PAY: ₹297\n`);
 ok("food cart parsed", fc!.lines.length === 1 && fc!.lines[0]!.id === "83192647" && fc!.totalPaise === 29700 && fc!.feeLines.some((f) => f.label === "Delivery"));
 ok("food cart guardrails", checkCart(fc, { id: "83192647", name: "Paneer Butter Masala", qty: 1 }, { needTotal: true }).ok);
+// Live 2026-10-11: Swiggy prints each cart item twice; it is one item (every Swiggy Food cart failed as "extra_items").
+const fc2 = parseFoodCart(`Items (1):\n  - Dal Khichdi — ₹248 (ID: 186061062)\n  - Dal Khichdi — ₹248 (ID: 186061062)\n\nItem total: ₹248\nDelivery: ₹54\nTaxes & charges: ₹40.1\nTO PAY: ₹342\n`);
+ok("food cart: a repeated line is one item", fc2!.lines.length === 1 && fc2!.totalPaise === 34200);
+ok("food cart: repeated line passes guardrails", checkCart(fc2, { id: "186061062", name: "Dal Khichdi", qty: 1 }, { needTotal: true }).ok);
+const fc3 = parseFoodCart(`Items (2):\n  - Dal Khichdi — ₹248 (ID: 186061062)\n  - Dal Khichdi — ₹248 (ID: 186061062)\n  - Papad — ₹24 (ID: 186061099)\n  - Papad — ₹24 (ID: 186061099)\nTO PAY: ₹380\n`);
+ok("food cart: two items each printed twice", fc3!.lines.length === 2 && fc3!.lines[1]!.id === "186061099");
 
 const zc = parseZeptoCart(`🛒 Cart Items (1 items)\n      1. Amul Taaza Homogenised Toned Milk (Tetra Pack) - ₹77 (Qty: 1)\n   pvid: 84eae511-5edb-4a22-875e-5aa94976c2d6, spid: 459a`);
 ok("zepto cart parsed", zc!.lines.length === 1 && zc!.lines[0]!.id === "84eae511-5edb-4a22-875e-5aa94976c2d6" && zc!.lines[0]!.qty === 1);
