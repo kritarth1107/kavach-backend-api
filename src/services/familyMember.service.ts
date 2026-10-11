@@ -360,7 +360,8 @@ export async function createInvitedUser(
         }
 
         if (phoneForUser) {
-            if (!user.phone) {
+            if (!user.phone || isInternalPhone(user.phone.countryCode)) {
+                // no number yet, or only the internal "+99" placeholder
                 updates.phone = {
                     countryCode: phoneForUser.countryCode,
                     number: phoneForUser.number,

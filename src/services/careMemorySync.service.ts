@@ -159,24 +159,29 @@ export async function claimScheduleRows(input: { familyId: string; recipientUser
     return { claimed: res.modifiedCount };
 }
 
-/** A family member's WhatsApp number: from their account, else from the invitation they joined by (elders often). */
+/**
+ * A family member's WhatsApp number, found the way every outbound message finds it: their account number unless it is
+ * the internal "+99" placeholder, else their WhatsApp link, else the invitation they joined by (elders often). Until
+ * 2026-10-11 this glued the account's "+99" placeholder onto the number, so Saheli's own messages to anyone without a
+ * real number on their account were dropped as "placeholder" (a caregiver in Bengaluru heard nothing for minutes).
+ */
 export async function familyMemberPhone(familyId: string, userId: string): Promise<{ phone: string } | { reason: string }> {
     const { default: Family } = await import("../models/family.model");
-    const { default: User } = await import("../models/users.model");
     const family = await Family.findOne({ familyId, status: "ACTIVE" }).lean();
     const member = family?.members.find((m) => m.userId === userId && m.status !== "REMOVED");
     if (!member) return { reason: "not a family member" };
-    const user = await User.findOne({ userId }).lean();
-    let phone = user?.phone?.countryCode && user.phone.number ? `${user.phone.countryCode}${user.phone.number}` : "";
-    if (!phone) {
-        // Elders who joined by WhatsApp invite may only have the number on the accepted invitation.
-        const { default: FamilyInvitation } = await import("../models/familyInvitation.model");
-        const inv = await FamilyInvitation.findOne({ familyId, userId, phone: { $exists: true, $ne: "" } })
-            .sort({ updatedAt: -1 })
-            .lean();
-        if (inv?.phone) phone = `${inv.phoneCountryCode || "+91"}${String(inv.phone).replace(/\D/g, "").slice(-10)}`;
-    }
-    return phone ? { phone } : { reason: "no WhatsApp number" };
+    const { resolveRecipientWhatsAppPhone } = await import("./identityResolver.service");
+    const resolved = await resolveRecipientWhatsAppPhone(userId, familyId).catch(() => null);
+    if (resolved) return { phone: resolved };
+    // The invitation they joined by, whatever their role (the resolver reads only care recipients' invitations).
+    const { default: FamilyInvitation } = await import("../models/familyInvitation.model");
+    const { isInternalPhone } = await import("../utils/phone.util");
+    const inv = await FamilyInvitation.findOne({ familyId, userId, phone: { $exists: true, $ne: "" } })
+        .sort({ updatedAt: -1 })
+        .lean();
+    const cc = inv?.phoneCountryCode || "+91";
+    if (inv?.phone && !isInternalPhone(cc)) return { phone: `${cc}${String(inv.phone).replace(/\D/g, "").slice(-10)}` };
+    return { reason: "no WhatsApp number" };
 }
 
 /** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */

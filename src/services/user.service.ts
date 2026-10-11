@@ -5,6 +5,7 @@ import { getUserInitials } from "./family.service";
 import { AuthProvider, IUserPreferences } from "../types/user.types";
 import { SessionStatus } from "../types/session.types";
 import { sortByLastActiveAtDesc } from "../utils/cosmos-safe-sort.util";
+import { isInternalPhone } from "../utils/phone.util";
 
 const defaultPreferences: IUserPreferences = {
     emailAlerts: true,
@@ -33,7 +34,8 @@ export function buildUserProfile(user: IUserDocument) {
         fullName: user.fullName,
         initials: getUserInitials(user.firstName, user.lastName, user.email),
         avatarUrl: user.avatarUrl,
-        phone: user.phone ?? null,
+        // The internal "+99" placeholder is not a number; shown, it stayed the code of a number typed over it.
+        phone: user.phone && !isInternalPhone(user.phone.countryCode) ? user.phone : null,
         emailVerified: user.emailVerified,
         primaryAuthProvider: user.primaryAuthProvider,
         linkedProviders: user.linkedProviders,
@@ -83,6 +85,9 @@ export async function updateUserProfile(
         } else {
             if (!phone || !countryCode) {
                 throw new AppError("Both phone number and country code are required", 400);
+            }
+            if (isInternalPhone(countryCode)) {
+                throw new AppError("Choose the country code of this number (for India, +91)", 400);
             }
             user.phone = { countryCode, number: phone.replace(/\D/g, "") };
         }

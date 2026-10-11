@@ -11,7 +11,7 @@ import {
     FamilyMemberStatus,
     FamilyRole,
 } from "../types/family.types";
-import { isInternalPhone, normalizePhoneInput } from "../utils/phone.util";
+import { INTERNAL_PHONE_COUNTRY_CODE, isInternalPhone, normalizePhoneInput } from "../utils/phone.util";
 
 export function normalizeChannelIdentifier(channelType: ChannelType, raw: string): string {
     const trimmed = raw.trim();
@@ -47,10 +47,19 @@ function phoneLookupVariants(normalized: string) {
     return { digits, last10, keys: [...keys] };
 }
 
-async function findUserByWhatsAppPhone(normalized: string) {
+type PhoneFields = { userId: string; phone?: { countryCode?: string; number?: string } | null; phoneKey?: string };
+
+/** The random internal placeholder an account gets when it has no phone ("+99" + the same digits as its key). */
+export function isRandomPlaceholder(u: Omit<PhoneFields, "userId">): boolean {
+    return isInternalPhone(u.phone?.countryCode) && u.phoneKey === `${INTERNAL_PHONE_COUNTRY_CODE}${u.phone?.number ?? ""}`;
+}
+
+/** Accounts whose number is this sender's; exact number matches first. A random placeholder that happens to share
+ *  the digits is nobody's number and never matches (most accounts carry one: 17 of 22 on 2026-10-11). */
+async function findUsersByWhatsAppPhone(normalized: string) {
     const { last10, keys } = phoneLookupVariants(normalized);
 
-    return User.findOne({
+    const rows = await User.find({
         $or: [
             ...keys.map((phoneKey) => ({ phoneKey })),
             ...(last10.length === 10
@@ -60,7 +69,43 @@ async function findUserByWhatsAppPhone(normalized: string) {
                   ]
                 : []),
         ],
-    }).lean();
+    })
+        .limit(5)
+        .lean();
+    const people = rows.filter((u) => !isRandomPlaceholder(u));
+    const exact = people.filter((u) => u.phoneKey && keys.includes(u.phoneKey));
+    return exact.length ? exact : people;
+}
+
+/**
+ * The real number for an account whose 10 digits were saved under the internal "+99" code (the settings page showed
+ * the placeholder's code until 2026-10-11, so a typed number kept it), taken from the number WhatsApp shows for the
+ * sender. Null when the account's number is not of that kind or does not end the sender's number.
+ */
+export function realNumberFromSender(u: Omit<PhoneFields, "userId">, normalizedSender: string) {
+    const number = String(u.phone?.number ?? "");
+    const digits = normalizedSender.replace(/\D/g, "");
+    if (!isInternalPhone(u.phone?.countryCode) || isRandomPlaceholder(u)) return null;
+    if (number.length !== 10 || digits.length <= 10 || !digits.endsWith(number)) return null;
+    const countryCode = `+${digits.slice(0, -10)}`;
+    if (isInternalPhone(countryCode)) return null;
+    return { countryCode, number, phoneKey: `${countryCode}${number}` };
+}
+
+/** Outbound messages and store logins skip "+99" numbers, so such a person could write to Saheli but never hear from
+ *  her first. WhatsApp has just shown their real number: put it on the account. Best effort. */
+async function claimSenderNumber(u: PhoneFields, normalizedSender: string): Promise<void> {
+    try {
+        const real = realNumberFromSender(u, normalizedSender);
+        if (!real) return;
+        if (await User.exists({ phoneKey: real.phoneKey, userId: { $ne: u.userId } })) return;
+        await User.updateOne(
+            { userId: u.userId, "phone.countryCode": INTERNAL_PHONE_COUNTRY_CODE, "phone.number": real.number },
+            { $set: { phone: { countryCode: real.countryCode, number: real.number }, phoneKey: real.phoneKey } },
+        );
+    } catch {
+        // the sender was still recognised; their next message tries again
+    }
 }
 
 async function backfillUserPhoneFromInvite(
@@ -189,10 +234,12 @@ export async function resolveWhatsAppSender(senderPhone: string): Promise<Resolv
         return fromInvite;
     }
 
-    const user = await findUserByWhatsAppPhone(normalized);
+    const users = await findUsersByWhatsAppPhone(normalized);
+    const user = users[0];
     if (user) {
         const membership = await resolveFamilyMembership(user.userId);
         if (membership) {
+            if (users.length === 1) await claimSenderNumber(user, normalized);
             return {
                 ...membership,
                 channelIdentifier: normalized,
