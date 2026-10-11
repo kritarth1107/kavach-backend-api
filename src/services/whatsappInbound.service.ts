@@ -61,17 +61,8 @@ async function deliverLate(msg: OutboundMessage | undefined): Promise<void> {
     try {
         const meta = await import("../clients/metaWhatsApp.client");
         if (!meta.isMetaWhatsAppEnabled()) return;
-        if (msg.audioBuffer || msg.audioBase64) {
-            await meta.sendMetaWhatsAppVoice({
-                to: msg.channelIdentifier,
-                audioBuffer: msg.audioBuffer || Buffer.from(msg.audioBase64 || "", "base64"),
-                mimeType: msg.audioMimeType || "audio/mpeg",
-                caption: msg.content,
-                payloads: msg.whatsappPayloads,
-            });
-        } else {
-            await meta.sendViaMetaWhatsApp(msg.channelIdentifier, msg.content, msg.whatsappPayloads);
-        }
+        const { sendWhatsAppReply } = await import("./voiceAfterText.service");
+        await sendWhatsAppReply(msg);
         console.log(`Meta WhatsApp late reply sent to ${msg.channelIdentifier.slice(0, 6)}…`);
     } catch (err) {
         console.error("late WhatsApp reply failed:", err instanceof Error ? err.message : err);

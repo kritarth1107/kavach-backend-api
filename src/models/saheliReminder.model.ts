@@ -40,6 +40,9 @@ export interface ISaheliReminder {
     stoppedBy?: string;
     /** The engine's why-trail id of the last change that came through Saheli (D-13). */
     lastTraceId?: string;
+    /** The care-record item it is for (a fact key such as "medicine:metformin"), when it is about one: a medicine
+     *  reminder is held back once the dose it belongs to is marked taken. */
+    aboutKey?: string;
     lastFiredAt?: Date;
     lastFiredSlotKey?: string;
     createdAt?: Date;
@@ -82,6 +85,7 @@ const saheliReminderSchema = new Schema<ISaheliReminderDocument>(
         stoppedAt: { type: Date },
         stoppedBy: { type: String },
         lastTraceId: { type: String },
+        aboutKey: { type: String, trim: true, maxlength: 200 },
         lastFiredAt: { type: Date },
         lastFiredSlotKey: { type: String },
     },

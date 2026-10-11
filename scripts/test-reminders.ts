@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
-import { describe as words, nextOccurrence, readSchedule, slotsOn } from "../src/services/reminderSchedule.service";
+import { describe as words, doseFor, nextOccurrence, readSchedule, slotsOn, upcoming } from "../src/services/reminderSchedule.service";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -74,6 +74,25 @@ async function pure() {
         assert.equal(words({ kind: "multi_time", times: night } as never), "14 times a day, 14:00 to 03:00", "a run across midnight reads as one");
         assert.equal(words({ kind: "multi_time", times: ["07:00"], repeat: "weekly", daysOfWeek: [5, 1, 3], endDate: "2026-11-30" } as never),
             "Mon, Wed, Fri at 07:00 until Mon 30 Nov");
+    });
+
+    await ok("a reminder belongs to the nearest dose of its medicine (live 2026-10-12: 'remind me in an hour' at 23:16)", () => {
+        const night = [{ scheduleId: "mag", time: "23:00" }];
+        assert.deepEqual(doseFor(night, MON, "00:15"), { scheduleId: "mag", dateKey: SUN }, "00:15 follows up the 23:00 dose of the day before");
+        assert.deepEqual(doseFor([{ scheduleId: "m", time: "08:00" }], MON, "08:30"), { scheduleId: "m", dateKey: MON });
+        assert.deepEqual(doseFor([{ scheduleId: "m", time: "08:00" }], MON, "07:45"), { scheduleId: "m", dateKey: MON }, "a reminder just before its dose");
+        const twice = [{ scheduleId: "am", time: "08:00" }, { scheduleId: "pm", time: "20:00" }];
+        assert.deepEqual(doseFor(twice, MON, "14:00"), { scheduleId: "am", dateKey: MON }, "halfway: the earlier dose, the one being followed up");
+        assert.deepEqual(doseFor(twice, MON, "21:00"), { scheduleId: "pm", dateKey: MON });
+        assert.equal(doseFor([{ scheduleId: "w", time: "08:00", daysOfWeek: [3] }], MON, "08:30"), null, "no dose of it that day");
+        assert.equal(doseFor([], MON, "08:30"), null);
+    });
+
+    await ok("the reminders due soon: the next hours, across midnight, skips left out", () => {
+        const smoke = { kind: "hourly_window", windowStartMinutes: 14 * 60, windowEndMinutes: 3 * 60, skips: [`${TUE}@01:00`] } as never;
+        assert.deepEqual(upcoming(smoke, MON, 22 * 60 + 30, 6).map((o) => `${o.day} ${o.time}`),
+            [`${MON} 23:00`, `${TUE} 00:00`, `${TUE} 02:00`, `${TUE} 03:00`]);
+        assert.deepEqual(upcoming({ kind: "multi_time", times: ["19:30"] } as never, MON, 20 * 60, 12), [], "tomorrow's 19:30 is more than 12 hours away");
     });
 }
 
@@ -216,6 +235,60 @@ async function withDb(uri: string) {
         assert.equal((await SaheliReminder.findOne({ reminderId: id }).lean())!.lastTraceId, "wamid.T1");
         await executeSaheliTool({ tool: "skip_reminder" as never, args: { reminderId: id }, familyId: "famR", recipientUserId: "el1", actorUserId: "cg1", traceId: "wamid.T2" });
         assert.equal((await SaheliReminder.findOne({ reminderId: id }).lean())!.lastTraceId, "wamid.T2");
+    });
+
+    await ok("a reminder for a medicine dose is not sent once that dose is marked taken (live 2026-10-12)", async () => {
+        // "Remind me in next 1 hour" at 23:16 for the 23:00 magnesium; at 00:12 "I had the medicine"; at 00:15 it came anyway.
+        const CareSchedule = (await import("../src/models/careSchedule.model")).default;
+        const CareScheduleCompletion = (await import("../src/models/careScheduleCompletion.model")).default;
+        const { CareScheduleType } = await import("../src/types/careSchedule.types");
+        await CareSchedule.create({ scheduleId: "sch-mag", familyId: "famR", recipientUserId: "el1", type: CareScheduleType.MEDICINE,
+                                    title: "Magnesium", time: "23:00", sourceKey: "medicine:magnesium", createdBy: "cg1" });
+        const made = await tool("create_reminder", { text: "Take your magnesium tablet", item: "medicine:magnesium",
+                                                     schedule: { times: ["00:15"], repeat: "once", date: TUE } });
+        assert.equal(made.reminder.aboutKey, "medicine:magnesium");
+        const other = await tool("create_reminder", { text: "Drink water", schedule: { times: ["00:15"], repeat: "once", date: TUE } });
+        const fired: string[] = [];
+        const fire = (async (i: { reminder: { reminderId: string } }) => { fired.push(i.reminder.reminderId); return true; }) as never;
+        // not taken yet: it goes out
+        const before = await R.runSaheliReminderTick(at(TUE, "00:15"), async () => true as never, async (r, d, t) => R.linkedDoseTaken(r, d, t));
+        assert.equal(before.held, 0);
+        await SaheliReminder.updateOne({ reminderId: made.reminder.reminderId }, { $set: { lastFiredSlotKey: null } });
+        await SaheliNudgeLog.deleteMany({ scheduleId: { $regex: `^reminder:${made.reminder.reminderId}` } });
+        // the dose of 12 Oct 23:00 marked taken at 00:12 (WhatsApp, the Done button or the dashboard all write this)
+        await CareScheduleCompletion.create({ familyId: "famR", recipientUserId: "el1", scheduleId: "sch-mag", dateKey: MON, status: "completed", markedBy: "el1" });
+        const tick = await R.runSaheliReminderTick(at(TUE, "00:15"), fire);
+        const ours = [made.reminder.reminderId, other.reminder.reminderId];
+        assert.deepEqual(fired.filter((id) => ours.includes(id)), [other.reminder.reminderId], "the water reminder goes out; the magnesium one is not needed");
+        assert.equal(tick.held, 1);
+        assert.equal((await R.runSaheliReminderTick(at(TUE, "00:16"), fire)).held, 0, "decided once");
+        const day = await R.remindersForDay({ familyId: "famR", recipientUserId: "el1", actorUserId: "el1", day: TUE, now: at(TUE, "00:20") });
+        const mag = day.occurrences.find((o) => o.reminderId === made.reminder.reminderId)!;
+        assert.equal(mag.status, "done", "the calendar shows it was not needed");
+        // a later reminder for the same medicine, before its next dose was taken, shows as scheduled
+        const tonight = await tool("create_reminder", { text: "Magnesium again", item: "medicine:magnesium", schedule: { times: ["22:45"], repeat: "once", date: TUE } });
+        const view = await R.remindersForDay({ familyId: "famR", recipientUserId: "el1", actorUserId: "el1", day: TUE, now: at(TUE, "00:20") });
+        assert.equal(view.occurrences.find((o) => o.reminderId === tonight.reminder.reminderId)!.status, "scheduled");
+    });
+
+    await ok("the care-record link is data: set, cleared, refused when it is not a key", async () => {
+        const r = await tool("create_reminder", { text: "Walk", schedule: { times: ["06:30"] } });
+        const id = r.reminder.reminderId;
+        assert.equal((await tool("update_reminder", { reminderId: id, item: "routine:morning_walk" })).reminder.aboutKey, "routine:morning_walk");
+        assert.equal((await tool("update_reminder", { reminderId: id, item: null })).reminder.aboutKey, null);
+        const bad = await tool("update_reminder", { reminderId: id, item: "the walk one" });
+        assert.equal(bad.ok, false);
+        assert.match(bad.error, /care record key/);
+    });
+
+    await ok("Saheli is told the reminders due soon: for the speaker and the person cared for, in time order", async () => {
+        const soon = await R.remindersSoon("famR", ["cg1", "el1"], at(MON, "18:00"), 12);
+        const cg = soon.filter((r) => r.recipientUserId === "cg1");
+        assert.ok(cg.length > 0 && cg.length <= 6, "at most 6 each");
+        assert.ok(cg.some((r) => r.reminderId === gym && r.day === MON && r.time === "19:30"), "the gym reminder at 19:30");
+        assert.deepEqual(cg.map((r) => r.day + r.time), [...cg.map((r) => r.day + r.time)].sort());
+        assert.equal(soon.some((r) => !["cg1", "el1"].includes(r.recipientUserId)), false);
+        assert.deepEqual(await R.remindersSoon("famR", ["nobody"], at(MON, "18:00")), []);
     });
 
     await ok("stop: it never goes out again, and the day still shows what went out before", async () => {

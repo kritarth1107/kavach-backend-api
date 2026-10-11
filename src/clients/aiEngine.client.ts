@@ -215,6 +215,7 @@ export async function aiPostBrainTurn(payload: {
     voice_language?: string | null;
     images?: Array<{ mime: string; data: string }>;
     media_note?: string;
+    reminders_soon?: Array<{ id: string; person: string; text: string; day: string; time: string; repeat: string; item: string | null }>;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }> }> {
     const res = await aiFetch(
         "/v2/turn",

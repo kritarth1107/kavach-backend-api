@@ -7,7 +7,10 @@ import SaheliReminder, {
     type SaheliReminderKind,
     type SaheliReminderStatus,
 } from "../models/saheliReminder.model";
-import { describe, isDay, isSkipped, minutesOf, nextOccurrence, normalTime, readSchedule, slotsOn, type ScheduleInput } from "./reminderSchedule.service";
+import { describe, doseFor, isDay, isSkipped, minutesOf, nextOccurrence, normalTime, readSchedule, slotsOn, upcoming, type DoseTime, type ScheduleInput } from "./reminderSchedule.service";
+import CareSchedule from "../models/careSchedule.model";
+import CareScheduleCompletion from "../models/careScheduleCompletion.model";
+import { CareScheduleType } from "../types/careSchedule.types";
 import { AppError } from "../middleware/error.middleware";
 import { FamilyRole } from "../types/family.types";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
@@ -50,10 +53,53 @@ function serialize(doc: ISaheliReminder, now: Date = new Date()) {
         stoppedBy: doc.stoppedBy ?? null,
         lastFiredAt: doc.lastFiredAt ?? null,
         lastFiredSlotKey: doc.lastFiredSlotKey ?? null,
+        aboutKey: doc.aboutKey ?? null,
     };
 }
 
 export type ReminderView = ReturnType<typeof serialize>;
+
+const ABOUT_KEY = /^[a-z_]{2,40}:[a-z0-9_]{1,160}$/;
+
+/** A care-record key as data ("medicine:metformin"); anything else is no link. */
+export function cleanAboutKey(v: unknown): string | undefined {
+    const k = typeof v === "string" ? v.trim().toLowerCase() : "";
+    return ABOUT_KEY.test(k) ? k : undefined;
+}
+
+/** The dose times of the medicine a reminder is for (its care schedules); none when it is not about a medicine. */
+async function dosesOf(r: Pick<ISaheliReminder, "familyId" | "recipientUserId" | "aboutKey">): Promise<DoseTime[]> {
+    if (!r.aboutKey?.startsWith("medicine:")) return [];
+    const rows = await CareSchedule.find({
+        familyId: r.familyId,
+        recipientUserId: r.recipientUserId,
+        sourceKey: r.aboutKey,
+        type: CareScheduleType.MEDICINE,
+        active: true,
+    }).lean();
+    return rows.map((x) => ({ scheduleId: x.scheduleId, time: x.time, daysOfWeek: x.daysOfWeek }));
+}
+
+/**
+ * Was the dose this reminder time belongs to already marked taken (on WhatsApp, the Done button or the dashboard)?
+ * Only for a reminder linked to a medicine; the nearest dose within 12 hours is the one it follows up (doseFor).
+ */
+export async function linkedDoseTaken(
+    r: Pick<ISaheliReminder, "familyId" | "recipientUserId" | "aboutKey">,
+    day: string,
+    time: string,
+    doses?: DoseTime[],
+): Promise<boolean> {
+    const dose = doseFor(doses ?? (await dosesOf(r)), day, time);
+    if (!dose) return false;
+    return Boolean(await CareScheduleCompletion.exists({
+        familyId: r.familyId,
+        recipientUserId: r.recipientUserId,
+        scheduleId: dose.scheduleId,
+        dateKey: dose.dateKey,
+        status: "completed",
+    }));
+}
 
 async function assertCanManageReminder(
     familyId: string,
@@ -174,6 +220,8 @@ export async function createSaheliReminder(input: {
      * When given, the reminder text is never parsed for times.
      */
     schedule?: ScheduleInput;
+    /** The care-record item it is for ("medicine:metformin"), when Saheli's brain gave one. */
+    aboutKey?: string | null;
     now?: Date;
     traceId?: string;
 }): Promise<
@@ -200,6 +248,7 @@ export async function createSaheliReminder(input: {
             status: "active" as SaheliReminderStatus,
             createdBy: input.actorUserId,
             ...(input.traceId ? { lastTraceId: input.traceId } : {}),
+            ...(cleanAboutKey(input.aboutKey) ? { aboutKey: cleanAboutKey(input.aboutKey) } : {}),
             ...checked.fields,
         });
         void logReminderActivity(doc, input.actorUserId, "Reminder created", "created");
@@ -371,6 +420,8 @@ export async function updateSaheliReminder(input: {
     reminderId: string;
     text?: string;
     schedule?: ScheduleInput;
+    /** Link it to a care-record item; "" or null removes the link; undefined leaves it. */
+    aboutKey?: string | null;
     now?: Date;
     traceId?: string;
 }): Promise<{ ok: true; reminder: ReminderView } | { ok: false; error: string }> {
@@ -409,6 +460,11 @@ export async function updateSaheliReminder(input: {
         if (text.length < 2) return { ok: false, error: "Reminder text is required." };
         doc.text = text;
     }
+    if (input.aboutKey !== undefined) {
+        const key = cleanAboutKey(input.aboutKey);
+        if (input.aboutKey && !key) return { ok: false, error: "item must be a care record key like medicine:metformin" };
+        doc.aboutKey = key;
+    }
     doc.updatedBy = input.actorUserId;
     if (input.traceId) doc.lastTraceId = input.traceId;
     await doc.save();
@@ -424,8 +480,9 @@ export type ReminderOccurrence = {
     reminderId: string;
     text: string;
     time: string;
-    /** scheduled | sent | failed | not_sent (its time passed: quiet hours, paused or the service was down) | skipped */
-    status: "scheduled" | "sent" | "failed" | "not_sent" | "skipped";
+    /** scheduled | sent | failed | not_sent (its time passed: quiet hours, paused or the service was down) | skipped |
+     *  done (the dose it was for was already marked taken, so it was not needed) */
+    status: "scheduled" | "sent" | "failed" | "not_sent" | "skipped" | "done";
     reason?: string;
     schedule: string;
     /** More than three times that day (an hourly one): the calendar shows these smaller. */
@@ -470,6 +527,7 @@ export async function remindersForDay(input: {
         });
         if (!slots.length) continue;
         shown.push(r);
+        const doses = r.aboutKey ? await dosesOf(r) : [];
         for (const t of slots) {
             const at = new Date(`${input.day}T${t}:00+05:30`);
             const log = byKey.get(`reminder:${r.reminderId}:${t}`);
@@ -478,7 +536,10 @@ export async function remindersForDay(input: {
             const past = at.getTime() + REMINDER_LATE_MINUTES * 60_000 < now.getTime();
             if (log?.delivered) status = "sent";
             else if (isSkipped(r, input.day, t)) status = "skipped";
-            else if (log?.reason === "paused") {
+            else if (log?.reason === "done" || (doses.length && (await linkedDoseTaken(r, input.day, t, doses)))) {
+                status = "done";
+                reason = "the dose was already marked taken";
+            } else if (log?.reason === "paused") {
                 status = "not_sent";
                 reason = "paused";
             } else if (log && (log.terminal || past)) {
@@ -715,16 +776,49 @@ async function fireReminderMessage(input: {
  * on the days its schedule says, unless someone skipped it. A reminder with nothing left to send (a once reminder
  * that went out, one past its end date) is marked completed.
  */
+/**
+ * A reminder that is no longer needed (the dose it was for is already marked taken) is not sent; the slot is claimed
+ * so it is decided once, and the day view shows it as done.
+ */
+async function holdBack(rem: ISaheliReminder, dateKey: string, slot: string): Promise<boolean> {
+    const attemptId = await claimNudgeAttempt(
+        {
+            familyId: rem.familyId,
+            recipientUserId: rem.recipientUserId,
+            scheduleId: `reminder:${rem.reminderId}:${slot}`,
+            dateKey,
+            nudgeKind: "pre_reminder",
+        },
+        `Reminder: ${rem.text}`,
+    );
+    if (!attemptId) return false;
+    await finalizeNudgeAttempt(attemptId, { delivered: false, channel: "none", terminal: true, reason: "done" });
+    await SaheliReminder.updateOne({ reminderId: rem.reminderId }, { $set: { lastFiredSlotKey: `${dateKey}:${slot}` } });
+    void import("./activityLog.service").then(({ logActivity }) =>
+        logActivity({
+            familyId: rem.familyId,
+            recipientUserId: rem.recipientUserId,
+            kind: "reminder",
+            title: "Reminder not needed: the dose was already marked taken",
+            detail: `Reminder: ${rem.text}`,
+            data: { reminderId: rem.reminderId, status: "done", slot },
+        }),
+    ).catch(() => undefined);
+    return true;
+}
+
 export async function runSaheliReminderTick(
     now = new Date(),
     fire: typeof fireReminderMessage = fireReminderMessage, // tests pass a fake sender
-): Promise<{ sent: number; scanned: number; finished: number }> {
+    alreadyDone: (r: ISaheliReminder, day: string, time: string) => Promise<boolean> = linkedDoseTaken,
+): Promise<{ sent: number; scanned: number; finished: number; held: number }> {
     const dateKey = toDateKeyIST(now);
     const { minutesSinceMidnight } = getISTParts(now);
     const active = await SaheliReminder.find({ status: "active" }).limit(2000).lean();
     let sent = 0;
     let scanned = 0;
     let finished = 0;
+    let held = 0;
 
     for (const rem of active) {
         scanned += 1;
@@ -732,6 +826,10 @@ export async function runSaheliReminderTick(
             const mins = minutesOf(t);
             if (mins == null || minutesSinceMidnight < mins || minutesSinceMidnight > mins + REMINDER_LATE_MINUTES) continue;
             if (isSkipped(rem, dateKey, t)) continue;
+            if (rem.aboutKey && (await alreadyDone(rem as ISaheliReminder, dateKey, t).catch(() => false))) {
+                if (await holdBack(rem as ISaheliReminder, dateKey, t)) held += 1;
+                continue;
+            }
             const ok = await fire({
                 familyId: rem.familyId,
                 recipientUserId: rem.recipientUserId,
@@ -747,5 +845,39 @@ export async function runSaheliReminderTick(
         }
     }
 
-    return { sent, scanned, finished };
+    return { sent, scanned, finished, held };
+}
+
+export type ReminderSoon = {
+    reminderId: string;
+    recipientUserId: string;
+    text: string;
+    day: string;
+    time: string;
+    repeat: string;
+    aboutKey: string | null;
+};
+
+/**
+ * The reminders due in the next `hours` hours for these people (at most 6 each), for Saheli's turn: when someone says
+ * they already did what one is for, she can skip that time instead of letting it go out anyway.
+ */
+export async function remindersSoon(familyId: string, userIds: string[], now = new Date(), hours = 12): Promise<ReminderSoon[]> {
+    const ids = [...new Set(userIds.filter(Boolean))];
+    if (!ids.length) return [];
+    const day = toDateKeyIST(now);
+    const minute = getISTParts(now).minutesSinceMidnight;
+    const rows = (await SaheliReminder.find({ familyId, recipientUserId: { $in: ids }, status: "active" }).limit(200).lean()) as ISaheliReminder[];
+    const out: ReminderSoon[] = [];
+    for (const id of ids) {
+        const mine = rows
+            .filter((r) => r.recipientUserId === id)
+            .flatMap((r) => upcoming(r, day, minute, hours).map((o) => ({
+                reminderId: r.reminderId, recipientUserId: id, text: r.text, day: o.day, time: o.time,
+                repeat: r.repeat || "daily", aboutKey: r.aboutKey ?? null,
+            })))
+            .sort((a, b) => (a.day + a.time).localeCompare(b.day + b.time));
+        out.push(...mine.slice(0, 6));
+    }
+    return out;
 }

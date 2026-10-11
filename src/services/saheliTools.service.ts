@@ -1130,6 +1130,7 @@ export async function executeSaheliTool(input: {
                     actorUserId: input.actorUserId,
                     text: textArg,
                     schedule: input.args.schedule as Record<string, unknown>,
+                    aboutKey: typeof input.args.item === "string" ? input.args.item : undefined,
                     traceId: input.traceId,
                 });
                 return result.ok ? { status: "created", reminder: result.reminder } : { status: "not_set", error: result.error };
@@ -1219,6 +1220,7 @@ export async function executeSaheliTool(input: {
                 reminderId: String(input.args.reminderId ?? ""),
                 text: typeof input.args.text === "string" ? input.args.text : undefined,
                 schedule: input.args.schedule && typeof input.args.schedule === "object" ? (input.args.schedule as Record<string, unknown>) : undefined,
+                aboutKey: "item" in input.args ? (input.args.item == null ? null : String(input.args.item)) : undefined,
                 traceId: input.traceId,
             });
         }

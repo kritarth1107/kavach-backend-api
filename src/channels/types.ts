@@ -33,6 +33,9 @@ export type OutboundMessage = {
     orderFlow?: import("../services/orderOrchestrator.service").OrderFlowPayload;
     /** Rich Meta WhatsApp payloads (interactive, media, text). */
     whatsappPayloads?: MetaWhatsAppPayload[];
+    /** Also speak it: the text goes out first, and the voice note (in this listener's language) follows unless
+     *  something newer reached the chat meanwhile (services/voiceAfterText). */
+    voiceLater?: { listenerUserId?: string };
 };
 
 export interface ChannelAdapter {

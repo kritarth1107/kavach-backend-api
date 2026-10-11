@@ -37,6 +37,30 @@ function toMetaRecipient(e164: string): string {
     return e164.replace(/\D/g, "");
 }
 
+/**
+ * How many messages have gone to each chat. A voice note is made after its text has gone out; when it is ready and
+ * something newer has reached that chat meanwhile (the person tapped "Yes, order it" and got "placing it now"), the old
+ * voice note is dropped, so an earlier message is never heard after a newer one (live 2026-10-12: "Shall I place it
+ * now?" arrived after "placing the order now"). The backend runs as one instance (Cloud Run min = max = 1), so this
+ * count sees every send; with more instances it would see only its own.
+ */
+const chatSends = new Map<string, number>();
+
+export function noteChatSend(to: string): void {
+    const key = toMetaRecipient(to);
+    chatSends.set(key, (chatSends.get(key) ?? 0) + 1);
+}
+
+/** The chat's send count now; pass it to sentSince() later. */
+export function chatMark(to: string): number {
+    return chatSends.get(toMetaRecipient(to)) ?? 0;
+}
+
+/** Has anything gone to this chat since chatMark() returned mark? */
+export function sentSince(to: string, mark: number): boolean {
+    return chatMark(to) !== mark;
+}
+
 const WHATSAPP_TEXT_LIMIT = 4096;
 
 function splitWhatsAppText(text: string, limit = WHATSAPP_TEXT_LIMIT): string[] {
@@ -175,6 +199,7 @@ async function sendSingleMetaWhatsAppText(
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
     }
+    noteChatSend(to);
     return readWamid(res);
 }
 
@@ -208,6 +233,7 @@ async function sendSingleMetaWhatsAppPayload(
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
     }
+    noteChatSend(to);
     return readWamid(res);
 }
 
@@ -322,6 +348,7 @@ export async function sendMetaWhatsAppTemplate(input: {
         const body = await res.text().catch(() => "");
         throw new Error(formatMetaSendError(res.status, body));
     }
+    noteChatSend(input.to);
     return readWamid(res);
 }
 
@@ -434,6 +461,12 @@ export async function sendMetaWhatsAppVoice(input: {
     } else if (input.caption?.trim()) {
         await sendViaMetaWhatsApp(input.to, input.caption.trim());
     }
+    await sendMetaWhatsAppAudio({ to: input.to, audioBuffer: input.audioBuffer, mimeType: input.mimeType });
+}
+
+/** Only the audio: a voice note (OGG/Opus) or an audio file. */
+export async function sendMetaWhatsAppAudio(input: { to: string; audioBuffer: Buffer; mimeType?: string }): Promise<void> {
+    await assertSendableWhatsAppRecipient(input.to);
     const mimeType = input.mimeType || "audio/ogg";
     const mediaId = await uploadMediaBuffer({
         buffer: input.audioBuffer,

@@ -59,6 +59,10 @@ export async function runBrainV2(input: {
         name: (m.name || "").trim(),
         role: brainRole(m.role),
     });
+    // Reminders due soon for the speaker (and the person cared for): Saheli skips one the person says is already done.
+    const soon = await import("./saheliReminder.service")
+        .then((R) => R.remindersSoon(input.identity.familyId, [input.identity.userId, elder.userId]))
+        .catch(() => []);
     const { aiPostBrainTurn } = await import("../clients/aiEngine.client");
     const started = Date.now();
     const out = await aiPostBrainTurn({
@@ -75,6 +79,14 @@ export async function runBrainV2(input: {
             : {}),
         ...(input.media?.length ? { images: input.media } : {}),
         ...(input.mediaNote ? { media_note: input.mediaNote } : {}),
+        ...(soon.length
+            ? {
+                  reminders_soon: soon.map((r) => ({
+                      id: r.reminderId, person: r.recipientUserId, text: r.text, day: r.day, time: r.time, repeat: r.repeat,
+                      item: r.aboutKey,
+                  })),
+              }
+            : {}),
     });
     console.log(
         `[brain-v2] ${JSON.stringify({

@@ -7,6 +7,10 @@ import { baseLanguageOf, convertToOpus, getTtsVoiceConfig, googleVoiceFor, isOgg
 import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
 import { singableLyrics, singPrompt, singToVoiceNote } from "../src/channels/voicePipeline";
 import { spawnSync } from "node:child_process";
+import { withVoiceReply } from "../src/services/whatsappRouting.service";
+import { sendVoiceAfterText } from "../src/services/voiceAfterText.service";
+import { chatMark, noteChatSend, sentSince } from "../src/clients/metaWhatsApp.client";
+import { ChannelType } from "../src/types/careRecord.types";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -145,7 +149,38 @@ async function songChecks() {
     ok("nothing singable → no audio, text kept", !none.audioBuffer && none.text === "🎶");
 }
 
-void songChecks().then(audioChecks).then(() => {
+// A voiced reply never holds back its text, and a voice note overtaken by a newer message is dropped. Live 2026-10-12:
+// the answer to a voice note waited for its audio, so "Shall I place it now?" arrived after "Okay, placing the order
+// now", the reply to the tap that came a second later.
+async function replyOrderChecks() {
+    const out = { channelType: ChannelType.WHATSAPP, channelIdentifier: "+919000000123", modality: "text" as const, content: "Shall I place it now?" };
+    const marked = withVoiceReply(out, "u1");
+    ok("voiced reply: marked to speak after the text, no audio made yet", marked.voiceLater?.listenerUserId === "u1" && !marked.audioBuffer && marked.content === out.content);
+    ok("marked reply is not voiced twice", !shouldVoiceReply({ mediaType: "voice" }, marked));
+    ok("fallback copy is never marked", !withVoiceReply({ ...out, content: VOICE_NOT_CAUGHT_REPLY }, "u1").voiceLater);
+
+    const to = "+91 90000 00123";
+    noteChatSend(to); // the reply's text went out
+    const mark = chatMark(to);
+    ok("same chat however the number is written", chatMark("919000000123") === mark && !sentSince("+919000000123", mark));
+    const sent: string[] = [];
+    const audio = Buffer.from("OggS fake");
+    const deps = (newerWhileSpeaking: boolean) => ({
+        speak: async () => {
+            if (newerWhileSpeaking) noteChatSend(to); // "Okay, placing the order now" went out meanwhile
+            return { audioBuffer: audio, mimeType: "audio/ogg" };
+        },
+        sendAudio: async (t: string) => { sent.push(t); },
+        sentSince,
+    });
+    ok("nothing newer → the voice note follows its text", (await sendVoiceAfterText({ to, text: "x", mark: chatMark(to) }, deps(false))) === "sent" && sent.length === 1);
+    ok("a newer message went first → the old voice note is dropped", (await sendVoiceAfterText({ to, text: "x", mark: chatMark(to) }, deps(true))) === "stale" && sent.length === 1);
+    ok("no voice available → nothing sent", (await sendVoiceAfterText({ to, text: "x", mark: chatMark(to) }, { ...deps(false), speak: async () => ({}) })) === "none" && sent.length === 1);
+    ok("a voice failure never throws (the text is already out)", (await sendVoiceAfterText({ to, text: "x", mark: chatMark(to) }, { ...deps(false), speak: async () => { throw new Error("tts down"); } })) === "failed");
+    ok("another chat's sends don't count", (() => { const m = chatMark(to); noteChatSend("+919000000999"); return !sentSince(to, m); })());
+}
+
+void songChecks().then(audioChecks).then(replyOrderChecks).then(() => {
     if (fail) {
         console.error(`${fail} failed`);
         process.exit(1);

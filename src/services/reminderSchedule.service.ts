@@ -112,6 +112,49 @@ export function nextOccurrence(r: ScheduleShape, day: string, minute: number, ho
     return null;
 }
 
+/** Its times from (day, minute) for the next `hours` hours, skips left out, in order (for Saheli's "due soon" list). */
+export function upcoming(r: ScheduleShape, day: string, minute: number, hours = 12): Array<{ day: string; time: string }> {
+    const out: Array<{ day: string; time: string }> = [];
+    const end = minute + hours * 60;
+    for (let i = 0; i <= Math.ceil(hours / 24) + 1; i++) {
+        const d = addDays(day, i);
+        for (const t of slotsOn(r, d)) {
+            const at = i * 1440 + (minutesOf(t) ?? 0);
+            if (at < minute || at > end || isSkipped(r, d, t)) continue;
+            out.push({ day: d, time: t });
+        }
+    }
+    return out;
+}
+
+/** A medicine's dose times (care schedules: "HH:MM", days 0 = Sunday, empty = every day). */
+export type DoseTime = { scheduleId: string; time: string; daysOfWeek?: number[] };
+
+/**
+ * The dose a reminder at (day, time) belongs to: the nearest dose of that medicine before or after it, within 12 hours
+ * (a tie goes to the earlier one, the dose being followed up). "Remind me in an hour" at 23:16 for a 23:00 dose gives
+ * a 00:15 reminder the next day: it belongs to the 23:00 dose of the day before.
+ */
+export function doseFor(doses: DoseTime[], day: string, time: string): { scheduleId: string; dateKey: string } | null {
+    const at = minutesOf(time);
+    if (at == null) return null;
+    let best: { scheduleId: string; dateKey: string; gap: number; before: boolean } | null = null;
+    for (const d of doses) {
+        const m = minutesOf(normalTime(d.time) ?? "");
+        if (m == null) continue;
+        for (const shift of [-1, 0, 1]) {
+            const dateKey = addDays(day, shift);
+            if (d.daysOfWeek?.length && !d.daysOfWeek.includes(weekdayOf(dateKey))) continue;
+            const delta = shift * 1440 + m - at; // minutes from the reminder to that dose (negative: the dose was before)
+            const gap = Math.abs(delta);
+            if (gap > 12 * 60) continue;
+            const before = delta <= 0;
+            if (!best || gap < best.gap || (gap === best.gap && before && !best.before)) best = { scheduleId: d.scheduleId, dateKey, gap, before };
+        }
+    }
+    return best ? { scheduleId: best.scheduleId, dateKey: best.dateKey } : null;
+}
+
 /** Has it nothing left to send after (day, minute)? (A once reminder that went out, a reminder past its end date.) */
 export function isFinished(r: ScheduleShape, day: string, minute: number): boolean {
     return nextOccurrence(r, day, minute, 400) === null;

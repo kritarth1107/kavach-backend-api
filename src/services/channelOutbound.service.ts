@@ -53,19 +53,16 @@ export async function resolveRecipientChannel(
 
 /**
  * Best effort: a voice note after the text for people who chose "always", in their language and dialect. The person
- * who reads the message decides (toUserId), not the person it is about. A failure never undoes the text.
+ * who reads the message decides (toUserId), not the person it is about. It follows the text (mark = the chat right
+ * after it) and is dropped if a newer message reaches the chat first. A failure never undoes the text.
  */
-async function alsoSendVoice(payload: { recipientUserId: string; toUserId?: string; channelIdentifier: string; content: string }): Promise<void> {
+async function alsoSendVoice(payload: { recipientUserId: string; toUserId?: string; channelIdentifier: string; content: string }, mark: number): Promise<void> {
     try {
-        const { getVoiceMode, getSpeechProfile } = await import("./voicePreference.service");
+        const { getVoiceMode } = await import("./voicePreference.service");
         const listener = payload.toUserId || payload.recipientUserId;
         if ((await getVoiceMode(listener)) !== "always") return;
-        const { textToSpeech } = await import("../channels/voicePipeline");
-        const { voiceHint } = await import("./language.service");
-        const spoken = await textToSpeech(payload.content, { languageHint: voiceHint(await getSpeechProfile(listener)) });
-        if (!spoken.audioBuffer) return;
-        const { sendMetaWhatsAppVoice } = await import("../clients/metaWhatsApp.client");
-        await sendMetaWhatsAppVoice({ to: payload.channelIdentifier, audioBuffer: spoken.audioBuffer, mimeType: spoken.mimeType || "audio/mpeg" });
+        const { sendVoiceAfterText } = await import("./voiceAfterText.service");
+        await sendVoiceAfterText({ to: payload.channelIdentifier, text: payload.content, listenerUserId: listener, mark });
     } catch (err) {
         console.warn("Voice note after a proactive message failed (text was sent):", err instanceof Error ? err.message : err);
     }
@@ -173,8 +170,10 @@ export async function deliverOutboundMessage(payload: {
                         contextMessageId: payload.replyToMessageId,
                     })),
                 );
-                // Someone who chose "always" voice notes also hears reminders and check-ins (after the text).
-                await alsoSendVoice(payload);
+                // Someone who chose "always" voice notes also hears reminders and check-ins (after the text, never
+                // holding up the next send).
+                const { chatMark } = await import("../clients/metaWhatsApp.client");
+                void alsoSendVoice(payload, chatMark(payload.channelIdentifier));
             }
         } else {
             const adapter =
