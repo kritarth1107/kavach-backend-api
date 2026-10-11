@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
-import { isRandomPlaceholder, realNumberFromSender } from "../src/services/identityResolver.service";
+import { realNumberFromSender } from "../src/services/identityResolver.service";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -27,21 +27,16 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
         );
 
 const TYPED = { phone: { countryCode: "+99", number: "9876501234" }, phoneKey: "+995550001111" }; // typed over the placeholder
-const RANDOM = { phone: { countryCode: "+99", number: "5550001111" }, phoneKey: "+995550001111" };
+const KEYED = { phone: { countryCode: "+99", number: "9876502345" }, phoneKey: "+999876502345" }; // real digits, key to match (the founder's account)
 
 async function pure() {
     console.log("pure helpers");
-    await ok("a random placeholder is told apart from a number typed over it", () => {
-        assert.equal(isRandomPlaceholder(RANDOM), true);
-        assert.equal(isRandomPlaceholder(TYPED), false);
-        assert.equal(isRandomPlaceholder({ phone: { countryCode: "+91", number: "9876501234" }, phoneKey: "+919876501234" }), false);
-    });
     await ok("the real number of a number typed under +99 comes from the sender", () => {
         assert.deepEqual(realNumberFromSender(TYPED, "+919876501234"), { countryCode: "+91", number: "9876501234", phoneKey: "+919876501234" });
         assert.deepEqual(realNumberFromSender(TYPED, "+19876501234"), { countryCode: "+1", number: "9876501234", phoneKey: "+19876501234" }, "abroad too");
         assert.equal(realNumberFromSender(TYPED, "+919876509999"), null, "another number");
         assert.equal(realNumberFromSender(TYPED, "+999876501234"), null, "never the internal code");
-        assert.equal(realNumberFromSender(RANDOM, "+915550001111"), null, "a random placeholder is nobody's number");
+        assert.deepEqual(realNumberFromSender(KEYED, "+919876502345"), { countryCode: "+91", number: "9876502345", phoneKey: "+919876502345" }, "key matching the digits");
         assert.equal(realNumberFromSender({ phone: { countryCode: "+91", number: "9876501234" }, phoneKey: "+919876501234" }, "+919876501234"), null, "already real");
     });
 }
@@ -67,7 +62,7 @@ async function withDb(uri: string) {
         person("u-carer", "carer@example.test", TYPED.phone, TYPED.phoneKey),
         person("u-elder", "elder@pending.kavach", { countryCode: "+91", number: "9876505678" }, "+919876505678"),
         person("u-linked", "linked@example.test", { countryCode: "+99", number: "5550002222" }, "+995550002222"),
-        person("u-other", "other@example.test", { countryCode: "+99", number: "9876509999" }, "+999876509999"),
+        person("u-keyed", "keyed@example.test", KEYED.phone, KEYED.phoneKey),
         person("u-fresh", "fresh@example.test", { countryCode: "+99", number: "5550003333" }, "+995550003333"),
     ]);
     await Family.collection.insertOne({
@@ -76,7 +71,7 @@ async function withDb(uri: string) {
             { userId: "u-carer", role: "PRIMARY_CAREGIVER", status: "JOINED" },
             { userId: "u-elder", role: "CARE_RECIPIENT", status: "JOINED" },
             { userId: "u-linked", role: "CO_CAREGIVER", status: "JOINED" },
-            { userId: "u-other", role: "CO_CAREGIVER", status: "JOINED" },
+            { userId: "u-keyed", role: "CO_CAREGIVER", status: "JOINED" },
         ],
     });
     await ChannelIdentity.collection.insertOne({
@@ -102,10 +97,15 @@ async function withDb(uri: string) {
         assert.deepEqual(await familyMemberPhone(FAM, "u-carer"), { phone: "+919876501234" });
         assert.equal((await resolveWhatsAppSender("+919876501234")).userId, "u-carer", "still recognised after the repair");
     });
-    await ok("a random placeholder that shares a sender's digits is nobody", async () => {
-        await assert.rejects(resolveWhatsAppSender("919876509999"), /not recognized/);
-        const u = await User.findOne({ userId: "u-other" }).lean();
-        assert.equal(u?.phoneKey, "+999876509999", "left alone");
+    await ok("real digits saved under +99 with a matching key are still recognised, and repaired", async () => {
+        assert.deepEqual(await familyMemberPhone(FAM, "u-keyed"), { reason: "no WhatsApp number" });
+        assert.equal((await resolveWhatsAppSender("+919876502345")).userId, "u-keyed");
+        const u = await User.findOne({ userId: "u-keyed" }).lean();
+        assert.deepEqual({ cc: u?.phone?.countryCode, key: u?.phoneKey }, { cc: "+91", key: "+919876502345" });
+        assert.deepEqual(await familyMemberPhone(FAM, "u-keyed"), { phone: "+919876502345" });
+    });
+    await ok("a number nobody holds is not recognised", async () => {
+        await assert.rejects(resolveWhatsAppSender("919876500000"), /not recognized/);
     });
     await ok("settings never show the placeholder and refuse the +99 code", async () => {
         const doc = await User.findOne({ userId: "u-linked" });

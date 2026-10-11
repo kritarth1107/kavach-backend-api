@@ -49,13 +49,8 @@ function phoneLookupVariants(normalized: string) {
 
 type PhoneFields = { userId: string; phone?: { countryCode?: string; number?: string } | null; phoneKey?: string };
 
-/** The random internal placeholder an account gets when it has no phone ("+99" + the same digits as its key). */
-export function isRandomPlaceholder(u: Omit<PhoneFields, "userId">): boolean {
-    return isInternalPhone(u.phone?.countryCode) && u.phoneKey === `${INTERNAL_PHONE_COUNTRY_CODE}${u.phone?.number ?? ""}`;
-}
-
-/** Accounts whose number is this sender's; exact number matches first. A random placeholder that happens to share
- *  the digits is nobody's number and never matches (most accounts carry one: 17 of 22 on 2026-10-11). */
+/** Accounts whose number is this sender's, exact number matches first. The 10 digits match under any country code:
+ *  real numbers sit under the internal "+99" code on some accounts, with or without a matching key (2026-10-11). */
 async function findUsersByWhatsAppPhone(normalized: string) {
     const { last10, keys } = phoneLookupVariants(normalized);
 
@@ -72,20 +67,19 @@ async function findUsersByWhatsAppPhone(normalized: string) {
     })
         .limit(5)
         .lean();
-    const people = rows.filter((u) => !isRandomPlaceholder(u));
-    const exact = people.filter((u) => u.phoneKey && keys.includes(u.phoneKey));
-    return exact.length ? exact : people;
+    const exact = rows.filter((u) => u.phoneKey && keys.includes(u.phoneKey));
+    return exact.length ? exact : rows;
 }
 
 /**
  * The real number for an account whose 10 digits were saved under the internal "+99" code (the settings page showed
  * the placeholder's code until 2026-10-11, so a typed number kept it), taken from the number WhatsApp shows for the
- * sender. Null when the account's number is not of that kind or does not end the sender's number.
+ * sender. Null when the account's number is not internal or does not end the sender's number.
  */
 export function realNumberFromSender(u: Omit<PhoneFields, "userId">, normalizedSender: string) {
     const number = String(u.phone?.number ?? "");
     const digits = normalizedSender.replace(/\D/g, "");
-    if (!isInternalPhone(u.phone?.countryCode) || isRandomPlaceholder(u)) return null;
+    if (!isInternalPhone(u.phone?.countryCode)) return null;
     if (number.length !== 10 || digits.length <= 10 || !digits.endsWith(number)) return null;
     const countryCode = `+${digits.slice(0, -10)}`;
     if (isInternalPhone(countryCode)) return null;
