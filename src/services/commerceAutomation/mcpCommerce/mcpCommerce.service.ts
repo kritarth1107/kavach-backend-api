@@ -111,7 +111,9 @@ async function withFamilyStore<T>(familyId: string, store: McpStore, fn: (client
         void McpConnection.updateOne({ ...where, authFailures: { $gt: 0 } }, { $set: { authFailures: 0 } }).catch(() => undefined);
         return out;
     } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        // The error's name too: the OAuth refresh throws InvalidGrantError with an empty message (live 2026-10-11: a family's
+        // Zepto link kept failing for weeks and was never marked expired, so every order tried it first).
+        const message = describeMcpError(err);
         if (isMcpAuthError(message) || /returned 401/i.test(message)) await noteAuthFailure(where, message);
         throw err;
     }
@@ -224,8 +226,21 @@ export function placeParts(place: Pick<Place, "line1" | "line2" | "landmark" | "
     return { flat, building, locality, city: place.city || "", pincode: place.pincode, full: place.full, landmark: place.landmark || "" };
 }
 
-export async function coordsForPlace(familyId: string, place: Place): Promise<{ lat: number; lng: number; source: string } | null> {
-    if (typeof place.lat === "number" && typeof place.lng === "number") return { lat: place.lat, lng: place.lng, source: "address_book" };
+export type PlaceCoords = { lat: number; lng: number; source: string; precision: "address" | "area" | "pincode" | "user" };
+
+/**
+ * The family place's map point. For a look-up (what is sold and delivered there) any point near the place does: the
+ * address book's (every place gets one, placeGeo.service), a Swiggy geocode, else one found now and saved. A store
+ * delivery pin (forDelivery: Zepto saves the address with this point) needs the door itself: a point someone set, a
+ * maps key's geocode, or Swiggy's; never an area or pincode centre.
+ */
+export async function coordsForPlace(familyId: string, place: Place, opts: { forDelivery?: boolean } = {}): Promise<PlaceCoords | null> {
+    const book: PlaceCoords | null =
+        typeof place.lat === "number" && typeof place.lng === "number"
+            ? { lat: place.lat, lng: place.lng, source: place.geoSource || "address_book", precision: place.geoPrecision || "user" }
+            : null;
+    const doorLevel = (c: PlaceCoords) => c.precision === "user" || ["google", "mapbox", "given", "address_book"].includes(c.source);
+    if (book && (opts.forDelivery ? doorLevel(book) : book.precision === "user" || book.precision === "address")) return book;
     // Swiggy geocodes the same family address server-side; reuse those coordinates for Zepto.
     const swiggy = await McpStoreAddress.findOne({
         familyId,
@@ -234,13 +249,21 @@ export async function coordsForPlace(familyId: string, place: Place): Promise<{ 
         partner: { $in: ["instamart", "swiggy"] },
         lat: { $ne: null },
     }).lean();
-    if (swiggy?.lat != null && swiggy.lng != null) return { lat: swiggy.lat, lng: swiggy.lng, source: "swiggy_geocode" };
-    const { geocodePlace } = await import("../../rideBooking/geoResolve.service");
-    const g = await geocodePlace(place.full).catch(() => null);
-    if (g?.ok && typeof g.place.lat === "number" && typeof g.place.lng === "number" && g.provider !== "nominatim") {
-        return { lat: g.place.lat, lng: g.place.lng, source: g.provider };
+    if (swiggy?.lat != null && swiggy.lng != null) return { lat: swiggy.lat, lng: swiggy.lng, source: "swiggy_geocode", precision: "address" };
+    if (opts.forDelivery) {
+        const { geocodePlace } = await import("../../rideBooking/geoResolve.service");
+        const g = await geocodePlace(place.full).catch(() => null);
+        if (g?.ok && typeof g.place.lat === "number" && typeof g.place.lng === "number" && g.provider !== "nominatim") {
+            return { lat: g.place.lat, lng: g.place.lng, source: g.provider, precision: "address" };
+        }
+        return null;
     }
-    return null;
+    if (book) return book;
+    const { ensurePlacePoint } = await import("../../familyAddressBook.service");
+    const p = await ensurePlacePoint(place);
+    return typeof p.lat === "number" && typeof p.lng === "number"
+        ? { lat: p.lat, lng: p.lng, source: p.geoSource || "geocode", precision: p.geoPrecision || "area" }
+        : null;
 }
 
 /**
@@ -288,7 +311,7 @@ export async function ensureStoreAddress(
     let createdId = "";
     let coords: { lat: number; lng: number } | null = null;
     if (store === "zepto") {
-        coords = await coordsForPlace(familyId, place);
+        coords = await coordsForPlace(familyId, place, { forDelivery: true });
         if (!coords) throw new McpStoreError("no_address_coords", "No reliable map location for this address, so Zepto can't take it.");
         const r = await call(client, "add_saved_address", {
             type: "OTHER",

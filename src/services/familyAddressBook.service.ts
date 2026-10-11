@@ -25,6 +25,9 @@ export type Place = {
     pincode: string;
     lat?: number;
     lng?: number;
+    /** Where lat/lng came from and how close it is to the door (placeGeo.service). */
+    geoSource?: string;
+    geoPrecision?: IFamilyAddress["geoPrecision"];
     contactName?: string;
     contactPhone?: string;
     memberUserIds: string[];
@@ -218,6 +221,8 @@ function toPlace(row: IFamilyAddress & { createdAt?: Date; updatedAt?: Date }): 
         pincode: row.pincode,
         lat: row.lat ?? undefined,
         lng: row.lng ?? undefined,
+        geoSource: row.lat != null ? row.geoSource || undefined : undefined,
+        geoPrecision: row.lat != null ? row.geoPrecision || undefined : undefined,
         contactName: row.contactName || undefined,
         contactPhone: row.contactPhone || undefined,
         memberUserIds: row.memberUserIds || [],
@@ -439,6 +444,10 @@ function validFields(input: PlaceInput): Partial<IFamilyAddress> {
     if (input.lng !== undefined) out.lng = input.lng === null ? undefined : Number(input.lng);
     if (out.lat !== undefined && !(Math.abs(out.lat) <= 90)) throw new AddressBookError("lat out of range", 400);
     if (out.lng !== undefined && !(Math.abs(out.lng) <= 180)) throw new AddressBookError("lng out of range", 400);
+    if (typeof out.lat === "number" && typeof out.lng === "number") {
+        // a point someone set (a map pin): kept as given, the most precise there is
+        Object.assign(out, { geoSource: "given", geoPrecision: "user", geoAt: new Date() });
+    }
     if (input.contactName !== undefined) out.contactName = pick(input.contactName, 80);
     if (input.contactPhone !== undefined) {
         const ph = String(input.contactPhone || "").replace(/[^\d+]/g, "");
@@ -486,7 +495,37 @@ export async function createPlace(
         createdByUserId: opts.actorUserId,
         source: opts.source,
     });
-    return toPlace(row.toObject());
+    return ensurePlacePoint(toPlace(row.toObject()), { timeoutMs: SAVE_POINT_MS });
+}
+
+/** How long a save waits for the map point; a place saved without one gets it at its first order (coordsForPlace). */
+const SAVE_POINT_MS = 8_000;
+const ADDRESS_KEYS = ["address", "line1", "line2", "landmark", "city", "state", "pincode"] as const;
+
+/**
+ * The place with a map point: found and saved when it has none (placeGeo.service). Never throws; without a reliable
+ * point the place comes back unchanged (stores that need a point then look with the written address).
+ */
+export async function ensurePlacePoint(place: Place, opts: { timeoutMs?: number } = {}): Promise<Place> {
+    if (typeof place.lat === "number" && typeof place.lng === "number") return place;
+    const { pointForPlace } = await import("./placeGeo.service");
+    let timer: NodeJS.Timeout | undefined;
+    const got = await Promise.race([
+        pointForPlace(place).catch(() => null),
+        new Promise<null>((ok) => {
+            timer = setTimeout(() => ok(null), opts.timeoutMs ?? 15_000);
+        }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!got) return place;
+    const geo = { lat: got.lat, lng: got.lng, geoSource: got.source, geoPrecision: got.precision, geoAt: new Date() };
+    // Only where no point was set meanwhile (a map pin someone dropped wins).
+    const r = await FamilyAddress.updateOne(
+        { familyId: place.familyId, addressId: place.addressId, $or: [{ lat: { $exists: false } }, { lat: null }] },
+        { $set: geo },
+    ).catch(() => null);
+    if (!r?.modifiedCount) return (await getPlace(place.familyId, place.addressId)) ?? place;
+    return { ...place, lat: got.lat, lng: got.lng, geoSource: got.source, geoPrecision: got.precision };
 }
 
 export async function updatePlace(
@@ -524,7 +563,14 @@ export async function updatePlace(
         { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) },
         { new: true },
     ).lean();
-    return toPlace(row!);
+    const place = toPlace(row!);
+    const moved = ADDRESS_KEYS.some((k) => input[k] !== undefined) && formatFull(place) !== formatFull(cur);
+    if (moved && input.lat === undefined && input.lng === undefined) {
+        // Another address: the old map point is somewhere else now (it used to stay, pointing at the old house).
+        await FamilyAddress.updateOne({ familyId, addressId }, { $unset: { lat: 1, lng: 1, geoSource: 1, geoPrecision: 1, geoAt: 1 } });
+        return ensurePlacePoint({ ...place, lat: undefined, lng: undefined, geoSource: undefined, geoPrecision: undefined }, { timeoutMs: SAVE_POINT_MS });
+    }
+    return place;
 }
 
 export async function deletePlace(familyId: string, addressId: string): Promise<void> {

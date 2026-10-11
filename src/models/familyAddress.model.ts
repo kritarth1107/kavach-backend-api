@@ -20,6 +20,11 @@ export interface IFamilyAddress {
     pincode: string;
     lat?: number;
     lng?: number;
+    /** Where lat/lng came from ("given", "google", "mapbox", "openstreetmap", "openstreetmap_pincode"). */
+    geoSource?: string;
+    /** How close lat/lng is to the door: the address, its area, or the pincode's centre (placeGeo.service). */
+    geoPrecision?: "address" | "area" | "pincode" | "user";
+    geoAt?: Date;
     contactName?: string;
     contactPhone?: string;
     /** Members this place applies to. Empty = everyone in the family. */
@@ -47,6 +52,9 @@ const schema = new Schema<IFamilyAddressDocument>(
         pincode: { type: String, required: true, match: /^[1-9]\d{5}$/ },
         lat: { type: Number, min: -90, max: 90 },
         lng: { type: Number, min: -180, max: 180 },
+        geoSource: { type: String, maxlength: 40 },
+        geoPrecision: { type: String, enum: ["address", "area", "pincode", "user"] },
+        geoAt: { type: Date },
         contactName: { type: String, trim: true, maxlength: 80 },
         contactPhone: { type: String, trim: true, maxlength: 20 },
         memberUserIds: { type: [String], default: [] },

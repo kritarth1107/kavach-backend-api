@@ -97,6 +97,14 @@ async function withDb(uri: string) {
     const Legacy = (await import("../src/models/recipientDeliveryAddress.model")).default;
     const FamilyAddress = (await import("../src/models/familyAddress.model")).default;
     await FamilyAddress.init();
+    // No network: OpenStreetMap knows the centres of the synthetic pincodes only.
+    const geo = await import("../src/services/placeGeo.service");
+    const centres: Record<string, [number, number]> = { "462002": [23.24, 77.4], "452010": [22.75, 75.89], "110001": [28.63, 77.22], "462016": [23.21, 77.43] };
+    geo.setGeoFetcherForTests(async (url) => {
+        const pin = new URL(url).searchParams.get("postalcode");
+        const c = pin ? centres[pin] : undefined;
+        return c ? [{ lat: String(c[0]), lon: String(c[1]), address: { postcode: pin } }] : [];
+    });
 
     await Legacy.create({ familyId: "famA", recipientUserId: "elderA", address: A1, pincode: "462002", source: "caregiver", setByUserId: "cgA" });
     await Legacy.create({ familyId: "famB", recipientUserId: "elderB", address: "H-5, Connaught Place, New Delhi, Delhi 110001", pincode: "110001", source: "caregiver" });
@@ -157,6 +165,33 @@ async function withDb(uri: string) {
         const firstEver = await svc.savePlaceFromChat({ familyId: "famD", memberUserId: "elderD", address: A1 });
         assert.equal(firstEver!.place.nickname, "Home");
         assert.deepEqual(firstEver!.place.defaultForUserIds, ["elderD"]);
+    });
+    await ok("map point: a new place gets one; a map pin is kept as given; another address gets a fresh one", async () => {
+        const p = await svc.createPlace("famE", { nickname: "Home", address: A2 }, { source: "whatsapp" });
+        assert.deepEqual([p.lat, p.lng, p.geoPrecision, p.geoSource], [22.75, 75.89, "pincode", "openstreetmap_pincode"]);
+        const pinned = await svc.createPlace("famE", { nickname: "Clinic", address: A1, lat: 23.2501, lng: 77.4102 }, { source: "dashboard" });
+        assert.deepEqual([pinned.lat, pinned.geoPrecision, pinned.geoSource], [23.2501, "user", "given"]);
+        const renamed = await svc.updatePlace("famE", p.addressId, { nickname: "Ghar" });
+        assert.equal(renamed.lat, 22.75, "a new name keeps the point");
+        const moved = await svc.updatePlace("famE", p.addressId, { address: "H-5, Connaught Place, New Delhi, Delhi 110001" });
+        assert.deepEqual([moved.lat, moved.lng, moved.geoPrecision], [28.63, 77.22, "pincode"], "the old point went with the old address");
+        const unknown = await svc.updatePlace("famE", p.addressId, { address: "1 Unknown Road, Somewhere, Kerala 695001" });
+        assert.equal(unknown.lat, undefined, "no reliable point: none, rather than the old one");
+        assert.equal((await svc.getPlace("famE", p.addressId))!.lat, undefined);
+    });
+    await ok("map point: ensurePlacePoint saves once and never overwrites a pin set meanwhile", async () => {
+        const row = await FamilyAddress.create({ addressId: "pinTest", familyId: "famE", nickname: "Old", nicknameKey: "old", line1: "Flat 1, Lake View", city: "Bhopal",
+            pincode: "462002", memberUserIds: [], defaultForUserIds: [], source: "migration" });
+        const place = (await svc.getPlace("famE", row.addressId))!;
+        assert.equal(place.lat, undefined);
+        await FamilyAddress.updateOne({ addressId: "pinTest" }, { $set: { lat: 23.3, lng: 77.5 } }); // someone drops a pin first
+        const got = await svc.ensurePlacePoint(place);
+        assert.equal(got.lat, 23.3);
+        const other = await FamilyAddress.create({ addressId: "pinTest2", familyId: "famE", nickname: "Old 2", nicknameKey: "old 2", line1: "Flat 2, Lake View",
+            city: "Bhopal", pincode: "462002", memberUserIds: [], defaultForUserIds: [], source: "migration" });
+        const healed = await svc.ensurePlacePoint((await svc.getPlace("famE", other.addressId))!);
+        assert.deepEqual([healed.lat, healed.geoPrecision], [23.24, "pincode"]);
+        assert.equal((await svc.getPlace("famE", other.addressId))!.lat, 23.24);
     });
     await ok("store addresses filtered to the family book", async () => {
         const rows = await svc.filterStoreAddressesToBook("famA", [
@@ -223,6 +258,7 @@ async function withDb(uri: string) {
     });
     await mongoose.connection.db!.dropDatabase();
     await mongoose.disconnect();
+    geo.setGeoFetcherForTests(null);
 }
 
 (async () => {

@@ -593,6 +593,13 @@ export async function executeSaheliTool(input: {
                 const u = await User.findOne({ userId: input.actorUserId }, { phone: 1 }).lean<{ phone?: { countryCode?: string; number?: string } }>();
                 if (u?.phone?.countryCode === "+91") loginPhone = indian(u.phone.number);
             }
+            if (!loginPhone) {
+                // The number Saheli's own WhatsApp messages reach (an invite's number, the member record, a real number
+                // saved under the +99 code): live 2026-10-11 a caregiver chatting on WhatsApp got "no phone number to log
+                // in with" because his number was not in the two places above.
+                const { resolveRecipientWhatsAppPhone } = await import("./identityResolver.service");
+                loginPhone = indian(await resolveRecipientWhatsAppPhone(input.actorUserId, input.familyId).catch(() => null));
+            }
             return { profileId: (await profileFor(input.familyId, partner)) ?? null, loginPhone };
         }
         case "delivery_place": {
@@ -605,7 +612,8 @@ export async function executeSaheliTool(input: {
             const hit = words ? findByWords(places, words, input.recipientUserId) : null;
             const place = hit || pickDefault(places, input.recipientUserId);
             if (!place) return { addressId: null, matched: words ? false : null, saved: [] };
-            // Coordinates for fast store look-ups: the address book's, else the ones the store connectors geocoded, else a geocode.
+            // The map point for fast store look-ups: the address book's (found and saved now if the place has none), or the
+            // one a linked store geocoded. geoPrecision tells the engine how near the door it is (pincode = the area's centre).
             const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
             const at = await coordsForPlace(input.familyId, place).catch(() => null);
             return {
@@ -615,6 +623,7 @@ export async function executeSaheliTool(input: {
                 full: place.full,
                 lat: at?.lat ?? null,
                 lng: at?.lng ?? null,
+                geoPrecision: at?.precision ?? null,
                 matched: words ? !!hit : null,
                 saved: places.map((p) => `${p.nickname} (${p.city || ""} ${p.pincode})`.replace(/\s+/g, " ").replace("( ", "(")),
             };
@@ -674,7 +683,9 @@ export async function executeSaheliTool(input: {
             const saved = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (GENERIC_PLACE.test(words) ? home : null);
             if (saved) {
                 const at = await coordsForPlace(input.familyId, saved).catch(() => null);
-                return at ? { lat: at.lat, lng: at.lng, label: `${saved.nickname}, ${saved.short || saved.full}` } : { lat: null, lng: null };
+                return at
+                    ? { lat: at.lat, lng: at.lng, label: `${saved.nickname}, ${saved.short || saved.full}`, geoPrecision: at.precision }
+                    : { lat: null, lng: null };
             }
             if (!words) return { lat: null, lng: null };
             const city = home?.city && !words.toLowerCase().includes(home.city.toLowerCase()) ? `, ${home.city}` : "";
@@ -708,7 +719,8 @@ export async function executeSaheliTool(input: {
             try {
                 const found = await mcp.searchStore(ctx, store, String(input.args.item ?? ""), { restaurantName: input.args.restaurant ? String(input.args.restaurant) : null });
                 if (found.error) {
-                    const kind = found.error === "not_connected" ? "not_connected" : found.error === "unserviceable" ? "unserviceable" : "store_error";
+                    // not_connected / auth_expired are this family's link, not the store's connector (the engine keeps them apart)
+                    const kind = ["not_connected", "unserviceable", "auth_expired"].includes(found.error) ? found.error : "store_error";
                     return { ok: false, kind, detail: found.message || found.error };
                 }
                 const rs = (paise?: number) => (paise ? `₹${Math.round(paise / 100)}` : undefined);
@@ -729,7 +741,10 @@ export async function executeSaheliTool(input: {
                 const found = chosen?.name && chosen.store === store
                     ? { hits: [chosen], error: undefined as string | undefined, message: undefined as string | undefined }
                     : await mcp.searchStore(ctx, store, String(input.args.item ?? ""), { restaurantName: input.args.restaurant ? String(input.args.restaurant) : null });
-                if (found.error) return { ok: false, kind: found.error === "not_connected" ? "not_connected" : "store_error", detail: found.message || found.error };
+                if (found.error) {
+                    const kind = ["not_connected", "auth_expired"].includes(found.error) ? found.error : "store_error";
+                    return { ok: false, kind, detail: found.message || found.error };
+                }
                 const pick = found.hits[0];
                 if (!pick) return { ok: false, kind: "not_found", detail: `Nothing matching "${input.args.item}" on ${mcp.MCP_STORE_LABEL[store]}.` };
                 // More items in the same cart (order lab 2026-10-10: "biscuits and munchies"): each one picked from its own look-up.
