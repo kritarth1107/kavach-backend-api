@@ -38,6 +38,8 @@ export interface ISaheliReminder {
     /** Who stopped it and when (a stop from WhatsApp or the dashboard, or a once reminder that went out). */
     stoppedAt?: Date;
     stoppedBy?: string;
+    /** The engine's why-trail id of the last change that came through Saheli (D-13). */
+    lastTraceId?: string;
     lastFiredAt?: Date;
     lastFiredSlotKey?: string;
     createdAt?: Date;
@@ -79,6 +81,7 @@ const saheliReminderSchema = new Schema<ISaheliReminderDocument>(
         updatedBy: { type: String },
         stoppedAt: { type: Date },
         stoppedBy: { type: String },
+        lastTraceId: { type: String },
         lastFiredAt: { type: Date },
         lastFiredSlotKey: { type: String },
     },

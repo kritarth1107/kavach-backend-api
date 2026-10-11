@@ -175,6 +175,7 @@ export async function createSaheliReminder(input: {
      */
     schedule?: ScheduleInput;
     now?: Date;
+    traceId?: string;
 }): Promise<
     | { ok: true; reminder: ReturnType<typeof serialize>; askUser?: string }
     | { ok: false; error: string; askUser?: string }
@@ -198,6 +199,7 @@ export async function createSaheliReminder(input: {
             timezone: "Asia/Kolkata",
             status: "active" as SaheliReminderStatus,
             createdBy: input.actorUserId,
+            ...(input.traceId ? { lastTraceId: input.traceId } : {}),
             ...checked.fields,
         });
         void logReminderActivity(doc, input.actorUserId, "Reminder created", "created");
@@ -327,6 +329,7 @@ export async function skipSaheliReminder(input: {
     time?: string;
     undo?: boolean;
     now?: Date;
+    traceId?: string;
 }): Promise<{ ok: true; reminder: ReminderView; skipped: string } | { ok: false; error: string }> {
     await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
     const doc = await ownReminder(input);
@@ -354,6 +357,7 @@ export async function skipSaheliReminder(input: {
     // keep the list short: drop skips of days long gone
     doc.skips = [...skips].filter((k) => k.slice(0, 10) >= today).sort();
     doc.updatedBy = input.actorUserId;
+    if (input.traceId) doc.lastTraceId = input.traceId;
     await doc.save();
     void logReminderActivity(doc, input.actorUserId, input.undo ? "Reminder skip undone" : time ? `Reminder skipped (${day} ${time})` : `Reminder skipped (${day})`, "skipped");
     return { ok: true, reminder: serialize(doc, now), skipped: key };
@@ -368,6 +372,7 @@ export async function updateSaheliReminder(input: {
     text?: string;
     schedule?: ScheduleInput;
     now?: Date;
+    traceId?: string;
 }): Promise<{ ok: true; reminder: ReminderView } | { ok: false; error: string }> {
     await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
     const doc = await ownReminder(input);
@@ -405,6 +410,7 @@ export async function updateSaheliReminder(input: {
         doc.text = text;
     }
     doc.updatedBy = input.actorUserId;
+    if (input.traceId) doc.lastTraceId = input.traceId;
     await doc.save();
     void logReminderActivity(doc, input.actorUserId, "Reminder changed", "changed");
     return { ok: true, reminder: serialize(doc, now) };
@@ -494,6 +500,7 @@ export async function cancelSaheliReminder(input: {
     actorUserId: string;
     reminderId?: string;
     textHint?: string;
+    traceId?: string;
 }): Promise<{ ok: boolean; reminder?: ReturnType<typeof serialize>; error?: string }> {
     await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
     let doc = input.reminderId
@@ -521,6 +528,7 @@ export async function cancelSaheliReminder(input: {
         doc.stoppedAt = new Date();
         doc.stoppedBy = input.actorUserId;
         doc.updatedBy = input.actorUserId;
+        if (input.traceId) doc.lastTraceId = input.traceId;
         await doc.save();
         void logReminderActivity(doc, input.actorUserId, "Reminder stopped", "cancelled");
     }

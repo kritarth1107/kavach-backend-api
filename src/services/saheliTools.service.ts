@@ -1130,6 +1130,7 @@ export async function executeSaheliTool(input: {
                     actorUserId: input.actorUserId,
                     text: textArg,
                     schedule: input.args.schedule as Record<string, unknown>,
+                    traceId: input.traceId,
                 });
                 return result.ok ? { status: "created", reminder: result.reminder } : { status: "not_set", error: result.error };
             }
@@ -1193,6 +1194,7 @@ export async function executeSaheliTool(input: {
                 reminderId: input.args.reminderId ? String(input.args.reminderId) : undefined,
                 // a hint by words only for the old brain; Saheli's v2 brain always passes the id from list_reminders
                 textHint: input.args.reminderId ? undefined : input.args.textHint ? String(input.args.textHint) : undefined,
+                traceId: input.traceId,
             });
         }
         case "skip_reminder": {
@@ -1205,6 +1207,7 @@ export async function executeSaheliTool(input: {
                 day: input.args.date ? String(input.args.date) : undefined,
                 time: input.args.time ? String(input.args.time) : undefined,
                 undo: input.args.undo === true,
+                traceId: input.traceId,
             });
         }
         case "update_reminder": {
@@ -1216,6 +1219,7 @@ export async function executeSaheliTool(input: {
                 reminderId: String(input.args.reminderId ?? ""),
                 text: typeof input.args.text === "string" ? input.args.text : undefined,
                 schedule: input.args.schedule && typeof input.args.schedule === "object" ? (input.args.schedule as Record<string, unknown>) : undefined,
+                traceId: input.traceId,
             });
         }
 case "notify_caregivers": {

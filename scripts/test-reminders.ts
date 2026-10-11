@@ -209,6 +209,15 @@ async function withDb(uri: string) {
             "a future day shows what is coming");
     });
 
+    await ok("a change through Saheli keeps its why-trail id (D-13), so the admin console can say why", async () => {
+        const made = (await executeSaheliTool({ tool: "create_reminder" as never, args: { text: "Water the plants", schedule: { times: ["08:00"] } },
+                                                familyId: "famR", recipientUserId: "el1", actorUserId: "cg1", traceId: "wamid.T1" })) as Record<string, any>;
+        const id = made.reminder.reminderId;
+        assert.equal((await SaheliReminder.findOne({ reminderId: id }).lean())!.lastTraceId, "wamid.T1");
+        await executeSaheliTool({ tool: "skip_reminder" as never, args: { reminderId: id }, familyId: "famR", recipientUserId: "el1", actorUserId: "cg1", traceId: "wamid.T2" });
+        assert.equal((await SaheliReminder.findOne({ reminderId: id }).lean())!.lastTraceId, "wamid.T2");
+    });
+
     await ok("stop: it never goes out again, and the day still shows what went out before", async () => {
         const out = await tool("cancel_reminder", { reminderId: smoke }, "cg1", "cg1");
         assert.equal(out.ok, true);
