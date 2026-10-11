@@ -605,11 +605,13 @@ export async function executeSaheliTool(input: {
         case "delivery_place": {
             // The saved place an order for this person must go to (the engine puts it in the task's limits). Named words
             // that match no saved place say so (matched: false), so Saheli asks instead of sending it to the default place.
-            const { listPlaces, pickDefault } = await import("./familyAddressBook.service");
+            const { listPlaces, pickDefault, exactPlace } = await import("./familyAddressBook.service");
             const { findByWords } = await import("./placeTools.service");
             const words = String(input.args.words ?? "").trim();
             const places = await listPlaces(input.familyId, { memberUserId: input.recipientUserId });
-            const hit = words ? findByWords(places, words, input.recipientUserId) : null;
+            // exact: the engine's AI already decided which saved place the person's words mean (its exact name), so no word
+            // matching here; without it (an older engine, or the AI was down) the old lookup runs.
+            const hit = words ? (input.args.exact === true ? exactPlace(places, words) : findByWords(places, words, input.recipientUserId)) : null;
             const place = hit || pickDefault(places, input.recipientUserId);
             if (!place) return { addressId: null, matched: words ? false : null, saved: [] };
             // The map point for fast store look-ups: the address book's (found and saved now if the place has none), or the
@@ -675,12 +677,15 @@ export async function executeSaheliTool(input: {
         }
         case "ride_place": {
             // Coordinates for a ride end ("Home", a saved place, or a named place in the family's city), for fast fares.
-            const { defaultPlaceFor, findPlaceByWords } = await import("./familyAddressBook.service");
+            const { defaultPlaceFor, findPlaceByWords, exactPlace, listPlaces } = await import("./familyAddressBook.service");
             const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
             const { geocodePlace, GENERIC_PLACE } = await import("./rideBooking/geoResolve.service");
             const words = String(input.args.words ?? "").trim();
             const home = await defaultPlaceFor(input.familyId, input.recipientUserId);
-            const saved = (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (GENERIC_PLACE.test(words) ? home : null);
+            // exact: the engine's AI decided whether the words mean a saved place (and which); no word matching here
+            const saved = input.args.exact === true
+                ? (words ? exactPlace(await listPlaces(input.familyId, { memberUserId: input.recipientUserId }), words) : null)
+                : (words && (await findPlaceByWords(input.familyId, input.recipientUserId, words))) || (GENERIC_PLACE.test(words) ? home : null);
             if (saved) {
                 const at = await coordsForPlace(input.familyId, saved).catch(() => null);
                 return at

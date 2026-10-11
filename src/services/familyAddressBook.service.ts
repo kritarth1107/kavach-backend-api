@@ -138,7 +138,15 @@ function tokens(s: string): string[] {
         .filter((w) => w.length >= 2 && !STOP.has(w));
 }
 
-/** Match spoken words ("ghar", "beta ke ghar", "clinic") to ONE saved place of this family. */
+/** The saved place with exactly this name (case and punctuation aside), else null. The engine's AI decides which saved
+ *  place a person's words mean and sends its exact name, so nothing here reads people's words. */
+export function exactPlace<T extends { nickname: string }>(places: T[], name: string | null | undefined): T | null {
+    const k = nicknameKey(name || "");
+    return (k && places.find((p) => nicknameKey(p.nickname) === k)) || null;
+}
+
+/** Match spoken words ("ghar", "beta ke ghar", "clinic") to ONE saved place of this family. Kept only for callers that do
+ *  not send an exact name yet (the v1 routes, an engine without the AI place step). */
 export function matchPlace<T extends { nickname: string; defaultForUserIds?: string[] }>(
     places: T[],
     words: string | null | undefined,

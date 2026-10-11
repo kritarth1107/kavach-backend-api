@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import {
+    exactPlace as svc_exactPlace,
     formatFull,
     keyLines,
     matchPlace,
@@ -73,6 +74,14 @@ async function pure() {
     });
     await ok("matchPlace: ghar with no Home → member default", () => {
         assert.equal(matchPlace([{ nickname: "Flat", defaultForUserIds: ["e"] }, { nickname: "Clinic", defaultForUserIds: [] }], "ghar", "e")?.nickname, "Flat");
+    });
+    await ok("exactPlace: the saved name only (case and punctuation aside); no word reading", () => {
+        const places = [{ nickname: "Home" }, { nickname: "Beta's flat" }];
+        assert.equal(svc_exactPlace(places, "home")!.nickname, "Home");
+        assert.equal(svc_exactPlace(places, "Beta's Flat!")!.nickname, "Beta's flat");
+        assert.equal(svc_exactPlace(places, "ghar"), null, "the engine's AI maps 'ghar' to the saved name first");
+        assert.equal(svc_exactPlace(places, "beta ke ghar"), null);
+        assert.equal(svc_exactPlace(places, ""), null);
     });
     await ok("keyLines picks flat + society", () => {
         // A bare 2-digit flat number is too weak to match on (it hides inside pincodes) → society only.
