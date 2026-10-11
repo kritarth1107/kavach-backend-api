@@ -1,5 +1,5 @@
 /**
- * What the elder sees for a place. Raw map numbers ("21.2403, 81.6935") are never shown or put in
+ * What the elder sees for a place. Raw map numbers ("21.2514, 81.6296") are never shown or put in
  * an app link: a place known only by its map point reads "Current location" until it is looked up.
  */
 export const CURRENT_LOCATION = "Current location";
@@ -10,7 +10,7 @@ export function hasCoords(s?: string | null): boolean {
     return Boolean(s && COORD_PAIR_RE.test(s));
 }
 
-/** "21.2403, 81.6935, RAIPUR" (a model or app echoing a pin) → the map point. */
+/** "21.2514, 81.6296, RAIPUR" (a model or app echoing a pin) → the map point. */
 export function coordsFromText(s?: string | null): { lat: number; lng: number } | null {
     const m = String(s || "").match(LEADING_PAIR_RE);
     if (!m) return null;

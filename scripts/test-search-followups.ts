@@ -12,21 +12,21 @@ const t = (name: string, fn: () => void) => {
     console.log(`  ✓ ${name}`);
 };
 
-const typed = "74 4th cross 4c sector amrutnagar byatarayanapura bangalore karnataka india 560092";
+const typed = "21 5th main 4th block jayanagar south bangalore karnataka india 560011";
 t("comma-less address: no city guessed from the whole line", () => {
     const p = splitAddress(typed)!;
-    assert.equal(p.pincode, "560092");
+    assert.equal(p.pincode, "560011");
     assert.equal(p.city, undefined);
     const full = formatFull(p);
-    assert.equal(full.match(/amrutnagar/g)!.length, 1, full);
+    assert.equal(full.match(/jayanagar/g)!.length, 1, full);
 });
 t("stored duplicate (line1 ⊃ city) renders once", () => {
     const full = formatFull({
-        line1: "74 4th cross 4c sector amrutnagar byatarayanapura bangalore karnataka india",
-        city: "74 4th cross 4c sector amrutnagar byatarayanapura bangalore",
-        pincode: "560092",
+        line1: "21 5th main 4th block jayanagar south bangalore karnataka india",
+        city: "21 5th main 4th block jayanagar south bangalore",
+        pincode: "560011",
     });
-    assert.equal(full, "74 4th cross 4c sector amrutnagar byatarayanapura bangalore karnataka india, 560092");
+    assert.equal(full, "21 5th main 4th block jayanagar south bangalore karnataka india, 560011");
 });
 t("comma address still splits city/state", () => {
     const p = splitAddress("Flat 12, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462002")!;
@@ -35,8 +35,8 @@ t("comma address still splits city/state", () => {
     assert.equal(formatFull(p), "Flat 12, Lake View Apartments, Shyamla Hills, Bhopal, Madhya Pradesh 462002");
 });
 t("AI parts compose without repeats", () => {
-    const s = composeAddress({ line1: "74 4th cross 4c sector", locality: "amrutnagar byatarayanapura", city: "bangalore", state: "karnataka", pincode: "560092" });
-    assert.equal(s, "74 4th cross 4c sector, amrutnagar byatarayanapura, bangalore, karnataka 560092");
+    const s = composeAddress({ line1: "21 5th main 4th block", locality: "jayanagar south", city: "bangalore", state: "karnataka", pincode: "560011" });
+    assert.equal(s, "21 5th main 4th block, jayanagar south, bangalore, karnataka 560011");
     assert.equal(composeAddress({ line1: "12 MG road bangalore", locality: null, city: "bangalore", state: null, pincode: "560001" }), "12 MG road bangalore, 560001");
 });
 t("MCP session 401 is not a revoked store token; invalid_grant still is", () => {

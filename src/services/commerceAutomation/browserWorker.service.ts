@@ -2515,7 +2515,7 @@ async function parkGenericConfirm(args: {
     const shownAddr = args.result.confirm?.addressLabel;
     const savedAddr = args.taskInput.deliveryAddress?.trim() || args.goal.match(/delivery_address=([^|]+)/i)?.[1]?.trim();
     // The store must show the family-book place (pincode + flat/street line) — never a
-    // store-account default like an old Gurugram address.
+    // store-account default like an old address in another city.
     const target = savedAddr ? splitAddress(savedAddr) : null;
     const matches = Boolean(
         savedAddr && shownAddr && addressMatches(shownAddr, savedAddr) && (!target || storeAddressMatchesPlace(shownAddr, target)),

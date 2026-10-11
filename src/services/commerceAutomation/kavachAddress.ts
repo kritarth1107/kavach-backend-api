@@ -15,8 +15,8 @@ const STATE_WORDS =
     /\b(andhra pradesh|arunachal pradesh|assam|bihar|chhattisgarh|gujarat|haryana|himachal pradesh|jharkhand|karnataka|kerala|madhya pradesh|maharashtra|manipur|meghalaya|mizoram|nagaland|odisha|punjab|rajasthan|sikkim|tamil nadu|telangana|tripura|uttar pradesh|uttarakhand|west bengal|jammu and kashmir|ladakh)\b/gi;
 
 /**
- * Typed addresses often have no commas ("74 4th cross amrutnagar byatarayanapura bangalore
- * karnataka india 560092"): split them around a known city into street, locality, city, state
+ * Typed addresses often have no commas ("21 5th main jayanagar south bangalore
+ * karnataka india 560011"): split them around a known city into street, locality, city, state
  * so the helpers below see the same shape as a comma address.
  */
 function commaShape(address: string): string {

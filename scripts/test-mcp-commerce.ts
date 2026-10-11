@@ -22,31 +22,31 @@ let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { if (cond) pass++; else { fail++; console.log("FAIL", name); } };
 
 const swAddr = `Found 4 saved addresses (page 1 of 1, showing 4):
-1. [1704] Kritarth Agrawal: 1704 - Tower 5, M3M Heights, Sector 65, Gurugram, Haryana 122102, India. (M3M Heights) (ID: d1dsqrice8mti3j6gpu0__AbFumQSX7tkWFmPT9FEEGZ)
-2. [Kavach Home] Kritarth: C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH 492001 (ID: darsuo41d96uh61kgiv0__AUQZ_QTei282Me66PAmkE4)
-3. [Home] Kritarth Agrawal: 504, Block C (lilly), Purena, Purena, Chhattisgarh, India (ID: d9qojnc1d96t5colmtvg__AUQaIgTei2sS36wl7t6Yks)
+1. [1203] Ravi Kumar: 1203 - Tower 2, Sample Heights, Sector 54, Gurugram, Haryana 122011, India. (Sample Heights) (ID: d1fakeaddr000000001a__AbCdEfGhIjKlMnOpQrSt12)
+2. [Kavach Home] Mohan: B12, SAMPLE PARK, CIVIL LINES, NEAR CITY MALL, RAIPUR, CHHATTISGARH 492001 (ID: dfakehome00000000002__AUQZ_FakeSuffix000002)
+3. [Home] Ravi Kumar: 12, Block D (rose), Shankar Nagar, Shankar Nagar, Chhattisgarh, India (ID: dfakeold000000000003__AUQaFakeSuffix00000003)
 
-The saved addresses are ranked for display. Suggested/preselected address ID: d1dsqrice8mti3j6gpu0__AbFumQSX7tkWFmPT9FEEGZ.`;
+The saved addresses are ranked for display. Suggested/preselected address ID: d1fakeaddr000000001a__AbCdEfGhIjKlMnOpQrSt12.`;
 const rows = parseSwiggyAddresses(swAddr);
-ok("swiggy addresses parsed", rows.length === 3 && rows[1]!.id.startsWith("darsuo41"));
-const place = { line1: "C504, SUNITA PARK, LABHANDIH", pincode: "492001" };
+ok("swiggy addresses parsed", rows.length === 3 && rows[1]!.id.startsWith("dfakehom"));
+const place = { line1: "B12, SAMPLE PARK, CIVIL LINES", pincode: "492001" };
 const matches = rows.filter((r) => storeAddressMatchesPlace(r.text, place));
-ok("only the Raipur C504 address matches (never the suggested default)", matches.length === 1 && matches[0]!.id.startsWith("darsuo41"));
-ok("pincode-less 504 Block C doesn't match", !storeAddressMatchesPlace(rows[2]!.text, place));
-ok("short id == listed id", sameStoreAddressId("darsuo41d96uh61kgiv0__AUQZ", "darsuo41d96uh61kgiv0"));
-ok("different ids differ", !sameStoreAddressId("d1dsqrice8mti3j6gpu0__x", "darsuo41d96uh61kgiv0"));
+ok("only the Raipur B12 address matches (never the suggested default)", matches.length === 1 && matches[0]!.id.startsWith("dfakehom"));
+ok("pincode-less 12, Block D doesn't match", !storeAddressMatchesPlace(rows[2]!.text, place));
+ok("short id == listed id", sameStoreAddressId("dfakehome00000000002__AUQZ", "dfakehome00000000002"));
+ok("different ids differ", !sameStoreAddressId("d1fakeaddr000000001a__x", "dfakehome00000000002"));
 
 const zAddr = `Found 2 saved address(es):
 
-1. Kavach Home: C504, SUNITA PARK, C504 SUNITA PARK NEAR TULIP AREA HOTEL
-2. Other: 1704, Tower 5, M3M Heights, Sector 65, Gurugram, Haryana 122102, India
+1. Kavach Home: B12, SAMPLE PARK, B12 SAMPLE PARK NEAR CITY MALL
+2. Other: 1203, Tower 2, Sample Heights, Sector 54, Gurugram, Haryana 122011, India
 
 ---
 Address IDs:
-1. "Kavach Home" → ID: 74dab511-e40b-4dc8-879c-082fcbcade25
-2. "Other" → ID: b212d1ec-1b85-4519-b9c3-ed637c870049`;
+1. "Kavach Home" → ID: 00000000-0000-4000-8000-0000000a0001
+2. "Other" → ID: 00000000-0000-4000-8000-0000000a0002`;
 const z = parseZeptoAddresses(zAddr);
-ok("zepto addresses parsed", z.length === 2 && z[0]!.id === "74dab511-e40b-4dc8-879c-082fcbcade25" && /SUNITA/.test(z[0]!.text));
+ok("zepto addresses parsed", z.length === 2 && z[0]!.id === "00000000-0000-4000-8000-0000000a0001" && /SAMPLE/.test(z[0]!.text));
 ok("zepto Gurugram doesn't match Raipur", !storeAddressMatchesPlace(z[1]!.text, place));
 
 const imSearch = `Found 5 product(s)\n\nDISPLAY INSTRUCTIONS:\n- x\n{\n "products": [ {"displayName":"Amul Taaza Milky Milk","inStock":true,"variations":[{"spinId":"D9PNFAT8MI","skuId":"4XY","quantityDescription":"500 ml x 4","displayName":"Amul Taaza Milky Milk","price":{"mrp":120,"offerPrice":120},"isInStockAndAvailable":false},{"spinId":"SKS75T1GV1","skuId":"VQJ","quantityDescription":"500 ml","displayName":"Amul Taaza Milky Milk","price":{"mrp":30,"offerPrice":29.5},"isInStockAndAvailable":true}]} ]\n}`;
@@ -75,7 +75,7 @@ const menu = `Found 3 menu items for "paneer butter masala":
 const fm = parseFoodMenu(menu);
 ok("food menu parsed, variant item skipped", fm.length === 2 && fm[1]!.restaurantId === "144645" && fm[1]!.menuItemId === "83192647" && fm[1]!.restaurantName === "Ramdev's Khana Khazana (Pachpedi Naka)");
 
-const imCart = `Cart retrieved successfully.\n{\n "selectedAddress": "darsuo41d96uh61kgiv0",\n "items": [{"spinId":"SKS75T1GV1","itemName":"Amul Taaza Milky Milk","itemVariant":"500 ml","quantity":1,"discountedFinalPrice":30}],\n "billBreakdown": {"lineItems":[{"label":"Item Total","value":"₹30.00"},{"label":"Handling Fee","value":"₹12.00"}],"toPay":{"label":"To Pay","value":"₹101"}}\n}`;
+const imCart = `Cart retrieved successfully.\n{\n "selectedAddress": "dfakehome00000000002",\n "items": [{"spinId":"SKS75T1GV1","itemName":"Amul Taaza Milky Milk","itemVariant":"500 ml","quantity":1,"discountedFinalPrice":30}],\n "billBreakdown": {"lineItems":[{"label":"Item Total","value":"₹30.00"},{"label":"Handling Fee","value":"₹12.00"}],"toPay":{"label":"To Pay","value":"₹101"}}\n}`;
 const ic = parseInstamartCart(imCart);
 ok("instamart cart parsed", ic!.lines.length === 1 && ic!.totalPaise === 10100);
 ok("instamart cart passes guardrails", checkCart(ic, { id: "SKS75T1GV1", name: "Amul Taaza Milky Milk — 500 ml", qty: 1 }, { needTotal: true }).ok);

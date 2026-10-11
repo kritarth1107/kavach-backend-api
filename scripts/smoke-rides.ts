@@ -42,18 +42,18 @@ async function main() {
     assert(providerFromText("book ola") === "ola", "provider ola");
     assert(providerFromText("uber me") === "uber", "provider uber");
 
-    const fromTo = parseFromTo("from 4th Cross Rd Amruthnagar to ritz Carlton bangalore");
-    assert(!!fromTo.pickup && /Amruthnagar|4th Cross/i.test(fromTo.pickup!), `from parse: ${fromTo.pickup}`);
+    const fromTo = parseFromTo("from 5th Main Rd Jayanagar to ritz Carlton bangalore");
+    assert(!!fromTo.pickup && /Jayanagar|5th Main/i.test(fromTo.pickup!), `from parse: ${fromTo.pickup}`);
     assert(!!fromTo.drop && /ritz/i.test(fromTo.drop!), `to parse: ${fromTo.drop}`);
 
     const pin = parseLocationPin(
-        '[location lat=12.9716 lng=77.5946 name="Home" address="4th Cross Rd, Amruthnagar"]',
+        '[location lat=12.9716 lng=77.5946 name="Home" address="5th Main Rd, Jayanagar"]',
     );
     assert(!!pin && pin.lat === 12.9716 && pin.lng === 77.5946, "location pin parse");
-    assert(/4th Cross|Home/i.test(pin!.shortLabel || pin!.address || ""), "pin label");
+    assert(/5th Main|Home/i.test(pin!.shortLabel || pin!.address || ""), "pin label");
 
     const route = formatRouteSummary(
-        placeFromText("4th Cross Rd, Amruthnagar"),
+        placeFromText("5th Main Rd, Jayanagar"),
         placeFromText("the Ritz-Carlton on Residency Rd"),
     );
     assert(/Got the route: from .* to .*/i.test(route), `route summary: ${route}`);
@@ -68,7 +68,7 @@ async function main() {
     const draft: RideDraft = {
         phase: "awaiting_otp",
         provider: "uber",
-        pickup: placeFromText("4th Cross Rd, Amruthnagar"),
+        pickup: placeFromText("5th Main Rd, Jayanagar"),
         drop: placeFromText("Ritz-Carlton Bangalore"),
         routeSummary: route,
     };

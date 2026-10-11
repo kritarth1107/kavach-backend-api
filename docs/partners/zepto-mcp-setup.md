@@ -33,10 +33,10 @@ For local dev (optional):
 
 ### Step 2 — Prepare the caregiver Zepto account
 
-Use **Vish's** (or paying caregiver's) Zepto account:
+Use the **paying caregiver's** Zepto account:
 
 1. Install Zepto app and sign in with Indian mobile number
-2. Save **Sudha's delivery address** as default or saved address
+2. Save **the elder's delivery address** as default or saved address
 3. Optional: add Zepto Cash or enable UPI for faster checkout
 
 Orders run on the **connected caregiver's Zepto account**, not a shared Kavach account.

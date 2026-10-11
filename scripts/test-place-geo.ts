@@ -46,21 +46,21 @@ async function main() {
             "Green Park Society, Near Lotus Hotel, Bhopal, Madhya Pradesh 462001",
             "Near Lotus Hotel, Bhopal, Madhya Pradesh 462001",
         ]);
-        // a comma-less saved line (the Bangalore place of 2026-10-11) is one query; "560092" alone is not asked
-        assert.deepEqual(osmQueries("74 4th cross 4c sector amrutnagar bangalore karnataka india, 560092", "560092"), [
-            "74 4th cross 4c sector amrutnagar bangalore karnataka india, 560092",
+        // a comma-less saved line (the Bangalore place of 2026-10-11) is one query; "560011" alone is not asked
+        assert.deepEqual(osmQueries("21 5th main 4th block jayanagar bangalore karnataka india, 560011", "560011"), [
+            "21 5th main 4th block jayanagar bangalore karnataka india, 560011",
         ]);
         assert.deepEqual(osmQueries("Flat 3, Anna Nagar, Chennai", "600040"), ["Flat 3, Anna Nagar, Chennai 600040", "Anna Nagar, Chennai 600040", "Chennai 600040"]);
     });
 
     await ok("distance", () => {
-        assert.ok(Math.abs(kmBetween({ lat: 12.9716, lng: 77.5946 }, { lat: 13.0617, lng: 77.5929 }) - 10.0) < 0.5);
+        assert.ok(Math.abs(kmBetween({ lat: 12.9716, lng: 77.5946 }, { lat: 12.9299, lng: 77.5826 }) - 4.8) < 0.3);
     });
 
     await ok("Bangalore: nothing for the street → the pincode's centre (precision pincode)", async () => {
-        const asked = fakeOsm({ "560092": [13.0617, 77.5929] }, {});
-        const p = await pointForPlace({ full: "74 4th cross 4c sector amrutnagar bangalore karnataka india, 560092", pincode: "560092" });
-        assert.deepEqual(p, { lat: 13.0617, lng: 77.5929, source: "openstreetmap_pincode", precision: "pincode" });
+        const asked = fakeOsm({ "560011": [12.9299, 77.5826] }, {});
+        const p = await pointForPlace({ full: "21 5th main 4th block jayanagar bangalore karnataka india, 560011", pincode: "560011" });
+        assert.deepEqual(p, { lat: 12.9299, lng: 77.5826, source: "openstreetmap_pincode", precision: "pincode" });
         assert.equal(asked.length, 2); // the centre, then the one address query
     });
 
@@ -82,10 +82,10 @@ async function main() {
 
     await ok("a street of the same name in another city is refused (far from the pincode)", async () => {
         fakeOsm({ "492001": [21.2387, 81.6507] }, {
-            // "Sunita Park" found in Delhi for a Raipur address
-            "C504, Sunita Park, Labhandih, Raipur, Chhattisgarh 492001": { lat: 28.6, lon: 77.2, postcode: "110001" },
+            // "Sample Park" found in Delhi for a Raipur address
+            "B12, Sample Park, Civil Lines, Raipur, Chhattisgarh 492001": { lat: 28.6, lon: 77.2, postcode: "110001" },
         });
-        const p = await pointForPlace({ full: "C504, Sunita Park, Labhandih, Raipur, Chhattisgarh 492001", pincode: "492001" });
+        const p = await pointForPlace({ full: "B12, Sample Park, Civil Lines, Raipur, Chhattisgarh 492001", pincode: "492001" });
         assert.deepEqual(p, { lat: 21.2387, lng: 81.6507, source: "openstreetmap_pincode", precision: "pincode" });
     });
 
@@ -113,7 +113,7 @@ async function main() {
             if (new URL(url).searchParams.get("postalcode")) return [{ lat: "21.2387", lon: "81.6507", address: { postcode: "492001" } }];
             throw new Error("geo HTTP 503");
         });
-        const p = await pointForPlace({ full: "C504, Sunita Park, Labhandih, Raipur, Chhattisgarh 492001", pincode: "492001" });
+        const p = await pointForPlace({ full: "B12, Sample Park, Civil Lines, Raipur, Chhattisgarh 492001", pincode: "492001" });
         assert.equal(p?.precision, "pincode");
         assert.equal(n, 2);
     });

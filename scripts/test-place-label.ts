@@ -12,17 +12,17 @@ let fail = 0;
 const ok = (n: string, c: boolean, got?: unknown) => { console.log(`${c ? "✓" : "✗"} ${n}${c ? "" : ` → ${JSON.stringify(got)}`}`); if (!c) fail++; };
 const NUM = /\d{1,3}\.\d{3,}/;
 
-ok("coords detected", hasCoords("21.24036026001, 81.693542480469, RAIPUR"));
-ok("coords parsed", JSON.stringify(coordsFromText("21.24036026001, 81.693542480469, RAIPUR")) === JSON.stringify({ lat: 21.24036026001, lng: 81.693542480469 }));
-ok("normal label kept", displayLabel("Sector 18, Noida") === "Sector 18, Noida" && displayLabel("21.24, 81.69") === "");
-const echoed = placeFromText("21.24036026001, 81.693542480469, RAIPUR");
-ok("echoed pin text → pin with map point", echoed.lat === 21.24036026001 && echoed.source === "location_pin" && echoed.shortLabel === CURRENT_LOCATION, echoed);
-const pin = parseLocationPin("[location lat=21.2408237 lng=81.6936378]")!;
+ok("coords detected", hasCoords("21.25146026001, 81.629642480469, RAIPUR"));
+ok("coords parsed", JSON.stringify(coordsFromText("21.25146026001, 81.629642480469, RAIPUR")) === JSON.stringify({ lat: 21.25146026001, lng: 81.629642480469 }));
+ok("normal label kept", displayLabel("Sector 18, Noida") === "Sector 18, Noida" && displayLabel("21.25, 81.63") === "");
+const echoed = placeFromText("21.25146026001, 81.629642480469, RAIPUR");
+ok("echoed pin text → pin with map point", echoed.lat === 21.25146026001 && echoed.source === "location_pin" && echoed.shortLabel === CURRENT_LOCATION, echoed);
+const pin = parseLocationPin("[location lat=21.2514237 lng=81.6296378]")!;
 ok("bare WhatsApp pin label", pin.shortLabel === CURRENT_LOCATION && !pin.address, pin);
-const pinNamed = parseLocationPin('[location lat=21.2408237 lng=81.6936378 name="21.2408, 81.6936"]')!;
+const pinNamed = parseLocationPin('[location lat=21.2514237 lng=81.6296378 name="21.2514, 81.6296"]')!;
 ok("pin whose name is numbers", pinNamed.shortLabel === CURRENT_LOCATION, pinNamed);
 // The exact place saved from the 28 Sep live try.
-const live = { raw: "21.24036026001, 81.693542480469, RAIPUR", shortLabel: "21.24036026001, 81.693542480469, RAIPUR", address: "21.24036026001, 81.693542480469, RAIPUR", lat: 21.2408237, lng: 81.6936378 };
+const live = { raw: "21.25146026001, 81.629642480469, RAIPUR", shortLabel: "21.25146026001, 81.629642480469, RAIPUR", address: "21.25146026001, 81.629642480469, RAIPUR", lat: 21.2514237, lng: 81.6296378 };
 const drop = { shortLabel: "Raipur Airport", address: "Raipur Airport, Raipur, India", lat: 21.1854, lng: 81.7459 };
 ok("name → Current location", nameFor(live) === CURRENT_LOCATION, nameFor(live));
 for (const [n, l] of [["ola", olaLink(live, drop)], ["uber", uberLink(live, drop)], ["rapido", rapidoLink(live, drop)]] as const)
@@ -33,28 +33,28 @@ ok("route summary, map point only", formatRouteSummary({ lat: 21.2, lng: 81.6 },
 
 // ── WhatsApp location pin, in every order (webhook shape: "[location lat=… lng=… name=… address=…]") ──
 {
-    const RAIPUR = "[location lat=21.2408 lng=81.6936]";
+    const RAIPUR = "[location lat=21.2514 lng=81.6296]";
     const pinA = parseLocationPin(RAIPUR)!;
-    const pinB = parseLocationPin('[location lat=21.2408 lng=81.6936 name="Telibandha Lake" address="GE Road, Raipur"]')!;
-    ok("webhook pin with name/address", pinB.lat === 21.2408 && pinB.shortLabel === "Telibandha Lake" && pinB.address === "GE Road, Raipur", pinB);
+    const pinB = parseLocationPin('[location lat=21.2514 lng=81.6296 name="Telibandha Lake" address="GE Road, Raipur"]')!;
+    ok("webhook pin with name/address", pinB.lat === 21.2514 && pinB.shortLabel === "Telibandha Lake" && pinB.address === "GE Road, Raipur", pinB);
     const airport = { raw: "Raipur airport", shortLabel: "Raipur Airport", lat: 21.1804, lng: 81.7388 };
-    const home = { raw: "C504, SUNITA PARK, RAIPUR", shortLabel: "C504, SUNITA PARK", address: "C504, SUNITA PARK, LABHANDIH, RAIPUR" };
+    const home = { raw: "B12, SAMPLE PARK, RAIPUR", shortLabel: "B12, SAMPLE PARK", address: "B12, SAMPLE PARK, CIVIL LINES, RAIPUR" };
     const now = Date.now();
     let p = pinPlan(null, null, pinA, now);
-    ok("pin first, nothing asked yet → pickup set, ask drop", p.phase === "need_drop" && p.pickup.lat === 21.2408 && !p.drop, p);
+    ok("pin first, nothing asked yet → pickup set, ask drop", p.phase === "need_drop" && p.pickup.lat === 21.2514 && !p.drop, p);
     p = pinPlan({ phase: "need_pickup", drop: airport }, null, pinA, now);
-    ok("drop then pin → both, straight to apps", p.phase === "confirming_route" && p.drop === airport && p.pickup.lng === 81.6936, p);
+    ok("drop then pin → both, straight to apps", p.phase === "confirming_route" && p.drop === airport && p.pickup.lng === 81.6296, p);
     p = pinPlan(null, { drop: airport, at: new Date(now - 5 * 60_000) }, pinA, now);
-    ok("after a failed saved-home try → pin pickup + that drop", p.phase === "confirming_route" && p.pickup.lat === 21.2408 && p.drop === airport && !(p.pickup as { address?: string }).address?.includes("SUNITA"), p);
+    ok("after a failed saved-home try → pin pickup + that drop", p.phase === "confirming_route" && p.pickup.lat === 21.2514 && p.drop === airport && !(p.pickup as { address?: string }).address?.includes("SAMPLE"), p);
     p = pinPlan({ phase: "ola_pick_type", drop: airport }, null, pinA, now, OLA_PRE_BOOKING_PHASES as readonly string[]);
-    ok("during Ola ride choice → Ola page released, pin is pickup", p.releaseOla && p.pickup.lat === 21.2408 && p.drop === airport, p);
+    ok("during Ola ride choice → Ola page released, pin is pickup", p.releaseOla && p.pickup.lat === 21.2514 && p.drop === airport, p);
     p = pinPlan({ phase: "confirming_route", drop: airport }, null, pinA, now);
-    ok("pin beats a saved home pickup", p.pickup.lat === 21.2408 && p.pickup.shortLabel !== home.shortLabel, p);
+    ok("pin beats a saved home pickup", p.pickup.lat === 21.2514 && p.pickup.shortLabel !== home.shortLabel, p);
     p = pinPlan(null, { drop: airport, at: new Date(now - 45 * 60_000) }, pinA, now);
     ok("old ride (>30 min) not reused", p.phase === "need_drop" && !p.drop, p);
     const ola = olaLink(p.pickup, airport) || "", ub = uberLink(p.pickup, airport) || "", rp = rapidoLink(p.pickup, airport) || "";
-    ok("pin coords reach the Ola link", ola.includes("21.2408") && ola.includes("81.6936"), ola);
-    ok("pin coords reach the Uber link", ub.includes("21.2408") && ub.includes("81.6936") && !/my_location/.test(ub), ub);
+    ok("pin coords reach the Ola link", ola.includes("21.2514") && ola.includes("81.6296"), ola);
+    ok("pin coords reach the Uber link", ub.includes("21.2514") && ub.includes("81.6296") && !/my_location/.test(ub), ub);
     // Rapido's web link takes place names only (no map point in its format); it must stay readable.
     ok("Rapido link readable, no raw numbers", /rapido/.test(rp) && !/\d{1,3}\.\d{3,}/.test(rp), rp);
     ok("no 'share location' tip after a pin", pinTipFor("hinglish", false, p.pickup) === "" && pinTipFor("en", false, pinB) === "");

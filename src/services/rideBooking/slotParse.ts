@@ -132,7 +132,7 @@ export function formatRouteSummary(pickup: RidePlace, drop: RidePlace): string {
 
 export function placeFromText(raw: string): RidePlace {
     const trimmed = raw.trim().slice(0, 200);
-    // Map numbers typed or echoed as text ("21.2403, 81.6935, RAIPUR") are a pin, not a place name.
+    // Map numbers typed or echoed as text ("21.2514, 81.6296, RAIPUR") are a pin, not a place name.
     const c = coordsFromText(trimmed);
     if (c) return { lat: c.lat, lng: c.lng, raw: trimmed, shortLabel: CURRENT_LOCATION, source: "location_pin" };
     return {

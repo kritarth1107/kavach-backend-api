@@ -21,11 +21,11 @@ const loggedIn = ["AVAILABLE RIDES", "Auto", "Get an auto at your doorstep", "�
 const li = parseRideTypes(loggedIn);
 ok("logged-in ETAs not shifted", JSON.stringify(li.map((t) => t.etaMin ?? null)) === JSON.stringify([null, 4, 2, 4, 1]), li);
 ok("logged-in fares read", JSON.stringify(li.map((t) => [t.name, t.fare])) === JSON.stringify([["Auto", 356], ["Mini", 312], ["Bike", 199], ["Prime Sedan", 322], ["Prime SUV", 477]]), li);
-const gc = geocodeCandidates("C504, SUNITA PARK, LABHANDIH, NEAR TULIP AREA HOTEL, RAIPUR, CHHATTISGARH 492001", "");
-ok("lookup: full address first", gc[0]!.startsWith("C504"), gc);
-ok("lookup: drops 'near …' part", gc.every((q) => !/NEAR TULIP/.test(q) || q === gc[0]), gc);
+const gc = geocodeCandidates("B12, SAMPLE PARK, CIVIL LINES, NEAR CITY MALL, RAIPUR, CHHATTISGARH 492001", "");
+ok("lookup: full address first", gc[0]!.startsWith("B12"), gc);
+ok("lookup: drops 'near …' part", gc.every((q) => !/NEAR CITY/.test(q) || q === gc[0]), gc);
 ok("lookup: never city+state only", !gc.some((q) => /^RAIPUR, CHHATTISGARH/.test(q)), gc);
-ok("lookup: locality + city tried", gc.includes("LABHANDIH, RAIPUR"), gc);
+ok("lookup: locality + city tried", gc.includes("CIVIL LINES, RAIPUR"), gc);
 // Live ride: only ride talk is captured; everything else goes to the normal chat.
 // Live 28 Sep: a hidden stale "PICKUP / DROP" card sits before the real one; payment is a <select>.
 {
@@ -72,14 +72,14 @@ const D = { name: "Ramesh Kumar", vehicle: "White Swift Dzire", plate: "DL 1C AB
 for (const lang of ["en", "hinglish"]) {
     const all = [
         OlaMsg.checking(lang), OlaMsg.types(lang, "Delhi Airport T3", ordered, "https://book.olacabs.com/?x=1"), OlaMsg.types(lang, "Delhi Airport T3", lo, null),
-        OlaMsg.confirmSignIn(lang, "Mini", "+917694829888"), OlaMsg.openingSignIn(lang), OlaMsg.otpSent(lang, "+917694829888"), OlaMsg.otpChecking(lang), OlaMsg.otpWrong(lang),
+        OlaMsg.confirmSignIn(lang, "Mini", "+919000012002"), OlaMsg.openingSignIn(lang), OlaMsg.otpSent(lang, "+919000012002"), OlaMsg.otpChecking(lang), OlaMsg.otpWrong(lang),
         OlaMsg.confirmBook(lang, c), OlaMsg.booking(lang), OlaMsg.searching(lang), OlaMsg.bookUnverified(lang), OlaMsg.update(lang, 0), OlaMsg.update(lang, 1), OlaMsg.update(lang, 2),
         OlaMsg.assigned(lang, D, 312), OlaMsg.noDriverTimeout(lang, 5), OlaMsg.olaNoDriver(lang), OlaMsg.driverCancelled(lang), OlaMsg.cancelledByUser(lang),
         OlaMsg.cancelAssignedAsk(lang), OlaMsg.cancelRetrying(lang), OlaMsg.cancelStuck(lang, "https://book.olacabs.com/"), OlaMsg.failed(lang, "https://book.olacabs.com/", "https://m.uber.com/ul/"),
         OlaMsg.notCash(lang), OlaMsg.links(lang, "https://m.uber.com/ul/", "https://m.rapido.bike/x"), OlaMsg.stillSearching(lang), OlaMsg.rideOn(lang, D),
     ];
     ok(`${lang}: no tech words in any Ola message`, all.every((m) => !hasStackWords(m)), all.find((m) => hasStackWords(m)));
-    ok(`${lang}: phone always masked`, all.every((m) => !/7694829888/.test(m)));
+    ok(`${lang}: phone always masked`, all.every((m) => !/9000012002/.test(m)));
     const u = [0, 1, 2].map((i) => OlaMsg.update(lang, i));
     ok(`${lang}: updates never repeat`, new Set(u).size === 3);
     ok(`${lang}: booking confirm shows vehicle, fare, cash, route`, /Mini/.test(OlaMsg.confirmBook(lang, c)) && /₹312/.test(OlaMsg.confirmBook(lang, c)) && /Cash/.test(OlaMsg.confirmBook(lang, c)) && /Rajiv Chowk/.test(OlaMsg.confirmBook(lang, c)));

@@ -1,6 +1,6 @@
 /**
- * Gemini understanding of a typed delivery-address reply ("560092 home", a comma-less full
- * address, "74 4th cross … bangalore"). Returns the parts she actually wrote (never invented),
+ * Gemini understanding of a typed delivery-address reply ("560011 home", a comma-less full
+ * address, "21 5th main … bangalore"). Returns the parts she actually wrote (never invented),
  * the place name she gave ("home" → Home), and whether it's complete enough to deliver to.
  * Code keeps the checks: the pincode must be in her text (or already known), street words must
  * come from her text. null → the rule parser is the fallback.
@@ -40,7 +40,7 @@ const SYSTEM = `You read one WhatsApp reply to "send your delivery address" from
 - label: the name they give the place ("home", "ghar", "mera ghar" → "Home"; "beti ka ghar" → "Beti ka ghar"; "office", "clinic"). null if none. A label is not part of the street.
 - line1: house/flat/plot number + building/society + street/cross/main road, in their words. null if missing.
 - locality: area / sector / layout / nagar words. city, state: only if written ("bangalore", "karnataka"). Drop "india".
-- complete: true only when line1 has a house/flat/building or street AND there is a locality or city, AND a pincode (from the message or known). "560092 home" alone → complete=false.
+- complete: true only when line1 has a house/flat/building or street AND there is a locality or city, AND a pincode (from the message or known). "560011 home" alone → complete=false.
 Return JSON only.`;
 
 function norm(s: string): string {

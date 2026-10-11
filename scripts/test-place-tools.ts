@@ -80,13 +80,13 @@ async function withDb(uri: string) {
         const nameless = (await tool("save_place", { address: FLAT }, "cg1")) as { ok: boolean; error: string };
         assert.equal(nameless.ok, false);
         assert.match(nameless.error, /what to call/);
-        const r = (await tool("save_place", { address: FLAT, name: "beta's flat", receiver_name: "Vish", receiver_phone: "9000012345" }, "cg1")) as {
+        const r = (await tool("save_place", { address: FLAT, name: "beta's flat", receiver_name: "Arjun", receiver_phone: "9000012345" }, "cg1")) as {
             ok: boolean;
             place: { name: string; receiver: string; isDefault: boolean };
         };
         assert.equal(r.ok, true);
         assert.equal(r.place.name, "Beta's flat");
-        assert.equal(r.place.receiver, "Vish, ending 2345");
+        assert.equal(r.place.receiver, "Arjun, ending 2345");
         assert.equal(r.place.isDefault, false);
     });
     await ok("the same address again is not saved twice", async () => {
@@ -101,13 +101,13 @@ async function withDb(uri: string) {
         assert.match(r.error, /already saved/);
     });
     await ok("change a saved place: rename, receiver, default", async () => {
-        const r = (await tool("save_place", { place: "beta ka flat", name: "Vish's Home", make_default: true })) as { ok: boolean; place: { name: string; isDefault: boolean } };
+        const r = (await tool("save_place", { place: "beta ka flat", name: "Arjun's Home", make_default: true })) as { ok: boolean; place: { name: string; isDefault: boolean } };
         assert.equal(r.ok, true);
-        assert.equal(r.place.name, "Vish's Home");
+        assert.equal(r.place.name, "Arjun's Home");
         assert.equal(r.place.isDefault, true);
         const bad = (await tool("save_place", { place: "Office", name: "X" })) as { ok: boolean; places: string[] };
         assert.equal(bad.ok, false);
-        assert.deepEqual(bad.places.sort(), ["Home", "Vish's Home"]);
+        assert.deepEqual(bad.places.sort(), ["Home", "Arjun's Home"]);
     });
     await ok("a bad address or phone is refused with a reason", async () => {
         assert.match(((await tool("save_place", { address: "near the temple", name: "Mandir" })) as { error: string }).error, /pincode/);
@@ -119,15 +119,15 @@ async function withDb(uri: string) {
         assert.match(((await tool("remove_place", { place: "Home" }, "cg1")) as { error: string }).error, /confirm/);
         const r = (await tool("remove_place", { place: "Home", confirmed: true }, "cg1")) as { ok: boolean; left: string[] };
         assert.equal(r.ok, true);
-        assert.deepEqual(r.left, ["Vish's Home"]);
+        assert.deepEqual(r.left, ["Arjun's Home"]);
     });
     await ok("delivery_place says when the named place is not saved (no silent default)", async () => {
         const miss = (await tool("delivery_place", { words: "Clinic" })) as { matched: boolean; nickname: string; saved: string[] };
         assert.equal(miss.matched, false);
-        assert.deepEqual(miss.saved, ["Vish's Home (Indore 452010)"]);
-        const hit = (await tool("delivery_place", { words: "vish ka ghar" })) as { matched: boolean; nickname: string };
+        assert.deepEqual(miss.saved, ["Arjun's Home (Indore 452010)"]);
+        const hit = (await tool("delivery_place", { words: "arjun ka ghar" })) as { matched: boolean; nickname: string };
         assert.equal(hit.matched, true);
-        assert.equal(hit.nickname, "Vish's Home");
+        assert.equal(hit.nickname, "Arjun's Home");
         assert.equal(((await tool("delivery_place", { words: "" })) as { matched: unknown }).matched, null);
     });
     await mongoose.connection.db!.dropDatabase();

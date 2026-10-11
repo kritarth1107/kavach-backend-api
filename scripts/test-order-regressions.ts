@@ -273,11 +273,11 @@ t("a store login refused 3 times in a row stops counting as linked (lab 2026-10-
     assert.equal(AUTH_FAILURES_TO_EXPIRE, 3);
 });
 
-t("a place with its own receiver uses only a store address in that receiver's name (Vish's Home with Vish's number)", () => {
-    const vish = { contactName: "Vish", contactPhone: "9980531439" };
-    assert.equal(receiverMatches("Kritarth Agrawal: 74, K NO 398/348/74, Amruthahalli, Bangalore 560092", vish), false);
-    assert.equal(receiverMatches("Vish: 74, K NO 398/348/74, Amruthahalli, Bangalore 560092", vish), true);
-    assert.equal(receiverMatches("Kritarth Agrawal: C504 Sunita Park, Raipur 492001", {}), true);
+t("a place with its own receiver uses only a store address in that receiver's name (Arjun's Home with Arjun's number)", () => {
+    const arjun = { contactName: "Arjun", contactPhone: "9000012001" };
+    assert.equal(receiverMatches("Ravi Kumar: 21, K NO 100/200/21, Jayanagar, Bangalore 560011", arjun), false);
+    assert.equal(receiverMatches("Arjun: 21, K NO 100/200/21, Jayanagar, Bangalore 560011", arjun), true);
+    assert.equal(receiverMatches("Ravi Kumar: B12 Sample Park, Raipur 492001", {}), true);
 });
 
 t("several items in one connector cart: exactly those lines at their qty (biscuits and munchies)", () => {
@@ -294,7 +294,7 @@ t("several items in one connector cart: exactly those lines at their qty (biscui
 
 t("the delivery time is read from a store's order answer (lab 2026-10-10: connector orders came back without one)", () => {
     const now = Date.UTC(2026, 9, 10, 12, 0); // 5:30 pm IST
-    const placed = "🎉 Instamart order placed successfully! Order ID: 250596002955721\n{\n  \"orderId\": \"250596002955721\",\n  \"status\": \"CONFIRMED\",\n  \"liveEtaEligible\": true,\n  \"etaText\": \"Arriving in 12 mins\"\n}";
+    const placed = "🎉 Instamart order placed successfully! Order ID: 250500000000001\n{\n  \"orderId\": \"250500000000001\",\n  \"status\": \"CONFIRMED\",\n  \"liveEtaEligible\": true,\n  \"etaText\": \"Arriving in 12 mins\"\n}";
     assert.equal(etaFrom(placed, now), "12 min");
     assert.equal(etaFrom(`ok\n{"orderId":"1","deliveryBy":${now + 14 * 60_000},"serverNow":${now},"pollIntervalSec":45}`, now), "about 14 min (by 5:44 pm)");
     assert.equal(etaFrom(`ok\n{"orderId":"1","deliveryBy":null,"serverNow":${now}}`, now), undefined);
@@ -308,8 +308,8 @@ t("the delivery time is read from a store's order answer (lab 2026-10-10: connec
 
 t("a WhatsApp reply quoting an earlier photo carries the quoted message id (live 2026-10-10 22:36)", () => {
     const body = { object: "whatsapp_business_account", entry: [{ changes: [{ value: { messages: [
-        { from: "917694829888", id: "wamid.NEW", type: "text", text: { body: "ye kya hai?" }, context: { from: "919000000000", id: "wamid.PHOTO" } },
-        { from: "917694829888", id: "wamid.PHOTO2", type: "image", image: { id: "MEDIA1", caption: "Ye kya h" } },
+        { from: "919000012002", id: "wamid.NEW", type: "text", text: { body: "ye kya hai?" }, context: { from: "919000000000", id: "wamid.PHOTO" } },
+        { from: "919000012002", id: "wamid.PHOTO2", type: "image", image: { id: "MEDIA1", caption: "Ye kya h" } },
     ] } }] }] };
     const [reply, photo] = parseMetaWebhookMessages(body);
     assert.equal(reply.replyToId, "wamid.PHOTO");
@@ -333,14 +333,14 @@ t("a WhatsApp reply quoting an earlier photo carries the quoted message id (live
             return { content: [{ type: "text", text: answers[name] ?? "{}" }] };
         },
     });
-    const ctx = { familyId: "f", recipientUserId: "u", recipientPhone: "", place: { addressId: "p", lat: 21.24, lng: 81.67 } } as never;
+    const ctx = { familyId: "f", recipientUserId: "u", recipientPhone: "", place: { addressId: "p", lat: 21.25, lng: 81.63 } } as never;
     const a = await liveEta(client({ get_delivery_status: `ok\n{"deliveryBy":${now + 20 * 60_000}}` }) as never, ctx, "O1", "S1");
     assert.match(a!, /^about (19|20) min \(by /);
     assert.equal(calls[0], 'get_delivery_status:{"orderId":"O1","addressId":"S1"}');
     calls.length = 0;
     const b = await liveEta(client({ get_delivery_status: 'ok\n{"deliveryBy":null}', track_order: 'ok\n{"status":{"statusMessage":"Arriving in 9 mins"}}' }) as never, ctx, "O2", "S1");
     assert.equal(b, "9 min");
-    assert.equal(calls[1], 'track_order:{"orderId":"O2","lat":21.24,"lng":81.67}');
+    assert.equal(calls[1], 'track_order:{"orderId":"O2","lat":21.25,"lng":81.63}');
     assert.equal(await liveEta(client({}) as never, ctx, "O3", "S1"), undefined);
     n++;
     console.log("  ✓ after an order: delivery-status tool, then the tracker with the place's coordinates");

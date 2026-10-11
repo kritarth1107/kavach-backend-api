@@ -192,7 +192,7 @@ export async function resolveOrderContact(input: {
 
 function placeFingerprint(p: Pick<Place, "line1" | "line2" | "landmark" | "city" | "pincode"> & Partial<Pick<Place, "contactName" | "contactPhone">>): string {
     const parts = [p.line1, p.line2, p.landmark, p.city, p.pincode];
-    // A place with its own receiver (Vish's number on Vish's Home) needs a store address carrying that receiver.
+    // A place with its own receiver (Arjun's number on Arjun's Home) needs a store address carrying that receiver.
     if (p.contactPhone) parts.push(p.contactName, p.contactPhone);
     return createHash("sha256").update(parts.map((x) => String(x || "").trim().toLowerCase()).join("|")).digest("hex").slice(0, 16);
 }
