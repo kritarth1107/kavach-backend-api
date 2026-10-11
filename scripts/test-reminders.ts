@@ -70,6 +70,8 @@ async function pure() {
         assert.match((readSchedule({ windowStart: "14:00" }, MON) as { error: string }).error, /start and an end/);
         assert.match((readSchedule({ times: [] }, MON) as { error: string }).error, /time/);
         assert.equal(words({ kind: "multi_time", times: ["17:00"], repeat: "once", date: WED } as never), "Once on Wed 14 Oct at 17:00");
+        const night = ["00:00", "01:00", "02:00", "03:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"];
+        assert.equal(words({ kind: "multi_time", times: night } as never), "14 times a day, 14:00 to 03:00", "a run across midnight reads as one");
         assert.equal(words({ kind: "multi_time", times: ["07:00"], repeat: "weekly", daysOfWeek: [5, 1, 3], endDate: "2026-11-30" } as never),
             "Mon, Wed, Fri at 07:00 until Mon 30 Nov");
     });

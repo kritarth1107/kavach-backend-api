@@ -132,7 +132,7 @@ export function describe(r: ScheduleShape): string {
         when = `every hour ${hhmm(r.windowStartMinutes ?? 0)}–${hhmm(r.windowEndMinutes ?? 0)}`;
     } else {
         const ts = (r.times ?? []).map((t) => normalTime(t)).filter((t): t is string => Boolean(t)).sort();
-        when = ts.length > 4 ? `${ts.length} times a day (${ts[0]}–${ts[ts.length - 1]})` : `at ${ts.join(", ")}`;
+        when = ts.length > 4 ? `${ts.length} times a day, ${span(ts)}` : `at ${ts.join(", ")}`;
     }
     let days: string;
     if (repeat === "once") days = r.date ? `Once on ${dayLabel(r.date)}` : "Once";
@@ -140,10 +140,29 @@ export function describe(r: ScheduleShape): string {
         const ds = [...new Set(r.daysOfWeek ?? [])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
         days = ds.length ? ds.map((d) => WEEKDAY[d]).join(", ") : "Weekly";
     } else days = "Every day";
-    const text = r.kind === "hourly_window" && repeat === "daily" ? `Every hour ${when.slice("every hour ".length)}` : `${days} ${when}`;
+    const many = r.kind !== "hourly_window" && (r.times ?? []).length > 4;
+    const text = repeat === "daily" && r.kind === "hourly_window" ? `Every hour ${when.slice("every hour ".length)}`
+        : repeat === "daily" && many ? `${when.charAt(0).toUpperCase()}${when.slice(1)}`
+            : `${days} ${when}`;
     const until = r.endDate ? ` until ${dayLabel(r.endDate)}` : "";
     const from = r.startDate && repeat !== "once" ? ` from ${dayLabel(r.startDate)}` : "";
     return `${text}${from}${until}`;
+}
+
+/** "14:00 to 03:00" for times that run on across midnight: the run starts after the longest gap between them. */
+function span(sorted: string[]): string {
+    const mins = sorted.map((t) => minutesOf(t) ?? 0);
+    let start = 0;
+    let gap = -1;
+    for (let i = 0; i < mins.length; i++) {
+        const next = i + 1 < mins.length ? mins[i + 1] : mins[0] + 1440;
+        if (next - mins[i] > gap) {
+            gap = next - mins[i];
+            start = (i + 1) % mins.length;
+        }
+    }
+    const end = (start + mins.length - 1) % mins.length;
+    return `${hhmm(mins[start])} to ${hhmm(mins[end])}`;
 }
 
 export type ScheduleInput = {
