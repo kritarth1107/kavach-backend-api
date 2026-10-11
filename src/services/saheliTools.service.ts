@@ -57,6 +57,8 @@ export type SaheliToolName =
     | "create_reminder"
     | "list_reminders"
     | "cancel_reminder"
+    | "skip_reminder"
+    | "update_reminder"
     | "log_appointment_notes"
     | "get_lab_trends"
     | "get_abnormal_flags"
@@ -1120,6 +1122,17 @@ export async function executeSaheliTool(input: {
         case "create_reminder": {
             const { createSaheliReminder } = await import("./saheliReminder.service");
             const textArg = String(input.args.text ?? input.args.message ?? "").trim();
+            if (input.args.schedule && typeof input.args.schedule === "object") {
+                // Saheli's brain read the words and sends the schedule as data; the text is never parsed here.
+                const result = await createSaheliReminder({
+                    familyId: input.familyId,
+                    recipientUserId: input.recipientUserId,
+                    actorUserId: input.actorUserId,
+                    text: textArg,
+                    schedule: input.args.schedule as Record<string, unknown>,
+                });
+                return result.ok ? { status: "created", reminder: result.reminder } : { status: "not_set", error: result.error };
+            }
             const timesRaw = input.args.times;
             const times = Array.isArray(timesRaw)
                 ? timesRaw.map((t) => String(t))
@@ -1162,13 +1175,12 @@ export async function executeSaheliTool(input: {
         }
         case "list_reminders": {
             const { listSaheliReminders } = await import("./saheliReminder.service");
+            const st = input.args.status;
             const reminders = await listSaheliReminders({
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
-                status: input.args.status === "cancelled" || input.args.status === "completed"
-                    ? (input.args.status as "cancelled" | "completed")
-                    : "active",
+                status: st === "cancelled" || st === "completed" || st === "all" ? (st as "cancelled" | "completed" | "all") : "active",
             });
             return { reminders };
         }
@@ -1179,7 +1191,31 @@ export async function executeSaheliTool(input: {
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 reminderId: input.args.reminderId ? String(input.args.reminderId) : undefined,
-                textHint: input.args.textHint ? String(input.args.textHint) : undefined,
+                // a hint by words only for the old brain; Saheli's v2 brain always passes the id from list_reminders
+                textHint: input.args.reminderId ? undefined : input.args.textHint ? String(input.args.textHint) : undefined,
+            });
+        }
+        case "skip_reminder": {
+            const { skipSaheliReminder } = await import("./saheliReminder.service");
+            return await skipSaheliReminder({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                reminderId: String(input.args.reminderId ?? ""),
+                day: input.args.date ? String(input.args.date) : undefined,
+                time: input.args.time ? String(input.args.time) : undefined,
+                undo: input.args.undo === true,
+            });
+        }
+        case "update_reminder": {
+            const { updateSaheliReminder } = await import("./saheliReminder.service");
+            return await updateSaheliReminder({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                reminderId: String(input.args.reminderId ?? ""),
+                text: typeof input.args.text === "string" ? input.args.text : undefined,
+                schedule: input.args.schedule && typeof input.args.schedule === "object" ? (input.args.schedule as Record<string, unknown>) : undefined,
             });
         }
 case "notify_caregivers": {

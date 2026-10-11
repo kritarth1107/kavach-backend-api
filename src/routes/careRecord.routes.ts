@@ -39,6 +39,7 @@ import {
 } from "../controllers/familyAddress.controller";
 
 import * as careMemory from "../controllers/careMemory.controller";
+import * as reminders from "../controllers/reminders.controller";
 
 const router = Router();
 
@@ -132,5 +133,13 @@ router.put(`${cm}/boundaries`, protect, wrap(careMemory.putBoundaries));
 router.get(`${cm}/emergency-link`, protect, wrap(careMemory.getEmergencyLink));
 router.post(`${cm}/emergency-link`, protect, wrap(careMemory.postEmergencyLink));
 router.delete(`${cm}/emergency-link`, protect, wrap(careMemory.deleteEmergencyLink));
+
+// A person's Saheli reminders: the calendar and the "All reminders" list (caregivers; the same is possible on WhatsApp)
+const rm = "/:familyId/subjects/:subjectUserId/reminders";
+router.get(rm, protect, wrap(reminders.getReminders));
+router.get(`${rm}/day`, protect, wrap(reminders.getRemindersForDay));
+router.post(`${rm}/:reminderId/stop`, protect, wrap(reminders.postStopReminder));
+router.post(`${rm}/:reminderId/skip`, protect, wrap(reminders.postSkipReminder));
+router.patch(`${rm}/:reminderId`, protect, wrap(reminders.patchReminder));
 
 export default router;

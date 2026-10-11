@@ -143,16 +143,31 @@ async function pushNudgeToLedger(nudgeId: string, outcome: { delivered: boolean;
     if (!outcome.delivered && !outcome.terminal) return;
     const row = await SaheliNudgeLog.findOne({ nudgeId }).lean().catch(() => null);
     if (!row) return;
-    const { default: CareSchedule } = await import("../models/careSchedule.model");
-    const item = row.scheduleId ? await CareSchedule.findOne({ scheduleId: row.scheduleId }).lean().catch(() => null) : null;
-    const what = item ? `${item.title}${item.dosage ? ` ${item.dosage}` : ""} at ${item.time}` : row.scheduleId || row.nudgeKind;
+    // A reminder Saheli set (scheduleId "reminder:<id>:<HH:MM>") says its own words, not its id (founder 2026-10-11: the
+    // calendar showed "pre reminder: reminder:1061061a…" for "Get ready for the gym").
+    const custom = row.scheduleId?.startsWith("reminder:") ? row.scheduleId.split(":") : null;
+    let what: string;
+    let extra: Record<string, unknown> = {};
+    if (custom) {
+        const [, reminderId, ...rest] = custom;
+        const slot = rest.join(":");
+        const { default: SaheliReminder } = await import("../models/saheliReminder.model");
+        const rem = await SaheliReminder.findOne({ reminderId }, { text: 1 }).lean().catch(() => null);
+        what = `${rem?.text ?? "a reminder"} at ${slot}`;
+        extra = { reminderId, slot, custom: true };
+    } else {
+        const { default: CareSchedule } = await import("../models/careSchedule.model");
+        const item = row.scheduleId ? await CareSchedule.findOne({ scheduleId: row.scheduleId }).lean().catch(() => null) : null;
+        what = item ? `${item.title}${item.dosage ? ` ${item.dosage}` : ""} at ${item.time}` : row.scheduleId || row.nudgeKind;
+    }
+    const label = custom ? "reminder" : row.nudgeKind.replace(/_/g, " ");
     const { aiPushCareEvent } = await import("../clients/aiEngine.client");
     await aiPushCareEvent({
         family_id: row.familyId,
         subject_id: row.recipientUserId,
         kind: outcome.delivered ? "reminder_sent" : "reminder_failed",
-        summary: `${row.nudgeKind.replace(/_/g, " ")}: ${what}${outcome.delivered ? "" : ` (not delivered: ${outcome.reason || "unknown"})`}`,
-        payload: { nudgeKind: row.nudgeKind, scheduleId: row.scheduleId, dateKey: row.dateKey, preview: outcome.messagePreview?.slice(0, 200) },
+        summary: `${label}: ${what}${outcome.delivered ? "" : ` (not delivered: ${outcome.reason || "unknown"})`}`,
+        payload: { nudgeKind: row.nudgeKind, scheduleId: row.scheduleId, dateKey: row.dateKey, preview: outcome.messagePreview?.slice(0, 200), ...extra },
         ref: `nudge:${nudgeId}:${outcome.delivered ? "sent" : "failed"}`,
     });
 }

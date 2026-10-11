@@ -2,6 +2,8 @@ import mongoose, { Document, Schema } from "mongoose";
 
 export type SaheliReminderStatus = "active" | "completed" | "cancelled";
 export type SaheliReminderKind = "multi_time" | "hourly_window";
+/** daily (default, also every older reminder) | weekly on daysOfWeek | once on date. */
+export type SaheliReminderRepeat = "daily" | "weekly" | "once";
 
 export interface ISaheliReminder {
     reminderId: string;
@@ -19,8 +21,23 @@ export interface ISaheliReminder {
     windowEndMinutes?: number | null;
     /** Semantic stop phrase e.g. "I filled it" / "done". */
     stopConditionPhrase?: string;
+    /** When it repeats (missing = daily). */
+    repeat?: SaheliReminderRepeat;
+    /** YYYY-MM-DD (IST): the one day of a once reminder. */
+    date?: string;
+    /** Weekly reminders: 0 = Sunday … 6 = Saturday (the same as care schedules). */
+    daysOfWeek?: number[];
+    /** YYYY-MM-DD (IST): first and last day it may go out (inclusive); either may be missing. */
+    startDate?: string;
+    endDate?: string;
+    /** Occurrences someone skipped: "YYYY-MM-DD" (the whole day) or "YYYY-MM-DD@HH:MM" (one time). */
+    skips?: string[];
     status: SaheliReminderStatus;
     createdBy: string;
+    updatedBy?: string;
+    /** Who stopped it and when (a stop from WhatsApp or the dashboard, or a once reminder that went out). */
+    stoppedAt?: Date;
+    stoppedBy?: string;
     lastFiredAt?: Date;
     lastFiredSlotKey?: string;
     createdAt?: Date;
@@ -46,6 +63,12 @@ const saheliReminderSchema = new Schema<ISaheliReminderDocument>(
         windowStartMinutes: { type: Number },
         windowEndMinutes: { type: Number, default: null },
         stopConditionPhrase: { type: String, trim: true, maxlength: 200 },
+        repeat: { type: String, enum: ["daily", "weekly", "once"], default: "daily" },
+        date: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
+        daysOfWeek: { type: [Number], default: undefined },
+        startDate: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
+        endDate: { type: String, match: /^\d{4}-\d{2}-\d{2}$/ },
+        skips: { type: [String], default: undefined },
         status: {
             type: String,
             enum: ["active", "completed", "cancelled"],
@@ -53,6 +76,9 @@ const saheliReminderSchema = new Schema<ISaheliReminderDocument>(
             index: true,
         },
         createdBy: { type: String, required: true },
+        updatedBy: { type: String },
+        stoppedAt: { type: Date },
+        stoppedBy: { type: String },
         lastFiredAt: { type: Date },
         lastFiredSlotKey: { type: String },
     },

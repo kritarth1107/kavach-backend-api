@@ -1,11 +1,13 @@
 import { randomUUID } from "crypto";
 import { claimNudgeAttempt, finalizeNudgeAttempt } from "./saheliNudgeAttempt.service";
 import Family from "../models/family.model";
+import SaheliNudgeLog from "../models/saheliNudgeLog.model";
 import SaheliReminder, {
     type ISaheliReminder,
     type SaheliReminderKind,
     type SaheliReminderStatus,
 } from "../models/saheliReminder.model";
+import { describe, isDay, isSkipped, minutesOf, nextOccurrence, normalTime, readSchedule, slotsOn, type ScheduleInput } from "./reminderSchedule.service";
 import { AppError } from "../middleware/error.middleware";
 import { FamilyRole } from "../types/family.types";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
@@ -15,7 +17,12 @@ import { parseTimeToMinutes } from "./careScheduleCompletion.service";
 
 const MANAGER_ROLES = new Set([FamilyRole.PRIMARY_CAREGIVER, FamilyRole.CO_CAREGIVER]);
 
-function serialize(doc: ISaheliReminder) {
+/** How long after its time a reminder may still go out (the scheduler was busy or restarting); the slot claim keeps it to once. */
+export const REMINDER_LATE_MINUTES = 15;
+
+function serialize(doc: ISaheliReminder, now: Date = new Date()) {
+    const nowParts = getISTParts(now);
+    const next = doc.status === "active" ? nextOccurrence(doc, toDateKeyIST(now), nowParts.minutesSinceMidnight) : null;
     return {
         reminderId: doc.reminderId,
         familyId: doc.familyId,
@@ -27,12 +34,26 @@ function serialize(doc: ISaheliReminder) {
         windowStartMinutes: doc.windowStartMinutes ?? null,
         windowEndMinutes: doc.windowEndMinutes ?? null,
         stopConditionPhrase: doc.stopConditionPhrase ?? null,
+        repeat: doc.repeat || "daily",
+        date: doc.date ?? null,
+        daysOfWeek: doc.daysOfWeek ?? [],
+        startDate: doc.startDate ?? null,
+        endDate: doc.endDate ?? null,
+        skips: doc.skips ?? [],
+        schedule: describe(doc),
+        next,
         status: doc.status,
         createdBy: doc.createdBy,
+        createdAt: doc.createdAt ?? null,
+        updatedBy: doc.updatedBy ?? null,
+        stoppedAt: doc.stoppedAt ?? null,
+        stoppedBy: doc.stoppedBy ?? null,
         lastFiredAt: doc.lastFiredAt ?? null,
         lastFiredSlotKey: doc.lastFiredSlotKey ?? null,
     };
 }
+
+export type ReminderView = ReturnType<typeof serialize>;
 
 async function assertCanManageReminder(
     familyId: string,
@@ -45,9 +66,10 @@ async function assertCanManageReminder(
         throw new AppError("Family not found or access denied", 403);
     }
     const role = family.getMemberRole(actorUserId);
-    // CARE_RECIPIENT may manage own reminders; caregivers manage for recipient.
-    if (actorUserId === recipientUserId && role === FamilyRole.CARE_RECIPIENT) return;
-    if (role && MANAGER_ROLES.has(role)) return;
+    // Your own reminders (the care recipient, or a caregiver's self care), or a care recipient's if you are a caregiver.
+    // Never another caregiver's own reminders: those are their self care.
+    if (actorUserId === recipientUserId && role && (role === FamilyRole.CARE_RECIPIENT || MANAGER_ROLES.has(role))) return;
+    if (role && MANAGER_ROLES.has(role) && family.getMemberRole(recipientUserId) === FamilyRole.CARE_RECIPIENT) return;
     throw new AppError("You do not have permission to manage reminders", 403);
 }
 
@@ -146,6 +168,13 @@ export async function createSaheliReminder(input: {
     windowStartMinutes?: number | null;
     windowEndMinutes?: number | null;
     stopConditionPhrase?: string | null;
+    /**
+     * The schedule as data (Saheli's brain reads the person's words and fills these; nothing here reads words):
+     * times, repeat (daily | weekly | once), date, days (0 = Sunday), startDate, endDate, windowStart / windowEnd (HH:MM).
+     * When given, the reminder text is never parsed for times.
+     */
+    schedule?: ScheduleInput;
+    now?: Date;
 }): Promise<
     | { ok: true; reminder: ReturnType<typeof serialize>; askUser?: string }
     | { ok: false; error: string; askUser?: string }
@@ -155,6 +184,24 @@ export async function createSaheliReminder(input: {
     const text = input.text.trim().slice(0, 400);
     if (!text || text.length < 2) {
         return { ok: false, error: "Reminder text is required." };
+    }
+
+    if (input.schedule) {
+        const now = input.now ?? new Date();
+        const checked = readSchedule(input.schedule, toDateKeyIST(now));
+        if (!checked.ok) return { ok: false, error: checked.error };
+        const doc = await SaheliReminder.create({
+            reminderId: randomUUID(),
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            text,
+            timezone: "Asia/Kolkata",
+            status: "active" as SaheliReminderStatus,
+            createdBy: input.actorUserId,
+            ...checked.fields,
+        });
+        void logReminderActivity(doc, input.actorUserId, "Reminder created", "created");
+        return { ok: true, reminder: serialize(doc, now) };
     }
 
     const window = parseHourlyWindow(text);
@@ -231,21 +278,214 @@ export async function createSaheliReminder(input: {
     return { ok: true, reminder: serialize(doc) };
 }
 
+function logReminderActivity(doc: ISaheliReminder, actorUserId: string, title: string, status: string) {
+    return import("./activityLog.service").then(({ logActivity }) =>
+        logActivity({
+            familyId: doc.familyId,
+            recipientUserId: doc.recipientUserId,
+            actorUserId,
+            kind: "reminder",
+            title,
+            detail: `${doc.text} · ${describe(doc)}`,
+            data: { reminderId: doc.reminderId, status, times: doc.times },
+        }),
+    ).catch(() => undefined);
+}
+
 export async function listSaheliReminders(input: {
     familyId: string;
     recipientUserId: string;
     actorUserId: string;
-    status?: SaheliReminderStatus;
+    status?: SaheliReminderStatus | "all";
+    now?: Date;
 }) {
     await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
     const filter: Record<string, unknown> = {
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
     };
-    if (input.status) filter.status = input.status;
-    else filter.status = "active";
-    const rows = await SaheliReminder.find(filter).sort({ createdAt: -1 }).limit(40).lean();
-    return rows.map((r) => serialize(r as ISaheliReminder));
+    if (input.status === "all") {
+        // what is on now, and what stopped or finished in the last 30 days
+        const since = new Date((input.now ?? new Date()).getTime() - 30 * 86_400_000);
+        filter.$or = [{ status: "active" }, { updatedAt: { $gte: since } }];
+    } else filter.status = input.status ?? "active";
+    const rows = await SaheliReminder.find(filter).sort({ createdAt: -1 }).limit(60).lean();
+    return rows.map((r) => serialize(r as ISaheliReminder, input.now));
+}
+
+async function ownReminder(input: { familyId: string; recipientUserId: string; reminderId: string }) {
+    return SaheliReminder.findOne({ reminderId: input.reminderId, familyId: input.familyId, recipientUserId: input.recipientUserId });
+}
+
+/** Skip one time ("time" given) or a whole day of a reminder; without a day, the next time it would go out. */
+export async function skipSaheliReminder(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    reminderId: string;
+    day?: string;
+    time?: string;
+    undo?: boolean;
+    now?: Date;
+}): Promise<{ ok: true; reminder: ReminderView; skipped: string } | { ok: false; error: string }> {
+    await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
+    const doc = await ownReminder(input);
+    if (!doc) return { ok: false, error: "Reminder not found." };
+    if (doc.status !== "active") return { ok: false, error: "That reminder is already stopped." };
+    const now = input.now ?? new Date();
+    const today = toDateKeyIST(now);
+    let day = input.day;
+    let time = input.time ? normalTime(input.time) ?? undefined : undefined;
+    if (input.time && !time) return { ok: false, error: "time must be HH:MM" };
+    if (!day) {
+        const next = nextOccurrence(doc, today, getISTParts(now).minutesSinceMidnight);
+        if (!next) return { ok: false, error: "It has nothing left to send." };
+        day = next.day;
+        time = time ?? next.time;
+    }
+    if (!isDay(day)) return { ok: false, error: "day must be YYYY-MM-DD" };
+    const slots = slotsOn(doc, day);
+    if (!slots.length) return { ok: false, error: "It does not go out on that day." };
+    if (time && !slots.includes(time)) return { ok: false, error: `It does not go out at ${time} that day (${slots.join(", ")}).` };
+    const key = time ? `${day}@${time}` : day;
+    const skips = new Set(doc.skips ?? []);
+    if (input.undo) skips.delete(key);
+    else skips.add(key);
+    // keep the list short: drop skips of days long gone
+    doc.skips = [...skips].filter((k) => k.slice(0, 10) >= today).sort();
+    doc.updatedBy = input.actorUserId;
+    await doc.save();
+    void logReminderActivity(doc, input.actorUserId, input.undo ? "Reminder skip undone" : time ? `Reminder skipped (${day} ${time})` : `Reminder skipped (${day})`, "skipped");
+    return { ok: true, reminder: serialize(doc, now), skipped: key };
+}
+
+/** Change when a reminder goes out (times, days, date, end date) or its words; the schedule is checked as data. */
+export async function updateSaheliReminder(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    reminderId: string;
+    text?: string;
+    schedule?: ScheduleInput;
+    now?: Date;
+}): Promise<{ ok: true; reminder: ReminderView } | { ok: false; error: string }> {
+    await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
+    const doc = await ownReminder(input);
+    if (!doc) return { ok: false, error: "Reminder not found." };
+    if (doc.status !== "active") return { ok: false, error: "That reminder is stopped; set a new one instead." };
+    const now = input.now ?? new Date();
+    if (input.schedule) {
+        // what is not given stays as it was
+        const s = input.schedule;
+        const timePart: ScheduleInput = s.windowStart !== undefined && s.windowStart !== null && s.windowStart !== ""
+            ? { windowStart: s.windowStart, windowEnd: s.windowEnd }
+            : s.times !== undefined && s.times !== null
+              ? { times: s.times }
+              : doc.kind === "hourly_window"
+                ? { windowStart: hhmmOf(doc.windowStartMinutes), windowEnd: hhmmOf(doc.windowEndMinutes) }
+                : { times: doc.times };
+        const merged: ScheduleInput = {
+            ...timePart,
+            repeat: s.repeat ?? doc.repeat ?? "daily",
+            date: s.date ?? doc.date,
+            days: s.days ?? doc.daysOfWeek,
+            startDate: s.startDate !== undefined ? s.startDate : doc.startDate,
+            endDate: s.endDate !== undefined ? s.endDate : doc.endDate,
+        };
+        const checked = readSchedule(merged, toDateKeyIST(now));
+        if (!checked.ok) return { ok: false, error: checked.error };
+        doc.set({
+            times: [], windowStartMinutes: undefined, windowEndMinutes: null, date: undefined, daysOfWeek: undefined,
+            startDate: undefined, endDate: undefined, ...checked.fields,
+        });
+    }
+    if (input.text !== undefined) {
+        const text = input.text.trim().slice(0, 400);
+        if (text.length < 2) return { ok: false, error: "Reminder text is required." };
+        doc.text = text;
+    }
+    doc.updatedBy = input.actorUserId;
+    await doc.save();
+    void logReminderActivity(doc, input.actorUserId, "Reminder changed", "changed");
+    return { ok: true, reminder: serialize(doc, now) };
+}
+
+function hhmmOf(mins?: number | null): string | undefined {
+    return mins == null ? undefined : `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+}
+
+export type ReminderOccurrence = {
+    reminderId: string;
+    text: string;
+    time: string;
+    /** scheduled | sent | failed | not_sent (its time passed: quiet hours, paused or the service was down) | skipped */
+    status: "scheduled" | "sent" | "failed" | "not_sent" | "skipped";
+    reason?: string;
+    schedule: string;
+    /** More than three times that day (an hourly one): the calendar shows these smaller. */
+    many: boolean;
+    stopped: boolean;
+};
+
+/** One person's reminders on one day, each time with what happened (for the calendar). */
+export async function remindersForDay(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    day: string;
+    now?: Date;
+}): Promise<{ day: string; occurrences: ReminderOccurrence[]; reminders: ReminderView[] }> {
+    await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
+    if (!isDay(input.day)) throw new AppError("day must be YYYY-MM-DD", 400);
+    const now = input.now ?? new Date();
+    const dayStart = new Date(`${input.day}T00:00:00+05:30`);
+    // the window of a reminder that crosses midnight starts the day before
+    const rows = (await SaheliReminder.find({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        createdAt: { $lt: new Date(dayStart.getTime() + 86_400_000) },
+        $or: [{ status: "active" }, { updatedAt: { $gte: new Date(dayStart.getTime() - 86_400_000) } }],
+    }).lean()) as ISaheliReminder[];
+    const logs = await SaheliNudgeLog.find({
+        familyId: input.familyId,
+        recipientUserId: input.recipientUserId,
+        dateKey: input.day,
+        scheduleId: { $regex: "^reminder:" },
+    }).lean();
+    const byKey = new Map(logs.map((l) => [l.scheduleId, l]));
+    const occurrences: ReminderOccurrence[] = [];
+    const shown: ISaheliReminder[] = [];
+    for (const r of rows) {
+        const until = r.status === "active" ? null : (r.stoppedAt ?? r.updatedAt ?? null);
+        const slots = slotsOn(r, input.day).filter((t) => {
+            const at = new Date(`${input.day}T${t}:00+05:30`);
+            if (r.createdAt && at.getTime() < new Date(r.createdAt).getTime() - 60_000) return false;
+            return !until || at.getTime() <= new Date(until).getTime();
+        });
+        if (!slots.length) continue;
+        shown.push(r);
+        for (const t of slots) {
+            const at = new Date(`${input.day}T${t}:00+05:30`);
+            const log = byKey.get(`reminder:${r.reminderId}:${t}`);
+            let status: ReminderOccurrence["status"];
+            let reason: string | undefined;
+            const past = at.getTime() + REMINDER_LATE_MINUTES * 60_000 < now.getTime();
+            if (log?.delivered) status = "sent";
+            else if (isSkipped(r, input.day, t)) status = "skipped";
+            else if (log?.reason === "paused") {
+                status = "not_sent";
+                reason = "paused";
+            } else if (log && (log.terminal || past)) {
+                status = "failed";
+                reason = log.reason;
+            } else if (past) status = "not_sent";
+            else status = "scheduled";
+            occurrences.push({ reminderId: r.reminderId, text: r.text, time: t, status, ...(reason ? { reason } : {}),
+                               schedule: describe(r), many: slots.length > 3, stopped: r.status !== "active" });
+        }
+    }
+    occurrences.sort((a, b) => (minutesOf(a.time) ?? 0) - (minutesOf(b.time) ?? 0));
+    return { day: input.day, occurrences, reminders: shown.map((r) => serialize(r, now)) };
 }
 
 export async function cancelSaheliReminder(input: {
@@ -276,8 +516,14 @@ export async function cancelSaheliReminder(input: {
         }
     }
     if (!doc) return { ok: false, error: "Reminder not found." };
-    doc.status = "cancelled";
-    await doc.save();
+    if (doc.status === "active") {
+        doc.status = "cancelled";
+        doc.stoppedAt = new Date();
+        doc.stoppedBy = input.actorUserId;
+        doc.updatedBy = input.actorUserId;
+        await doc.save();
+        void logReminderActivity(doc, input.actorUserId, "Reminder stopped", "cancelled");
+    }
     return { ok: true, reminder: serialize(doc) };
 }
 
@@ -455,58 +701,43 @@ async function fireReminderMessage(input: {
     return delivery.delivered;
 }
 
-/** Tick due Instinct-style reminders (call from care nudge scheduler). */
+/**
+ * Tick due Instinct-style reminders (call from care nudge scheduler). A slot goes out from its time until
+ * REMINDER_LATE_MINUTES after (a busy or restarting scheduler no longer loses it; the slot claim keeps it to once),
+ * on the days its schedule says, unless someone skipped it. A reminder with nothing left to send (a once reminder
+ * that went out, one past its end date) is marked completed.
+ */
 export async function runSaheliReminderTick(
     now = new Date(),
-): Promise<{ sent: number; scanned: number }> {
+    fire: typeof fireReminderMessage = fireReminderMessage, // tests pass a fake sender
+): Promise<{ sent: number; scanned: number; finished: number }> {
     const dateKey = toDateKeyIST(now);
     const { minutesSinceMidnight } = getISTParts(now);
-    const active = await SaheliReminder.find({ status: "active" }).limit(500).lean();
+    const active = await SaheliReminder.find({ status: "active" }).limit(2000).lean();
     let sent = 0;
     let scanned = 0;
+    let finished = 0;
 
     for (const rem of active) {
         scanned += 1;
-        if (rem.kind === "multi_time") {
-            for (const t of rem.times ?? []) {
-                const mins = parseTimeToMinutes(t);
-                if (mins == null) continue;
-                // Fire within a 2-minute window of the slot.
-                if (minutesSinceMidnight < mins || minutesSinceMidnight > mins + 1) continue;
-                const ok = await fireReminderMessage({
-                    familyId: rem.familyId,
-                    recipientUserId: rem.recipientUserId,
-                    reminder: rem as ISaheliReminder,
-                    slotKey: t,
-                    dateKey,
-                });
-                if (ok) sent += 1;
-            }
-            continue;
-        }
-
-        if (rem.kind === "hourly_window") {
-            const start = rem.windowStartMinutes;
-            const end = rem.windowEndMinutes;
-            if (start == null || end == null) continue;
-            const inWindow =
-                start <= end
-                    ? minutesSinceMidnight >= start && minutesSinceMidnight <= end
-                    : minutesSinceMidnight >= start || minutesSinceMidnight <= end;
-            if (!inWindow) continue;
-            // Fire on the hour (minute 0-1) within the window.
-            if (minutesSinceMidnight % 60 > 1) continue;
-            const hourSlot = `${String(Math.floor(minutesSinceMidnight / 60)).padStart(2, "0")}:00`;
-            const ok = await fireReminderMessage({
+        for (const t of slotsOn(rem, dateKey)) {
+            const mins = minutesOf(t);
+            if (mins == null || minutesSinceMidnight < mins || minutesSinceMidnight > mins + REMINDER_LATE_MINUTES) continue;
+            if (isSkipped(rem, dateKey, t)) continue;
+            const ok = await fire({
                 familyId: rem.familyId,
                 recipientUserId: rem.recipientUserId,
                 reminder: rem as ISaheliReminder,
-                slotKey: hourSlot,
+                slotKey: t,
                 dateKey,
             });
             if (ok) sent += 1;
         }
+        if (nextOccurrence(rem, dateKey, Math.max(0, minutesSinceMidnight - REMINDER_LATE_MINUTES)) === null) {
+            const res = await SaheliReminder.updateOne({ reminderId: rem.reminderId, status: "active" }, { $set: { status: "completed" } });
+            finished += res.modifiedCount ? 1 : 0;
+        }
     }
 
-    return { sent, scanned };
+    return { sent, scanned, finished };
 }
