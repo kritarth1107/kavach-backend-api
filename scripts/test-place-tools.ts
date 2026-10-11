@@ -109,6 +109,16 @@ async function withDb(uri: string) {
         assert.equal(bad.ok, false);
         assert.deepEqual(bad.places.sort(), ["Arjun's Home", "Home"]);
     });
+    await ok("a shared WhatsApp location becomes a saved place's exact point (founder 2026-10-12: rides from the right door)", async () => {
+        const r = (await tool("save_place", { place: "Arjun's Home", lat: 22.7196, lng: 75.8577 }, "cg1")) as { ok: boolean };
+        assert.equal(r.ok, true);
+        const p = (await listPlaces("famP", { memberUserId: "el1" })).find((x) => x.nickname === "Arjun's Home")!;
+        assert.equal(p.lat, 22.7196);
+        assert.equal(p.lng, 75.8577);
+        assert.equal(p.geoPrecision, "user");
+        const bad = (await tool("save_place", { place: "Arjun's Home", lat: 999, lng: 75 }, "cg1")) as { ok: boolean };
+        assert.equal(bad.ok, false, "an impossible point changes nothing");
+    });
     await ok("a bad address or phone is refused with a reason", async () => {
         assert.match(((await tool("save_place", { address: "near the temple", name: "Mandir" })) as { error: string }).error, /pincode/);
         assert.match(((await tool("save_place", { place: "Home", receiver_phone: "12" })) as { error: string }).error, /10–13 digits/);

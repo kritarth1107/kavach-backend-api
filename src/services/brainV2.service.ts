@@ -37,7 +37,10 @@ export async function runBrainV2(input: {
     /** A photo, video, PDF or sticker they sent (base64), for the brain to look at; mediaNote when it could not be opened. */
     media?: Array<{ mime: string; data: string }>;
     mediaNote?: string;
-}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }> } | null> {
+    /** A shared location pin (a ride's pickup): passed as data. */
+    location?: { lat: number; lng: number; name?: string; address?: string };
+}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }>;
+    location_request?: boolean } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
     const joined = (members as Array<{ userId: string; name?: string; role: string; status?: string }>).filter(
@@ -79,6 +82,7 @@ export async function runBrainV2(input: {
             : {}),
         ...(input.media?.length ? { images: input.media } : {}),
         ...(input.mediaNote ? { media_note: input.mediaNote } : {}),
+        ...(input.location ? { location: { name: "", address: "", ...input.location } } : {}),
         ...(soon.length
             ? {
                   reminders_soon: soon.map((r) => ({

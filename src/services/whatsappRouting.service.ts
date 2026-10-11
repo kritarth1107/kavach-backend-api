@@ -324,6 +324,8 @@ type WhatsAppInboundBody = {
     mediaCaption?: string;
     /** The message this one replies to (quoted): a photo/video they sent earlier comes back to Saheli with it. */
     replyToId?: string;
+    /** A shared location pin as data (the text carries it too): Saheli uses its exact point for a ride. */
+    location?: { lat: number; lng: number; name?: string; address?: string };
 };
 
 /**
@@ -653,12 +655,13 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             const v2 = await V2.runBrainV2({
                 identity, text: v2Text, messageRef: body.messageId, mode,
                 voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
-                media: brainMedia, mediaNote: brainMediaNote,
+                media: brainMedia, mediaNote: brainMediaNote, location: body.location,
             }).catch((err) => {
                 console.warn("[brain-v2] live turn failed, using v1:", err instanceof Error ? err.message : err);
                 return null;
             });
             if (v2?.reply?.trim()) {
+                if (v2.location_request) return outbound(phone, v2.reply, { kind: "location_request" }); // "Send location" button
                 return v2.buttons?.length
                     ? outbound(phone, v2.reply, { kind: "saheli_buttons", buttons: v2.buttons })
                     : outbound(phone, v2.reply);
@@ -666,7 +669,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             if (v2Button) return outbound(phone, "🙏");
         } else if (mode === "shadow") {
             void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode, voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
-                media: brainMedia, mediaNote: brainMediaNote }).catch((err) =>
+                media: brainMedia, mediaNote: brainMediaNote, location: body.location }).catch((err) =>
                 console.warn("[brain-v2] shadow turn failed:", err instanceof Error ? err.message : err),
             );
         }

@@ -518,7 +518,21 @@ export type MetaInboundMessage = {
     mediaCaption?: string;
     /** The message this one replies to (WhatsApp "reply" with a quote). */
     replyToId?: string;
+    /** A shared location pin, as data (the text carries it too): a ride's pickup is its exact point. */
+    location?: { lat: number; lng: number; name?: string; address?: string };
 };
+
+/** A shared location pin's point, name and address (null for anything else, or a pin without a valid point). */
+export function extractInboundLocation(row: Record<string, unknown>): { lat: number; lng: number; name?: string; address?: string } | null {
+    if (String(row.type ?? "") !== "location") return null;
+    const loc = row.location as Record<string, unknown> | undefined;
+    const lat = Number(loc?.latitude ?? loc?.lat);
+    const lng = Number(loc?.longitude ?? loc?.lng ?? loc?.long);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    const name = String(loc?.name ?? "").trim().slice(0, 200);
+    const address = String(loc?.address ?? "").trim().slice(0, 400);
+    return { lat, lng, ...(name ? { name } : {}), ...(address ? { address } : {}) };
+}
 
 function normalizeInteractiveInboundId(id: string): string {
     const lower = id.toLowerCase();
@@ -1173,6 +1187,7 @@ export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
                 if (!from) continue;
                 const text = extractInboundText(row);
                 const media = extractInboundMedia(row);
+                const location = extractInboundLocation(row);
                 if (text || media.mediaType) {
                     out.push({
                         from,
@@ -1195,6 +1210,7 @@ export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
                                   ) || undefined
                                 : undefined,
                         ...media,
+                        ...(location ? { location } : {}),
                     });
                 }
             }

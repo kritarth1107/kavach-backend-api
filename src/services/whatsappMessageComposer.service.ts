@@ -803,6 +803,9 @@ export function composeWhatsAppReply(
     if (kind === "saheli_buttons" && context.buttons?.length) {
         return buildSaheliButtonMessages(text, context.buttons);
     }
+    if (kind === "location_request") {
+        return buildLocationRequestMessages(text);
+    }
     if (kind === "schedule_missed") {
         const schedule = buildScheduleCompanionMessages(text);
         if (schedule.length) return schedule;
@@ -826,6 +829,18 @@ export function buildSaheliButtonMessages(text: string, buttons: Array<{ id: str
     ];
 }
 
+/** Saheli asks them to share a place (a ride's pickup): WhatsApp's "Send location" button under her question. The body is
+ * at most 1024 characters, so a longer message goes first as text. */
+export function buildLocationRequestMessages(text: string): MetaWhatsAppPayload[] {
+    const body = text.trim();
+    const ask = (t: string): MetaWhatsAppPayload => ({
+        type: "interactive",
+        interactive: { type: "location_request_message", body: { text: t }, action: { name: "send_location" } },
+    });
+    if (body && body.length <= 1000) return [ask(body)];
+    return [{ type: "text", text: { body: truncate(body, 4096) } }, ask("📍")];
+}
+
 export function flattenWhatsAppPayloads(payloads: MetaWhatsAppPayload[]): string {
     return payloads
         .map((p) => {
@@ -845,6 +860,9 @@ export function flattenWhatsAppPayloads(payloads: MetaWhatsAppPayload[]): string
                 }
                 if (p.interactive.type === "cta_url") {
                     return `${body}\n[${p.interactive.action.parameters.display_text}]`;
+                }
+                if (p.interactive.type === "location_request_message") {
+                    return `${body}\n[Send location]`;
                 }
             }
             return "";

@@ -216,7 +216,9 @@ export async function aiPostBrainTurn(payload: {
     images?: Array<{ mime: string; data: string }>;
     media_note?: string;
     reminders_soon?: Array<{ id: string; person: string; text: string; day: string; time: string; repeat: string; item: string | null }>;
-}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }> }> {
+    location?: { lat: number; lng: number; name: string; address: string };
+}): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }>;
+    buttons?: Array<{ id: string; title: string }>; location_request?: boolean }> {
     const res = await aiFetch(
         "/v2/turn",
         { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },

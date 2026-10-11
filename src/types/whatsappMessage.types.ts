@@ -66,6 +66,16 @@ export type MetaWhatsAppInteractiveCtaPayload = {
     };
 };
 
+/** Asks them to share a location: WhatsApp shows a "Send location" button under the text. */
+export type MetaWhatsAppInteractiveLocationRequestPayload = {
+    type: "interactive";
+    interactive: {
+        type: "location_request_message";
+        body: { text: string };
+        action: { name: "send_location" };
+    };
+};
+
 export type MetaWhatsAppImagePayload = {
     type: "image";
     image: {
@@ -98,6 +108,7 @@ export type MetaWhatsAppPayload =
     | MetaWhatsAppInteractiveButtonsPayload
     | MetaWhatsAppInteractiveListPayload
     | MetaWhatsAppInteractiveCtaPayload
+    | MetaWhatsAppInteractiveLocationRequestPayload
     | MetaWhatsAppImagePayload
     | MetaWhatsAppDocumentPayload
     | MetaWhatsAppAudioPayload;
@@ -112,6 +123,7 @@ export type WhatsAppReplyKind =
     | "schedule_missed"
     | "companion"
     | "saheli_buttons"
+    | "location_request"
     | "plain";
 
 export type WhatsAppReplyContext = {

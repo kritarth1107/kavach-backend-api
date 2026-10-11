@@ -681,6 +681,14 @@ export async function executeSaheliTool(input: {
             return removePlaceTool(input, input.args);
         }
         case "ride_place": {
+            // A shared WhatsApp location's point: its address in words (reverse geocoded), so the ride app can be given it
+            // and what the app sets can be checked against it (founder 2026-10-12: a ride's pickup as a location).
+            const pinLat = Number(input.args.lat), pinLng = Number(input.args.lng);
+            if (input.args.lat !== undefined && input.args.lng !== undefined && Number.isFinite(pinLat) && Number.isFinite(pinLng)) {
+                const { reverseGeocode } = await import("./rideBooking/geoResolve.service");
+                const r = await reverseGeocode(pinLat, pinLng).catch(() => null);
+                return { lat: pinLat, lng: pinLng, label: r?.ok ? r.place.shortLabel ?? null : null, address: r?.ok ? r.place.address ?? null : null };
+            }
             // Coordinates for a ride end ("Home", a saved place, or a named place in the family's city), for fast fares.
             const { defaultPlaceFor, findPlaceByWords, exactPlace, listPlaces } = await import("./familyAddressBook.service");
             const { coordsForPlace } = await import("./commerceAutomation/mcpCommerce/mcpCommerce.service");
@@ -823,6 +831,7 @@ export async function executeSaheliTool(input: {
                 toUserId: String(input.args.to ?? input.recipientUserId),
                 text: String(input.args.text ?? ""),
                 buttons: Array.isArray(input.args.buttons) ? (input.args.buttons as Array<{ id: string; title: string }>) : undefined,
+                locationRequest: input.args.location_request === true,
             });
         }
         case "claim_schedule_rows": {

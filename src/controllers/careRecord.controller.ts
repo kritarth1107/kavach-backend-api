@@ -606,6 +606,7 @@ async function processMetaInboundMessages(
                 mediaUrl: inbound.mediaId,
                 mediaCaption: inbound.mediaCaption,
                 replyToId: inbound.replyToId,
+                location: inbound.location,
             });
             replyPreview = reply.content?.slice(0, 200);
             if (isMetaWhatsAppEnabled() && (reply.content || reply.audioBuffer || reply.audioBase64)) {

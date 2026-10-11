@@ -84,6 +84,12 @@ export async function savePlaceTool(ctx: Ctx, args: Record<string, unknown>): Pr
     const makeDefault = args.make_default === true;
     const fields: PlaceInput = {};
     if (str("receiver_name") !== undefined) fields.contactName = str("receiver_name");
+    // the WhatsApp location they shared for this place: its exact point (geoPrecision "user"), for rides and deliveries
+    const lat = Number(args.lat), lng = Number(args.lng);
+    if (args.lat !== undefined && args.lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        fields.lat = lat;
+        fields.lng = lng;
+    }
     if (str("receiver_phone") !== undefined) fields.contactPhone = str("receiver_phone");
     if (address) {
         const parts = splitAddress(address);

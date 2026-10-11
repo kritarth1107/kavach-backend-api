@@ -196,6 +196,8 @@ export async function sendSaheliWhatsApp(input: {
     toUserId: string;
     text: string;
     buttons?: Array<{ id: string; title: string }>;
+    /** The message asks them to share a location: WhatsApp's "Send location" button goes with it. */
+    locationRequest?: boolean;
 }) {
     const text = input.text.trim();
     if (!text) return { delivered: false, reason: "empty" };
@@ -206,7 +208,10 @@ export async function sendSaheliWhatsApp(input: {
     const { scrubStack } = await import("./stackScrub");
     const buttons = (input.buttons || []).filter((b) => b && typeof b.id === "string" && b.id.startsWith("v2:") && b.title);
     let whatsappPayloads;
-    if (buttons.length) {
+    if (input.locationRequest) {
+        const { buildLocationRequestMessages } = await import("./whatsappMessageComposer.service");
+        whatsappPayloads = buildLocationRequestMessages(scrubStack(text));
+    } else if (buttons.length) {
         const { buildSaheliButtonMessages } = await import("./whatsappMessageComposer.service");
         whatsappPayloads = buildSaheliButtonMessages(scrubStack(text), buttons);
     }
