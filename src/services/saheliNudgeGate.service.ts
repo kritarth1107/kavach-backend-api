@@ -10,7 +10,6 @@
 import ActivityLog from "../models/activityLog.model";
 import SaheliCompanion from "../models/saheliCompanion.model";
 import WhatsappSession from "../models/whatsappSession.model";
-import User from "../models/users.model";
 import {
     hasParkedBrowserOtpSession,
     isCheckoutInFlight,
@@ -61,11 +60,11 @@ export async function canSendProactiveNudge(input: {
     try {
         // (2) active jobs/flows — in-memory browser state first (cheap, authoritative for live pages)
         const actorIds = new Set<string>([input.recipientUserId]);
-        const user = await User.findOne({ userId: input.recipientUserId }).lean();
-        const phoneDigits =
-            user?.phone?.countryCode && user.phone.number
-                ? `${user.phone.countryCode}${user.phone.number}`.replace(/\D/g, "")
-                : "";
+        // Their WhatsApp number as outbound messages find it (never the internal "+99" placeholder).
+        const { resolveRecipientWhatsAppPhone } = await import("./identityResolver.service");
+        const phoneDigits = String(
+            (await resolveRecipientWhatsAppPhone(input.recipientUserId, input.familyId).catch(() => null)) ?? "",
+        ).replace(/\D/g, "");
         const or: Record<string, unknown>[] = [
             { userId: input.recipientUserId },
             { pendingRecipientUserId: input.recipientUserId },

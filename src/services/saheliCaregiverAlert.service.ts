@@ -1,9 +1,9 @@
 import Family from "../models/family.model";
 import Notification from "../models/notification.model";
-import User from "../models/users.model";
 import { toDateKeyIST } from "../utils/istTime.util";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import { deliverOutboundMessage } from "./channelOutbound.service";
+import { resolveRecipientWhatsAppPhone } from "./identityResolver.service";
 import { createFamilyNotification } from "./notification.service";
 import { composeWhatsAppReply } from "./whatsappMessageComposer.service";
 
@@ -112,11 +112,9 @@ export async function notifyCaregivers(input: {
         }).catch(() => {});
 
         if (!allowWhatsApp) continue;
-        const user = await User.findOne({ userId: caregiverId }).lean();
-        const phone =
-            user?.phone?.countryCode && user.phone.number
-                ? `${user.phone.countryCode}${user.phone.number}`
-                : undefined;
+        // Found the way every outbound message finds a number: never the internal "+99" placeholder most caregivers
+        // who signed up by email carry, else their WhatsApp link (until 2026-10-11 such alerts were dropped).
+        const phone = (await resolveRecipientWhatsAppPhone(caregiverId, input.familyId).catch(() => null)) ?? undefined;
         if (phone) {
             // Never attach "approve" interactive chrome for elder-placed notify-only alerts.
             const payloads = composeWhatsAppReply(input.message, {
