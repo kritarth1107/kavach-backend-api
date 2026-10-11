@@ -181,6 +181,8 @@ export async function generateDoctorBrief(
             timeline,
             staleHealth: staleHealthBlock,
             memoryProfile,
+            familyId,
+            subjectUserId,
         });
         narrative = result.brief;
     } catch {

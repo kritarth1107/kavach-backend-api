@@ -40,6 +40,8 @@ export async function syncMedicineSchedule(input: {
     instructions?: string;
     daysOfWeek?: number[];
     active: boolean;
+    /** The engine's why-trail id of the change that caused this sync (D-13). */
+    traceId?: string;
 }): Promise<{ active: string[]; disabled: string[] }> {
     const times = input.active ? normalizeTimes(input.times) : [];
     const existing = await CareSchedule.find({
@@ -65,11 +67,13 @@ export async function syncMedicineSchedule(input: {
             row.daysOfWeek = days;
             row.active = true;
             row.updatedBy = input.actorUserId;
+            if (input.traceId) row.lastTraceId = input.traceId;
             await row.save();
             kept.push(asHHMM(row.time));
         } else if (row.active) {
             row.active = false;
             row.updatedBy = input.actorUserId;
+            if (input.traceId) row.lastTraceId = input.traceId;
             await row.save();
             disabled.push(row.time);
         }
@@ -89,6 +93,7 @@ export async function syncMedicineSchedule(input: {
             createdBy: input.actorUserId,
             updatedBy: input.actorUserId,
             sourceKey: input.sourceKey,
+            ...(input.traceId ? { lastTraceId: input.traceId } : {}),
         });
         kept.push(time);
     }

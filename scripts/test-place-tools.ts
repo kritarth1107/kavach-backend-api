@@ -107,7 +107,7 @@ async function withDb(uri: string) {
         assert.equal(r.place.isDefault, true);
         const bad = (await tool("save_place", { place: "Office", name: "X" })) as { ok: boolean; places: string[] };
         assert.equal(bad.ok, false);
-        assert.deepEqual(bad.places.sort(), ["Home", "Arjun's Home"]);
+        assert.deepEqual(bad.places.sort(), ["Arjun's Home", "Home"]);
     });
     await ok("a bad address or phone is refused with a reason", async () => {
         assert.match(((await tool("save_place", { address: "near the temple", name: "Mandir" })) as { error: string }).error, /pincode/);

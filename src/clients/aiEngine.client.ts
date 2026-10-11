@@ -808,6 +808,9 @@ export async function aiPostDoctorBrief(payload: {
     timeline: string;
     staleHealth?: string;
     memoryProfile?: string;
+    /** Kavach ids: the engine then adds the current care record with each medicine's links (D-13). */
+    familyId?: string;
+    subjectUserId?: string;
 }): Promise<{ brief: string; audience?: string }> {
     const res = await aiFetch(
         "/v1/doctor-brief/generate",
@@ -818,6 +821,7 @@ export async function aiPostDoctorBrief(payload: {
                 timeline: payload.timeline,
                 stale_health: payload.staleHealth ?? "",
                 memory_profile: payload.memoryProfile ?? "",
+                ...(payload.familyId && payload.subjectUserId ? { family_id: payload.familyId, subject_id: payload.subjectUserId } : {}),
             }),
         },
         config.aiEngine.writeTimeoutMs,

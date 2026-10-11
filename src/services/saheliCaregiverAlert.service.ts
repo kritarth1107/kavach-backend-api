@@ -59,6 +59,8 @@ export async function notifyCaregivers(input: {
     kind?: string;
     /** Stable key for the in-app notification; without it every call makes a new one. */
     dedupeKey?: string;
+    /** The engine's why-trail id (D-13): the admin console's alert list links to why it was sent. */
+    traceId?: string;
 }): Promise<{ notifiedCount: number; channels: string[] }> {
     const allowWhatsApp = caregiverWhatsAppAllowed(input.kind, input.urgency);
     {
@@ -76,7 +78,7 @@ export async function notifyCaregivers(input: {
                       : "info",
             title: `Caregiver ${allowWhatsApp ? "WhatsApp alert" : "dashboard note"}: ${input.kind || "care_alert"}`,
             detail: input.message,
-            data: { kind: input.kind || null, urgency: input.urgency || null, whatsapp: allowWhatsApp },
+            data: { kind: input.kind || null, urgency: input.urgency || null, whatsapp: allowWhatsApp, ...(input.traceId ? { traceId: input.traceId } : {}) },
         });
     }
     const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" }).lean();

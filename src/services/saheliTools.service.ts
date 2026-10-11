@@ -99,6 +99,8 @@ export async function executeSaheliTool(input: {
     familyId: string;
     recipientUserId: string;
     actorUserId: string;
+    /** The engine's why-trail id (D-13), kept on reminder changes and alerts. */
+    traceId?: string;
 }): Promise<Record<string, unknown>> {
     if (input.tool === "ops_alert") {
         // Internal only (the engine, behind the shared secret) → the founder: e.g. the browser service is low on credit.
@@ -558,6 +560,7 @@ export async function executeSaheliTool(input: {
                 instructions: input.args.instructions ? String(input.args.instructions) : undefined,
                 daysOfWeek: Array.isArray(input.args.days) ? (input.args.days as number[]) : undefined,
                 active: input.args.active !== false,
+                traceId: input.traceId,
             });
         }
         case "export_care_record": {
@@ -1187,6 +1190,7 @@ case "notify_caregivers": {
                 actorUserId: input.actorUserId,
                 message: String(input.args.message ?? ""),
                 urgency: (input.args.urgency as "low" | "medium" | "high") ?? "medium",
+                traceId: input.traceId,
             });
         }
         case "trigger_emergency_escalation": {

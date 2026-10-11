@@ -6,6 +6,7 @@ import { engine } from "../engine";
 import { AdminNote, SupportIssue, type IAdminNote, type ISupportIssue } from "../models";
 import type { RouteDef } from "../router";
 import ActivityLog from "../../models/activityLog.model";
+import CareSchedule from "../../models/careSchedule.model";
 import Family from "../../models/family.model";
 import McpConnection from "../../models/mcpConnection.model";
 import Order from "../../models/order.model";
@@ -291,6 +292,54 @@ export function peopleRoutes(): RouteDef[] {
                 if (!f.members.some((m) => m.userId === userId)) throw new AdminError(400, "bad_input", "pick a member of this family");
                 const data = await engine<unknown>("GET", `/families/${encodeURIComponent(f.familyId)}/care-record?subject=${encodeURIComponent(userId)}`);
                 return { target: `family:${f.familyId}`, detail: { subject: `user:${userId}` }, data };
+            },
+        },
+        {
+            // D-13 why-trail: the message, model, role and cost, tool calls, confirms, outcome and what was learned behind a
+            // task, a care-record change, a reminder change or an alert. Health data and messages: break-glass with a reason.
+            method: "get", path: "/families/:familyId/why", perm: "care.breakglass", action: "family.why", reason: "required",
+            handler: async ({ params, query }) => {
+                const f = await familyOr404(params.familyId);
+                const ask = new URLSearchParams({ family: f.familyId });
+                const detail: Record<string, string> = {};
+                for (const k of ["task", "version", "loop", "event", "trace"] as const) {
+                    const v = String(query[k] || "").trim();
+                    if (v) { ask.set(k, v.slice(0, 160)); detail[k] = v.slice(0, 160); }
+                }
+                const reminder = String(query.reminder || "").trim();
+                if (reminder) {
+                    const row = await CareSchedule.findOne({ familyId: f.familyId, scheduleId: reminder }, { lastTraceId: 1 }).lean<{ lastTraceId?: string }>();
+                    if (!row) throw new AdminError(404, "not_found", "no such reminder in this family");
+                    if (!row.lastTraceId) throw new AdminError(404, "not_found", "this reminder was set by hand or before the why-trail existed");
+                    ask.set("trace", row.lastTraceId);
+                    detail.reminder = reminder;
+                }
+                if (!Object.keys(detail).length) throw new AdminError(400, "bad_input", "give task, version, loop, event, trace or reminder");
+                const data = await engine<unknown>("GET", `/why?${ask.toString()}`);
+                return { target: `family:${f.familyId}`, detail, data };
+            },
+        },
+        {
+            method: "get", path: "/families/:familyId/why/recent", perm: "care.breakglass", action: "family.why_recent", reason: "required",
+            handler: async ({ params, query }) => {
+                const f = await familyOr404(params.familyId);
+                const days = Math.max(1, Math.min(Number(query.days) || 14, 90));
+                const [engineSide, reminders, alerts] = await Promise.all([
+                    engine<Record<string, unknown>>("GET", `/families/${encodeURIComponent(f.familyId)}/why?days=${days}`),
+                    CareSchedule.find({ familyId: f.familyId, lastTraceId: { $exists: true }, updatedAt: { $gte: daysAgo(days) } },
+                        { scheduleId: 1, title: 1, time: 1, active: 1, updatedAt: 1, lastTraceId: 1 }).sort({ updatedAt: -1 }).limit(40)
+                        .lean<Array<{ scheduleId: string; title: string; time: string; active: boolean; updatedAt?: Date; lastTraceId?: string }>>(),
+                    ActivityLog.find({ familyId: f.familyId, kind: "caregiver_alert", "data.traceId": { $exists: true }, createdAt: { $gte: daysAgo(days) } })
+                        .sort({ createdAt: -1 }).limit(40).lean<ActivityDoc[]>(),
+                ]);
+                return {
+                    target: `family:${f.familyId}`, detail: { days },
+                    data: {
+                        ...engineSide,
+                        reminders: reminders.map((r) => ({ scheduleId: r.scheduleId, title: r.title, time: r.time, active: r.active, at: iso(r.updatedAt), trace: r.lastTraceId })),
+                        caregiverAlerts: alerts.map((a) => ({ ...safeActivity(a), title: a.title })),
+                    },
+                };
             },
         },
         {

@@ -56,6 +56,7 @@ export function safeActivity(a: ActivityDoc) {
         at: iso(a.createdAt), kind: a.kind, label: kindLabel(a.kind), severity: a.severity || "info", familyId: a.familyId,
         recipientUserId: a.recipientUserId, alertKind, whatsapp: a.kind === "caregiver_alert" ? a.data?.whatsapp === true : undefined,
         delivered: a.kind === "reminder" ? !/not delivered|not sent/i.test(a.title) : undefined,
+        traceId: typeof a.data?.traceId === "string" ? (a.data.traceId as string) : undefined,
     };
 }
 

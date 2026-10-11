@@ -1,7 +1,7 @@
 /** Health records: reading → review → decision helpers (whose record, flags, dates, what Saheli remembers, cards). */
 import { readingFromModel, timesFor, type Reading } from "../src/services/healthRecordReader.service";
 import { buttonsFor, factLines } from "../src/services/whatsappHealthRecord.service";
-import { applyCorrections, cleanEdited, computeFlag, deviation, effectiveRange, dateLabel, isoOf, medicineWord, memoryPoints, nameTokens, namesMatch, nextVisitDate, testKey, endsOn, type DraftReading } from "../src/services/healthRecordReview.service";
+import { applyCorrections, cleanEdited, computeFlag, deviation, effectiveRange, dateLabel, isoOf, medicineWord, memoryPoints, nameTokens, namesMatch, nextVisitDate, recordLinks, testKey, endsOn, type DraftReading } from "../src/services/healthRecordReview.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -109,6 +109,15 @@ ok("someone else's name → other / mine / delete", ids(buttonsFor(rxDraft, { st
 ok("confirmed mismatch asks the normal question", ids(buttonsFor(rxDraft, { status: "mismatch", confirmedBy: "u1" }, false, "d1", "hi", true)) === "meds,keep,wrong");
 ok("unreadable → read again / file / delete", ids(buttonsFor(null, undefined, true, "d1", "en", true)) === "again,file,del");
 ok("button titles fit WhatsApp's 20 characters", [...buttonsFor(rxDraft, { status: "match" }, false, "d1", "hi", true), ...buttonsFor(rxDraft, { status: "mismatch" }, false, "d1", "en", false), ...buttonsFor(null, undefined, true, "d1", "hi", true)].every((b) => b.title.length <= 20));
+
+// Each medicine of a reviewed record links to the record and its doctor (engine care links, D-13)
+const rxLinks = recordLinks({ kind: "prescription", recordDate: "2026-09-03", title: "Prescription", doctor: "Dr. Sharma" }, "doc-1");
+ok("record link reads '3 Sep prescription' and names the doctor", JSON.stringify(rxLinks) === JSON.stringify([
+    { relation: "from_record", to_domain: "record", to_name: "doc-1", label: "3 Sep prescription" },
+    { relation: "prescribed_by", to_domain: "doctor", to_name: "Dr. Sharma" },
+]), rxLinks);
+const undated = recordLinks({ kind: "lab", recordDate: null, title: "CBC", doctor: null }, "doc-2");
+ok("an undated record without a doctor: only the record link, named by its title", undated.length === 1 && undated[0].label === "lab report: CBC", undated);
 
 if (fail) {
     console.error(`${fail} failed`);

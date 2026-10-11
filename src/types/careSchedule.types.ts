@@ -20,6 +20,8 @@ export interface ICareScheduleItem {
     createdBy: string;
     updatedBy?: string;
     sourceKey?: string;
+    /** The engine's why-trail id of the last change that came from Saheli's care memory (D-13). */
+    lastTraceId?: string;
     createdAt: Date;
     updatedAt: Date;
 }

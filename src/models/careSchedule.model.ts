@@ -68,6 +68,10 @@ const careScheduleSchema = new Schema<ICareScheduleDocument>(
             type: String,
             index: true,
         },
+        /** The engine's why-trail id of the last change from Saheli's care memory (D-13): the admin console's "Why?". */
+        lastTraceId: {
+            type: String,
+        },
     },
     {
         timestamps: true,

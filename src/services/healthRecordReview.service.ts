@@ -178,6 +178,22 @@ export function dateLabel(iso: string | null | undefined): string {
     return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+const KIND_WORD: Record<string, string> = { prescription: "prescription", lab: "lab report", discharge: "discharge summary", scan: "scan report" };
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** How a reviewed record's medicines link to it and to its doctor (engine care links, D-13). */
+export function recordLinks(r: { kind?: string; recordDate?: string | null; title: string; doctor?: string | null }, documentId: string) {
+    const word = KIND_WORD[r.kind || ""] || "health record";
+    const when = r.recordDate ? new Date(`${r.recordDate}T00:00:00Z`) : null;
+    const day = when && !Number.isNaN(when.getTime()) ? `${when.getUTCDate()} ${SHORT_MONTHS[when.getUTCMonth()]}` : "";
+    const label = (day ? `${day} ${word}` : `${word}: ${r.title}`).slice(0, 150);
+    const doctor = (r.doctor || "").trim();
+    return [
+        { relation: "from_record", to_domain: "record", to_name: documentId, label },
+        ...(doctor ? [{ relation: "prescribed_by", to_domain: "doctor", to_name: doctor.slice(0, 150) }] : []),
+    ];
+}
+
 /* ── what Saheli would remember ─────────────────────────────────────────── */
 
 type Prior = { value: number; date: string };
@@ -417,6 +433,10 @@ export async function applyDecision(familyId: string, recipientUserId: string, d
         }
     }
     if (input.addMedicines !== false) {
+        // Each medicine links to this record and its doctor (D-13), so Saheli, the medicine card and the doctor brief can
+        // say "Metformin 500, for diabetes, Dr Sharma, from the 3 Sep prescription".
+        const links = recordLinks(r, documentId);
+        const source = r.kind === "lab" ? "lab" : "prescription";
         for (const m of r.medicines.filter((x) => x.add && x.times.length && !x.alreadyOnSchedule)) {
             const dose = [m.strength, m.dose].filter(Boolean).join(", ");
             const until = endsOn(new Date().toISOString().slice(0, 10), m.durationDays);
@@ -427,11 +447,20 @@ export async function applyDecision(familyId: string, recipientUserId: string, d
                     details: { name: m.name, dose: dose || null, times: m.times, ...(m.food ? { food_timing: m.food } : {}), ...(m.instructions ? { instructions: m.instructions } : {}),
                                ...(until ? { ends_on: until } : {}), from_record: documentId },
                     sentence: `${m.name}${dose ? ` ${dose}` : ""} at ${m.times.join(", ")}${food}${until ? ` until ${dateLabel(until)}` : ""} (from ${r.doctor || r.title})`.slice(0, 480),
+                    links, source,
                 }, 45_000);
                 out.scheduled.push(m.name);
             } catch (err) {
                 out.scheduleProblems.push(m.name);
                 console.warn(`record medicine failed doc=${documentId} ${m.name}:`, err instanceof Error ? err.message : err);
+            }
+        }
+        // a medicine already on the schedule keeps its reminders; it only gains the links to this record
+        for (const m of r.medicines.filter((x) => x.add && x.alreadyOnSchedule)) {
+            try {
+                await aiEngineJson("POST", `${base}/links`, { actor: ACTOR(actor.id, actor.name), domain: "medicine", name: m.name, links, source }, 20_000);
+            } catch (err) {
+                console.warn(`record medicine links failed doc=${documentId} ${m.name}:`, err instanceof Error ? err.message : err);
             }
         }
     }
