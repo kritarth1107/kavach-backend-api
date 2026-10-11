@@ -30,27 +30,27 @@ async function main() {
     };
 
     // --- shape checks ---
-    assert.equal(guard.couldBePlaceholderNumber("+999980531439"), true);
-    assert.equal(guard.couldBePlaceholderNumber("+998686245770"), true);
+    assert.equal(guard.couldBePlaceholderNumber("+999912345678"), true);
+    assert.equal(guard.couldBePlaceholderNumber("+998612345678"), true);
     assert.equal(guard.couldBePlaceholderNumber("+919876543210"), false);
     assert.equal(guard.couldBePlaceholderNumber("+14155550123"), false);
-    assert.equal(guard.isDefinitelyPlaceholderNumber("+999980531439"), true);
-    assert.equal(guard.isDefinitelyPlaceholderNumber("+998686245770"), false);
+    assert.equal(guard.isDefinitelyPlaceholderNumber("+999912345678"), true);
+    assert.equal(guard.isDefinitelyPlaceholderNumber("+998612345678"), false);
     ok("placeholder shape detection");
 
     // --- async guard, no DB needed for these ---
-    assert.equal(await guard.isPlaceholderWhatsAppNumber("+999980531439"), true);
+    assert.equal(await guard.isPlaceholderWhatsAppNumber("+999912345678"), true);
     assert.equal(await guard.isPlaceholderWhatsAppNumber("+919876543210"), false);
-    assert.equal(await guard.isPlaceholderWhatsAppNumber("918310905372"), false);
+    assert.equal(await guard.isPlaceholderWhatsAppNumber("919800012345"), false);
     ok("isPlaceholderWhatsAppNumber: +999… blocked, Indian numbers allowed");
 
     // --- central send layer ---
     await assert.rejects(
-        client.sendViaMetaWhatsApp("+999980531439", "hello"),
+        client.sendViaMetaWhatsApp("+999912345678", "hello"),
         (err: unknown) => guard.isWhatsAppPlaceholderRecipientError(err),
     );
     await assert.rejects(
-        client.sendMetaWhatsAppTemplate({ to: "+999980531439", templateName: "x", bodyParameters: [] }),
+        client.sendMetaWhatsAppTemplate({ to: "+999912345678", templateName: "x", bodyParameters: [] }),
         (err: unknown) => guard.isWhatsAppPlaceholderRecipientError(err),
     );
     assert.equal(sentTo.length, 0, "no HTTP call for placeholder");

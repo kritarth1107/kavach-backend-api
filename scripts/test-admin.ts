@@ -30,7 +30,7 @@ const cfg: AdminConfig = {
     assertionKey: "k".repeat(40), auditKey: "a".repeat(40), allowedDomain: "kavach.care", insecureLocal: false,
 };
 const assertion = (claims: Record<string, unknown> = {}, opts: jwt.SignOptions = {}) =>
-    jwt.sign({ sub: "kritarth@kavach.care", sid: "s1", jti: Math.random().toString(36).slice(2), ...claims }, cfg.assertionKey,
+    jwt.sign({ sub: "owner@kavach.care", sid: "s1", jti: Math.random().toString(36).slice(2), ...claims }, cfg.assertionKey,
         { algorithm: "HS256", audience: "kavach-admin-api", issuer: "kavach-admin-web", expiresIn: 60, ...opts });
 
 // permissions
@@ -42,9 +42,9 @@ ok("unknown role can do nothing", !can("root", "overview.read") && !can(undefine
 ok("reasons must say something", validReason("fixing a missed reminder") && !validReason("x") && !validReason("12345678") && !validReason("a".repeat(301)));
 
 // masking
-ok("phone masked", maskPhone("+917694829888") === "+91 ••••• •9888", maskPhone("+917694829888"));
-ok("email masked", maskEmail("kritarth@kavach.care") === "k••••••h@kavach.care", maskEmail("kritarth@kavach.care"));
-ok("name masked to first name + initial", maskName("Vasundara Devi") === "Vasundara D." && maskName("Amma") === "Amma");
+ok("phone masked", maskPhone("+919876543210") === "+91 ••••• •3210", maskPhone("+919876543210"));
+ok("email masked", maskEmail("founder@kavach.care") === "f•••••r@kavach.care", maskEmail("founder@kavach.care"));
+ok("name masked to first name + initial", maskName("Sarla Devi") === "Sarla D." && maskName("Amma") === "Amma");
 ok("nothing → null", maskPhone(undefined) === null && maskEmail("") === null);
 
 // lock 2: the signed admin assertion
@@ -56,7 +56,7 @@ ok("wrong audience refused", throwsCode(() => verifyAssertion(assertion({}, { au
 ok("long-lived assertion refused", throwsCode(() => verifyAssertion(assertion({}, { expiresIn: 3600 }), cfg), "bad_admin_assertion"));
 ok("expired assertion refused", throwsCode(() => verifyAssertion(assertion({}, { expiresIn: 60 }), cfg, undefined, Date.now() + 120_000), "bad_admin_assertion"));
 ok("assertion for another request refused", throwsCode(() => verifyAssertion(assertion({ m: "GET", p: "/admin/v1/me" }), cfg, { method: "POST", path: "/admin/v1/users/u1/status" }), "assertion_not_for_this_request"));
-ok("assertion for this request accepted", verifyAssertion(assertion({ m: "POST", p: "/admin/v1/users/u1/status" }), cfg, { method: "POST", path: "/admin/v1/users/u1/status" }).email === "kritarth@kavach.care");
+ok("assertion for this request accepted", verifyAssertion(assertion({ m: "POST", p: "/admin/v1/users/u1/status" }), cfg, { method: "POST", path: "/admin/v1/users/u1/status" }).email === "owner@kavach.care");
 ok("'none' algorithm refused", throwsCode(() => verifyAssertion(jwt.sign({ sub: "x@kavach.care", jti: "j2" }, "", { algorithm: "none", audience: "kavach-admin-api", issuer: "kavach-admin-web", expiresIn: 60 } as jwt.SignOptions), cfg), "bad_admin_assertion"));
 const once = assertion();
 verifyAssertion(once, cfg);
@@ -73,7 +73,7 @@ ok("caller check can't be turned off on Cloud Run by accident", throwsAny(() => 
     && loadAdminConfig({ ADMIN_CALLER_CHECK: "off", ...keys } as NodeJS.ProcessEnv).callerCheck === "off");
 
 // audit signature
-const entry = { at: new Date("2026-10-07T10:00:00Z"), admin: "kritarth@kavach.care", role: "owner", action: "family.view", method: "GET", path: "/admin/v1/families/f1", result: "ok", status: 200 } as Omit<IAdminAudit, "sig">;
+const entry = { at: new Date("2026-10-07T10:00:00Z"), admin: "owner@kavach.care", role: "owner", action: "family.view", method: "GET", path: "/admin/v1/families/f1", result: "ok", status: 200 } as Omit<IAdminAudit, "sig">;
 ok("audit signature changes when an entry is edited", auditSig(entry, cfg.auditKey) !== auditSig({ ...entry, admin: "someone@kavach.care" }, cfg.auditKey));
 ok("audit signature ignores key order of the detail", auditSig({ ...entry, detail: { a: 1, b: { c: 2, d: 3 } } }, cfg.auditKey) === auditSig({ ...entry, detail: { b: { d: 3, c: 2 }, a: 1 } }, cfg.auditKey));
 
@@ -160,7 +160,7 @@ ok("admin service doesn't load public routes, controllers or the public auth", b
 // the wrapper, over HTTP with fakes
 const audits: IAdminAudit[] = [];
 let auditDown = false;
-const roles: Record<string, string> = { "kritarth@kavach.care": "owner", "help@kavach.care": "support" };
+const roles: Record<string, string> = { "owner@kavach.care": "owner", "help@kavach.care": "support" };
 let handlerRuns = 0;
 const fakeDefs: RouteDef[] = [
     { method: "get", path: "/x", perm: "users.read", action: "x.read", handler: async () => ({ data: { hello: 1 }, target: "family:f1" }) },
@@ -169,7 +169,7 @@ const fakeDefs: RouteDef[] = [
     { method: "get", path: "/q", perm: "users.read", action: "q.read", handler: async ({ query }) => ({ data: { q: query.q ?? null } }) },
     { method: "get", path: "/boom", perm: "users.read", action: "x.boom", handler: async () => { throw new Error("db down"); } },
 ];
-const sessions: Record<string, string> = { "sess-owner-000000000000000000000000": "kritarth@kavach.care", "sess-help-0000000000000000000000000": "help@kavach.care", "sess-stranger-000000000000000000000": "stranger@kavach.care" };
+const sessions: Record<string, string> = { "sess-owner-000000000000000000000000": "owner@kavach.care", "sess-help-0000000000000000000000000": "help@kavach.care", "sess-stranger-000000000000000000000": "stranger@kavach.care" };
 const app = express().use(express.json()).use("/admin/v1", buildAdminRouter(fakeDefs, {
     cfg,
     loadSession: async (t) => { const email = sessions[t || ""]; if (!email) throw new AdminError(401, "not_signed_in"); return { id: `id-${email}`, email, createdAt: new Date() }; },

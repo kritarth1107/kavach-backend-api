@@ -14,7 +14,7 @@ export const APPROVED_RECORDS = { reviewStatus: { $nin: ["needs_review", "file_o
 
 const TITLE_WORDS = new Set(["mr", "mrs", "ms", "miss", "smt", "shri", "sri", "shrimati", "kumari", "kum", "master", "baby", "dr", "late", "md", "w", "o", "s", "d", "c"]);
 
-/** Name words worth comparing: lower case, titles and initials dropped ("MRS. B.N.VASUNDARA DEVI" → vasundara, devi). */
+/** Name words worth comparing: lower case, titles and initials dropped ("MRS. S.K.SHARMILA DEVI" → sharmila, devi). */
 export function nameTokens(name: string | null | undefined): string[] {
     return String(name || "")
         .toLowerCase()

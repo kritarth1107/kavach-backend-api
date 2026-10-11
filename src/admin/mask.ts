@@ -17,7 +17,7 @@ export function maskEmail(email?: string | null): string | null {
     return `${head}${"•".repeat(Math.max(2, Math.min(user.length - head.length - tail.length, 6)))}${tail}@${domain}`;
 }
 
-/** "Vasundara Devi" → "Vasundara D." (first name is how support talks about a person). */
+/** "Sarla Devi" → "Sarla D." (first name is how support talks about a person). */
 export function maskName(name?: string | null): string | null {
     if (!name) return null;
     const parts = String(name).trim().split(/\s+/).filter(Boolean);

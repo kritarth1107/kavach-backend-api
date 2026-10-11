@@ -195,7 +195,7 @@ async function main() {
 
     await t("generic checkout: store-account address (Gurugram) → address_unverified, no Place", async () => {
         clicked.length = 0;
-        extractQueue = [screen({}), screen({ deliveryAddress: "1704, Tower 5, M3M Heights, Gurugram 122102" })];
+        extractQueue = [screen({}), screen({ deliveryAddress: "12, Tower 2, Lakeside Residency, Gurugram 122018" })];
         observeQueue = [];
         const out = await runGenericCodCheckout(page, { ...baseOpts });
         assert.equal(out.status, "address_unverified");

@@ -64,7 +64,7 @@ LIVE_FRONTEND_URL=http://localhost:3000
 
 ### Step 4 — Connect in the dashboard
 
-1. Sign in as primary caregiver (`vish2030@gmail.com`)
+1. Sign in as the family's primary caregiver
 2. Go to **Integrations**
 3. Click **Connect Zepto account**
 4. Complete OTP on Zepto's page

@@ -19,7 +19,7 @@ export function respectfulElderAddress(displayName: string): string {
         return raw;
     }
     if (lower.endsWith(" ji") || /\bji$/i.test(raw)) return raw;
-    // Soften bare first names: avoid "Hi Vasundara!" — use Namaste without first-name.
+    // Soften bare first names: avoid "Hi Sarla!" — use Namaste without first-name.
     return "";
 }
 
