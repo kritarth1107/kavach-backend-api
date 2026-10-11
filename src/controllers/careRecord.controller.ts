@@ -227,9 +227,16 @@ export async function postPrivacyAudit(req: Request, res: Response) {
         res.status(404).json({ success: false, message: "Not found" });
         return;
     }
+    const text = String(req.body?.text || "").trim();
+    if (text.length < 6) {
+        res.status(400).json({ success: false, message: "text: the leaked address words to look for (6 characters or more)" });
+        return;
+    }
     const { runAddressLeakAudit } = await import("../services/privacyAudit.service");
     const data = await runAddressLeakAudit({
         ownerPhone: String(req.body?.ownerPhone || ""),
+        text,
+        pincode: typeof req.body?.pincode === "string" ? req.body.pincode : undefined,
         since: typeof req.body?.since === "string" ? req.body.since : undefined,
         cleanup: req.body?.cleanup === true,
     });

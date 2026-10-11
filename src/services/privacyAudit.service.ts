@@ -1,7 +1,9 @@
 /**
- * One-off privacy audit (mock-secret gated): where did a leaked address string end up, and in
- * which families? Returns counts per family with masked ids only (no message content).
- * cleanup=true removes it from OTHER families' open order drafts (never touches history).
+ * Privacy audit (mock-secret gated): where did a leaked address string end up, and in which
+ * families? The caller gives the words to look for (`text`, and optionally a `pincode` for the
+ * address books); nothing about any family is written in this file. Returns counts per family
+ * with masked ids only (no message content). cleanup=true removes it from OTHER families' open
+ * order drafts (never touches history).
  */
 import SaheliMessage from "../models/saheliMessage.model";
 import OutboundMessage from "../models/outboundMessage.model";
@@ -13,8 +15,8 @@ import Order from "../models/order.model";
 import OrderPreview from "../models/orderPreview.model";
 import FamilyAddress from "../models/familyAddress.model";
 
-const LEAK = /sunita\s*park|labhandih|\b492001\b/i;
-const mask = (s?: string | null) => (s ? `${String(s).slice(0, 4)}…${String(s).slice(-3)}` : null);
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const mask =(s?: string | null) => (s ? `${String(s).slice(0, 4)}…${String(s).slice(-3)}` : null);
 const maskPhone = (s?: string | null) => (s ? `…${String(s).replace(/\D/g, "").slice(-4)}` : null);
 
 type Group = { family: string | null; owner: boolean; count: number; first?: string; last?: string; phones?: string[]; roles?: Record<string, number> };
@@ -36,7 +38,10 @@ function group(rows: Array<{ familyId?: string; createdAt?: Date; phone?: string
     return [...by.values()];
 }
 
-export async function runAddressLeakAudit(input: { ownerPhone: string; since?: string; cleanup?: boolean }) {
+export async function runAddressLeakAudit(input: { ownerPhone: string; text: string; pincode?: string; since?: string; cleanup?: boolean }) {
+    const words = input.text.trim();
+    if (words.length < 6) throw new Error("text must be the leaked address words (6 characters or more)");
+    const LEAK = new RegExp(escapeRe(words).replace(/\s+/g, "\\s*"), "i");
     const digits = input.ownerPhone.replace(/\D/g, "");
     const ids = await ChannelIdentity.find({ channelIdentifier: { $in: [digits, `+${digits}`, digits.slice(-10)] } }).lean();
     const ownerFamilies = new Set(ids.map((i) => i.familyId));
@@ -58,7 +63,7 @@ export async function runAddressLeakAudit(input: { ownerPhone: string; since?: s
     ).lean();
     const orders = await Order.find({ deliveryAddress: LEAK }, { familyId: 1, createdAt: 1 }).lean();
     const previews = await OrderPreview.find({ deliveryAddress: LEAK }, { familyId: 1, createdAt: 1 }).lean();
-    const book = await FamilyAddress.find({ $or: [{ line1: LEAK }, { pincode: "492001" }] }, { familyId: 1, createdAt: 1 }).lean();
+    const book = await FamilyAddress.find({ $or: [{ line1: LEAK }, ...(input.pincode ? [{ pincode: input.pincode }] : [])] }, { familyId: 1, createdAt: 1 }).lean();
     const sessions = (await WhatsappSession.find({}, { phone: 1, familyId: 1, browserTaskDraft: 1, pharmacyDraft: 1, updatedAt: 1 }).lean()) as Array<{
         _id: unknown;
         phone: string;

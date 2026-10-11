@@ -10,10 +10,10 @@ const ok = (name: string, cond: boolean, got?: unknown) => {
 };
 
 // Whose record is it
-ok("titles and initials dropped", nameTokens("MRS. B.N.VASUNDARA DEVI").join() === "vasundara,devi", nameTokens("MRS. B.N.VASUNDARA DEVI"));
-ok("report name matches the person", namesMatch("MRS. B.N.VASUNDARA DEVI", ["Vasundara Devi"]));
-ok("one typo still matches (Vasundhara)", namesMatch("Smt. Vasundhara Devi", ["Vasundara"]));
-ok("someone else does not match", !namesMatch("Mr. Ramesh K. Gupta", ["Vasundara Devi", "Maa"]));
+ok("titles and initials dropped", nameTokens("MRS. S.K.SHARMILA DEVI").join() === "sharmila,devi", nameTokens("MRS. S.K.SHARMILA DEVI"));
+ok("report name matches the person", namesMatch("MRS. S.K.SHARMILA DEVI", ["Sharmila Devi"]));
+ok("one typo still matches (Sharmilla)", namesMatch("Smt. Sharmilla Devi", ["Sharmila"]));
+ok("someone else does not match", !namesMatch("Mr. Ramesh K. Gupta", ["Sharmila Devi", "Maa"]));
 ok("short shared words do not match (Dr / Md)", !namesMatch("Dr. M.D. Rao", ["Md Ali"]));
 
 // Flags from printed ranges

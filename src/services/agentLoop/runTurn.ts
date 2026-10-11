@@ -334,7 +334,7 @@ export async function runFlaggedElderTurn(input: {
         },
         context: ctx,
         adapters: {
-            linkedSearch: async ({ store, query }) => liveStoreSearch({ store, query }),
+            linkedSearch: async ({ store, query }) => liveStoreSearch({ store, query, familyId: input.familyId, memberUserId: input.elderId }),
             browserSearch: async () => ({ ok: false, error: "no_second_search" }),
         },
     };

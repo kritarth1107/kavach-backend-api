@@ -144,8 +144,8 @@ async function t(name: string, fn: () => void | Promise<void>) {
         assert.ok(!JSON.stringify(msgs).includes("Anything else"));
     });
     await t("activity redaction masks OTP + phone", () => {
-        const r = redactActivityText("OTP 482913 sent to +91 76948 29888")!;
-        assert.ok(!r.includes("482913") && !r.includes("76948"), r);
+        const r = redactActivityText("OTP 482913 sent to +91 98765 43210")!;
+        assert.ok(!r.includes("482913") && !r.includes("98765"), r);
     });
 
     console.log("nudge gate");

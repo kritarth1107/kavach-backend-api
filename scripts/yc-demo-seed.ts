@@ -16,7 +16,7 @@ const LABS = [
         recordDate: "8 Aug 2026",
         daysAgo: 17,
         rawText: `Lab report — thyroid
-Patient: Mrs. Vasundara Devi
+Patient: Mrs. Sarla Devi
 Date: 8 Aug 2026
 
 TSH 4.2 mIU/L
@@ -30,7 +30,7 @@ Printed values only. No interpretation.`,
         recordDate: "18 Aug 2026",
         daysAgo: 7,
         rawText: `Lab report — fasting glucose
-Patient: Mrs. Vasundara Devi
+Patient: Mrs. Sarla Devi
 Date: 18 Aug 2026
 
 Fasting glucose 104 mg/dL
@@ -43,7 +43,7 @@ Printed values only. No interpretation.`,
         recordDate: "25 Aug 2026",
         daysAgo: 0,
         rawText: `Home BP log
-Patient: Mrs. Vasundara Devi
+Patient: Mrs. Sarla Devi
 Date: 25 Aug 2026 · 8:05 AM
 
 Blood pressure 118/76 mmHg
@@ -79,7 +79,7 @@ const MESSAGES: SeedMsg[] = [
     {
         thread: "elder",
         role: "system",
-        content: "Check-in prompted for Mrs. Vasundara Devi",
+        content: "Check-in prompted for Mrs. Sarla Devi",
         daysAgo: 6,
         hour: 9,
         minute: 0,
@@ -119,7 +119,7 @@ const MESSAGES: SeedMsg[] = [
     {
         thread: "elder",
         role: "system",
-        content: "Check-in prompted for Mrs. Vasundara Devi",
+        content: "Check-in prompted for Mrs. Sarla Devi",
         daysAgo: 0,
         hour: 9,
         minute: 0,
@@ -168,7 +168,7 @@ const MESSAGES: SeedMsg[] = [
         thread: "caregiver",
         role: "saheli",
         content:
-            "Mrs. Vasundara Devi last said: “I took Folvite at 1. Took Shelcal after lunch. Feeling okay.” Saved report “TSH report” (8 Aug 2026): TSH 4.2 mIU/L Free T4 1.1 ng/dL. Blood pressure log (25 Aug 2026): 118/76 mmHg. Reported only — nothing invented.",
+            "Mrs. Sarla Devi last said: “I took Folvite at 1. Took Shelcal after lunch. Feeling okay.” Saved report “TSH report” (8 Aug 2026): TSH 4.2 mIU/L Free T4 1.1 ng/dL. Blood pressure log (25 Aug 2026): 118/76 mmHg. Reported only — nothing invented.",
         daysAgo: 0,
         hour: 14,
         minute: 41,

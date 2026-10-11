@@ -5,15 +5,19 @@
 
 import type { GoalDoc, ToolResult } from "./types";
 
-const ADDRESS = "C504, Sunita Park, Labhandih, near Tulip Area Hotel, Raipur, Chhattisgarh 492001";
-const PINCODE = "492001";
-
 function rupees(paise: number | undefined): string | undefined {
     if (typeof paise !== "number" || paise <= 0) return undefined;
     return `₹${(paise / 100).toFixed(paise % 100 === 0 ? 0 : 2)}`;
 }
 
-export async function liveStoreSearch(args: { store: string; query: string }): Promise<ToolResult> {
+/** The family's own default delivery place (until 2026-10-11 every search here used one test family's home address). */
+async function familyPlace(familyId: string, memberUserId?: string): Promise<{ address: string; pincode: string } | null> {
+    const { defaultPlaceFor, formatFull } = await import("../familyAddressBook.service");
+    const place = await defaultPlaceFor(familyId, memberUserId).catch(() => null);
+    return place ? { address: formatFull(place), pincode: place.pincode } : null;
+}
+
+export async function liveStoreSearch(args: { store: string; query: string; familyId: string; memberUserId?: string }): Promise<ToolResult> {
     if (process.env.SAHELI_TRAIN === "1" || process.env.VERTEX_DISABLED === "1") {
         throw new Error("refusing a fixture or a disabled model");
     }
@@ -22,6 +26,9 @@ export async function liveStoreSearch(args: { store: string; query: string }): P
     if (!query || /^(show\s*more|retry|more)$/i.test(query)) {
         return { ok: false, error: "refused_control_word" };
     }
+    const place = await familyPlace(args.familyId, args.memberUserId);
+    if (!place) return { ok: false, error: "no_saved_place" };
+    const { address: ADDRESS, pincode: PINCODE } = place;
     if (store === "swiggy" || store === "food" || store === "zomato") {
         if (store === "zomato") {
             const { searchGuestCatalog } = await import("../commerceAutomation/guestCatalogSearch.service");
