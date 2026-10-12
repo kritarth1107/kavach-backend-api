@@ -1,5 +1,6 @@
 /** Overview numbers, system health, messaging, alerts, reminders, orders, tasks, rides. Aggregates and masked rows. */
-import { engineOrNull } from "../engine";
+import { AdminError } from "../auth";
+import { engine, engineOrNull } from "../engine";
 import type { RouteDef } from "../router";
 import ActivityLog from "../../models/activityLog.model";
 import CareScheduleCompletion from "../../models/careScheduleCompletion.model";
@@ -213,6 +214,59 @@ export function opsRoutes(): RouteDef[] {
                         })),
                     },
                 };
+            },
+        },
+        {
+            // Watch live (founder 2026-10-13): every conversation of the last half hour with its pace, cost and mood, orders
+            // and rides running, check-ins due, alerts of the day. Names masked, no message text (that stays break-glass).
+            method: "get", path: "/live", perm: "users.read", action: "live.read",
+            handler: async ({ query }) => {
+                const minutes = Math.max(5, Math.min(240, Number(query.minutes) || 30));
+                type Live = {
+                    now: string; windowMinutes: number;
+                    conversations: Array<{ familyId: string; personId: string } & Record<string, unknown>>;
+                    outreach: Array<{ familyId: string; count: number }>;
+                    tasks: Array<{ familyId: string; personId: string } & Record<string, unknown>>;
+                    comingUp: Array<{ familyId: string; personId: string | null } & Record<string, unknown>>;
+                    alerts: Array<{ familyId: string; personId: string } & Record<string, unknown>>;
+                };
+                const got = await engineOrNull<Live>("GET", `/live?minutes=${minutes}`);
+                const live = got.data;
+                if (!live) return { detail: { engine: got.error || "unavailable" }, data: { engine: false, error: got.error || null } };
+                const fids = new Set<string>();
+                const pids = new Set<string>();
+                for (const rows of [live.conversations, live.tasks, live.comingUp, live.alerts, live.outreach]) {
+                    for (const r of rows as Array<{ familyId: string; personId?: string | null }>) {
+                        fids.add(r.familyId);
+                        if (r.personId) pids.add(r.personId);
+                    }
+                }
+                const fams = await Family.find({ familyId: { $in: [...fids] } }, { familyId: 1, name: 1, members: 1 }).lean<Array<{ familyId: string; name?: string; members?: Array<{ userId: string; role: string }> }>>();
+                const users = await usersById([...pids]);
+                const famName = (id: string) => fams.find((f) => f.familyId === id)?.name || "Family";
+                const roleOf = (fid: string, pid?: string | null) => fams.find((f) => f.familyId === fid)?.members?.find((m) => m.userId === pid)?.role || null;
+                const who = (fid: string, pid?: string | null) => ({ family: famName(fid), person: pid ? maskedUser(users.get(pid))?.name || "Person" : null, role: roleOf(fid, pid) });
+                return {
+                    detail: { conversations: live.conversations.length, tasks: live.tasks.length },
+                    data: {
+                        engine: true, now: live.now, windowMinutes: live.windowMinutes,
+                        conversations: live.conversations.map((c) => ({ ...c, ...who(c.familyId, c.personId) })),
+                        outreach: live.outreach.map((o) => ({ ...o, family: famName(o.familyId) })),
+                        tasks: live.tasks.map((t) => ({ ...t, ...who(t.familyId, t.personId) })),
+                        comingUp: live.comingUp.map((l) => ({ ...l, ...who(l.familyId, l.personId) })),
+                        alerts: live.alerts.map((a) => ({ ...a, ...who(a.familyId, a.personId) })),
+                    },
+                };
+            },
+        },
+        {
+            // The browser of a running order or ride, on the family's own account: break-glass with a reason.
+            method: "get", path: "/live/tasks/:taskId/view", perm: "care.breakglass", action: "task.live_view", reason: "required",
+            handler: async ({ params }) => {
+                const id = String(params.taskId || "");
+                if (!/^[0-9a-f-]{36}$/i.test(id)) throw new AdminError(400, "bad_input", "bad task id");
+                const out = await engine<{ url: string | null }>("GET", `/tasks/${id}/live-url`);
+                return { target: `task:${id}`, data: { url: out.url } };
             },
         },
         {
