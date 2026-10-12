@@ -290,7 +290,10 @@ export async function postVoicePreference(req: Request, res: Response) {
 
 export async function getSkills(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
-    res.json({ success: true, data: await aiEngineJson("GET", `${base}/skills`) });
+    // Only this person's own skills: the order agents' shared store steps (counts across every family) are no family's to
+    // see (founder 2026-10-13: a new account read them as orders it had never placed).
+    const data = (await aiEngineJson("GET", `${base}/skills`)) as { skills?: unknown[] };
+    res.json({ success: true, data: { skills: data?.skills ?? [] } });
 }
 
 export async function postSkill(req: Request, res: Response) {
