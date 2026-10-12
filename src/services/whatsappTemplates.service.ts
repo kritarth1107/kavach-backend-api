@@ -49,6 +49,7 @@ export function alertTemplateFor(kind?: string): TemplatePurpose | null {
     switch (kind) {
         case "health_red_flag":
         case "emergency":
+        case "crisis":
         case "symptom":
             return "alert_health";
         case "nudge_silence":

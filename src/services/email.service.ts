@@ -72,6 +72,20 @@ export async function sendOpsAlert(subject: string, text: string) {
   return { sent: true, to: to.length };
 }
 
+/** A care alert to the Kavach care team (founder 2026-10-13: a user talking of suicide, self-harm or harming someone, or an
+ *  emergency with no one else to tell). CARE_TEAM_ALERT_TO overrides the recipients (comma separated). */
+export async function sendCareTeamAlert(subject: string, text: string) {
+  const to = (process.env.CARE_TEAM_ALERT_TO || process.env.OPS_ALERT_TO || "kritarth@kavach.care").split(",").map((x) => x.trim()).filter(Boolean);
+  const { error } = await resend().emails.send({
+    from: process.env.CARE_TEAM_ALERT_FROM || "Kavach care alert <alerts@emails.kavach.care>",
+    to,
+    subject: subject.slice(0, 160),
+    text: text.slice(0, 8000),
+  });
+  if (error) throw new AppError(error.message || "Failed to send care team alert", 502);
+  return { sent: true, to: to.length };
+}
+
 /** A short care email to a family member (Saheli: an order is stuck and needs them). Plain text; the reply is on WhatsApp. */
 export async function sendFamilyEmail(to: string, subject: string, text: string) {
   const { error } = await resend().emails.send({

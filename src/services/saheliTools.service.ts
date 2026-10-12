@@ -98,7 +98,8 @@ export type SaheliToolName =
     | "set_my_name"
     | "finish_setup"
     | "send_template"
-    | "whatsapp_window";
+    | "whatsapp_window"
+    | "alert_care_team";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -902,6 +903,22 @@ export async function executeSaheliTool(input: {
                 template: engineTemplate(input.args.template),
             });
         }
+        case "alert_care_team": {
+            // The Kavach care team (founder 2026-10-13): talk of suicide, self-harm or harming someone, or an emergency with no
+            // one else to tell. An email at once; the engine decides when (first one at once, updates batched).
+            const { alertCareTeam } = await import("./careTeamAlert.service");
+            return alertCareTeam({
+                familyId: input.familyId,
+                subjectUserId: input.recipientUserId,
+                kind: input.args.kind === "emergency_alone" ? "emergency_alone" : "crisis",
+                lines: Array.isArray(input.args.lines)
+                    ? (input.args.lines as unknown[]).map((l) => l as { at?: string; said?: string; summary?: string; reply?: string }).slice(0, 12)
+                    : [],
+                familyTold: Number(input.args.family_told ?? 0),
+                update: input.args.update === true,
+                traceId: input.traceId,
+            });
+        }
         case "whatsapp_window": {
             // Is this person's WhatsApp chat open (they wrote in the last 24 hours)? A check-in is planned only then.
             const { familyMemberPhone } = await import("./careMemorySync.service");
@@ -1329,6 +1346,9 @@ case "notify_caregivers": {
                 actorUserId: input.actorUserId,
                 message: String(input.args.message ?? ""),
                 urgency: (input.args.urgency as "low" | "medium" | "high") ?? "medium",
+                // the engine's kind (health_red_flag, nudge_silence, unusual_activity, crisis, care_note…) decides WhatsApp vs
+                // dashboard and the template for a closed chat; it was dropped here, so only "high" urgency reached WhatsApp
+                ...(typeof input.args.kind === "string" && input.args.kind ? { kind: input.args.kind } : {}),
                 traceId: input.traceId,
             });
         }

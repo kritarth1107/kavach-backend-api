@@ -32,6 +32,8 @@ const WHATSAPP_KINDS = new Set([
     // 4th category: high-confidence unusual activity (repeat/bulk/risky orders, confusion, scam cues,
     // marked mood drop / meds missed after >= 7 baseline days). Tiered + 24h-deduped upstream.
     "unusual_activity",
+    // talk of suicide, self-harm or harming someone (founder 2026-10-13); the Kavach care team is emailed too
+    "crisis",
 ]);
 
 export function caregiverWhatsAppAllowed(kind?: string, urgency?: "low" | "medium" | "high"): boolean {
@@ -61,7 +63,7 @@ export async function notifyCaregivers(input: {
     dedupeKey?: string;
     /** The engine's why-trail id (D-13): the admin console's alert list links to why it was sent. */
     traceId?: string;
-}): Promise<{ notifiedCount: number; channels: string[] }> {
+}): Promise<{ notifiedCount: number; channels: string[]; others: number }> {
     const allowWhatsApp = caregiverWhatsAppAllowed(input.kind, input.urgency);
     {
         const { logActivity } = await import("./activityLog.service");
@@ -82,7 +84,7 @@ export async function notifyCaregivers(input: {
         });
     }
     const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" }).lean();
-    if (!family) return { notifiedCount: 0, channels: [] };
+    if (!family) return { notifiedCount: 0, channels: [], others: 0 };
 
     const caregiverIds = family.members
         .filter(
@@ -90,7 +92,10 @@ export async function notifyCaregivers(input: {
                 m.status === FamilyMemberStatus.JOINED &&
                 CAREGIVER_ROLES.has(m.role as FamilyRole),
         )
-        .map((m) => m.userId);
+        .map((m) => m.userId)
+        // never the person the alert is about: caring for themselves, they are their own primary caregiver (founder
+        // 2026-10-13: a self-care user got five "urgent care alert" messages about himself)
+        .filter((id) => id !== input.recipientUserId);
 
     let notifiedCount = 0;
     const channels: string[] = [];
@@ -108,9 +113,9 @@ export async function notifyCaregivers(input: {
     for (const caregiverId of caregiverIds) {
         const isOrderPlaced = input.kind === "order_placed";
         void createFamilyNotification(input.familyId, {
-            kind: input.kind === "emergency" ? "emergency" : isOrderPlaced ? "order_placed" : "care_alert",
+            kind: input.kind === "emergency" || input.kind === "crisis" ? "emergency" : isOrderPlaced ? "order_placed" : "care_alert",
             title:
-                input.kind === "emergency" || input.kind === "health_red_flag"
+                input.kind === "emergency" || input.kind === "health_red_flag" || input.kind === "crisis"
                     ? "Urgent care alert"
                     : isOrderPlaced
                       ? "Amma placed an order"
@@ -133,6 +138,7 @@ export async function notifyCaregivers(input: {
                 kind:
                     input.kind === "emergency" ||
                     input.kind === "health_red_flag" ||
+                    input.kind === "crisis" ||
                     isOrderPlaced ||
                     input.kind === "missed_tasks" ||
                     input.kind === "symptom" ||
@@ -160,7 +166,7 @@ export async function notifyCaregivers(input: {
         }
     }
 
-    return { notifiedCount, channels };
+    return { notifiedCount, channels, others: caregiverIds.length };
 }
 
 /** Durable check across restarts: notification dedupe keys are stored as `<caregiverId>:<key>`. */

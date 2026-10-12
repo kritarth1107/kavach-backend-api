@@ -250,6 +250,10 @@ async function withDb(uri: string) {
                                                      schedule: { times: ["00:15"], repeat: "once", date: TUE } });
         assert.equal(made.reminder.aboutKey, "medicine:magnesium");
         const other = await tool("create_reminder", { text: "Drink water", schedule: { times: ["00:15"], repeat: "once", date: TUE } });
+        // made before their day (the test's dates are fixed; the clock is real: after 00:15 on 13 Oct the day view left out
+        // a slot earlier than its reminder's own creation)
+        await SaheliReminder.collection.updateMany({ reminderId: { $in: [made.reminder.reminderId, other.reminder.reminderId] } },
+                                                   { $set: { createdAt: at(SUN, "10:00") } });
         const fired: string[] = [];
         const fire = (async (i: { reminder: { reminderId: string } }) => { fired.push(i.reminder.reminderId); return true; }) as never;
         // not taken yet: it goes out
@@ -269,6 +273,7 @@ async function withDb(uri: string) {
         assert.equal(mag.status, "done", "the calendar shows it was not needed");
         // a later reminder for the same medicine, before its next dose was taken, shows as scheduled
         const tonight = await tool("create_reminder", { text: "Magnesium again", item: "medicine:magnesium", schedule: { times: ["22:45"], repeat: "once", date: TUE } });
+        await SaheliReminder.collection.updateOne({ reminderId: tonight.reminder.reminderId }, { $set: { createdAt: at(SUN, "10:00") } });
         const view = await R.remindersForDay({ familyId: "famR", recipientUserId: "el1", actorUserId: "el1", day: TUE, now: at(TUE, "00:20") });
         assert.equal(view.occurrences.find((o) => o.reminderId === tonight.reminder.reminderId)!.status, "scheduled");
     });
