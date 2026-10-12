@@ -220,7 +220,8 @@ export async function postRestoreForgotten(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/forgotten/${id}/restore`, { actor }) });
 }
 
-const HISTORY_KINDS = new Set(["note", "fact", "skill", "style"]);
+// mirrors the engine's app/care/versions.py KINDS (D-13 added "link": its history drawer filtered on nothing before)
+const HISTORY_KINDS = new Set(["note", "fact", "skill", "style", "link"]);
 
 /** What changed in this person's memory (notes, care record, skills, style), with the family member's name on each change. */
 export async function getMemoryHistory(req: Request, res: Response) {
