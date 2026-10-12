@@ -1,10 +1,11 @@
 /**
  * Kavach's approved WhatsApp Utility templates (founder OK 2026-10-12), for a person whose 24-hour window is closed.
  *
- *   reminder  kavach_care_reminder   {{1}} what, {{2}} time; quick reply "Done" (payload done:<schedule> for a dose)
- *   summary   kavach_daily_summary   {{1}} the person cared for; the tap opens the chat and Saheli sends the brief
- *   alert     kavach_alert_<lang>    {{1}} who it is about, {{2}} a short line; Saheli gives the alert when they tap
- *   order     kavach_order_update    {{1}} the order or ride, {{2}} a short status; Saheli gives the update when they tap
+ *   reminder  kavach_care_reminder        {{1}} what, {{2}} time; quick reply "Done" (payload done:<schedule> for a dose)
+ *   summary   kavach_daily_summary        {{1}} the person cared for; the tap opens the chat and Saheli sends the brief
+ *   alert_*   kavach_alert_<kind>_<lang>  {{1}} who it is about: a medicine not marked taken, no reply to a check-in, a
+ *                                         health problem reported, an order waiting for approval; Saheli gives the
+ *                                         alert itself when they tap
  *
  * Meta files each template name under one category for all its languages; a language it filed as MARKETING was taken
  * off the shared name and has its own (<base>_<lang>). So a template is looked up as <base>_<lang>, then <base>, in the
@@ -13,17 +14,50 @@
  */
 import config from "../config/app.config";
 
-export type TemplatePurpose = "reminder" | "summary" | "alert" | "order";
+export type TemplatePurpose =
+    | "reminder"
+    | "summary"
+    | "alert_dose"
+    | "alert_noreply"
+    | "alert_health"
+    | "alert_approval"
+    | "alert"
+    | "order";
 
 export const TEMPLATE_BASE: Record<TemplatePurpose, string> = {
     reminder: "kavach_care_reminder",
     summary: "kavach_daily_summary",
+    // a caregiver alert as a fixed sentence per kind, {{1}} = the person (kavach_alert_<kind>_<lang>)
+    alert_dose: "kavach_alert_dose",
+    alert_noreply: "kavach_alert_noreply",
+    alert_health: "kavach_alert_health",
+    alert_approval: "kavach_alert_approval",
+    // free-text alert and order update ({{2}} = a line of the message): Meta filed both MARKETING (2026-10-12), so none
+    // is approved and these go as before; kept for the engine's hints
     alert: "kavach_alert",
     order: "kavach_order_update",
 };
 
 /** Params each template takes (Meta refuses a send with the wrong count). */
-export const TEMPLATE_PARAMS: Record<TemplatePurpose, number> = { reminder: 2, summary: 1, alert: 2, order: 2 };
+export const TEMPLATE_PARAMS: Record<TemplatePurpose, number> = {
+    reminder: 2, summary: 1, alert_dose: 1, alert_noreply: 1, alert_health: 1, alert_approval: 1, alert: 2, order: 2,
+};
+
+/** The fixed alert template for a caregiver alert's kind (backend notifyCaregivers kinds); none for the rest. */
+export function alertTemplateFor(kind?: string): TemplatePurpose | null {
+    switch (kind) {
+        case "health_red_flag":
+        case "emergency":
+        case "symptom":
+            return "alert_health";
+        case "nudge_silence":
+            return "alert_noreply";
+        case "missed_tasks":
+            return "alert_dose";
+        default:
+            return null;
+    }
+}
 
 /** Languages Meta offers no templates in read the nearest one (Odia, Nepali and Konkani readers get Hindi). */
 const NEAREST: Record<string, string> = { as: "bn", or: "hi", ne: "hi", kok: "hi" };

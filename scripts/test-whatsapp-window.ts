@@ -50,12 +50,21 @@ async function pure() {
         assert.deepEqual(T.languageChain(undefined), ["en", "hi"]);
     });
     await ok("a language with its own name (filed apart after Meta called the shared one marketing) is tried first", async () => {
-        T.setTemplateCatalogForTest(["kavach_care_reminder|hi", "kavach_care_reminder_bn|bn", "kavach_alert_ta|ta", "kavach_alert_en|en", "kavach_order_update|en"]);
+        T.setTemplateCatalogForTest(["kavach_care_reminder|hi", "kavach_care_reminder_bn|bn", "kavach_alert_health_ta|ta", "kavach_alert_health_en|en"]);
         assert.deepEqual(await T.pickTemplate("reminder", "bn"), { name: "kavach_care_reminder_bn", language: "bn" });
         assert.deepEqual(await T.pickTemplate("reminder", "mr"), { name: "kavach_care_reminder", language: "hi" });
-        assert.deepEqual(await T.pickTemplate("alert", "ta"), { name: "kavach_alert_ta", language: "ta" });
-        assert.deepEqual(await T.pickTemplate("alert", "gu"), { name: "kavach_alert_en", language: "en" });
+        assert.deepEqual(await T.pickTemplate("alert_health", "ta"), { name: "kavach_alert_health_ta", language: "ta" });
+        assert.deepEqual(await T.pickTemplate("alert_health", "gu"), { name: "kavach_alert_health_en", language: "en" });
         assert.equal(await T.pickTemplate("summary", "hi"), null); // not approved yet: no template
+        assert.equal(await T.pickTemplate("alert", "en"), null); // the free-text alert was filed marketing
+    });
+    await ok("each caregiver alert kind has its fixed template; the others have none", () => {
+        assert.equal(T.alertTemplateFor("health_red_flag"), "alert_health");
+        assert.equal(T.alertTemplateFor("emergency"), "alert_health");
+        assert.equal(T.alertTemplateFor("nudge_silence"), "alert_noreply");
+        assert.equal(T.alertTemplateFor("missed_tasks"), "alert_dose");
+        assert.equal(T.alertTemplateFor("lab_alert"), null);
+        assert.equal(T.alertTemplateFor(undefined), null);
     });
     await ok("template params are one short line; the alert line is the first sentence; times read 8:30 PM", () => {
         assert.equal(T.templateParam("a\nb\t c    d"), "a b c d");
@@ -95,7 +104,7 @@ async function withDb(uri: string) {
         assert.equal(await W.windowOpen(PHONE), true);
     });
 
-    T.setTemplateCatalogForTest(["kavach_care_reminder|hi", "kavach_alert_hi|hi", "kavach_alert_en|en", "kavach_daily_summary|en"]);
+    T.setTemplateCatalogForTest(["kavach_care_reminder|hi", "kavach_alert_health_hi|hi", "kavach_alert_health_en|en", "kavach_daily_summary|en"]);
     const CLOSED = "+919000000202";
     await W.noteInbound(CLOSED, new Date(Date.now() - 30 * 3_600_000)); // wrote 30 hours ago: closed
     const base = { familyId: "fam-w", recipientUserId: "elder-w", channel: "whatsapp" as const, channelIdentifier: CLOSED };
@@ -103,7 +112,7 @@ async function withDb(uri: string) {
     await ok("an open chat gets the message itself", async () => {
         sent.length = 0;
         const d = await deliverOutboundMessage({ ...base, channelIdentifier: PHONE, purpose: "proactive", content: "Hello",
-            template: { purpose: "alert", params: ["Maa", "Hello"] } });
+            template: { purpose: "alert_health", params: ["Maa"] } });
         assert.equal(d.delivered, true);
         assert.equal(d.via, undefined);
         assert.equal(sent[0]?.body.type, "text");
@@ -124,15 +133,17 @@ async function withDb(uri: string) {
     });
     await ok("an alert to a caregiver's closed chat goes as the alert template, and the alert waits for his next message", async () => {
         sent.length = 0;
-        const d = await deliverOutboundMessage({ ...base, toUserId: "son-w", purpose: "alert", content: "Maa missed the 8 PM dose.\nPlease call her.",
-            template: { purpose: "alert", params: ["Maa", "Maa missed the 8 PM dose"], lang: "en" } });
+        const d = await deliverOutboundMessage({ ...base, toUserId: "son-w", purpose: "alert", content: "Maa says her chest hurts.\nPlease call her.",
+            template: { purpose: "alert_health", params: ["Maa"], lang: "en" } });
         assert.equal(d.via, "template");
         assert.equal(d.waiting, true);
-        assert.equal((sent[0]!.body.template as { name: string }).name, "kavach_alert_en");
+        const tpl = sent[0]!.body.template as { name: string; components: Array<{ parameters: Array<{ text: string }> }> };
+        assert.equal(tpl.name, "kavach_alert_health_en");
+        assert.deepEqual(tpl.components[0]!.parameters, [{ type: "text", text: "Maa" }]);
         const waiting = await W.takeWaiting("son-w");
         assert.equal(waiting.length, 1);
-        assert.equal(waiting[0]!.purpose, "alert");
-        assert.equal(waiting[0]!.text, "Maa missed the 8 PM dose.\nPlease call her.");
+        assert.equal(waiting[0]!.purpose, "alert_health");
+        assert.equal(waiting[0]!.text, "Maa says her chest hurts.\nPlease call her.");
         assert.deepEqual(await W.takeWaiting("son-w"), []); // given once
     });
     await ok("a nudge to a closed chat is not sent (no template fits) and nothing waits", async () => {

@@ -193,7 +193,7 @@ export async function familyMemberPhone(familyId: string, userId: string): Promi
 /** A template hint from the engine ({purpose, params, lang}), checked: anything else is dropped. */
 export function engineTemplate(raw: unknown): import("./channelOutbound.service").OutboundTemplate | undefined {
     const t = raw as { purpose?: unknown; params?: unknown; lang?: unknown } | null | undefined;
-    const purposes = ["reminder", "summary", "alert", "order"];
+    const purposes = ["reminder", "summary", "alert", "order", "alert_dose", "alert_noreply", "alert_health", "alert_approval"];
     if (!t || typeof t !== "object" || !purposes.includes(String(t.purpose))) return undefined;
     const params = Array.isArray(t.params) ? t.params.map((p) => String(p ?? "")).slice(0, 3) : [];
     return {
