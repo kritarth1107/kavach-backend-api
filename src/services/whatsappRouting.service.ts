@@ -326,6 +326,8 @@ type WhatsAppInboundBody = {
     replyToId?: string;
     /** A shared location pin as data (the text carries it too): Saheli uses its exact point for a ride. */
     location?: { lat: number; lng: number; name?: string; address?: string };
+    /** The name on their WhatsApp profile (a new number's name until they say theirs). */
+    profileName?: string;
 };
 
 /**
@@ -391,7 +393,20 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     try {
         identity = await resolveWhatsAppSender(phone);
     } catch {
-        return handleGuestMessage(phone);
+        // A number Kavach does not know: an account and a family now, then Saheli's setup chat (founder 2026-10-12).
+        // Over the sign-up limits, or switched off, the old "sign up on the website" answer goes out.
+        const signup = await import("./whatsappSignup.service")
+            .then((S) => S.startWhatsAppSignup(phone, { profileName: body.profileName }))
+            .catch((err) => {
+                console.warn("[whatsapp-signup] failed:", err instanceof Error ? err.message : err);
+                return null;
+            });
+        if (!signup?.ok) return handleGuestMessage(phone);
+        try {
+            identity = await resolveWhatsAppSender(phone);
+        } catch {
+            return handleGuestMessage(phone);
+        }
     }
 
     // STT runs BEFORE emergency / language / intent checks so spoken emergencies escalate.

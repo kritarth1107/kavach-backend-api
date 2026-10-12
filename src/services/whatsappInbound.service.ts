@@ -89,6 +89,7 @@ export async function handleWhatsAppInbound(body: {
     mediaCaption?: string;
     replyToId?: string;
     location?: { lat: number; lng: number; name?: string; address?: string };
+    profileName?: string;
 }): Promise<OutboundMessage> {
     const slaMs = replySlaMs();
     let timer: ReturnType<typeof setTimeout> | undefined;

@@ -93,7 +93,10 @@ export type SaheliToolName =
     | "connector_order_status"
     | "list_places"
     | "save_place"
-    | "remove_place";
+    | "remove_place"
+    | "add_family_member"
+    | "set_my_name"
+    | "finish_setup";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -530,6 +533,65 @@ export async function executeSaheliTool(input: {
             const mode = await getVoiceMode(input.recipientUserId);
             const speech = await getSpeechProfile(input.recipientUserId);
             return { mode, means: VOICE_MODE_LABEL[mode], ...speech, language_label: speechLabel(speech) };
+        }
+        case "add_family_member": {
+            // Setup on WhatsApp: the person the family cares for, added by a caregiver (founder 2026-10-12). Their number is
+            // proven when they first write to Saheli; nothing is sent to them before that (WhatsApp's 24-hour rule).
+            const Family = (await import("../models/family.model")).default;
+            const { FamilyRole, FamilyMemberStatus } = await import("../types/family.types");
+            const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" });
+            if (!family) return { ok: false, error: "family not found" };
+            const me = family.members.find((m: { userId: string; role: string; status: string }) => m.userId === input.actorUserId);
+            if (!me || (me.role !== FamilyRole.PRIMARY_CAREGIVER && me.role !== FamilyRole.CO_CAREGIVER)) return { ok: false, error: "only a caregiver can add someone" };
+            const live = (m: { status: string }) => m.status !== FamilyMemberStatus.REMOVED && m.status !== FamilyMemberStatus.REJECTED;
+            if (family.members.some((m: { role: string; status: string }) => m.role === FamilyRole.CARE_RECIPIENT && live(m))) {
+                return { ok: false, error: "this family already has the person it cares for; add others on the dashboard" };
+            }
+            const name = String(input.args.name ?? "").trim().slice(0, 60);
+            if (name.length < 2) return { ok: false, error: "their name is needed" };
+            const digits = String(input.args.phone ?? "").replace(/\D/g, "");
+            let phone: { cc: string; number: string } | null = null;
+            if (digits) {
+                const { splitPhone } = await import("./onboarding.service");
+                phone = splitPhone(`+${digits.length === 10 ? `91${digits}` : digits}`);
+                if (phone.number.length < 7) return { ok: false, error: "that number looks incomplete; ask for it with the country code" };
+            }
+            const User = (await import("../models/users.model")).default;
+            const inviter = await User.findOne({ userId: input.actorUserId });
+            if (!inviter) return { ok: false, error: "caregiver account not found" };
+            const { inviteFamilyMember } = await import("./familyMember.service");
+            const list = await inviteFamilyMember(input.familyId, inviter, {
+                role: "care_recipient",
+                name,
+                relationship: input.args.relationship ? String(input.args.relationship).slice(0, 40) : undefined,
+                phone: phone?.number,
+                phoneCountryCode: phone?.cc,
+                notify: false,
+            });
+            const added = (list.members as Array<{ userId?: string; name?: string; role?: string }>).find(
+                (m) => m.role === FamilyRole.CARE_RECIPIENT && (m.name || "").includes(name.split(" ")[0]),
+            );
+            const appConfig = (await import("../config/app.config")).default;
+            const line = appConfig.whatsapp.kavachNumber.replace(/\D/g, "");
+            return {
+                ok: true, userId: added?.userId ?? null, name,
+                joinLink: `https://wa.me/${line}?text=${encodeURIComponent("Hi Saheli")}`,
+                next: "Saheli writes to them only after they send her a message from that number: give the caregiver the link to share.",
+            };
+        }
+        case "set_my_name": {
+            const User = (await import("../models/users.model")).default;
+            const first = String(input.args.firstName ?? "").trim().slice(0, 40);
+            if (first.length < 1) return { ok: false, error: "a first name is needed" };
+            const last = String(input.args.lastName ?? "").trim().slice(0, 40);
+            await User.updateOne({ userId: input.actorUserId }, { $set: { firstName: first, ...(last ? { lastName: last } : {}) } });
+            return { ok: true, firstName: first, lastName: last || null };
+        }
+        case "finish_setup": {
+            const { finishSetup } = await import("./whatsappSignup.service");
+            await finishSetup(input.actorUserId);
+            const appConfig = (await import("../config/app.config")).default;
+            return { ok: true, dashboard: "https://app.kavach.care", signIn: "with this WhatsApp number (a code comes on WhatsApp)", saheliNumber: appConfig.whatsapp.kavachNumber };
         }
         case "set_voice_preference": {
             const { isVoiceMode, setVoiceMode, setSpeechProfile, VOICE_MODE_LABEL } = await import("./voicePreference.service");

@@ -156,6 +156,8 @@ const userSchema = new Schema<IUserDocument>(
         },
         /** Last time they proved this number with a WhatsApp code (mobile sign-in). */
         phoneVerifiedAt: { type: Date },
+        /** How the account was made: "whatsapp" when they signed up by writing to Saheli (rate limits count these). */
+        signupSource: { type: String, index: true },
         preferences: {
             emailAlerts: { type: Boolean, default: true },
             pushReminders: { type: Boolean, default: true },

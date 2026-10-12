@@ -62,6 +62,10 @@ export async function runBrainV2(input: {
         name: (m.name || "").trim(),
         role: brainRole(m.role),
     });
+    // Setup not finished (a new WhatsApp sign-up, or an account that never finished onboarding): Saheli runs the setup chat.
+    const onboarding = await import("./whatsappSignup.service")
+        .then((S) => S.setupPending(input.identity.userId))
+        .catch(() => false);
     // Reminders due soon for the speaker (and the person cared for): Saheli skips one the person says is already done.
     const soon = await import("./saheliReminder.service")
         .then((R) => R.remindersSoon(input.identity.familyId, [input.identity.userId, elder.userId]))
@@ -83,6 +87,7 @@ export async function runBrainV2(input: {
         ...(input.media?.length ? { images: input.media } : {}),
         ...(input.mediaNote ? { media_note: input.mediaNote } : {}),
         ...(input.location ? { location: { name: "", address: "", ...input.location } } : {}),
+        ...(onboarding ? { onboarding: true } : {}),
         ...(soon.length
             ? {
                   reminders_soon: soon.map((r) => ({

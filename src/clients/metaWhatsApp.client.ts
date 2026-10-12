@@ -520,6 +520,8 @@ export type MetaInboundMessage = {
     replyToId?: string;
     /** A shared location pin, as data (the text carries it too): a ride's pickup is its exact point. */
     location?: { lat: number; lng: number; name?: string; address?: string };
+    /** The name on the sender's WhatsApp profile (Meta sends it in contacts[]): a new number's first name until they say theirs. */
+    profileName?: string;
 };
 
 /** A shared location pin's point, name and address (null for anything else, or a pin without a valid point). */
@@ -1179,6 +1181,14 @@ export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
             const messages = Array.isArray((value as Record<string, unknown>).messages)
                 ? ((value as Record<string, unknown>).messages as unknown[])
                 : [];
+            const contacts = Array.isArray((value as Record<string, unknown>).contacts)
+                ? ((value as Record<string, unknown>).contacts as Array<Record<string, unknown>>)
+                : [];
+            const profileOf = (waId: string): string | undefined => {
+                const c = contacts.find((x) => String(x?.wa_id ?? "") === waId) ?? (contacts.length === 1 ? contacts[0] : undefined);
+                const n = String(((c?.profile as Record<string, unknown> | undefined)?.name as string | undefined) ?? "").trim();
+                return n ? n.slice(0, 60) : undefined;
+            };
             for (const msg of messages) {
                 if (!msg || typeof msg !== "object") continue;
                 const row = msg as Record<string, unknown>;
@@ -1211,6 +1221,7 @@ export function parseMetaWebhookMessages(body: unknown): MetaInboundMessage[] {
                                 : undefined,
                         ...media,
                         ...(location ? { location } : {}),
+                        ...(profileOf(from) ? { profileName: profileOf(from) } : {}),
                     });
                 }
             }
