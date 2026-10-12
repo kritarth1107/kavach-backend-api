@@ -135,9 +135,11 @@ async function withDb(uri: string) {
         const miss = (await tool("delivery_place", { words: "Clinic" })) as { matched: boolean; nickname: string; saved: string[] };
         assert.equal(miss.matched, false);
         assert.deepEqual(miss.saved, ["Arjun's Home (Indore 452010)"]);
-        const hit = (await tool("delivery_place", { words: "arjun ka ghar" })) as { matched: boolean; nickname: string };
+        const hit = (await tool("delivery_place", { words: "arjun ka ghar" })) as { matched: boolean; nickname: string; defaultFor: string[] };
         assert.equal(hit.matched, true);
         assert.equal(hit.nickname, "Arjun's Home");
+        // whose home it is (founder 2026-10-12): the engine checks it against whom an order is for
+        assert.deepEqual(hit.defaultFor, ["el1"]);
         assert.equal(((await tool("delivery_place", { words: "" })) as { matched: unknown }).matched, null);
     });
     await mongoose.connection.db!.dropDatabase();

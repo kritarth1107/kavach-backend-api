@@ -631,6 +631,9 @@ export async function executeSaheliTool(input: {
                 lat: at?.lat ?? null,
                 lng: at?.lng ?? null,
                 geoPrecision: at?.precision ?? null,
+                // whose home the place is (founder 2026-10-12: a caregiver's own order to his own home was recorded as his
+                // mother's): the engine checks it against whom the order is for, and asks the right person afterwards
+                defaultFor: place.defaultForUserIds ?? [],
                 matched: words ? !!hit : null,
                 saved: places.map((p) => `${p.nickname} (${p.city || ""} ${p.pincode})`.replace(/\s+/g, " ").replace("( ", "(")),
             };
