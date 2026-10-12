@@ -113,6 +113,13 @@ export async function getHome(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/home`, undefined, 45_000) });
 }
 
+/** The person-centred pages (Care plan, Story, Emergency card): who they are, mood, what Saheli learned with their words,
+ *  the people around them, their day and a week of doses. */
+export async function getPortrait(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/portrait`, undefined, 45_000) });
+}
+
 // ── care views (the same data Saheli's tools read on WhatsApp) ──────────────
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;

@@ -87,6 +87,7 @@ router.post("/:familyId/channel-identities", protect, postChannelIdentityHandler
 const cm = "/:familyId/subjects/:subjectUserId/care-memory";
 router.get(`${cm}/overview`, protect, wrap(careMemory.getOverview));
 router.get(`${cm}/home`, protect, wrap(careMemory.getHome));
+router.get(`${cm}/portrait`, protect, wrap(careMemory.getPortrait));
 router.get(`${cm}/history`, protect, wrap(careMemory.getFactHistory));
 router.get(`${cm}/events`, protect, wrap(careMemory.getEvents));
 router.post(`${cm}/facts`, protect, wrap(careMemory.postFact));
