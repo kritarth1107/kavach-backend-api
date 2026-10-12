@@ -94,6 +94,15 @@ export async function notifyCaregivers(input: {
 
     let notifiedCount = 0;
     const channels: string[] = [];
+    // A caregiver whose WhatsApp chat is closed (24 hours since they wrote) gets the alert template naming the person and
+    // the first line; the full alert waits and Saheli gives it when they tap or write.
+    let template: import("./channelOutbound.service").OutboundTemplate | undefined;
+    if (allowWhatsApp) {
+        const { headlineOf } = await import("./whatsappTemplates.service");
+        const { default: User } = await import("../models/users.model");
+        const who = await User.findOne({ userId: input.recipientUserId }).select("name").lean<{ name?: string }>().catch(() => null);
+        template = { purpose: "alert", params: [(who?.name || "").trim().split(/\s+/)[0] || "-", headlineOf(input.message)] };
+    }
 
     for (const caregiverId of caregiverIds) {
         const isOrderPlaced = input.kind === "order_placed";
@@ -141,6 +150,7 @@ export async function notifyCaregivers(input: {
                 channel: "whatsapp",
                 channelIdentifier: phone,
                 whatsappPayloads: payloads,
+                ...(template ? { template } : {}),
             });
             if (delivery.delivered) {
                 notifiedCount += 1;

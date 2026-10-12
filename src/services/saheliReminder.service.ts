@@ -724,12 +724,15 @@ async function fireReminderMessage(input: {
         return false;
     }
 
+    // Their WhatsApp chat closed (no message from them in 24 hours): the reminder still reaches them, as the template.
+    const { clockTime } = await import("./whatsappTemplates.service");
     const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         content: text,
         channel: target.channel,
         channelIdentifier: target.channelIdentifier,
+        template: { purpose: "reminder", params: [input.reminder.text, clockTime(input.slotKey)] },
     });
 
     if (delivery.reason === "paused") {

@@ -190,6 +190,39 @@ export async function familyMemberPhone(familyId: string, userId: string): Promi
 }
 
 /** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */
+/** A template hint from the engine ({purpose, params, lang}), checked: anything else is dropped. */
+export function engineTemplate(raw: unknown): import("./channelOutbound.service").OutboundTemplate | undefined {
+    const t = raw as { purpose?: unknown; params?: unknown; lang?: unknown } | null | undefined;
+    const purposes = ["reminder", "summary", "alert", "order"];
+    if (!t || typeof t !== "object" || !purposes.includes(String(t.purpose))) return undefined;
+    const params = Array.isArray(t.params) ? t.params.map((p) => String(p ?? "")).slice(0, 3) : [];
+    return {
+        purpose: String(t.purpose) as import("./whatsappTemplates.service").TemplatePurpose,
+        params,
+        ...(typeof t.lang === "string" && t.lang ? { lang: t.lang } : {}),
+    };
+}
+
+/** Just the template, when their chat is closed (nothing when it is open: the engine sends the message itself then). */
+export async function sendTemplateOnly(input: {
+    familyId: string;
+    recipientUserId: string;
+    toUserId: string;
+    template: import("./channelOutbound.service").OutboundTemplate;
+}) {
+    const found = await familyMemberPhone(input.familyId, input.toUserId);
+    if ("reason" in found) return { sent: false, reason: found.reason };
+    const { windowOpen } = await import("./whatsappWindow.service");
+    if (await windowOpen(found.phone)) return { sent: false, reason: "chat open" };
+    const { flagsLoadedAt, isSaheliPaused, refreshFlags } = await import("./featureFlags.service");
+    if (!flagsLoadedAt()) await refreshFlags().catch(() => undefined);
+    if (isSaheliPaused(input.familyId)) return { sent: false, reason: "paused" };
+    const { isMetaWhatsAppEnabled } = await import("../clients/metaWhatsApp.client");
+    if (!isMetaWhatsAppEnabled()) return { sent: false, reason: "whatsapp off" };
+    const { sendTemplateNotice } = await import("./channelOutbound.service");
+    return sendTemplateNotice({ familyId: input.familyId, recipientUserId: input.recipientUserId, toUserId: input.toUserId, phone: found.phone, template: input.template });
+}
+
 export async function sendSaheliWhatsApp(input: {
     familyId: string;
     recipientUserId: string;
@@ -198,6 +231,8 @@ export async function sendSaheliWhatsApp(input: {
     buttons?: Array<{ id: string; title: string }>;
     /** The message asks them to share a location: WhatsApp's "Send location" button goes with it. */
     locationRequest?: boolean;
+    /** Sent instead when their WhatsApp chat is closed (the message then waits for their next one). */
+    template?: import("./channelOutbound.service").OutboundTemplate;
 }) {
     const text = input.text.trim();
     if (!text) return { delivered: false, reason: "empty" };
@@ -223,6 +258,12 @@ export async function sendSaheliWhatsApp(input: {
         channel: "whatsapp",
         channelIdentifier: phone,
         ...(whatsappPayloads ? { whatsappPayloads } : {}),
+        ...(input.template ? { template: input.template } : {}),
     });
-    return { delivered: Boolean(delivery.delivered) };
+    return {
+        delivered: Boolean(delivery.delivered),
+        ...(delivery.via ? { via: delivery.via } : {}),
+        ...(delivery.waiting ? { waiting: true } : {}),
+        ...(delivery.reason ? { reason: delivery.reason } : {}),
+    };
 }

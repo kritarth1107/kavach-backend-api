@@ -504,6 +504,10 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { recordWhatsAppWebhookEvent } = await import("../services/whatsappWebhookLog.service");
 
     const messages = parseMetaWebhookMessages(req.body);
+    // A free message Meta refused because the person's 24-hour window was closed: close it, so later sends use a template.
+    void import("../services/whatsappWindow.service")
+        .then((W) => W.noteStatusFailures(req.body))
+        .catch(() => undefined);
     if (!messages.length) {
         const objectType =
             req.body && typeof req.body === "object"
@@ -529,6 +533,10 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     for (const inbound of messages) {
         if (await claimWhatsAppInboundMessage(inbound.messageId, inbound.from, { mediaId: inbound.mediaId, mediaType: inbound.mediaType })) {
             fresh.push(inbound);
+            // Their message opens WhatsApp's 24-hour window: Saheli may write freely until it shuts.
+            await import("../services/whatsappWindow.service")
+                .then((W) => W.noteInbound(inbound.from))
+                .catch((err) => console.warn("WhatsApp window note failed:", err instanceof Error ? err.message : err));
         } else {
             console.log(
                 `Meta WhatsApp webhook: duplicate delivery ignored (msg=${String(inbound.messageId).slice(-10)})`,

@@ -205,7 +205,9 @@ async function withDb(uri: string) {
                                       nudgeKind: "pre_reminder", delivered: true, channel: "whatsapp" });
         await SaheliNudgeLog.create({ nudgeId: "n2", familyId: "famR", recipientUserId: "cg1", scheduleId: `reminder:${smoke}:15:00`, dateKey: MON,
                                       nudgeKind: "pre_reminder", delivered: false, terminal: true, reason: "invalid_recipient", channel: "whatsapp" });
-        await SaheliReminder.updateMany({}, { $set: { createdAt: at(SUN, "10:00") } }, { timestamps: false });
+        // straight to the collection: mongoose keeps createdAt immutable and drops the change silently (the test then
+        // depended on the hour it ran: it failed after 14:00 on the day the dates were written)
+        await SaheliReminder.collection.updateMany({}, { $set: { createdAt: at(SUN, "10:00") } });
         await R.skipSaheliReminder({ familyId: "famR", recipientUserId: "cg1", actorUserId: "cg1", reminderId: smoke, day: MON, time: "17:00", now: at(MON, "09:00") });
         const view = await R.remindersForDay({ familyId: "famR", recipientUserId: "cg1", actorUserId: "cg1", day: MON, now: at(MON, "18:00") });
         const st = (id: string, t: string) => view.occurrences.find((o) => o.reminderId === id && o.time === t)?.status;

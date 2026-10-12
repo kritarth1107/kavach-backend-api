@@ -96,7 +96,9 @@ export type SaheliToolName =
     | "remove_place"
     | "add_family_member"
     | "set_my_name"
-    | "finish_setup";
+    | "finish_setup"
+    | "send_template"
+    | "whatsapp_window";
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -889,7 +891,7 @@ export async function executeSaheliTool(input: {
             });
         }
         case "send_whatsapp": {
-            const { sendSaheliWhatsApp } = await import("./careMemorySync.service");
+            const { sendSaheliWhatsApp, engineTemplate } = await import("./careMemorySync.service");
             return sendSaheliWhatsApp({
                 familyId: input.familyId,
                 recipientUserId: input.recipientUserId,
@@ -897,6 +899,27 @@ export async function executeSaheliTool(input: {
                 text: String(input.args.text ?? ""),
                 buttons: Array.isArray(input.args.buttons) ? (input.args.buttons as Array<{ id: string; title: string }>) : undefined,
                 locationRequest: input.args.location_request === true,
+                template: engineTemplate(input.args.template),
+            });
+        }
+        case "whatsapp_window": {
+            // Is this person's WhatsApp chat open (they wrote in the last 24 hours)? A check-in is planned only then.
+            const { familyMemberPhone } = await import("./careMemorySync.service");
+            const found = await familyMemberPhone(input.familyId, String(input.args.to ?? input.recipientUserId));
+            if ("reason" in found) return { open: false, reason: found.reason };
+            const { windowOpen } = await import("./whatsappWindow.service");
+            return { open: await windowOpen(found.phone) };
+        }
+        case "send_template": {
+            // Only the notice (the engine keeps the message itself, e.g. the nightly brief): sent when their chat is closed.
+            const { sendTemplateOnly, engineTemplate } = await import("./careMemorySync.service");
+            const template = engineTemplate(input.args.template);
+            if (!template) return { sent: false, reason: "no template" };
+            return sendTemplateOnly({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                toUserId: String(input.args.to ?? input.recipientUserId),
+                template,
             });
         }
         case "claim_schedule_rows": {

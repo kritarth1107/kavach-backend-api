@@ -70,6 +70,10 @@ export async function runBrainV2(input: {
     const soon = await import("./saheliReminder.service")
         .then((R) => R.remindersSoon(input.identity.familyId, [input.identity.userId, elder.userId]))
         .catch(() => []);
+    // Messages that could not reach them while their WhatsApp chat was closed (they got a template): Saheli gives them now.
+    const waiting = await import("./whatsappWindow.service")
+        .then((W) => W.takeWaiting(input.identity.userId))
+        .catch(() => []);
     const { aiPostBrainTurn } = await import("../clients/aiEngine.client");
     const started = Date.now();
     const out = await aiPostBrainTurn({
@@ -88,6 +92,7 @@ export async function runBrainV2(input: {
         ...(input.mediaNote ? { media_note: input.mediaNote } : {}),
         ...(input.location ? { location: { name: "", address: "", ...input.location } } : {}),
         ...(onboarding ? { onboarding: true } : {}),
+        ...(waiting.length ? { waiting } : {}),
         ...(soon.length
             ? {
                   reminders_soon: soon.map((r) => ({

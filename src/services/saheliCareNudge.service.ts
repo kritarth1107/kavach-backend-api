@@ -138,6 +138,12 @@ export async function deliverCareNudge(input: {
             return false;
         }
     }
+    // Their WhatsApp chat closed (no message from them in 24 hours): the dose still reaches them as the reminder template,
+    // with the same Done button. The day's schedule message has no template; its doses get their own reminders.
+    const { clockTime } = await import("./whatsappTemplates.service");
+    const template = input.nudgeKind === "daily_schedule"
+        ? undefined
+        : { purpose: "reminder" as const, params: [input.title, clockTime(input.time)], quickReplyPayloads: [`done:${input.scheduleId}`] };
     const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
@@ -145,6 +151,7 @@ export async function deliverCareNudge(input: {
         channel: target.channel,
         channelIdentifier: target.channelIdentifier,
         whatsappPayloads: payloads,
+        ...(template ? { template } : {}),
     });
 
     await finalizeNudgeAttempt(attemptId, {
@@ -292,9 +299,16 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
             const hindi = /hindi|hinglish/i.test(input.preferredLanguage);
             const text = lateDoseText(claims.map((x) => x.item), input.displayName, hindi);
             const target = await resolveRecipientChannel(c.familyId, c.recipientUserId, c.preferredChannel);
+            const { clockTime } = await import("./whatsappTemplates.service");
+            const one = claims.length === 1 ? claims[0]!.item : null;
+            const template = {
+                purpose: "reminder" as const,
+                params: [claims.map((x) => x.item.title).join(", "), clockTime(claims[0]!.item.time)],
+                ...(one ? { quickReplyPayloads: [`done:${one.scheduleId}`] } : {}),
+            };
             const delivery = target && target.channel !== "dashboard"
                 ? await deliverOutboundMessage({ purpose: "proactive", familyId: c.familyId, recipientUserId: c.recipientUserId, content: text,
-                                                 channel: target.channel, channelIdentifier: target.channelIdentifier })
+                                                 channel: target.channel, channelIdentifier: target.channelIdentifier, template })
                 : { delivered: false, channel: "dashboard" as const, reason: "invalid_recipient" as const };
             for (const x of claims) {
                 await finalizeNudgeAttempt(x.id, {

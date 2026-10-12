@@ -310,6 +310,8 @@ export async function sendMetaWhatsAppTemplate(input: {
     bodyParameters?: string[];
     /** Authentication templates: the "Copy code" URL button takes the code as its parameter. */
     urlButtonParameter?: string;
+    /** Quick reply buttons, in order: what comes back when one is tapped (e.g. done:<schedule> on a reminder). */
+    quickReplyPayloads?: string[];
 }): Promise<string | undefined> {
     await assertSendableWhatsAppRecipient(input.to);
     const meta = config.whatsapp.meta;
@@ -330,7 +332,7 @@ export async function sendMetaWhatsAppTemplate(input: {
             template: {
                 name: input.templateName,
                 language: { code: input.languageCode ?? "en" },
-                components: input.bodyParameters?.length || input.urlButtonParameter
+                components: input.bodyParameters?.length || input.urlButtonParameter || input.quickReplyPayloads?.length
                     ? [
                           ...(input.bodyParameters?.length
                               ? [{ type: "body", parameters: input.bodyParameters.map((text) => ({ type: "text", text })) }]
@@ -338,6 +340,9 @@ export async function sendMetaWhatsAppTemplate(input: {
                           ...(input.urlButtonParameter
                               ? [{ type: "button", sub_type: "url", index: "0", parameters: [{ type: "text", text: input.urlButtonParameter }] }]
                               : []),
+                          ...(input.quickReplyPayloads ?? []).map((payload, i) => ({
+                              type: "button", sub_type: "quick_reply", index: String(i), parameters: [{ type: "payload", payload }],
+                          })),
                       ]
                     : undefined,
             },

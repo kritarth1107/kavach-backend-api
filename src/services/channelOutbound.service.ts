@@ -6,7 +6,6 @@ import {
     sendViaMetaWhatsApp,
     sendMetaWhatsAppTemplate,
 } from "../clients/metaWhatsApp.client";
-import SaheliCompanion from "../models/saheliCompanion.model";
 import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
 import { composeWhatsAppReply } from "./whatsappMessageComposer.service";
 import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
@@ -22,10 +21,30 @@ export type OutboundDelivery = {
     channel: "whatsapp" | "phone" | "dashboard";
     channelIdentifier: string;
     delivered: boolean;
-    /** Set when delivery was skipped/failed; "invalid_recipient" is terminal (placeholder number). */
-    reason?: "invalid_recipient" | "send_failed" | "paused";
+    /** Set when delivery was skipped/failed; "invalid_recipient" is terminal (placeholder number); "outside_window": their
+     *  WhatsApp chat is closed (24 hours since they last wrote) and no approved template fits this message. */
+    reason?: "invalid_recipient" | "send_failed" | "paused" | "outside_window";
     /** WhatsApp message ids (wamid…) of what was sent, when the provider returned them. */
     messageIds?: string[];
+    /** The chat was closed: a template went instead of the message. */
+    via?: "template";
+    /** The message itself waits and goes to Saheli's next turn with them. */
+    waiting?: boolean;
+};
+
+/**
+ * What to send instead when the person's 24-hour WhatsApp window is closed (whatsappTemplates.service). Without one, a
+ * message to a closed chat is not sent (it would fail quietly).
+ */
+export type OutboundTemplate = {
+    purpose: import("./whatsappTemplates.service").TemplatePurpose;
+    params: string[];
+    /** The reader's language code; else their saved one. */
+    lang?: string;
+    /** Quick reply payloads, in order (a reminder's Done). */
+    quickReplyPayloads?: string[];
+    /** The message waits for their next message (default: yes, except a reminder, which the template already is). */
+    keepWaiting?: boolean;
 };
 
 export async function resolveRecipientChannel(
@@ -82,6 +101,8 @@ export async function deliverOutboundMessage(payload: {
     /** "proactive" = Saheli starts it (reminders, nudges, outreach): held back while the family is paused from the
      *  admin console. "alert" = caregiver alerts, never held back. */
     purpose?: "proactive" | "alert";
+    /** Sent instead when their WhatsApp window is closed. */
+    template?: OutboundTemplate;
 }): Promise<OutboundDelivery> {
     const record = {
         messageId: randomUUID(),
@@ -145,36 +166,24 @@ export async function deliverOutboundMessage(payload: {
     const messageIds: string[] = [];
     try {
         if (payload.channel === "whatsapp" && isMetaWhatsAppEnabled()) {
-            const companion = await SaheliCompanion.findOne({
-                familyId: payload.familyId,
-                recipientUserId: payload.recipientUserId,
-            }).lean();
-            const outsideWindow =
-                companion?.lastWhatsAppInboundAt &&
-                Date.now() - new Date(companion.lastWhatsAppInboundAt).getTime() >
-                    24 * 60 * 60 * 1000;
-
-            if (outsideWindow && process.env.WHATSAPP_TEMPLATE_MORNING_CARE) {
-                const id = await sendMetaWhatsAppTemplate({
-                    to: payload.channelIdentifier,
-                    templateName: process.env.WHATSAPP_TEMPLATE_MORNING_CARE,
-                    bodyParameters: [payload.content.slice(0, 120)],
-                });
-                if (id) messageIds.push(id);
-            } else {
-                // Proactive sends (nudges, outreach, reminders) go out as ONLY the message —
-                // no trailing "Anything else I can help with?" quick-action bubble.
-                const rich = payload.whatsappPayloads ?? composeWhatsAppReply(payload.content, { kind: "plain" });
-                messageIds.push(
-                    ...(await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content, rich, {
-                        contextMessageId: payload.replyToMessageId,
-                    })),
-                );
-                // Someone who chose "always" voice notes also hears reminders and check-ins (after the text, never
-                // holding up the next send).
-                const { chatMark } = await import("../clients/metaWhatsApp.client");
-                void alsoSendVoice(payload, chatMark(payload.channelIdentifier));
+            // The reader's own window (the caregiver's, for news about the elder), kept from every inbound message.
+            const { windowOpen } = await import("./whatsappWindow.service");
+            if (!(await windowOpen(payload.channelIdentifier).catch(() => true))) {
+                const out = await deliverOutsideWindow(payload, record);
+                if (out) return out; // else no template for it is approved yet: the message itself is tried, as before
             }
+            // Proactive sends (nudges, outreach, reminders) go out as ONLY the message —
+            // no trailing "Anything else I can help with?" quick-action bubble.
+            const rich = payload.whatsappPayloads ?? composeWhatsAppReply(payload.content, { kind: "plain" });
+            messageIds.push(
+                ...(await sendViaMetaWhatsApp(payload.channelIdentifier, payload.content, rich, {
+                    contextMessageId: payload.replyToMessageId,
+                })),
+            );
+            // Someone who chose "always" voice notes also hears reminders and check-ins (after the text, never
+            // holding up the next send).
+            const { chatMark } = await import("../clients/metaWhatsApp.client");
+            void alsoSendVoice(payload, chatMark(payload.channelIdentifier));
         } else {
             const adapter =
                 payload.channel === "phone" ? phoneMockAdapter : whatsAppMockAdapter;
@@ -210,6 +219,69 @@ export async function deliverOutboundMessage(payload: {
             delivered: false,
             reason: "send_failed",
         };
+    }
+}
+
+/** Only a template notice (the caller keeps the message itself, e.g. the engine's nightly brief); nothing else is sent. */
+export async function sendTemplateNotice(input: {
+    familyId: string;
+    recipientUserId: string;
+    toUserId: string;
+    phone: string;
+    template: OutboundTemplate;
+}): Promise<{ sent: boolean; reason?: string; template?: string }> {
+    const T = await import("./whatsappTemplates.service");
+    const lang = input.template.lang || (await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.toUserId)).catch(() => null))?.language;
+    const chosen = await T.pickTemplate(input.template.purpose, lang);
+    if (!chosen) return { sent: false, reason: "no approved template" };
+    const params = Array.from({ length: T.TEMPLATE_PARAMS[input.template.purpose] }, (_, i) => T.templateParam(input.template.params[i] ?? ""));
+    try {
+        await sendMetaWhatsAppTemplate({ to: input.phone, templateName: chosen.name, languageCode: chosen.language, bodyParameters: params });
+        await OutboundMessage.create({ messageId: randomUUID(), familyId: input.familyId, recipientUserId: input.recipientUserId, channel: "whatsapp",
+            channelIdentifier: input.phone, content: `[${chosen.name} ${chosen.language}] ${params.join(" | ")}`, direction: "outbound", deliveredAt: new Date() });
+        return { sent: true, template: chosen.name };
+    } catch (err) {
+        console.warn(`WhatsApp template ${chosen.name} failed:`, err instanceof Error ? err.message : err);
+        return { sent: false, reason: "send failed" };
+    }
+}
+
+/**
+ * Their WhatsApp chat is closed (no message from them in 24 hours): a free message would fail quietly. With an approved
+ * template, they get it (in their language) and the message itself waits for their next message, when Saheli gives it.
+ * Without a template (a nudge) nothing is sent. null: no template for it is approved yet, so the caller tries the
+ * message itself as before.
+ */
+async function deliverOutsideWindow(
+    payload: Parameters<typeof deliverOutboundMessage>[0],
+    record: Record<string, unknown>,
+): Promise<OutboundDelivery | null> {
+    const t = payload.template;
+    if (!t) return { channel: "dashboard", channelIdentifier: "dashboard", delivered: false, reason: "outside_window" };
+    const phone = payload.channelIdentifier;
+    const reader = payload.toUserId || payload.recipientUserId;
+    const T = await import("./whatsappTemplates.service");
+    const lang = t.lang || (await import("./voicePreference.service").then((V) => V.getSpeechProfile(reader)).catch(() => null))?.language;
+    const chosen = await T.pickTemplate(t.purpose, lang);
+    if (!chosen) return null;
+    const params = Array.from({ length: T.TEMPLATE_PARAMS[t.purpose] }, (_, i) => T.templateParam(t.params[i] ?? ""));
+    try {
+        const id = await sendMetaWhatsAppTemplate({
+            to: phone, templateName: chosen.name, languageCode: chosen.language, bodyParameters: params,
+            ...(t.quickReplyPayloads?.length ? { quickReplyPayloads: t.quickReplyPayloads } : {}),
+        });
+        await OutboundMessage.create({ ...record, content: `[${chosen.name} ${chosen.language}] ${params.join(" | ")}` });
+        const waiting = t.keepWaiting ?? t.purpose !== "reminder";
+        if (waiting) {
+            const { keepWaiting } = await import("./whatsappWindow.service");
+            await keepWaiting({ phone, familyId: payload.familyId, toUserId: reader, purpose: t.purpose, text: payload.content }).catch((err) =>
+                console.warn("Keeping a message for a closed WhatsApp chat failed:", err instanceof Error ? err.message : err),
+            );
+        }
+        return { channel: "whatsapp", channelIdentifier: phone, delivered: true, via: "template", waiting, messageIds: id ? [id] : [] };
+    } catch (err) {
+        console.warn(`WhatsApp template ${chosen.name} failed:`, err instanceof Error ? err.message : err);
+        return null; // the message itself is tried
     }
 }
 
