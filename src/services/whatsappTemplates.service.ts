@@ -24,18 +24,19 @@ export type TemplatePurpose =
     | "alert"
     | "order";
 
-export const TEMPLATE_BASE: Record<TemplatePurpose, string> = {
-    reminder: "kavach_care_reminder",
-    summary: "kavach_daily_summary",
+/** Template names per purpose, in order: a reworded alternate is tried where Meta did not file the first as UTILITY. */
+export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
+    reminder: ["kavach_care_reminder"],
+    summary: ["kavach_daily_summary"],
     // a caregiver alert as a fixed sentence per kind, {{1}} = the person (kavach_alert_<kind>_<lang>)
-    alert_dose: "kavach_alert_dose",
-    alert_noreply: "kavach_alert_noreply",
-    alert_health: "kavach_alert_health",
-    alert_approval: "kavach_alert_approval",
+    alert_dose: ["kavach_alert_dose"],
+    alert_noreply: ["kavach_alert_noreply", "kavach_alert_wellbeing"],
+    alert_health: ["kavach_alert_health", "kavach_alert_unwell"],
+    alert_approval: ["kavach_alert_approval"],
     // free-text alert and order update ({{2}} = a line of the message): Meta filed both MARKETING (2026-10-12), so none
     // is approved and these go as before; kept for the engine's hints
-    alert: "kavach_alert",
-    order: "kavach_order_update",
+    alert: ["kavach_alert"],
+    order: ["kavach_order_update"],
 };
 
 /** Params each template takes (Meta refuses a send with the wrong count). */
@@ -114,10 +115,11 @@ export function languageChain(lang?: string | null): string[] {
 /** The template to send for this purpose to someone who reads `lang`, or null when none is approved yet. */
 export async function pickTemplate(purpose: TemplatePurpose, lang?: string | null): Promise<{ name: string; language: string } | null> {
     const ok = await approvedTemplates();
-    const base = TEMPLATE_BASE[purpose];
     for (const l of languageChain(lang)) {
-        for (const name of [`${base}_${l}`, base]) {
-            if (ok.has(`${name}|${l}`)) return { name, language: l };
+        for (const base of TEMPLATE_BASES[purpose]) {
+            for (const name of [`${base}_${l}`, base]) {
+                if (ok.has(`${name}|${l}`)) return { name, language: l };
+            }
         }
     }
     return null;

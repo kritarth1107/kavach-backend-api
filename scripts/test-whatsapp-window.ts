@@ -57,6 +57,10 @@ async function pure() {
         assert.deepEqual(await T.pickTemplate("alert_health", "gu"), { name: "kavach_alert_health_en", language: "en" });
         assert.equal(await T.pickTemplate("summary", "hi"), null); // not approved yet: no template
         assert.equal(await T.pickTemplate("alert", "en"), null); // the free-text alert was filed marketing
+        // where the first wording of a kind was not filed UTILITY, the reworded alternate in the same language comes first
+        T.setTemplateCatalogForTest(["kavach_alert_wellbeing_en|en", "kavach_alert_noreply_hi|hi"]);
+        assert.deepEqual(await T.pickTemplate("alert_noreply", "en"), { name: "kavach_alert_wellbeing_en", language: "en" });
+        assert.deepEqual(await T.pickTemplate("alert_noreply", "hi"), { name: "kavach_alert_noreply_hi", language: "hi" });
     });
     await ok("each caregiver alert kind has its fixed template; the others have none", () => {
         assert.equal(T.alertTemplateFor("health_red_flag"), "alert_health");
