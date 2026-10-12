@@ -25,6 +25,31 @@ function inWindow(value: number, min: number, max: number): boolean {
     return value >= min && value <= max;
 }
 
+async function composeDoseLine(input: { familyId: string; recipientUserId: string; scheduleId: string; title: string; time: string }): Promise<string | null> {
+    try {
+        const SaheliNudgeLog = (await import("../models/saheliNudgeLog.model")).default;
+        const rows = await SaheliNudgeLog.find({ familyId: input.familyId, recipientUserId: input.recipientUserId, scheduleId: input.scheduleId, delivered: true })
+            .sort({ lastAttemptAt: -1 })
+            .limit(8)
+            .select("messagePreview")
+            .lean<Array<{ messagePreview?: string }>>();
+        const { aiEngineJson } = await import("../clients/aiEngine.client");
+        const out = await aiEngineJson<{ text: string | null }>("POST", "/v2/brain/compose-reminder", {
+            family_id: input.familyId,
+            subject_id: input.recipientUserId,
+            purpose: `time for ${input.title} (${input.time})`,
+            at: input.time,
+            recent: rows.map((r) => String(r.messagePreview ?? "")).filter(Boolean),
+            kind: "medicine",
+            item: input.title,
+        }, 20_000);
+        return out?.text?.trim() || null;
+    } catch (err) {
+        console.warn(`[care-nudge] compose failed, sending the usual text: ${err instanceof Error ? err.message : err}`);
+        return null;
+    }
+}
+
 export async function deliverCareNudge(input: {
     familyId: string;
     recipientUserId: string;
@@ -57,6 +82,7 @@ export async function deliverCareNudge(input: {
         const { stripMaa } = await import("./saheliFactGuard.service");
         text = stripMaa(text);
     }
+
     // Evolving profile: ONE care line from today's care actions (follow up on her knee, ask about
     // her walk, a sip of water) — like her own child remembering yesterday. Offers stay offers.
     if (input.nudgeKind === "daily_schedule" && P) {
@@ -72,16 +98,18 @@ export async function deliverCareNudge(input: {
         if (line) text = `${text}\n\n${line}`;
     }
 
-    const payloads = buildCareNudgeMessages({
-        text,
-        nudgeKind:
-            input.nudgeKind === "daily_schedule" || input.nudgeKind === "dose_due"
-                ? "pre_reminder"
-                : input.nudgeKind,
-        scheduleId: input.scheduleId,
-        title: input.title,
-        time: input.time,
-    });
+    const build = () =>
+        buildCareNudgeMessages({
+            text,
+            nudgeKind:
+                input.nudgeKind === "daily_schedule" || input.nudgeKind === "dose_due"
+                    ? "pre_reminder"
+                    : input.nudgeKind,
+            scheduleId: input.scheduleId,
+            title: input.title,
+            time: input.time,
+        });
+    let payloads = build();
 
     const slotKey = {
         familyId: input.familyId,
@@ -98,6 +126,15 @@ export async function deliverCareNudge(input: {
             console.log(`Care nudge deferred (${gate.reason}) for ${input.recipientUserId} (${input.nudgeKind})`);
             if (input.medicine && input.nudgeKind === "dose_due") await rememberHeldDose(input, gate.reason || "gate");
             return false;
+        }
+    }
+    if (input.nudgeKind === "dose_due") {
+        // A dose reminder is written when it goes out (after the gate, so a held dose costs nothing), never the same line
+        // twice (founder 2026-10-13); the medicine's name and time stay exact; the usual text goes out if there is none.
+        const fresh = await composeDoseLine(input);
+        if (fresh) {
+            text = avoidMaa ? (await import("./saheliFactGuard.service")).stripMaa(fresh) : fresh;
+            payloads = build();
         }
     }
     const attemptId = await claimNudgeAttempt(slotKey, text);

@@ -172,12 +172,18 @@ export async function logVitals(input: {
     recipientUserId: string;
     actorUserId: string;
     kind: string;
+    /** For kind "other": what was measured. */
+    name?: string;
     value: string;
     unit?: string;
     note?: string;
+    /** YYYY-MM-DD when measured on an earlier day (a scan photo from yesterday). */
+    takenOn?: string;
     channel?: ChannelType;
 }): Promise<Record<string, unknown>> {
-    const detail = [input.kind, input.value, input.unit].filter(Boolean).join(" ");
+    const label = input.kind === "other" && input.name?.trim() ? input.name.trim() : input.kind;
+    const takenOn = input.takenOn && /^\d{4}-\d{2}-\d{2}$/.test(input.takenOn) ? input.takenOn : undefined;
+    const detail = [label, input.value, input.unit].filter(Boolean).join(" ") + (takenOn ? ` (measured ${takenOn})` : "");
     await appendCareRecordEvent({
         familyId: input.familyId,
         subjectUserId: input.recipientUserId,
@@ -185,15 +191,15 @@ export async function logVitals(input: {
         type: CareRecordEventType.VITAL,
         source: CareRecordSource.SAHELI,
         channel: input.channel ?? ChannelType.WHATSAPP,
-        title: input.kind,
+        title: label,
         detail: input.note?.trim() ? `${detail} — ${input.note.trim()}` : detail,
         status: "reported",
-        payload: { kind: input.kind, value: input.value, unit: input.unit },
+        payload: { kind: input.kind, value: input.value, unit: input.unit, ...(input.name ? { name: input.name } : {}), ...(takenOn ? { takenOn } : {}) },
         skipSignalCheck: true,
     });
 
     const bpMatch = input.value.match(/(\d{2,3})\s*[/\\]\s*(\d{2,3})/);
-    if (bpMatch && /bp|blood pressure/i.test(input.kind)) {
+    if (bpMatch && !takenOn && /bp|blood pressure/i.test(input.kind)) {
         const day = await getScheduleDayStatuses(
             input.familyId,
             input.recipientUserId,

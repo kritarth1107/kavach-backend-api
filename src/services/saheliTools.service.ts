@@ -1139,9 +1139,11 @@ export async function executeSaheliTool(input: {
                 recipientUserId: input.recipientUserId,
                 actorUserId: input.actorUserId,
                 kind: String(input.args.kind ?? input.args.name ?? "Vitals"),
+                name: input.args.name ? String(input.args.name) : undefined,
                 value: String(input.args.value ?? ""),
                 unit: input.args.unit ? String(input.args.unit) : undefined,
                 note: input.args.note ? String(input.args.note) : undefined,
+                takenOn: input.args.taken_on ? String(input.args.taken_on) : undefined,
             });
         }
         case "log_dose": {

@@ -565,10 +565,65 @@ export async function resolvePerson(familyId: string, recipientUserId: string, d
 export type StatCard = {
     key: string; name: string; value: string; unit: string | null; range: string | null; flag: Flag | null;
     date: string | null; count: number; trend: Array<{ date: string | null; value: number }>; delta: number | null; prevDate: string | null;
+    /** Where the latest value came from: a saved report, a reading told to Saheli, or worked out (BMI from weight and height). */
+    from?: "report" | "chat" | "calculated";
 };
 
+/** A reading told to Saheli (chat, photo of a scale or scan), as it shows in the records. */
+export type ChatReading = { key: string; name: string; value: string; unit: string | null; date: string; at: string };
+
+/** Saheli's reading kinds (engine log_vital enum): the card each goes to, and a normal range only where one fits everyone. */
+const VITAL_CARDS: Record<string, { key: string; label: string; range?: string }> = {
+    weight: { key: "weight", label: "Weight" },
+    height: { key: "height", label: "Height" },
+    bmi: { key: "bmi", label: "BMI", range: "18.5–24.9" },
+    body_fat: { key: "body_fat", label: "Body fat" },
+    muscle_mass: { key: "muscle_mass", label: "Muscle mass" },
+    waist: { key: "waist", label: "Waist" },
+    bp: { key: "bp", label: "Blood pressure" },
+    sugar: { key: "sugar", label: "Blood sugar" },
+    temperature: { key: "temperature", label: "Temperature" },
+    spo2: { key: "spo2", label: "SpO2", range: "95–100" },
+    pulse: { key: "pulse", label: "Pulse", range: "60–100" },
+};
+
+/** Height in cm from a reading's number and unit (Saheli sends cm; metres and feet are converted). */
+export function heightCm(value: string, unit: string | null): number | null {
+    const n = num(value);
+    if (n == null || n <= 0) return null;
+    const u = String(unit || "").toLowerCase().trim();
+    if (u === "m" || (!u && n < 3)) return n * 100;
+    if (u === "ft" || u === "feet") {
+        const m = String(value).match(/(\d+)(?:\s*[.'\s]\s*(\d+(?:\.\d+)?))?/);
+        return m ? Number(m[1]) * 30.48 + (m[2] ? Number(m[2]) * 2.54 : 0) : null;
+    }
+    if (u === "in" || u === "inch" || u === "inches") return n * 2.54;
+    return n > 50 && n < 260 ? n : null;
+}
+
+async function chatReadings(familyId: string, recipientUserId: string): Promise<ChatReading[]> {
+    const { default: CareRecordEvent } = await import("../models/careRecordEvent.model");
+    const rows = await CareRecordEvent.find({ familyId, subjectUserId: recipientUserId, type: "vital" }, { payload: 1, title: 1, createdAt: 1 })
+        .sort({ createdAt: -1 }).limit(500).lean<Array<{ payload?: Record<string, unknown>; title?: string; createdAt?: Date }>>();
+    const out: ChatReading[] = [];
+    for (const r of rows) {
+        const p = r.payload ?? {};
+        const kind = String(p.kind ?? r.title ?? "").toLowerCase().trim();
+        const value = String(p.value ?? "").trim();
+        if (!kind || !value || num(value) == null) continue;
+        const known = VITAL_CARDS[kind];
+        const card = known ? { key: known.key, label: known.label } : testKey(String(p.name || kind));
+        const at = r.createdAt ? new Date(r.createdAt).toISOString() : new Date().toISOString();
+        const taken = typeof p.takenOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(p.takenOn) ? p.takenOn : null;
+        const date = taken ?? new Date(new Date(at).getTime() + 330 * 60_000).toISOString().slice(0, 10);
+        out.push({ key: card.key, name: card.label, value, unit: p.unit ? String(p.unit) : null, date, at });
+    }
+    return out;
+}
+
 /** Markers families usually watch; a small tie-break only, and only when their own reports include them. */
-const KEY_MARKERS = new Set(["haemoglobin", "creatinine", "hba1c", "glucose_fasting", "bp", "tsh", "wbc", "platelets", "egfr", "potassium", "sodium", "ldl"]);
+const KEY_MARKERS = new Set(["haemoglobin", "creatinine", "hba1c", "glucose_fasting", "bp", "tsh", "wbc", "platelets", "egfr", "potassium", "sodium", "ldl",
+                             "weight", "bmi", "sugar"]);
 
 /** How far outside its range a value is, as a fraction of the nearest limit (0 when unknown). */
 export function deviation(value: string, range: string | null, flag: Flag | null): number {
@@ -585,7 +640,8 @@ export function deviation(value: string, range: string | null, flag: Flag | null
 
 export async function recordHighlights(familyId: string, recipientUserId: string) {
     const docs = await LabDocument.find({ familyId, recipientUserId, ...APPROVED_RECORDS }, { structuredValues: 1, recordDate: 1, createdAt: 1, documentId: 1, title: 1 }).lean();
-    const groups = new Map<string, { label: string; points: Array<{ date: string | null; value: string; unit: string | null; range: string | null; flag: Flag | null; n: number | null }> }>();
+    type Point = { date: string | null; value: string; unit: string | null; range: string | null; flag: Flag | null; n: number | null; from: "report" | "chat" | "calculated" };
+    const groups = new Map<string, { label: string; points: Point[] }>();
     let reports = 0;
     for (const d of docs) {
         const vals = d.structuredValues ?? [];
@@ -595,9 +651,29 @@ export async function recordHighlights(familyId: string, recipientUserId: string
         for (const v of vals) {
             const { key, label } = testKey(v.name);
             const g = groups.get(key) ?? { label, points: [] };
-            g.points.push({ date: isoOf(v.date) || docDate, value: v.value, unit: v.unit || null, range: v.refRange || null, flag: computeFlag(v.value, v.refRange, (v.flag as Flag) || null), n: num(v.value) });
+            g.points.push({ date: isoOf(v.date) || docDate, value: v.value, unit: v.unit || null, range: v.refRange || null, flag: computeFlag(v.value, v.refRange, (v.flag as Flag) || null), n: num(v.value), from: "report" });
             groups.set(key, g);
         }
+    }
+    // Readings told to Saheli (founder 2026-10-13: weight, BMI or anything sent in chat goes to the health records).
+    const said = await chatReadings(familyId, recipientUserId);
+    for (const r of [...said].reverse()) {
+        const range = VITAL_CARDS[r.key]?.range ?? null;
+        const g = groups.get(r.key) ?? { label: r.name, points: [] };
+        g.points.push({ date: r.date, value: r.value, unit: r.unit, range, flag: computeFlag(r.value, range, null), n: num(r.value), from: "chat" });
+        groups.set(r.key, g);
+    }
+    // BMI from the latest weight and height, when no BMI was measured on or after that weight.
+    const latest = (k: string) => groups.get(k)?.points.filter((p) => p.n != null).sort((a, b) => String(a.date).localeCompare(String(b.date))).at(-1) ?? null;
+    const w = latest("weight");
+    const h = latest("height");
+    const cm = h ? heightCm(h.value, h.unit) : null;
+    const b = latest("bmi");
+    if (w?.n && cm && (!b || String(b.date) < String(w.date))) {
+        const bmi = Math.round((w.n / (cm / 100) ** 2) * 10) / 10;
+        const g = groups.get("bmi") ?? { label: "BMI", points: [] };
+        g.points.push({ date: w.date, value: String(bmi), unit: null, range: VITAL_CARDS.bmi.range!, flag: computeFlag(String(bmi), VITAL_CARDS.bmi.range!, null), n: bmi, from: "calculated" });
+        groups.set("bmi", g);
     }
     const cards: StatCard[] = [];
     for (const [key, g] of groups) {
@@ -608,7 +684,7 @@ export async function recordHighlights(familyId: string, recipientUserId: string
         cards.push({
             key, name: g.label, value: last.value, unit: last.unit, range: last.range, flag: last.flag, date: last.date, count: pts.length,
             trend: numeric.slice(-6).map((p) => ({ date: p.date, value: p.n! })),
-            delta: prev && last.n != null ? Math.round((last.n - prev.n!) * 100) / 100 : null, prevDate: prev?.date ?? null,
+            delta: prev && last.n != null ? Math.round((last.n - prev.n!) * 100) / 100 : null, prevDate: prev?.date ?? null, from: last.from,
         });
     }
     const today = Date.now();
@@ -627,7 +703,7 @@ export async function recordHighlights(familyId: string, recipientUserId: string
     const yearBefore = latestDate ? new Date(new Date(`${latestDate}T00:00:00Z`).getTime() - 365 * 86_400_000).toISOString().slice(0, 10) : null;
     const recent = ranked.filter((c) => !yearBefore || (c.date != null && c.date >= yearBefore));
     const top = [...recent, ...ranked.filter((c) => !recent.includes(c))].slice(0, 4);
-    return { cards: top, all: ranked, reports, latestDate, noticed: noticedFor(top, groups) };
+    return { cards: top, all: ranked, reports, latestDate, noticed: noticedFor(top, groups), readings: said.slice(0, 20) };
 }
 
 /** One plain observation for the most important card, only when the reports clearly show it. */

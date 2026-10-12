@@ -679,6 +679,38 @@ export async function tryCompleteRemindersFromMessage(input: {
     return `Got it — stopped ${completed.length} reminders.`;
 }
 
+/** The last lines sent for this reminder, newest first ("Reminder: " labels of older sends dropped). */
+export async function recentReminderLines(reminderId: string, limit = 8): Promise<string[]> {
+    const rows = await SaheliNudgeLog.find({ scheduleId: { $regex: `^reminder:${reminderId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:` }, delivered: true })
+        .sort({ lastAttemptAt: -1 })
+        .limit(limit)
+        .select("messagePreview")
+        .lean<Array<{ messagePreview?: string }>>();
+    return rows.map((r) => String(r.messagePreview ?? "").replace(/^Reminder:\s*/, "").trim()).filter(Boolean);
+}
+
+/** A fresh line from the engine for this send, or null (then the stored text goes out). */
+export async function composeReminderLine(familyId: string, recipientUserId: string, reminder: Pick<ISaheliReminder, "reminderId" | "text" | "aboutKey">, slotKey: string): Promise<string | null> {
+    try {
+        const { aiEngineJson } = await import("../clients/aiEngine.client");
+        const recent = await recentReminderLines(reminder.reminderId);
+        const medicine = typeof reminder.aboutKey === "string" && reminder.aboutKey.startsWith("medicine:");
+        const out = await aiEngineJson<{ text: string | null }>("POST", "/v2/brain/compose-reminder", {
+            family_id: familyId,
+            subject_id: recipientUserId,
+            purpose: reminder.text,
+            at: slotKey,
+            recent,
+            kind: medicine ? "medicine" : "reminder",
+            item: medicine ? reminder.text : undefined,
+        }, 20_000);
+        return out?.text?.trim() || null;
+    } catch (err) {
+        console.warn(`[reminder] compose failed, sending the stored text: ${err instanceof Error ? err.message : err}`);
+        return null;
+    }
+}
+
 async function fireReminderMessage(input: {
     familyId: string;
     recipientUserId: string;
@@ -691,7 +723,7 @@ async function fireReminderMessage(input: {
         return false;
     }
 
-    const text = `Reminder: ${input.reminder.text}`;
+    let text = `Reminder: ${input.reminder.text}`;
     const attemptId = await claimNudgeAttempt(
         {
             familyId: input.familyId,
@@ -722,6 +754,14 @@ async function fireReminderMessage(input: {
             reason: "no_valid_recipient",
         });
         return false;
+    }
+
+    // Written at the moment it goes out, never the same line again (founder 2026-10-13: the cigarette reminder repeated
+    // the same text). The stored text goes out if the engine has nothing.
+    const fresh = await composeReminderLine(input.familyId, input.recipientUserId, input.reminder, input.slotKey);
+    if (fresh) {
+        text = fresh;
+        await SaheliNudgeLog.updateOne({ nudgeId: attemptId }, { $set: { messagePreview: fresh.slice(0, 200) } }).catch(() => undefined);
     }
 
     // Their WhatsApp chat closed (no message from them in 24 hours): the reminder still reaches them, as the template.
