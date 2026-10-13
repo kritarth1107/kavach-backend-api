@@ -47,6 +47,8 @@ async function withDb(uri: string) {
     console.log("with DB");
     await mongoose.connect(uri);
     await mongoose.connection.db!.dropDatabase();
+    // the sign-up mechanics with sign-up open; invite-only (invite codes, the waitlist) is in scripts/test-invites.ts
+    process.env.INVITE_ONLY = "off";
     const S = await import("../src/services/whatsappSignup.service");
     const User = (await import("../src/models/users.model")).default;
     const Family = (await import("../src/models/family.model")).default;

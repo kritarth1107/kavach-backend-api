@@ -30,6 +30,10 @@ export const FLAG_DEFS = {
         type: "bool", env: "MCP_AGENT_CONNECTOR", envOn: "on", label: "Store connectors first",
         help: "Swiggy, Instamart and Zepto through their connectors first, the browser as fallback.",
     },
+    "signup.inviteOnly": {
+        type: "bool", env: "INVITE_ONLY", envOn: "on", label: "Invite-only sign-up",
+        help: "On (also when unset): a new account needs an invite link or an approved waitlist entry; everyone else joins the waitlist, on the dashboard and on WhatsApp. Off: anyone can sign up.",
+    },
 } as const satisfies Record<string, FlagDef>;
 
 export type FlagKey = keyof typeof FLAG_DEFS;
@@ -85,6 +89,12 @@ export function flaggedEnv(env: NodeJS.ProcessEnv = process.env, flags = snapsho
 export function regularNudgeMode(env: NodeJS.ProcessEnv = process.env, flags = snapshot): "off" | "shadow" | "on" {
     const v = typeof flags["nudge.regular"] === "string" ? (flags["nudge.regular"] as string) : (env.NUDGE_REGULAR || "off").trim().toLowerCase();
     return v === "shadow" || v === "on" ? v : "off";
+}
+
+/** Invite-only sign-up: the admin switch if set, else INVITE_ONLY ("off"/"false"/"0" opens sign-up), else on. */
+export function inviteOnlyEnabled(env: NodeJS.ProcessEnv = process.env, flags = snapshot): boolean {
+    if (typeof flags["signup.inviteOnly"] === "boolean") return flags["signup.inviteOnly"] as boolean;
+    return !["off", "false", "0", "no"].includes(String(env.INVITE_ONLY ?? "on").trim().toLowerCase());
 }
 
 export function isSaheliPaused(familyId: string, flags = snapshot): boolean {

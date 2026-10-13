@@ -10,6 +10,11 @@ on:
       - "src/models/**"
       - "src/services/featureFlags.service.ts"
       - "src/services/brainV2.service.ts"
+      # waitlist approval (approve sends the email with a personal invite link)
+      - "src/services/waitlist.service.ts"
+      - "src/services/invite.service.ts"
+      - "src/services/waitlistEmail.template.ts"
+      - "src/services/email.service.ts"
       - "src/types/**"
       - "src/config/**"
       - "scripts/test-admin.ts"
@@ -78,7 +83,9 @@ jobs:
               "GCP_PROJECT_ID": "${{ env.GCP_PROJECT_ID }}",
           }
           # Infrastructure page: which WhatsApp account's bill to read.
-          for k in ("BRAIN_V2", "BRAIN_V2_LIVE_FAMILIES", "MCP_AGENT_CONNECTOR", "WHATSAPP_META_WABA_ID", "WHATSAPP_META_GRAPH_VERSION"):
+          # Waitlist approval email: Saheli's live number and the dashboard address, the same as the backend's.
+          for k in ("BRAIN_V2", "BRAIN_V2_LIVE_FAMILIES", "MCP_AGENT_CONNECTOR", "WHATSAPP_META_WABA_ID", "WHATSAPP_META_GRAPH_VERSION",
+                    "KAVACH_WHATSAPP_NUMBER", "LIVE_FRONTEND_URL", "DASHBOARD_URL", "INVITE_ONLY"):
               if e.get(k): env[k] = e[k]
           with open("/tmp/admin-env.yaml", "w") as f:
               for k, v in env.items(): f.write(f"{k}: {json.dumps(v)}\n")

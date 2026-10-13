@@ -185,13 +185,16 @@ export async function verifyGoogleIdToken(idToken: string) {
   };
 }
 
+/** How a new account may be made (invite-only: see invite.service gatedSignup). Existing accounts ignore it. */
+export type SignupOptions = { inviteToken?: unknown; via?: string };
+
 export async function findOrCreateGoogleUser(profile: {
   googleId: string;
   email: string;
   name?: string;
   picture?: string;
   emailVerified: boolean;
-}) {
+}, signup: SignupOptions = {}) {
   let user = await User.findBySocialAccount(AuthProvider.GOOGLE, profile.googleId);
 
   if (!user) {
@@ -221,28 +224,37 @@ export async function findOrCreateGoogleUser(profile: {
     const [firstName, ...rest] = (profile.name ?? profile.email.split("@")[0]).split(" ");
     const passwordHash = await generatePasswordHash();
 
-    user = await User.create({
-      email: profile.email,
-      firstName,
-      lastName: rest.join(" ") || undefined,
-      avatarUrl: profile.picture,
-      passwordHash,
-      primaryAuthProvider: AuthProvider.GOOGLE,
-      emailVerified: profile.emailVerified,
-      onboarding: { status: "pending" },
-      socialAccounts: [
-        {
-          provider: AuthProvider.GOOGLE,
-          providerId: profile.googleId,
+    const { gatedSignup, isSignupDenied } = await import("./invite.service");
+    try {
+      user = await gatedSignup({ inviteToken: signup.inviteToken, email: profile.email, via: signup.via ?? "google" }, () =>
+        User.create({
           email: profile.email,
-          displayName: profile.name,
+          firstName,
+          lastName: rest.join(" ") || undefined,
           avatarUrl: profile.picture,
-          linkedAt: new Date(),
-          lastUsedAt: new Date(),
-        },
-      ],
-      ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
-    });
+          passwordHash,
+          primaryAuthProvider: AuthProvider.GOOGLE,
+          emailVerified: profile.emailVerified,
+          onboarding: { status: "pending" },
+          socialAccounts: [
+            {
+              provider: AuthProvider.GOOGLE,
+              providerId: profile.googleId,
+              email: profile.email,
+              displayName: profile.name,
+              avatarUrl: profile.picture,
+              linkedAt: new Date(),
+              lastUsedAt: new Date(),
+            },
+          ],
+          ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
+        }),
+      );
+    } catch (err) {
+      // the waitlist form opens with what Google told us
+      if (isSignupDenied(err)) err.data = { ...err.data, email: profile.email, name: profile.name ?? undefined };
+      throw err;
+    }
 
     await createDefaultFamilyForUser(user);
   }
@@ -250,7 +262,7 @@ export async function findOrCreateGoogleUser(profile: {
   return user;
 }
 
-export async function findOrCreateEmailUser(email: string, fullName: string) {
+export async function findOrCreateEmailUser(email: string, fullName: string, signup: SignupOptions = {}) {
   const normalizedEmail = email.toLowerCase();
   let user = await findUserByContactEmail(normalizedEmail);
 
@@ -262,16 +274,19 @@ export async function findOrCreateEmailUser(email: string, fullName: string) {
   const [firstName, ...rest] = fullName.trim().split(/\s+/);
   const passwordHash = await generatePasswordHash();
 
-  user = await User.create({
-    email: email.toLowerCase(),
-    firstName,
-    lastName: rest.join(" ") || undefined,
-    passwordHash,
-    primaryAuthProvider: AuthProvider.EMAIL,
-    emailVerified: true,
-    onboarding: { status: "pending" },
-    ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
-  });
+  const { gatedSignup } = await import("./invite.service");
+  user = await gatedSignup({ inviteToken: signup.inviteToken, email: normalizedEmail, via: signup.via ?? "email" }, () =>
+    User.create({
+      email: email.toLowerCase(),
+      firstName,
+      lastName: rest.join(" ") || undefined,
+      passwordHash,
+      primaryAuthProvider: AuthProvider.EMAIL,
+      emailVerified: true,
+      onboarding: { status: "pending" },
+      ...phoneFieldsFromNormalized(buildCosmosSafePhonePlaceholder()),
+    }),
+  );
 
   return user;
 }
@@ -280,6 +295,7 @@ export async function findOrCreatePhoneUser(
   countryCode: string,
   number: string,
   fullName: string,
+  signup: SignupOptions = {},
 ) {
   const { findPhoneOwner } = await import("./phoneOwner.service");
   let user = await findPhoneOwner(countryCode, number);
@@ -294,16 +310,21 @@ export async function findOrCreatePhoneUser(
   const passwordHash = await generatePasswordHash();
   const placeholderEmail = `${randomBytes(16).toString("hex")}@pending.kavach`;
 
-  user = await User.create({
-    email: placeholderEmail,
-    firstName,
-    lastName: rest.join(" ") || undefined,
-    passwordHash,
-    primaryAuthProvider: AuthProvider.EMAIL,
-    emailVerified: false,
-    onboarding: { status: "pending" },
-    ...phoneFieldsFromNormalized(normalizedPhone),
-  });
+  const { gatedSignup } = await import("./invite.service");
+  user = await gatedSignup(
+    { inviteToken: signup.inviteToken, phoneDigits: normalizedPhone.key.replace(/\D/g, ""), via: signup.via ?? "phone" },
+    () =>
+      User.create({
+        email: placeholderEmail,
+        firstName,
+        lastName: rest.join(" ") || undefined,
+        passwordHash,
+        primaryAuthProvider: AuthProvider.EMAIL,
+        emailVerified: false,
+        onboarding: { status: "pending" },
+        ...phoneFieldsFromNormalized(normalizedPhone),
+      }),
+  );
 
   return user;
 }

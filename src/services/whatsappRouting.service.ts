@@ -395,13 +395,17 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     } catch {
         // A number Kavach does not know: an account and a family now, then Saheli's setup chat (founder 2026-10-12).
         // Over the sign-up limits, or switched off, the old "sign up on the website" answer goes out.
+        // Invite-only (2026-10-13): without a valid invite code or an approved waitlist entry, one line and the waitlist.
         const signup = await import("./whatsappSignup.service")
-            .then((S) => S.startWhatsAppSignup(phone, { profileName: body.profileName }))
+            .then((S) => S.startWhatsAppSignup(phone, { profileName: body.profileName, text }))
             .catch((err) => {
                 console.warn("[whatsapp-signup] failed:", err instanceof Error ? err.message : err);
                 return null;
             });
+        if (signup && !signup.ok && signup.reason === "waitlist") return outbound(phone, signup.reply);
         if (!signup?.ok) return handleGuestMessage(phone);
+        // the setup chat starts from their hello, not from the invite code
+        text = await import("./invite.service").then((I) => I.stripInviteCode(text) || "hi");
         try {
             identity = await resolveWhatsAppSender(phone);
         } catch {

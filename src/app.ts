@@ -27,6 +27,7 @@ import { startCareNudgeScheduler } from "./workers/careNudgeScheduler";
 import { startMemoryConsolidationScheduler } from "./workers/memoryConsolidationScheduler";
 import internalRoutes from "./routes/internal.routes";
 import delegateRoutes from "./routes/delegate.routes";
+import { inviteRouter, waitlistRouter } from "./routes/invite.routes";
 
 dotenv.config();
 
@@ -61,6 +62,8 @@ app.use(
 app.use(express.urlencoded({ extended: true }));
 
 app.use("/api/auth", authRoutes);
+app.use("/api/invites", inviteRouter);
+app.use("/api/waitlist", waitlistRouter);
 app.use("/api/users", userRoutes);
 // every /api/families/<familyId>/… route: a joined member of that family (each route still checks the role it needs)
 app.use("/api/families/:familyId", familyAccess);

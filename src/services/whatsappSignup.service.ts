@@ -6,23 +6,45 @@
  *
  * Limits keep a flood of strangers from making accounts: SIGNUPS_PER_HOUR and SIGNUPS_PER_DAY across everyone; over
  * them, the old "sign up on the website" answer goes out. WHATSAPP_SIGNUP=off (env or admin flag) turns it off.
+ *
+ * Invite-only (founder 2026-10-13: "registration through WhatsApp hi should be closed for now; only via invitation
+ * link"): a new number needs a valid invite code in the message ("hi KAVACH-…", what the invite link's WhatsApp
+ * button types in) or an approved waitlist entry. Anyone else gets no account: one friendly line and a waitlist entry.
  */
 import User from "../models/users.model";
 import { flaggedEnv } from "./featureFlags.service";
+import type { DenyReason } from "./invite.service";
 
 export const SIGNUPS_PER_HOUR = 30;
 export const SIGNUPS_PER_DAY = 200;
 
 export type SignupResult =
     | { ok: true; userId: string; familyId: string; created: boolean }
-    | { ok: false; reason: "off" | "limit" | "taken" | "invalid" };
+    | { ok: false; reason: "off" | "limit" | "taken" | "invalid" }
+    | { ok: false; reason: "waitlist"; reply: string };
+
+const WAITLIST_REPLY: Record<DenyReason, string> = {
+    invite_required: "Namaste 🙏 Kavach is invite-only for now, so I've added you to the waitlist; once you're in, just say hi here again.",
+    invite_used: "Namaste 🙏 That invite has already been used, and Kavach is invite-only for now, so I've added you to the waitlist.",
+    invite_expired: "Namaste 🙏 That invite has expired, and Kavach is invite-only for now, so I've added you to the waitlist.",
+    invite_revoked: "Namaste 🙏 That invite was cancelled, and Kavach is invite-only for now, so I've added you to the waitlist.",
+    invite_invalid: "Namaste 🙏 I couldn't find that invite code, and Kavach is invite-only for now, so I've added you to the waitlist.",
+};
+
+async function toWaitlist(phone: string, reason: DenyReason, profileName?: string): Promise<SignupResult> {
+    const { waitlistFromWhatsApp } = await import("./waitlist.service");
+    await waitlistFromWhatsApp(phone, profileName).catch((err) =>
+        console.warn("[whatsapp-signup] waitlist entry failed:", err instanceof Error ? err.message : err),
+    );
+    return { ok: false, reason: "waitlist", reply: WAITLIST_REPLY[reason] };
+}
 
 function cleanName(raw: string | undefined): string {
     const name = String(raw ?? "").replace(/[^\p{L}\p{M}\s.'-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 60);
     return name.length >= 2 ? name : "Friend";
 }
 
-export async function startWhatsAppSignup(phone: string, opts: { profileName?: string; now?: Date } = {}): Promise<SignupResult> {
+export async function startWhatsAppSignup(phone: string, opts: { profileName?: string; text?: string; now?: Date } = {}): Promise<SignupResult> {
     if (String(flaggedEnv().WHATSAPP_SIGNUP ?? "on").toLowerCase() === "off") return { ok: false, reason: "off" };
     const digits = String(phone ?? "").replace(/\D/g, "");
     if (digits.length < 8 || digits.length > 15) return { ok: false, reason: "invalid" };
@@ -45,6 +67,12 @@ export async function startWhatsAppSignup(phone: string, opts: { profileName?: s
         }
         return { ok: true, userId: owner.userId, familyId: fid!, created: false };
     }
+    // invite-only: a valid code in the message, or an approved waitlist entry for this number; else the waitlist
+    const { checkSignupAccess, inviteCodeFromText, isSignupDenied } = await import("./invite.service");
+    const inviteToken = inviteCodeFromText(opts.text);
+    const access = await checkSignupAccess({ inviteToken, phoneDigits: digits }, now);
+    if (!access.ok) return toWaitlist(phone, access.reason, opts.profileName);
+
     const since = (ms: number) => new Date(now.getTime() - ms);
     const recent = async (ms: number) => User.countDocuments({ signupSource: "whatsapp", createdAt: { $gte: since(ms) } });
     if ((await recent(3_600_000)) >= SIGNUPS_PER_HOUR || (await recent(86_400_000)) >= SIGNUPS_PER_DAY) {
@@ -53,7 +81,14 @@ export async function startWhatsAppSignup(phone: string, opts: { profileName?: s
     }
 
     const { findOrCreatePhoneUser } = await import("./auth.service");
-    const user = await findOrCreatePhoneUser(cc, number, cleanName(opts.profileName));
+    let user: Awaited<ReturnType<typeof findOrCreatePhoneUser>>;
+    try {
+        user = await findOrCreatePhoneUser(cc, number, cleanName(opts.profileName), { inviteToken, via: "whatsapp" });
+    } catch (err) {
+        // the code was used by someone else a moment ago
+        if (isSignupDenied(err)) return toWaitlist(phone, err.code as DenyReason, opts.profileName);
+        throw err;
+    }
     await User.updateOne({ userId: user.userId }, { $set: { phoneVerifiedAt: now, signupSource: "whatsapp", "onboarding.status": "pending" } });
     let familyId = user.activeFamilyId || user.primaryFamilyId;
     if (!familyId) {

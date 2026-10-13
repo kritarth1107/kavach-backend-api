@@ -41,6 +41,7 @@ import {
 import { AuthProvider } from "../types/user.types";
 import { NormalizedPhone, normalizePhoneInput } from "../utils/phone.util";
 import { findPhoneOwner } from "../services/phoneOwner.service";
+import { checkSignupAccess, signupDenied } from "../services/invite.service";
 import appConfig from "../config/app.config";
 
 type EmailOtpContext = {
@@ -167,6 +168,28 @@ async function assertNumberFree(context: OtpContext) {
   throw new AppError("This number is already linked to someone in a family on Kavach. Sign in with your own number or email.", 409);
 }
 
+/** The invite code the join page carries through sign-in (optional; only a new account needs one). */
+const inviteTokenOf = (body: Request["body"]) => (typeof body?.inviteToken === "string" ? body.inviteToken : undefined);
+
+/**
+ * Invite-only (founder 2026-10-13): a new account needs a valid invite or an approved waitlist entry. Checked before a
+ * code goes out, so someone without one gets the waitlist form straight away instead of a code that leads nowhere.
+ */
+async function assertMaySignUp(context: OtpContext, body: Request["body"]) {
+  const access = await checkSignupAccess({
+    inviteToken: inviteTokenOf(body),
+    email: context.channel === "email" ? context.email : null,
+    phoneDigits: context.channel === "phone" ? context.phone.key.replace(/\D/g, "") : null,
+  });
+  if (access.ok) return;
+  throw signupDenied(
+    access.reason,
+    context.channel === "email"
+      ? { email: context.email }
+      : { phone: context.phone.number, phoneCountryCode: context.phone.countryCode },
+  );
+}
+
 export const googleAuth = async (
   req: Request,
   res: Response,
@@ -180,7 +203,7 @@ export const googleAuth = async (
     }
 
     const profile = await verifyGoogleIdToken(idToken);
-    const user = await findOrCreateGoogleUser(profile);
+    const user = await findOrCreateGoogleUser(profile, { inviteToken: inviteTokenOf(req.body) });
     await assertDashboardLoginAllowed(user.userId);
     const session = await createAuthSession(user, AuthProvider.GOOGLE, req);
 
@@ -210,6 +233,7 @@ export const sendOtp = async (
       await assertDashboardLoginAllowed(existingUser.userId);
     } else {
       await assertNumberFree(context);
+      await assertMaySignUp(context, req.body);
     }
 
     if (context.channel === "email") {
@@ -350,13 +374,15 @@ export const registerWithOtp = async (
 
     if (!user) {
       await assertNumberFree(context);
+      const signup = { inviteToken: inviteTokenOf(req.body) };
       if (context.channel === "email") {
-        user = await findOrCreateEmailUser(context.email, fullName);
+        user = await findOrCreateEmailUser(context.email, fullName, signup);
       } else {
         user = await findOrCreatePhoneUser(
           context.phone.countryCode,
           context.phone.number,
           fullName,
+          signup,
         );
       }
       isNewUser = true;

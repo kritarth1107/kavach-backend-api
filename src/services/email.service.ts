@@ -8,6 +8,11 @@ function resend(): Resend {
   return (client ??= new Resend(config.email.resendApiKey));
 }
 
+/** Tests: send through a fake (it gets what Resend would; return { error } to simulate a failure). null restores Resend. */
+export function setEmailClientForTests(fake: { emails: { send: (msg: Record<string, unknown>) => Promise<{ error?: { message?: string } | null }> } } | null) {
+  client = fake as unknown as Resend | null;
+}
+
 export async function sendOtpEmail(email: string, code: string) {
   const { error } = await resend().emails.send({
     from: config.email.from,
@@ -57,6 +62,22 @@ export async function sendFamilyInviteEmail(params: {
   if (error) {
     throw new AppError(error.message || "Failed to send invitation email", 502);
   }
+}
+
+/** The waitlist approval email: a big "Send hi to Saheli" button plus the personal registration link. */
+export async function sendWaitlistApprovedEmail(params: { to: string; name: string; registerUrl: string; whatsappUrl: string }) {
+  const { renderWaitlistApprovedEmail } = await import("./waitlistEmail.template");
+  const { APPROVAL_LINK_TTL_DAYS } = await import("./invite.service");
+  const mail = renderWaitlistApprovedEmail({ ...params, validDays: APPROVAL_LINK_TTL_DAYS });
+  const { error } = await resend().emails.send({
+    from: process.env.WAITLIST_EMAIL_FROM || "Saheli at Kavach <saheli@emails.kavach.care>",
+    to: params.to,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text,
+  });
+  if (error) throw new AppError(error.message || "Failed to send approval email", 502);
+  return { sent: true };
 }
 
 /** An operations alert to the founder (credits running out, a vendor down). OPS_ALERT_TO overrides the recipient. */

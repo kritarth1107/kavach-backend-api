@@ -5,6 +5,7 @@ import { endLogins, endSessions, noticeEmail, sendMail, SETUP_WINDOW_MS, type Ma
 import { AdminAudit, AdminUser, auditSig, type IAdminAudit, type IAdminUser } from "../models";
 import { permissionsOf, ROLES } from "../permissions";
 import type { RouteDef } from "../router";
+import WaitlistEntry from "../../models/waitlist.model";
 
 const emailOf = (domain: string) =>
     z.string().trim().toLowerCase().email().refine((e) => e.endsWith(`@${domain}`), `must be an @${domain} account`);
@@ -24,7 +25,13 @@ export function teamRoutes(cfg: AdminConfig, mail: Mailer = sendMail): RouteDef[
     return [
         {
             method: "get", path: "/me", perm: "overview.read", action: "me.read", noAudit: true,
-            handler: async ({ admin }) => ({ data: { email: admin.email, role: admin.role, permissions: permissionsOf(admin.role) } }),
+            handler: async ({ admin }) => {
+                // the nav's waitlist badge (a count only, for those who may see the waitlist; never fails /me)
+                const waitlistPending = permissionsOf(admin.role).includes("users.read")
+                    ? await WaitlistEntry.countDocuments({ status: "pending", registeredUserId: null }).catch(() => null)
+                    : null;
+                return { data: { email: admin.email, role: admin.role, permissions: permissionsOf(admin.role), waitlistPending } };
+            },
         },
         {
             method: "get", path: "/admins", perm: "admins.manage", action: "admins.list",
