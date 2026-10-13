@@ -1,7 +1,7 @@
 /** Onboarding: prescription timings, answers → care record entries and notes, verification replies, limits. */
 import { sanitizeUnderstood, toHHMM, toPhone } from "../src/services/onboardingChat.service";
 import { phoneVariants } from "../src/services/phoneOwner.service";
-import { AnswersSchema, VERIFY_RE, allow, factsFor, noteFor, quietHours, scheduleFromText, splitPhone, verifiedThanks, type Answers } from "../src/services/onboarding.service";
+import { AnswersSchema, DIET_SENTENCE, VERIFY_RE, allow, factsFor, noteFor, quietHours, scheduleFromText, splitPhone, verifiedThanks, type Answers } from "../src/services/onboarding.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -41,6 +41,32 @@ const note = noteFor(answers.persons[0], answers);
 ok("note carries the soft context", note.includes("Knee pain") && note.includes("Misses Papa") && note.includes("Volini") && note.includes("Grandson") && note.includes("Maid at 11"));
 ok("answers must name the person and a valid number", !AnswersSchema.safeParse({ you: { name: "R" }, careFor: "mother", persons: [{ relation: "Mother", name: "" }] }).success
     && !AnswersSchema.safeParse({ ...answers, persons: [{ ...answers.persons[0], phone: "98765" }] }).success);
+
+// Diet (nutrition plan §N13): a tap at onboarding → one `diet` care fact named by the type, with a plain sentence
+ok("no diet given (skipped) → no diet fact", by("diet").length === 0);
+const withDiet = (diet: unknown) => AnswersSchema.safeParse({ ...answers, persons: [{ ...answers.persons[0], diet }] });
+const veg = withDiet("veg");
+const vegFacts = veg.success ? factsFor(veg.data.persons[0], veg.data, "Riya Sharma").filter((f) => f.domain === "diet") : [];
+ok("vegetarian → diet:veg with a clear sentence", vegFacts.length === 1 && vegFacts[0].name === "veg" && vegFacts[0].details.type === "veg"
+    && vegFacts[0].sentence === "Vegetarian (no meat, fish or eggs)", vegFacts);
+const dietFacts = (["veg", "egg", "nonveg", "vegan", "jain"] as const).map((d) => {
+    const r = withDiet(d);
+    return r.success ? factsFor(r.data.persons[0], r.data, "Riya Sharma").find((f) => f.domain === "diet") : undefined;
+});
+ok("every diet type → its own fact name and sentence", dietFacts.every((f, k) => f && f.name === ["veg", "egg", "nonveg", "vegan", "jain"][k] && f.sentence === DIET_SENTENCE[f.name as keyof typeof DIET_SENTENCE] && f.sentence.length > 4)
+    && new Set(dietFacts.map((f) => f?.sentence)).size === 5, dietFacts);
+ok("a diet that is not one of the five is refused", !withDiet("keto").success && !withDiet("Vegetarian").success);
+ok("diet sentences describe, never advise", Object.values(DIET_SENTENCE).every((s) => !/\b(should|must|healthy|unhealthy|good|bad|avoid|recommend)\b/i.test(s)));
+
+// Self care: "Food & nutrition" is an area like the others (it goes in Saheli's note with the rest)
+const selfCare = AnswersSchema.safeParse({
+    you: { name: "Neha Joshi", phone: "+919000000301" }, careFor: "self", helpWith: ["food", "sleep"],
+    persons: [{ relation: "Self", name: "Neha Joshi", phone: "+919000000301", diet: "egg" }],
+});
+ok("self care with Food & nutrition parses", selfCare.success && selfCare.data.helpWith.join() === "food,sleep", selfCare.success ? undefined : selfCare.error.issues[0]);
+const selfNote = selfCare.success ? noteFor(selfCare.data.persons[0], selfCare.data) : "";
+ok("the chosen areas, food among them, reach Saheli's note", selfNote.includes("help with:** food, sleep"), selfNote);
+ok("self care diet → diet:egg about themselves", selfCare.success && factsFor(selfCare.data.persons[0], selfCare.data, "Neha Joshi").some((f) => f.domain === "diet" && f.name === "egg"));
 
 // Verification thank-you in their language and dialect
 ok("Marwari greeting in Devanagari", verifiedThanks({ language: "hi", dialect: "mwr" }, "Maa ji").startsWith("राम राम सा Maa ji"));
@@ -82,6 +108,9 @@ ok("understood: an ack with a link is dropped; follow-up kept when allowed", u.a
 ok("understood: no follow-up when none are left; unknown enum dropped", sanitizeUnderstood({ answered: true, ack: "Lovely", careFor: "cousin", followup: { q: "Anything about her knees at all?" } }, { followupsLeft: 0 }).followup === undefined
     && sanitizeUnderstood({ careFor: "cousin", ack: "" }, { followupsLeft: 0 }).updates.careFor === undefined);
 ok("understood: a question to Saheli is not an answer", sanitizeUnderstood({ answered: false, ack: "", reply: "I talk to her on WhatsApp." }, { followupsLeft: 0 }).answered === false);
+ok("understood: a typed diet is kept only as one of the five types", sanitizeUnderstood({ answered: true, ack: "", person: { diet: "jain" } }, { followupsLeft: 0 }).updates.person?.diet === "jain"
+    && sanitizeUnderstood({ answered: true, ack: "", person: { diet: "keto" } }, { followupsLeft: 0 }).updates.person === undefined
+    && up.diet === undefined);
 
 // One number, one person: every way the number may have been saved is looked up
 ok("phone variants (+91 also bare 10 digits; other codes never bare)", phoneVariants("+91", "98290 41123").join() === "+919829041123,919829041123,9829041123" && phoneVariants("+971", "501234567").join() === "+971501234567,971501234567");

@@ -14,6 +14,7 @@ const CONDITIONS = ["Diabetes (sugar)", "High BP", "Heart problem", "Thyroid", "
 const FOOD = ["before_food", "after_food", "with_food", "empty_stomach", "any"] as const;
 const CARE_FOR = ["mother", "father", "both_parents", "grandmother", "grandfather", "spouse", "self", "other"] as const;
 const LIVES = ["alone", "spouse", "me", "family", "care_home"] as const;
+const DIETS = ["veg", "egg", "nonveg", "vegan", "jain"] as const;
 
 const STR = { type: "STRING" };
 const arr = (items: object) => ({ type: "ARRAY", items });
@@ -44,6 +45,7 @@ const RESPONSE_SCHEMA = {
                 problems: arr(STR), noProblems: { type: "BOOLEAN" },
                 day: { type: "OBJECT", properties: { wake: STR, breakfast: STR, lunch: STR, tea: STR, dinner: STR, sleep: STR, activities: arr(STR), notes: STR } },
                 likes: arr(STR), avoidTopics: STR, doctorName: STR, doctorHospital: STR, phone: STR,
+                diet: { type: "STRING", enum: [...DIETS] },
             },
         },
         helpAreas: arr(STR),
@@ -65,6 +67,7 @@ Rules:
 - Times are 24-hour HH:MM. Medicines: name as on the strip, dose like "500 mg"; times from what they said, using the person's meal times given below for "after breakfast" / "with dinner"; "1-0-1" = morning and night. When timing is vague, put it in frequency instead of times.
 - livesWith: alone, spouse, me (with the caregiver), family, care_home.
 - codesFrom: who gives store login codes (OTPs) for the person's orders: "self" (the person, on their own phone) or "me" (the caregiver answering, on their phone).
+- diet: what the person eats, only when they say it: veg (vegetarian: no meat, fish or eggs), egg (vegetarian and eggs), nonveg (meat or fish), vegan (no animal foods, no dairy), jain (Jain food). Anything more about food (no onion on Tuesdays, less salt) goes in note.
 - "none", "no", "nothing", "nahi" for a yes/no-style question set the matching no* flag.
 - answered: true when the message answers the current question at least partly (including "none", "skip", "don't know"); false when it is a question to Saheli or about something else.
 - ack: one short, warm, specific sentence (at most 22 words) reacting to what they shared, in simple English, like a caring young Indian woman. No question, no medical advice, no promises beyond Saheli's job. Gentle empathy for loss, illness or worry. Never list what you noted ("I have noted her age…"); react like a person would. Vary the wording; empty when there is nothing to react to.
@@ -187,6 +190,7 @@ export function sanitizeUnderstood(raw: Raw | null, ctx: { day?: Partial<Person[
     }
     set("likes", list(p.likes, 20, 40));
     set("avoidTopics", txt(p.avoidTopics, 300));
+    set("diet", oneOf(p.diet, DIETS));
     if (txt(p.doctorName, 80)) person.doctor = { name: txt(p.doctorName, 80), ...(txt(p.doctorHospital, 120) ? { hospital: txt(p.doctorHospital, 120) } : {}) };
     set("phone", toPhone(p.phone));
 

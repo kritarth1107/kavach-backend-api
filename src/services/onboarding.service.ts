@@ -78,6 +78,7 @@ export const PersonSchema = z.object({
     likes: z.array(z.string().trim().max(40)).max(20).default([]),
     likesOther: z.string().trim().max(300).optional(),
     avoidTopics: z.string().trim().max(300).optional(),
+    diet: z.enum(["veg", "egg", "nonveg", "vegan", "jain"]).optional(),
 });
 
 export const AnswersSchema = z.object({
@@ -356,6 +357,14 @@ export async function followupQuestions(userId: string, answers: unknown): Promi
 
 const LEGACY_LANG: Record<string, "english" | "hindi" | "tamil" | "kannada"> = { en: "english", hi: "hindi", ta: "tamil", kn: "kannada" };
 const FOOD_WORDS: Record<string, string> = { before_food: "before food", after_food: "after food", with_food: "with food", empty_stomach: "on an empty stomach", any: "" };
+/** What each diet type means, for the care record (a `diet` fact; nutrition plan §N2, §N13). Descriptions only, no advice. */
+export const DIET_SENTENCE: Record<NonNullable<Person["diet"]>, string> = {
+    veg: "Vegetarian (no meat, fish or eggs)",
+    egg: "Eggetarian (vegetarian, and eats eggs)",
+    nonveg: "Non-vegetarian (eats meat, fish and eggs)",
+    vegan: "Vegan (no meat, fish, eggs or dairy)",
+    jain: "Jain (vegetarian; no eggs, and no root vegetables such as onion, garlic or potato)",
+};
 
 type Fact = { domain: string; name: string; details: Record<string, unknown>; sentence: string };
 
@@ -384,6 +393,7 @@ export function factsFor(p: Person, answers: Answers, caregiverName: string): Fa
     for (const [name, time, label] of routine) if (time) facts.push({ domain: "routine", name, details: { time }, sentence: `${label} around ${time}` });
     for (const a of d.activities) facts.push({ domain: "routine", name: a, details: { activity: a }, sentence: `Usually: ${a}` });
     if (p.sugarCheck && p.sugarCheck !== "no") facts.push({ domain: "routine", name: "sugar_check", details: { how_often: p.sugarCheck }, sentence: `Checks sugar at home (${p.sugarCheck})` });
+    if (p.diet) facts.push({ domain: "diet", name: p.diet, details: { type: p.diet }, sentence: DIET_SENTENCE[p.diet] });
     if (p.bpMachine) facts.push({ domain: "home", name: "bp_machine", details: { has: true }, sentence: "Has a BP machine at home" });
     if (p.livesWith || p.city) facts.push({ domain: "home", name: "lives_with", details: { with: p.livesWith || null, city: p.city || null }, sentence: `Lives ${p.livesWith === "alone" ? "alone" : p.livesWith ? `with ${p.livesWith === "me" ? caregiverName : p.livesWith.replace("_", " ")}` : ""}${p.city ? ` in ${p.city}` : ""}`.trim() });
     if (p.age) facts.push({ domain: "profile", name: "age", details: { age: p.age }, sentence: `${p.age} years old` });
