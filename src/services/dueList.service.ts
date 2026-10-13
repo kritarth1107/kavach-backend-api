@@ -95,7 +95,7 @@ async function remindedPeople(): Promise<Set<string>> {
 }
 
 /** Build (or refresh) the day's slots. Idempotent: a slot already sent keeps its state; one no longer due is "removed". */
-export async function buildDueList(dateKey: string): Promise<{ slots: number; removed: number }> {
+export async function buildDueList(dateKey: string, now = clockNow()): Promise<{ slots: number; removed: number }> {
     const { default: CareSchedule } = await import("../models/careSchedule.model");
     const { default: SaheliReminder } = await import("../models/saheliReminder.model");
     const { slotsOn, isSkipped, weekdayOf } = await import("./reminderSchedule.service");
@@ -109,10 +109,9 @@ export async function buildDueList(dateKey: string): Promise<{ slots: number; re
         dateKey, dayOfWeek: weekdayOf(dateKey), schedules,
         reminders: reminders.map((r) => ({ ...r, slots: slotsOn(r, dateKey), skipped: (t: string) => isSkipped(r, dateKey, t) })),
     });
-    const now = clockNow();
     for (const p of planned) {
         const { state, reason, ...fields } = p;
-        await DueSlot.updateOne(
+        const res = await DueSlot.updateOne(
             { slotKey: p.slotKey },
             {
                 $set: { title: fields.title, time: fields.time, dueAt: fields.dueAt, medicine: fields.medicine, ...(fields.critical ? { critical: true } : {}) },
@@ -121,6 +120,9 @@ export async function buildDueList(dateKey: string): Promise<{ slots: number; re
             },
             { upsert: true },
         );
+        // A slot first listed after its time had passed (the first build after a deploy, or after Kavach was down at
+        // midnight): what happened is read from the reminder ledger, and it never alerts (nobody was watching it then).
+        if (res.upsertedCount && fields.dueAt.getTime() < now.getTime() - DOSE_ALERT_AFTER_MS) await seedPastSlot(p, now);
         // a time skipped after the list was built
         if (state === "held") await DueSlot.updateOne({ slotKey: p.slotKey, state: "scheduled" }, { $set: { state, reason } });
     }
@@ -129,6 +131,29 @@ export async function buildDueList(dateKey: string): Promise<{ slots: number; re
     // a removed slot that is due again (a schedule turned back on)
     await DueSlot.updateMany({ dateKey, state: "removed", slotKey: { $in: keys } }, { $set: { state: "scheduled" }, $unset: { reason: 1 } });
     return { slots: planned.length, removed: removed.modifiedCount };
+}
+
+/** A slot that was already past when first listed: its state from SaheliNudgeLog, and no alert. */
+async function seedPastSlot(p: Built, now: Date): Promise<void> {
+    const { default: SaheliNudgeLog } = await import("../models/saheliNudgeLog.model");
+    const scheduleId = p.kind === "dose" ? p.refId : `reminder:${p.refId}:${p.time}`;
+    const log = await SaheliNudgeLog.findOne({ familyId: p.familyId, recipientUserId: p.recipientUserId, scheduleId, dateKey: p.dateKey,
+        nudgeKind: p.kind === "dose" ? "dose_due" : "pre_reminder" }).lean<{ delivered?: boolean; deliveryStatus?: string; wamid?: string; reason?: string;
+        terminal?: boolean; lastAttemptAt?: Date; attempts?: number; deliveredAt?: Date; readAt?: Date }>().catch(() => null);
+    let set: Record<string, unknown>;
+    if (log?.delivered) {
+        const st = log.deliveryStatus === "read" || log.deliveryStatus === "delivered" ? log.deliveryStatus : "sent";
+        set = { state: st, ...(log.wamid ? { wamid: log.wamid } : {}), ...(log.lastAttemptAt ? { sentAt: log.lastAttemptAt } : {}),
+                ...(log.deliveredAt ? { deliveredAt: log.deliveredAt } : {}), ...(log.readAt ? { readAt: log.readAt } : {}) };
+    } else if (log && (log.reason === "done" || log.reason === "paused" || String(log.reason ?? "").startsWith("gated"))) {
+        set = { state: "held", reason: log.reason === "done" ? "already marked taken" : log.reason };
+    } else if (log) {
+        set = { state: "failed", reason: log.reason || "not delivered" };
+    } else {
+        set = { state: "held", reason: "before tracking began" };
+    }
+    await DueSlot.updateOne({ slotKey: p.slotKey }, { $set: { ...set, ...(log?.attempts ? { attempts: log.attempts } : {}), alertedAt: now,
+        alertReason: "listed after its time (not alerted)" } }).catch(() => undefined);
 }
 
 let last: { dateKey: string; fingerprint: string; at: number } | null = null;
@@ -152,7 +177,7 @@ export async function ensureDueList(now = clockNow()): Promise<boolean> {
     const dateKey = toDateKeyIST(now);
     const fp = await fingerprint();
     if (last && last.dateKey === dateKey && last.fingerprint === fp && now.getTime() - last.at < 30 * 60_000) return false;
-    await buildDueList(dateKey);
+    await buildDueList(dateKey, now);
     last = { dateKey, fingerprint: fp, at: now.getTime() };
     return true;
 }

@@ -166,6 +166,31 @@ async function withDb(uri: string) {
         assert.equal((await DueSlot.findOne({ slotKey: `reminder:rd1:21:00:${DAY}` }).lean())!.state, "missed");
     });
 
+    await ok("a slot first listed after its time (the first build after a deploy) takes its state from the reminder ledger and never alerts", async () => {
+        const FAM2 = "fam-due-late";
+        await User.create({ userId: "e2", firstName: "Gopal", email: "gopal-due@world.kavach.test", passwordHash: "x", phone: { countryCode: "+91", number: "9000000502" }, phoneKey: "+919000000502" });
+        await Family.create({ familyId: FAM2, name: "Late build", createdBy: "e2", members: [{ userId: "e2", role: "CARE_RECIPIENT", status: "JOINED" }] });
+        await SaheliCompanion.create({ familyId: FAM2, recipientUserId: "e2", enabled: true });
+        for (const [id, time] of [["sl1", "06:00"], ["sl2", "06:30"], ["sl3", "23:00"]] as const) {
+            await CareSchedule.create({ scheduleId: id, familyId: FAM2, recipientUserId: "e2", type: "MEDICINE", title: "Dose", time, createdBy: "e2",
+                createdAt: new Date("2026-10-01T00:00:00Z") });
+        }
+        await SaheliNudgeLog.create({ nudgeId: "n-sl1", familyId: FAM2, recipientUserId: "e2", scheduleId: "sl1", dateKey: DAY, nudgeKind: "dose_due",
+            delivered: true, channel: "whatsapp", attempts: 1, lastAttemptAt: at("06:00"), wamid: "wamid.sl1", deliveryStatus: "read" });
+        await D.ensureDueList(at("10:00"));
+        const s1 = await DueSlot.findOne({ slotKey: `dose:sl1:${DAY}` }).lean();
+        assert.equal(s1!.state, "read");
+        assert.ok(s1!.alertedAt);
+        const s2 = await DueSlot.findOne({ slotKey: `dose:sl2:${DAY}` }).lean();
+        assert.equal(s2!.state, "held");
+        assert.equal(s2!.reason, "before tracking began");
+        assert.equal((await DueSlot.findOne({ slotKey: `dose:sl3:${DAY}` }).lean())!.state, "scheduled"); // still ahead: watched as usual
+        const { runDoseAlertCheck } = await import("../src/services/deliveryReport.service");
+        await runDoseAlertCheck(at("10:00"));
+        const reasons = (await DueSlot.find({ familyId: FAM2, alertedAt: { $exists: true } }).lean()).map((x) => x.alertReason);
+        assert.deepEqual(reasons, ["listed after its time (not alerted)", "listed after its time (not alerted)"]);
+    });
+
     await ok("catch-up: a medicine reminder missed while Kavach was down is sent once, a little late", async () => {
         const { default: HB } = await import("../src/models/schedulerHeartbeat.model");
         // Kavach down 08:50–09:40; the 09:00 insulin reminder fell in the gap and was never attempted
