@@ -98,6 +98,38 @@ async function withDb(uri: string) {
         assert.equal(whatsapp.length, 0);
     });
 
+    await ok("the alert record says who was told: no one else to tell is a dashboard note, not a WhatsApp alert", async () => {
+        const ActivityLog = (await import("../src/models/activityLog.model")).default;
+        await ActivityLog.deleteMany({});
+        await executeSaheliTool({ tool: "notify_caregivers", familyId: "famSelf", recipientUserId: "self1", actorUserId: "self1",
+                                  args: { message: "Care note (not a diagnosis): stomach upset recurred.", urgency: "medium", kind: "symptom" } });
+        const self = await ActivityLog.findOne({ familyId: "famSelf", kind: "caregiver_alert" }).lean<{ title: string; data: Record<string, unknown> }>();
+        assert.ok(self, "the alert is still recorded");
+        assert.equal(self.title, "Caregiver dashboard note: symptom");
+        assert.equal(self.data.whatsapp, false, "nobody got a WhatsApp alert");
+        assert.equal(self.data.whatsappKind, true);
+        assert.equal(self.data.told, 0);
+        assert.equal(self.data.caregivers, 0);
+
+        await executeSaheliTool({ tool: "notify_caregivers", familyId: "famElder", recipientUserId: "elder1", actorUserId: "elder1",
+                                  args: { message: "Kamla ji felt dizzy after lunch.", urgency: "medium", kind: "symptom" } });
+        const told = await ActivityLog.findOne({ familyId: "famElder", kind: "caregiver_alert" }).lean<{ title: string; data: Record<string, unknown> }>();
+        assert.equal(told?.title, "Caregiver WhatsApp alert: symptom");
+        assert.equal(told?.data.whatsapp, true);
+        assert.equal(told?.data.told, 1);
+    });
+
+    await ok("an order alert names the person the family way, never a fixed \"Amma\"", async () => {
+        const Notification = (await import("../src/models/notification.model")).default;
+        await Notification.deleteMany({});
+        const { notifyCaregiversOrderPlaced } = await import("../src/services/saheliCaregiverAlert.service");
+        await notifyCaregiversOrderPlaced({ familyId: "famElder", recipientUserId: "elder1", actorUserId: "elder1", partnerLabel: "Blinkit",
+                                            item: "Milk 1 L", orderId: "ord-test-1" });
+        await new Promise((r) => setTimeout(r, 200)); // the in-app notification is written without waiting
+        const n = await Notification.findOne({ familyId: "famElder", kind: "order_placed" }).lean<{ title: string }>();
+        assert.equal(n?.title, "Kamla placed an order");
+    });
+
     await ok("crisis talk emails the Kavach care team with who, their number, what they said and a link", async () => {
         emails.length = 0;
         const out = await executeSaheliTool({ tool: "alert_care_team", familyId: "famSelf", recipientUserId: "self1", actorUserId: "self1",

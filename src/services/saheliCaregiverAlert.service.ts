@@ -79,28 +79,9 @@ export async function notifyCaregivers(input: {
     onlyUserIds?: string[];
 }): Promise<{ notifiedCount: number; channels: string[]; others: number; notifiedUserIds: string[] }> {
     const allowWhatsApp = caregiverWhatsAppAllowed(input.kind, input.urgency);
-    {
-        const { logActivity } = await import("./activityLog.service");
-        void logActivity({
-            familyId: input.familyId,
-            recipientUserId: input.recipientUserId,
-            actorUserId: input.actorUserId,
-            kind: "caregiver_alert",
-            severity:
-                input.kind === "emergency" || input.kind === "health_red_flag" || input.urgency === "high"
-                    ? "error"
-                    : input.kind === "nudge_silence"
-                      ? "warn"
-                      : "info",
-            title: `Caregiver ${allowWhatsApp ? "WhatsApp alert" : "dashboard note"}: ${input.kind || "care_alert"}`,
-            detail: input.message,
-            data: { kind: input.kind || null, urgency: input.urgency || null, whatsapp: allowWhatsApp, ...(input.traceId ? { traceId: input.traceId } : {}) },
-        });
-    }
     const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" }).lean();
-    if (!family) return { notifiedCount: 0, channels: [], others: 0, notifiedUserIds: [] };
 
-    const caregiverIds = family.members
+    const caregiverIds = (family?.members ?? [])
         .filter(
             (m) =>
                 m.status === FamilyMemberStatus.JOINED &&
@@ -115,73 +96,103 @@ export async function notifyCaregivers(input: {
     let notifiedCount = 0;
     const notifiedUserIds: string[] = [];
     const channels: string[] = [];
-    // A caregiver whose WhatsApp chat is closed (24 hours since they wrote) gets the alert template for this kind, naming
-    // the person; the full alert waits and Saheli gives it when they tap or write.
-    let template: import("./channelOutbound.service").OutboundTemplate | undefined;
-    const { alertTemplateFor } = await import("./whatsappTemplates.service");
-    const purpose = allowWhatsApp ? alertTemplateFor(input.kind) : null;
-    if (purpose) {
-        template = { purpose, params: [await alertPersonName(family, input.recipientUserId)] };
-    }
+    try {
+        const active = family;
+        if (active) {
+            // A caregiver whose WhatsApp chat is closed (24 hours since they wrote) gets the alert template for this kind, naming
+            // the person; the full alert waits and Saheli gives it when they tap or write.
+            let template: import("./channelOutbound.service").OutboundTemplate | undefined;
+            const { alertTemplateFor } = await import("./whatsappTemplates.service");
+            const purpose = allowWhatsApp ? alertTemplateFor(input.kind) : null;
+            const person = purpose || input.kind === "order_placed" ? await alertPersonName(active, input.recipientUserId) : "";
+            if (purpose) template = { purpose, params: [person] };
 
-    for (const caregiverId of caregiverIds) {
-        const isOrderPlaced = input.kind === "order_placed";
-        void createFamilyNotification(input.familyId, {
-            kind: input.kind === "emergency" || input.kind === "crisis" ? "emergency" : isOrderPlaced ? "order_placed" : "care_alert",
-            title:
-                input.kind === "emergency" || input.kind === "health_red_flag" || input.kind === "crisis"
-                    ? "Urgent care alert"
-                    : isOrderPlaced
-                      ? "Amma placed an order"
-                      : input.urgency === "high"
-                        ? "Urgent care alert"
-                        : "Care update",
-            body: input.message.slice(0, 280),
-            actionUrl: isOrderPlaced ? "/dashboard/approvals" : "/dashboard",
-            recipientUserId: input.recipientUserId,
-            dedupeKey: input.dedupeKey || `alert:${input.recipientUserId}:${input.message.slice(0, 40)}:${Date.now()}`,
-        }).catch(() => {});
+            for (const caregiverId of caregiverIds) {
+                const isOrderPlaced = input.kind === "order_placed";
+                void createFamilyNotification(input.familyId, {
+                    kind: input.kind === "emergency" || input.kind === "crisis" ? "emergency" : isOrderPlaced ? "order_placed" : "care_alert",
+                    title:
+                        input.kind === "emergency" || input.kind === "health_red_flag" || input.kind === "crisis"
+                            ? "Urgent care alert"
+                            : isOrderPlaced
+                              ? `${person} placed an order` // the family's own name for them (was "Amma" for everyone)
+                              : input.urgency === "high"
+                                ? "Urgent care alert"
+                                : "Care update",
+                    body: input.message.slice(0, 280),
+                    actionUrl: isOrderPlaced ? "/dashboard/approvals" : "/dashboard",
+                    recipientUserId: input.recipientUserId,
+                    dedupeKey: input.dedupeKey || `alert:${input.recipientUserId}:${input.message.slice(0, 40)}:${Date.now()}`,
+                }).catch(() => {});
 
-        if (!allowWhatsApp) continue;
-        // Found the way every outbound message finds a number: never the internal "+99" placeholder most caregivers
-        // who signed up by email carry, else their WhatsApp link (until 2026-10-11 such alerts were dropped).
-        const phone = (await resolveRecipientWhatsAppPhone(caregiverId, input.familyId).catch(() => null)) ?? undefined;
-        if (phone) {
-            // Never attach "approve" interactive chrome for elder-placed notify-only alerts.
-            const payloads = composeWhatsAppReply(input.message, {
-                kind:
-                    input.kind === "emergency" ||
-                    input.kind === "health_red_flag" ||
-                    input.kind === "crisis" ||
-                    isOrderPlaced ||
-                    input.kind === "missed_tasks" ||
-                    input.kind === "symptom" ||
-                    input.kind === "lab_alert" ||
-                    input.kind === "elder_share" ||
-                    input.kind === "nudge_silence" ||
-                    input.kind === "unusual_activity"
-                        ? "plain"
-                        : "order_pending_approval",
-            });
-            const delivery = await deliverOutboundMessage({ purpose: "alert",
-                familyId: input.familyId,
-                recipientUserId: input.recipientUserId,
-                toUserId: caregiverId, // a voice note goes in the caregiver's language, not the elder's
-                content: input.message,
-                channel: "whatsapp",
-                channelIdentifier: phone,
-                whatsappPayloads: payloads,
-                ...(template ? { template } : {}),
-                delivery: { kind: "alert", refId: input.refId ?? `alert:${input.kind || "care_alert"}` },
-            });
-            if (delivery.delivered) {
-                notifiedCount += 1;
-                notifiedUserIds.push(caregiverId);
-                channels.push("whatsapp");
+                if (!allowWhatsApp) continue;
+                // Found the way every outbound message finds a number: never the internal "+99" placeholder most caregivers
+                // who signed up by email carry, else their WhatsApp link (until 2026-10-11 such alerts were dropped).
+                const phone = (await resolveRecipientWhatsAppPhone(caregiverId, input.familyId).catch(() => null)) ?? undefined;
+                if (phone) {
+                    // Never attach "approve" interactive chrome for elder-placed notify-only alerts.
+                    const payloads = composeWhatsAppReply(input.message, {
+                        kind:
+                            input.kind === "emergency" ||
+                            input.kind === "health_red_flag" ||
+                            input.kind === "crisis" ||
+                            isOrderPlaced ||
+                            input.kind === "missed_tasks" ||
+                            input.kind === "symptom" ||
+                            input.kind === "lab_alert" ||
+                            input.kind === "elder_share" ||
+                            input.kind === "nudge_silence" ||
+                            input.kind === "unusual_activity"
+                                ? "plain"
+                                : "order_pending_approval",
+                    });
+                    const delivery = await deliverOutboundMessage({ purpose: "alert",
+                        familyId: input.familyId,
+                        recipientUserId: input.recipientUserId,
+                        toUserId: caregiverId, // a voice note goes in the caregiver's language, not the elder's
+                        content: input.message,
+                        channel: "whatsapp",
+                        channelIdentifier: phone,
+                        whatsappPayloads: payloads,
+                        ...(template ? { template } : {}),
+                        delivery: { kind: "alert", refId: input.refId ?? `alert:${input.kind || "care_alert"}` },
+                    });
+                    if (delivery.delivered) {
+                        notifiedCount += 1;
+                        notifiedUserIds.push(caregiverId);
+                        channels.push("whatsapp");
+                    }
+                }
             }
         }
+    } finally {
+        // Written after the sends, so the record says who was told: a WhatsApp-kind alert with no one else to tell was
+        // listed as a "WhatsApp alert" nobody got (13 Oct, two symptom notes about a caregiver caring for himself).
+        const { logActivity } = await import("./activityLog.service");
+        await logActivity({
+            familyId: input.familyId,
+            recipientUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            kind: "caregiver_alert",
+            severity:
+                input.kind === "emergency" || input.kind === "health_red_flag" || input.urgency === "high"
+                    ? "error"
+                    : input.kind === "nudge_silence"
+                      ? "warn"
+                      : "info",
+            title: `Caregiver ${notifiedCount ? "WhatsApp alert" : "dashboard note"}: ${input.kind || "care_alert"}`,
+            detail: input.message,
+            data: {
+                kind: input.kind || null,
+                urgency: input.urgency || null,
+                whatsapp: notifiedCount > 0,
+                whatsappKind: allowWhatsApp,
+                told: notifiedCount,
+                caregivers: caregiverIds.length,
+                ...(input.traceId ? { traceId: input.traceId } : {}),
+            },
+        }).catch(() => {});
     }
-
     return { notifiedCount, channels, others: caregiverIds.length, notifiedUserIds };
 }
 
