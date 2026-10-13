@@ -63,6 +63,14 @@ const careScheduleSchema = new Schema<ICareScheduleDocument>(
         updatedBy: {
             type: String,
         },
+        /**
+         * A medicine the family marked critical (insulin, a blood thinner…): if it goes unanswered, the escalation to the
+         * caregiver is never held for their quiet hours (trust plan B2.2).
+         */
+        critical: {
+            type: Boolean,
+            default: false,
+        },
         /** Care-record key (e.g. medicine:metformin) when Saheli's care memory owns this row. */
         sourceKey: {
             type: String,

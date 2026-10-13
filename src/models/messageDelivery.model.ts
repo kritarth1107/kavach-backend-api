@@ -50,6 +50,8 @@ export interface IMessageDelivery {
     failedAt?: Date;
     errorCode?: number;
     errorTitle?: string;
+    /** The first receipt of any kind arrived (the ledger's health: receipts for at least 95% of sends). */
+    receiptAt?: Date;
     status: DeliveryStatus;
     viaTemplate?: boolean;
     template?: string;
@@ -79,6 +81,7 @@ const schema = new Schema<IMessageDelivery>(
         failedAt: { type: Date },
         errorCode: { type: Number },
         errorTitle: { type: String },
+        receiptAt: { type: Date },
         status: { type: String, required: true, enum: ["sent", "delivered", "read", "failed"] },
         viaTemplate: { type: Boolean },
         template: { type: String },

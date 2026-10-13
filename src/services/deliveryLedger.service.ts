@@ -194,12 +194,13 @@ async function applyReceipt(r: Receipt): Promise<"updated" | "same" | "unknown">
         early.set(r.wamid, e);
         return "unknown";
     }
-    const next = mergeReceipt(row, r);
-    const changed = (["status", "deliveredAt", "readAt", "failedAt", "errorCode", "errorTitle"] as const).some(
+    const next: ReceiptState & { receiptAt?: Date } = mergeReceipt(row, r);
+    const changed = !row.receiptAt || (["status", "deliveredAt", "readAt", "failedAt", "errorCode", "errorTitle"] as const).some(
         (k) => String(next[k] instanceof Date ? (next[k] as Date).getTime() : next[k] ?? "") !==
                String(row[k] instanceof Date ? (row[k] as Date).getTime() : row[k] ?? ""),
     );
     if (!changed) return "same";
+    if (!row.receiptAt) next.receiptAt = r.at;
     await MessageDelivery.updateOne({ wamid: r.wamid }, { $set: next });
     const after = { ...row, ...next } as IMessageDelivery;
     if (after.nudgeId && !after.part) {
@@ -212,8 +213,17 @@ async function applyReceipt(r: Receipt): Promise<"updated" | "same" | "unknown">
                 ...(after.readAt ? { readAt: after.readAt } : {}),
                 ...(after.failedAt ? { failedAt: after.failedAt } : {}),
                 ...(after.errorCode != null ? { errorCode: after.errorCode } : {}),
+                // WhatsApp could not deliver a dose or reminder: the slot may be tried again inside its window (B1.7),
+                // as the template now if the chat turned out to be closed (131047)
+                ...(after.status === "failed" && (after.kind === "dose_reminder" || after.kind === "reminder") ? { delivered: false } : {}),
             },
         }).catch((err) => console.warn("[ledger] reminder ledger update failed:", err instanceof Error ? err.message : err));
+    }
+    if (row.status !== after.status) {
+        // the due list (B1.4): a dose or reminder slot moves to delivered / read / failed; a failed one alerts (B1.5)
+        const { onDeliveryReceipt } = await import("./dueList.service");
+        await onDeliveryReceipt(after).catch((err) => console.warn("[ledger] due list update failed:", err instanceof Error ? err.message : err));
+        if (after.status === "failed" && after.viaTemplate && after.kind === "alert") await alertFailedTemplate(after);
     }
     for (const fn of listeners) {
         try {
@@ -223,6 +233,18 @@ async function applyReceipt(r: Receipt): Promise<"updated" | "same" | "unknown">
         }
     }
     return "updated";
+}
+
+/** A caregiver alert's template that WhatsApp could not deliver: the team hears (B3.5). */
+async function alertFailedTemplate(row: IMessageDelivery): Promise<void> {
+    const { alertOps } = await import("./opsAlert.service");
+    const text = `WhatsApp could not deliver the ${row.template ?? "alert"} template (an alert to a caregiver) for family ${String(row.familyId ?? "-").slice(0, 8)}: ` +
+        `${row.errorCode ?? ""} ${row.errorTitle ?? ""}`.trim() + ". The alert itself waits for their next message. Check the template's status at Meta.";
+    const out = await alertOps(`template-failed:${row.template ?? "alert"}`, "A caregiver alert template was not delivered", text, { everyMs: 30 * 60_000 });
+    const { default: OpsAlertLog } = await import("../models/opsAlertLog.model");
+    await OpsAlertLog.create({ kind: "template", subject: "A caregiver alert template was not delivered", text,
+        items: [{ family: String(row.familyId ?? "-").slice(0, 8), template: row.template, error: `${row.errorCode ?? ""} ${row.errorTitle ?? ""}`.trim() }],
+        emailed: out.sent, at: new Date() }).catch(() => undefined);
 }
 
 /**

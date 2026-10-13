@@ -148,7 +148,7 @@ export async function getScheduleDayStatuses(
     const reference = parseDateKeyIST(key);
     if (!reference) throw new AppError("Invalid date", 400);
 
-    const now = new Date();
+    const now = (await import("../utils/clock.util")).clockNow();
     const schedules = await getSchedulesForDayOfWeek(
         familyId,
         recipientUserId,

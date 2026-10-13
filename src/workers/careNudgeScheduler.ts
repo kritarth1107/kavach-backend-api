@@ -2,13 +2,24 @@ import { runCareNudgeTick } from "../services/saheliCareNudge.service";
 import { runSaheliReminderTick } from "../services/saheliReminder.service";
 
 const TICK_MS = 60 * 1000;
+/** A tick that has not finished in this long is stuck: the next one may start (the slot claims keep sends single). */
+const STUCK_MS = 10 * 60 * 1000;
 let timer: ReturnType<typeof setInterval> | null = null;
+let watchdog: ReturnType<typeof setInterval> | null = null;
 let running = false;
+let runningSince = 0;
 
 async function runTick() {
-    if (running) return;
+    if (running) {
+        if (Date.now() - runningSince < STUCK_MS) return;
+        console.error(`Care nudge tick stuck for ${Math.round((Date.now() - runningSince) / 60_000)} min: starting a new one`);
+    }
     running = true;
+    runningSince = Date.now();
     try {
+        // the day's due list (B1.4), rebuilt when a schedule or reminder changed
+        const { ensureDueList } = await import("../services/dueList.service");
+        await ensureDueList().catch((e) => console.warn("due list build failed:", e instanceof Error ? e.message : e));
         const result = await runCareNudgeTick();
         if (result.sent > 0 || result.scanned > 0) {
             console.log(`Care nudge tick: sent=${result.sent} scanned=${result.scanned}`);
@@ -26,6 +37,13 @@ async function runTick() {
         void runDelegateTick().catch((e) => console.warn("delegate tick failed:", e));
         const { runDailySnapshotTick } = await import("../services/dailySnapshot.service");
         void runDailySnapshotTick().catch((e) => console.warn("daily snapshot tick failed:", e));
+        // the Kavach team hears about any dose that did not go or did not reach the phone (B1.5), and gets the 23:30
+        // due-vs-sent report (B1.6)
+        const R = await import("../services/deliveryReport.service");
+        await R.runDoseAlertCheck().catch((e) => console.warn("dose alert check failed:", e instanceof Error ? e.message : e));
+        const { markMissed } = await import("../services/dueList.service");
+        await markMissed().catch((e) => console.warn("due list missed-marking failed:", e instanceof Error ? e.message : e));
+        await R.runDailyDeliveryReport().catch((e) => console.warn("daily delivery report failed:", e instanceof Error ? e.message : e));
     } catch (err) {
         console.warn("Care nudge tick failed:", err);
     } finally {
@@ -42,12 +60,33 @@ export function startCareNudgeScheduler() {
     console.log("Care nudge scheduler started (1m tick, includes Instinct reminders)");
     void runTick();
     timer = setInterval(() => void runTick(), TICK_MS);
+    // If the tick stops (stuck, or crashing before its heartbeat), the team hears (B1.7); the uptime worker watches
+    // /api/health/reminders from outside Google too.
+    watchdog = setInterval(() => void checkReminderHeartbeat().catch(() => undefined), TICK_MS);
+}
+
+/** The reminder tick's heartbeat is older than 3 minutes: email the team (at most every 30 min). */
+export async function checkReminderHeartbeat(now = Date.now(), minUptimeS = 180): Promise<{ ok: boolean; ageMs: number | null; alerted?: boolean }> {
+    const { reminderHeartbeat } = await import("../services/reminderHealth.service");
+    const hb = await reminderHeartbeat(now);
+    if (!hb.ok && process.uptime() >= minUptimeS) {
+        const { alertOps } = await import("../services/opsAlert.service");
+        await alertOps("reminder-tick-stopped", "Reminders are not running",
+            `The reminder tick last ran ${hb.ageMs == null ? "never (no heartbeat)" : `${Math.round(hb.ageMs / 60_000)} minutes ago`}. ` +
+            "Dose reminders and Saheli's reminders are not going out. Check kavach-backend on Cloud Run (logs, restarts).", { now });
+        return { ...hb, alerted: true };
+    }
+    return hb;
 }
 
 export function stopCareNudgeScheduler() {
     if (timer) {
         clearInterval(timer);
         timer = null;
+    }
+    if (watchdog) {
+        clearInterval(watchdog);
+        watchdog = null;
     }
 }
 

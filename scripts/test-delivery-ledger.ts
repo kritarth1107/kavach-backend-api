@@ -168,7 +168,10 @@ async function withDb(uri: string) {
         const d = await deliverOutboundMessage({ ...base, content: "Metformin time", delivery: { kind: "dose_reminder", refId: "dose:s1:2026-10-14" } });
         wamid = d.messageIds![0]!;
         const now = Math.floor(Date.now() / 1000);
-        assert.deepEqual(await L.applyStatuses(status(wamid, "sent", now)), { updated: 0, unknown: 0, closed: 0 }); // already "sent"
+        assert.deepEqual(await L.applyStatuses(status(wamid, "sent", now)), { updated: 1, unknown: 0, closed: 0 }); // the first receipt
+        assert.equal((await MessageDelivery.findOne({ wamid }).lean())!.status, "sent");
+        assert.ok((await MessageDelivery.findOne({ wamid }).lean())!.receiptAt);
+        assert.deepEqual(await L.applyStatuses(status(wamid, "sent", now)), { updated: 0, unknown: 0, closed: 0 }); // a repeat changes nothing
         assert.equal((await L.applyStatuses(status(wamid, "delivered", now + 2))).updated, 1);
         assert.equal((await MessageDelivery.findOne({ wamid }).lean())!.status, "delivered");
         assert.equal((await L.applyStatuses(status(wamid, "read", now + 60))).updated, 1);

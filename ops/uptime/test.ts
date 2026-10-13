@@ -1,6 +1,6 @@
 /** Uptime alarm: when it alerts, what it says, and what it checks (fake network, fake storage). */
 import { decide, duration, formatAlerts, resetWeek, weeklySummary, type Probe, type State } from "./src/check";
-import { probe, runChecks, sendEmail, targets } from "./src/index";
+import { probe, reminderTarget, runChecks, sendEmail, targets, targetsFor } from "./src/index";
 import { alertEmail, esc, LOGO_URL, recoveredLine, weeklyEmail } from "./src/email";
 
 let fail = 0;
@@ -80,6 +80,18 @@ const env = {
 ok("backend check uses detailed health with the secret", targets(env)[1].url === "https://be.test/api/health/detailed?HEALTH_SECRET=hs");
 ok("private engine checked through the backend", targets(env)[2].url === "https://be.test/api/health/engine?HEALTH_SECRET=hs");
 ok("without the secret, the engine directly", targets({ ...env, HEALTH_SECRET: undefined })[2].url === "https://en.test/health");
+// reminders (trust plan B1.7): checked every minute, the rest on the 5-minute marks
+ok("reminders check is public and needs status ok", reminderTarget(env).url === "https://be.test/api/health/reminders"
+    && reminderTarget(env).expect!(200, '{"status":"ok"}') && !reminderTarget(env).expect!(503, '{"status":"stale"}'));
+ok("a minute off the 5-minute mark checks only reminders", JSON.stringify(targetsFor(env, t(3)).map((x) => x.name)) === '["reminders"]');
+ok("the 5-minute mark checks everything", targetsFor(env, t(5)).map((x) => x.name).join(",") === "dashboard,backend,engine,reminders");
+{
+    const kept = decide({ services: { backend: { fails: 1, down: false, downMs: 0, since: t(0) } } }, [P("reminders", true)], t(1));
+    ok("a reminders-only round keeps the others' state", kept.next.services.backend.fails === 1 && kept.next.services.reminders.fails === 0, kept.next);
+    let rs = decide({ services: {} }, [P("reminders", false)], t(1));
+    rs = decide(rs.next, [P("reminders", false)], t(2));
+    ok("reminders stale two minutes running: one down alert", rs.alerts.length === 1 && rs.alerts[0].name === "reminders" && rs.alerts[0].kind === "down");
+}
 const sent: Array<{ url: string; body?: string }> = [];
 let mode: "up" | "down" = "down";
 const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -88,7 +100,7 @@ const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
     if (u.startsWith("https://api.resend.com")) return new Response("{}", { status: 200 });
     if (mode === "down" && !u.startsWith("https://app.kavach.care"))
         return new Response('{"error":{"status":"PERMISSION_DENIED","details":"CONSUMER_SUSPENDED"}}', { status: 404 });
-    if (u.includes("/api/health/detailed") || u.includes("/api/health/engine")) return new Response('{"status":"ok"}', { status: 200 });
+    if (u.includes("/api/health/detailed") || u.includes("/api/health/engine") || u.includes("/api/health/reminders")) return new Response('{"status":"ok"}', { status: 200 });
     if (u.endsWith("/health")) return new Response('{"status":"ok"}', { status: 200 });
     return new Response("<html>", { status: 200 });
 }) as typeof fetch;

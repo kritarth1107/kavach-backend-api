@@ -1,6 +1,8 @@
 /**
  * Kavach uptime alarm: a Cloudflare Worker (outside Google, so a Google suspension can't silence it).
- * Every 5 minutes it checks the dashboard, the backend (and its database) and Saheli's engine, and emails the founder
+ * Every minute it checks that reminders are running (the backend's /api/health/reminders: 503 when the reminder tick has
+ * not run for 3 minutes; trust plan B1.7); every 5 minutes it also checks the dashboard, the backend (and its database)
+ * and Saheli's engine. Two failures in a row email the founder
  * through Resend when one goes down, every 6 h while it stays down, and when it recovers. Monday 09:00 IST it sends a
  * weekly check-in, so a silent alarm is noticed too. GET /status runs a round now and shows it (no secrets, saves nothing).
  * KV is written only when the state changes (a few times a day), never every round: the free tier allows 1,000 writes a day.
@@ -26,6 +28,22 @@ type Scheduled = { cron: string; scheduledTime: number };
 type Ctx = { waitUntil(p: Promise<unknown>): void };
 
 const WEEKLY_CRON = "30 3 * * 1"; // Monday 03:30 UTC = 09:00 IST
+
+/** The every-minute check: are reminders going out? */
+export function reminderTarget(env: Env): Target {
+    return {
+        name: "reminders",
+        label: "Reminders (the backend's 1-minute reminder tick)",
+        url: `${env.BACKEND_URL}/api/health/reminders`,
+        expect: (status, body) => status === 200 && /"status"\s*:\s*"ok"/.test(body),
+    };
+}
+
+/** What a round checks: reminders every minute, everything else on the 5-minute marks. */
+export function targetsFor(env: Env, now: string): Target[] {
+    const everything = new Date(now).getUTCMinutes() % 5 === 0;
+    return everything ? [...targets(env), reminderTarget(env)] : [reminderTarget(env)];
+}
 
 export function targets(env: Env): Target[] {
     const backend = env.HEALTH_SECRET
@@ -96,8 +114,8 @@ async function loadRaw(env: Env): Promise<{ state: State; raw: string | null }> 
 }
 const load = async (env: Env) => (await loadRaw(env)).state;
 
-export async function runChecks(env: Env, now = new Date().toISOString(), fetchFn: typeof fetch = fetch) {
-    const probes = await Promise.all(targets(env).map((t) => probe(t, fetchFn)));
+export async function runChecks(env: Env, now = new Date().toISOString(), fetchFn: typeof fetch = fetch, all = true) {
+    const probes = await Promise.all((all ? [...targets(env), reminderTarget(env)] : targetsFor(env, now)).map((t) => probe(t, fetchFn)));
     const { state: prev, raw } = await loadRaw(env);
     const { next, alerts } = decide(prev, probes, now);
     if (alerts.length) {
@@ -124,11 +142,11 @@ export default {
             })());
             return;
         }
-        ctx.waitUntil(runChecks(env));
+        ctx.waitUntil(runChecks(env, new Date(event.scheduledTime || Date.now()).toISOString(), fetch, false));
     },
     async fetch(req: Request, env: Env) {
         if (new URL(req.url).pathname !== "/status") return new Response("Kavach uptime monitor", { status: 200 });
-        const probes = await Promise.all(targets(env).map((t) => probe(t)));
+        const probes = await Promise.all([...targets(env), reminderTarget(env)].map((t) => probe(t)));
         const body = { at: new Date().toISOString(), probes: probes.map(({ name, ok, status, ms, error }) => ({ name, ok, status, ms, error })), state: await load(env) };
         return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
     },

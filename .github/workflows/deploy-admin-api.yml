@@ -15,6 +15,11 @@ on:
       - "src/services/invite.service.ts"
       - "src/services/waitlistEmail.template.ts"
       - "src/services/email.service.ts"
+      # the Delivery page (trust plan B1.6, B2.5): the due list, the daily report, escalations on time
+      - "src/services/deliveryReport.service.ts"
+      - "src/services/dueList.service.ts"
+      - "src/services/escalation.service.ts"
+      - "src/utils/clock.util.ts"
       - "src/types/**"
       - "src/config/**"
       - "scripts/test-admin.ts"

@@ -1,12 +1,13 @@
 # Kavach uptime alarm
 
-A Cloudflare Worker that checks, every 5 minutes, from outside Google:
+A Cloudflare Worker that checks from outside Google, every minute for reminders and every 5 minutes for the rest:
 
 | Check | URL | Healthy when |
 | --- | --- | --- |
 | Dashboard | `https://app.kavach.care/auth/login` | 2xx/3xx |
 | Backend + database | `<backend>/api/health/detailed?HEALTH_SECRET=…` | 200 and `"status": "ok"` (MongoDB answers) |
 | Saheli's brain | `<engine>/health` | 200 and `"ok"` |
+| Reminders (every minute) | `<backend>/api/health/reminders` | 200 and `"status": "ok"` (the reminder tick ran in the last 3 minutes) |
 
 Two failed checks in a row = down → one email (Resend), a reminder once a day while down, and a "recovered" email with
 how long it lasted. Monday 09:00 IST: a weekly check-in with each service's uptime, so a broken alarm is noticed too.

@@ -5,7 +5,7 @@ compatibility_date = "2025-09-01"
 workers_dev = false   # runs on its cron only; no public URL (status: npx wrangler kv key get last --binding STATE --remote)
 
 [triggers]
-crons = ["*/5 * * * *", "30 3 * * 1"]   # every 5 minutes; Monday 09:00 IST weekly check-in
+crons = ["* * * * *", "30 3 * * 1"]   # every minute (reminders; the rest on the 5-minute marks); Monday 09:00 IST weekly check-in
 
 [vars]
 ALERT_TO = "kritarth@kavach.care"

@@ -8,6 +8,8 @@ import SaheliReminder, {
     type SaheliReminderStatus,
 } from "../models/saheliReminder.model";
 import { describe, doseFor, isDay, isSkipped, minutesOf, nextOccurrence, normalTime, readSchedule, slotsOn, upcoming, type DoseTime, type ScheduleInput } from "./reminderSchedule.service";
+import { noteDueFailed, noteDueHeld, noteDueMissed, noteDueSent, reminderSlotKey } from "./dueList.service";
+import { clockNow } from "../utils/clock.util";
 import CareSchedule from "../models/careSchedule.model";
 import CareScheduleCompletion from "../models/careScheduleCompletion.model";
 import { CareScheduleType } from "../types/careSchedule.types";
@@ -716,9 +718,7 @@ export async function composeReminderLine(familyId: string, recipientUserId: str
 }
 
 /** A reminder time's slot on the due list: one per reminder time per day. */
-export function reminderSlotKey(reminderId: string, hhmm: string, dateKey: string): string {
-    return `reminder:${reminderId}:${hhmm}:${dateKey}`;
-}
+export { reminderSlotKey } from "./dueList.service";
 
 async function fireReminderMessage(input: {
     familyId: string;
@@ -728,7 +728,9 @@ async function fireReminderMessage(input: {
     dateKey: string;
 }): Promise<boolean> {
     const companion = await getCompanionProfile(input.familyId, input.recipientUserId);
-    if (isWithinQuietHours(companion)) {
+    const slot = reminderSlotKey(input.reminder.reminderId, input.slotKey, input.dateKey);
+    if (isWithinQuietHours(companion, clockNow())) {
+        await noteDueHeld(slot, "quiet hours");
         return false;
     }
 
@@ -762,6 +764,7 @@ async function fireReminderMessage(input: {
             terminal: true,
             reason: "no_valid_recipient",
         });
+        await noteDueFailed(slot, "no WhatsApp number for them");
         return false;
     }
 
@@ -796,6 +799,7 @@ async function fireReminderMessage(input: {
         // Paused from the admin console: no retries, no "not delivered" warning, and this slot never fires late after a resume.
         await finalizeNudgeAttempt(attemptId, { delivered: false, channel: target.channel, terminal: true, reason: "paused" });
         await SaheliReminder.updateOne({ reminderId: input.reminder.reminderId }, { $set: { lastFiredSlotKey: `${input.dateKey}:${input.slotKey}` } });
+        await noteDueHeld(slot, "paused (admin console)");
         return false;
     }
     await finalizeNudgeAttempt(attemptId, {
@@ -808,6 +812,11 @@ async function fireReminderMessage(input: {
         messagePreview: text,
         wamid: delivery.messageIds?.[0],
     });
+    {
+        const attempts = await attemptsOf(attemptId);
+        if (delivery.delivered) await noteDueSent(slot, { wamid: delivery.messageIds?.[0], attempts });
+        else await noteDueFailed(slot, delivery.reason ?? "send_failed", attempts);
+    }
     void import("./activityLog.service").then(({ logActivity }) =>
         logActivity({
             familyId: input.familyId,
@@ -857,6 +866,7 @@ async function holdBack(rem: ISaheliReminder, dateKey: string, slot: string): Pr
     );
     if (!attemptId) return false;
     await finalizeNudgeAttempt(attemptId, { delivered: false, channel: "none", terminal: true, reason: "done" });
+    await noteDueHeld(reminderSlotKey(rem.reminderId, slot, dateKey), "already marked taken");
     await SaheliReminder.updateOne({ reminderId: rem.reminderId }, { $set: { lastFiredSlotKey: `${dateKey}:${slot}` } });
     void import("./activityLog.service").then(({ logActivity }) =>
         logActivity({
@@ -889,8 +899,96 @@ export async function chattingNow(familyId: string, userId: string, now: Date = 
     return last > 0 && now.getTime() - last >= 0 && now.getTime() - last < CHATTING_MS;
 }
 
+/**
+ * Reminders Saheli set that are linked to a medicine (aboutKey medicine:*) and that Kavach missed while it was down (a
+ * gap in the reminder tick's heartbeat), caught up by the same rules as care-schedule doses (reminderCatchUp.service,
+ * trust plan B1.7): 15–90 min late → one "a little late" reminder that says not to take it twice; later, or the next time
+ * of the same reminder under 2 h away → not sent (a late one could lead to a double dose), noted for the caregiver.
+ */
+export async function catchUpMedicineReminders(
+    active: ISaheliReminder[],
+    now: Date,
+    send: (input: { rem: ISaheliReminder; slot: string; dateKey: string; attemptId: string }) => Promise<{ delivered: boolean; wamid?: string; reason?: string }> = sendLateReminder,
+): Promise<{ late: number; tooLate: number }> {
+    const { inGap, doseAt, LATE_MAX_MIN, NEXT_DOSE_GAP_MIN } = await import("./reminderCatchUp.service");
+    const { default: HB } = await import("../models/schedulerHeartbeat.model");
+    const hb = (await HB.findById("care-nudge").lean().catch(() => null)) as { gaps?: Array<{ from: Date; to: Date }> } | null;
+    const gaps = hb?.gaps ?? [];
+    if (!gaps.length) return { late: 0, tooLate: 0 }; // never down today: the usual case
+    const dateKey = toDateKeyIST(now);
+    const minute = getISTParts(now).minutesSinceMidnight;
+    let late = 0;
+    let tooLate = 0;
+    for (const rem of active) {
+        if (!String(rem.aboutKey ?? "").startsWith("medicine:")) continue;
+        const times = slotsOn(rem, dateKey);
+        for (const t of times) {
+            const mins = minutesOf(t);
+            if (mins == null) continue;
+            const since = minute - mins;
+            if (since <= REMINDER_LATE_MINUTES) continue; // the normal window still covers it
+            if (!inGap(gaps, doseAt(dateKey, mins))) continue; // not missed because Kavach was down
+            if (isSkipped(rem, dateKey, t)) continue;
+            if (rem.createdAt && new Date(rem.createdAt).getTime() > doseAt(dateKey, mins).getTime()) continue;
+            const scheduleId = `reminder:${rem.reminderId}:${t}`;
+            if (await SaheliNudgeLog.exists({ familyId: rem.familyId, recipientUserId: rem.recipientUserId, scheduleId, dateKey })) continue;
+            const nextSame = times.map((x) => minutesOf(x)).filter((x): x is number => x != null && x > minute).sort((a, b) => a - b)[0];
+            const tooLateWhy = nextSame != null && nextSame - minute < NEXT_DOSE_GAP_MIN ? "the next time is soon" : since > LATE_MAX_MIN ? "too late to help" : null;
+            const attemptId = await claimNudgeAttempt(
+                { familyId: rem.familyId, recipientUserId: rem.recipientUserId, scheduleId, dateKey, nudgeKind: "pre_reminder" },
+                tooLateWhy ? `not sent (Kavach was down): ${rem.text} ${t}` : `late reminder: ${rem.text} ${t}`,
+                now,
+            );
+            if (!attemptId) continue;
+            const slot = reminderSlotKey(rem.reminderId, t, dateKey);
+            if (tooLateWhy) {
+                tooLate += 1;
+                await finalizeNudgeAttempt(attemptId, { delivered: false, channel: "dashboard", terminal: true, reason: `missed_while_down: ${tooLateWhy}` });
+                await noteDueMissed(slot, `Kavach was down; not sent late (${tooLateWhy})`);
+                void import("./activityLog.service").then(({ logActivity }) =>
+                    logActivity({
+                        familyId: rem.familyId, recipientUserId: rem.recipientUserId, kind: "reminder",
+                        title: `Reminder not sent: ${rem.text} (${t})`,
+                        detail: `Kavach was down when this reminder was due, and ${tooLateWhy}, so Saheli did not send it late (a late reminder ` +
+                                `could lead to a double dose). Please check whether it was taken.`,
+                    }),
+                ).catch(() => undefined);
+                continue;
+            }
+            const out = await send({ rem, slot: t, dateKey, attemptId });
+            await finalizeNudgeAttempt(attemptId, { delivered: out.delivered, channel: "whatsapp", terminal: !out.delivered,
+                reason: out.delivered ? undefined : `late_reminder_${out.reason ?? "failed"}`, ...(out.wamid ? { wamid: out.wamid } : {}) });
+            if (out.delivered) {
+                late += 1;
+                await noteDueSent(slot, { wamid: out.wamid, late: true });
+            } else await noteDueFailed(slot, `late reminder: ${out.reason ?? "failed"}`);
+        }
+    }
+    return { late, tooLate };
+}
+
+/** The "a little late" message for a medicine reminder Kavach missed while down (never take it twice). */
+async function sendLateReminder(input: { rem: ISaheliReminder; slot: string; dateKey: string; attemptId: string }): Promise<{ delivered: boolean; wamid?: string; reason?: string }> {
+    const { rem } = input;
+    const target = await resolveRecipientChannel(rem.familyId, rem.recipientUserId, "whatsapp");
+    if (!target || target.channel === "dashboard") return { delivered: false, reason: "no_valid_recipient" };
+    const { lateDoseText } = await import("./reminderCatchUp.service");
+    const { default: Family } = await import("../models/family.model");
+    const { alertPersonName } = await import("./saheliCaregiverAlert.service");
+    const who = await alertPersonName(await Family.findOne({ familyId: rem.familyId }).lean().catch(() => null), rem.recipientUserId).catch(() => "");
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(rem.recipientUserId)).catch(() => null);
+    const text = lateDoseText([{ title: rem.text, time: input.slot } as never], who, speech?.language === "hi");
+    const { clockTime } = await import("./whatsappTemplates.service");
+    const delivery = await deliverOutboundMessage({ purpose: "proactive", familyId: rem.familyId, recipientUserId: rem.recipientUserId, content: text,
+        channel: target.channel, channelIdentifier: target.channelIdentifier,
+        template: { purpose: "reminder", params: [rem.text, clockTime(input.slot)] },
+        delivery: { kind: "dose_followup", refId: reminderSlotKey(rem.reminderId, input.slot, input.dateKey), nudgeId: input.attemptId,
+                    dueAt: new Date(`${input.dateKey}T${input.slot}:00+05:30`) } });
+    return { delivered: delivery.delivered, wamid: delivery.messageIds?.[0], ...(delivery.reason ? { reason: delivery.reason } : {}) };
+}
+
 export async function runSaheliReminderTick(
-    now = new Date(),
+    now = clockNow(),
     fire: typeof fireReminderMessage = fireReminderMessage, // tests pass a fake sender
     alreadyDone: (r: ISaheliReminder, day: string, time: string) => Promise<boolean> = linkedDoseTaken,
     chatting: (familyId: string, userId: string, now: Date) => Promise<boolean> = chattingNow,
@@ -931,6 +1029,11 @@ export async function runSaheliReminderTick(
             const res = await SaheliReminder.updateOne({ reminderId: rem.reminderId, status: "active" }, { $set: { status: "completed" } });
             finished += res.modifiedCount ? 1 : 0;
         }
+    }
+    // medicine reminders Kavach missed while it was down (only the real sender: tests of the tick pass their own)
+    if (fire === fireReminderMessage) {
+        await catchUpMedicineReminders(active as ISaheliReminder[], now).catch((err) =>
+            console.warn("medicine reminder catch-up failed:", err instanceof Error ? err.message : err));
     }
 
     return { sent, scanned, finished, held };

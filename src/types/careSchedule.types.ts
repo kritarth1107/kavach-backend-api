@@ -17,6 +17,8 @@ export interface ICareScheduleItem {
     instructions?: string;
     daysOfWeek: number[];
     active: boolean;
+    /** A critical medicine: its escalation is never held for quiet hours. */
+    critical?: boolean;
     createdBy: string;
     updatedBy?: string;
     sourceKey?: string;

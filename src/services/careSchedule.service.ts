@@ -64,6 +64,7 @@ function serializeSchedule(item: {
     instructions?: string;
     daysOfWeek: number[];
     active: boolean;
+    critical?: boolean;
     createdBy: string;
     updatedBy?: string;
     createdAt: Date;
@@ -80,6 +81,7 @@ function serializeSchedule(item: {
         instructions: item.instructions ?? null,
         daysOfWeek: item.daysOfWeek ?? [],
         active: item.active,
+        critical: Boolean(item.critical),
         createdBy: item.createdBy,
         updatedBy: item.updatedBy ?? null,
         createdAt: item.createdAt,
@@ -122,6 +124,7 @@ export async function createCareSchedule(
         instructions?: string;
         daysOfWeek?: number[];
         active?: boolean;
+        critical?: boolean;
     },
 ) {
     const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
@@ -148,6 +151,7 @@ export async function createCareSchedule(
         instructions: payload.instructions?.trim() || undefined,
         daysOfWeek: Array.isArray(payload.daysOfWeek) ? payload.daysOfWeek : [],
         active: payload.active !== false,
+        critical: payload.critical === true,
         createdBy: actorUserId,
         updatedBy: actorUserId,
     });
@@ -177,6 +181,7 @@ export async function updateCareSchedule(
         instructions?: string | null;
         daysOfWeek?: number[];
         active?: boolean;
+        critical?: boolean;
     },
 ) {
     const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
@@ -211,6 +216,9 @@ export async function updateCareSchedule(
     }
     if (payload.active !== undefined) {
         item.active = payload.active;
+    }
+    if (payload.critical !== undefined) {
+        item.critical = payload.critical === true;
     }
 
     item.updatedBy = actorUserId;

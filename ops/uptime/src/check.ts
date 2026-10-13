@@ -94,6 +94,8 @@ export function decide(prev: State, probes: Probe[], now: string): { next: State
         if (!s.since) s.since = now; // when the trouble started, even before it counts as down
         services[p.name] = s;
     }
+    // services not checked this round (the every-5-minute ones on a reminders-only minute) keep their state
+    for (const [name, s] of Object.entries(prev.services)) if (!(name in services)) services[name] = s;
     return { next: { ...prev, services }, alerts };
 }
 

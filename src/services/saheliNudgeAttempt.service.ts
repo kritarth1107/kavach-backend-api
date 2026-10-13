@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import SaheliNudgeLog, { type SaheliNudgeKind } from "../models/saheliNudgeLog.model";
+import { clockNow } from "../utils/clock.util";
 
 /**
  * Attempt bookkeeping for scheduled Saheli sends (care nudges + reminders).
@@ -12,6 +13,27 @@ import SaheliNudgeLog, { type SaheliNudgeKind } from "../models/saheliNudgeLog.m
  */
 export const NUDGE_MAX_ATTEMPTS = 2; // first send + at most 1 retry
 export const NUDGE_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
+
+/**
+ * How often a slot may be tried, and how long to wait before each retry (trust plan B1.7: a retry must land inside the
+ * slot's window, or it never happens). A dose (sent 0–4 min after its time): again at +1 and +3 min. A reminder Saheli set
+ * (15-minute window): again at +2 and +6 min. Everything else: once more after 30 min, as before.
+ */
+export type RetryPolicy = { maxAttempts: number; cooldownsMs: number[] };
+export const DEFAULT_RETRY: RetryPolicy = { maxAttempts: NUDGE_MAX_ATTEMPTS, cooldownsMs: [NUDGE_RETRY_COOLDOWN_MS] };
+export const DOSE_RETRY: RetryPolicy = { maxAttempts: 3, cooldownsMs: [60_000, 120_000] };
+export const REMINDER_RETRY: RetryPolicy = { maxAttempts: 3, cooldownsMs: [120_000, 240_000] };
+
+export function retryPolicy(key: Pick<NudgeSlotKey, "nudgeKind" | "scheduleId">): RetryPolicy {
+    if (key.nudgeKind === "dose_due") return DOSE_RETRY;
+    if (String(key.scheduleId ?? "").startsWith("reminder:")) return REMINDER_RETRY;
+    return DEFAULT_RETRY;
+}
+
+/** The wait before the next try, after `attempts` tries. */
+export function cooldownAfter(policy: RetryPolicy, attempts: number): number {
+    return policy.cooldownsMs[Math.min(Math.max(1, attempts) - 1, policy.cooldownsMs.length - 1)] ?? NUDGE_RETRY_COOLDOWN_MS;
+}
 
 export type NudgeSlotKey = {
     familyId: string;
@@ -35,16 +57,16 @@ export type NudgeSlotDecision =
     | { allowed: false; reason: "delivered" | "terminal" | "max_attempts" | "cooldown" };
 
 /** Pure decision helper (exported for tests). */
-export function decideNudgeSlot(rows: SlotRow[], now = new Date()): NudgeSlotDecision {
+export function decideNudgeSlot(rows: SlotRow[], now = new Date(), policy: RetryPolicy = DEFAULT_RETRY): NudgeSlotDecision {
     if (!rows.length) return { allowed: true };
     if (rows.some((r) => r.delivered)) return { allowed: false, reason: "delivered" };
     if (rows.some((r) => r.terminal)) return { allowed: false, reason: "terminal" };
     const attempts = rows.reduce((sum, r) => sum + Math.max(1, r.attempts ?? 0), 0);
-    if (attempts >= NUDGE_MAX_ATTEMPTS) return { allowed: false, reason: "max_attempts" };
+    if (attempts >= policy.maxAttempts) return { allowed: false, reason: "max_attempts" };
     const last = Math.max(
         ...rows.map((r) => new Date(r.lastAttemptAt ?? r.createdAt ?? 0).getTime()),
     );
-    if (now.getTime() - last < NUDGE_RETRY_COOLDOWN_MS) return { allowed: false, reason: "cooldown" };
+    if (now.getTime() - last < cooldownAfter(policy, attempts)) return { allowed: false, reason: "cooldown" };
     return { allowed: true };
 }
 
@@ -65,10 +87,11 @@ function slotFilter(key: NudgeSlotKey) {
 export async function claimNudgeAttempt(
     key: NudgeSlotKey,
     messagePreview: string,
-    now = new Date(),
+    now = clockNow(),
 ): Promise<string | null> {
     const rows = (await SaheliNudgeLog.find(slotFilter(key)).lean()) as unknown as SlotRow[];
-    const decision = decideNudgeSlot(rows, now);
+    const policy = retryPolicy(key);
+    const decision = decideNudgeSlot(rows, now, policy);
     if (!decision.allowed) return null;
 
     if (!rows.length) {
@@ -93,7 +116,7 @@ export async function claimNudgeAttempt(
 
     // Retry: compare-and-set on lastAttemptAt so only one instance wins.
     const row = rows[0] as SlotRow & { nudgeId?: string };
-    const cutoff = new Date(now.getTime() - NUDGE_RETRY_COOLDOWN_MS);
+    const cutoff = new Date(now.getTime() - cooldownAfter(policy, Math.max(1, row.attempts ?? 0)));
     const res = await SaheliNudgeLog.updateOne(
         {
             _id: row._id,

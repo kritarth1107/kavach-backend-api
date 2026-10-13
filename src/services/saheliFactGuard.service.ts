@@ -82,10 +82,13 @@ export function groundOutreachReply(reply: string, allowedFacts: string): string
     return reply;
 }
 
+/** The dose reminder's window, in minutes after its time: the first send, then the retries at +1 and +3 (trust plan B1.7). */
+export const DOSE_WINDOW_MIN = 4;
+
 /** Send the medicine WhatsApp in the minute it is due, then again if there is no reply. */
 export function medicineDueWindow(minutesSince: number, status: string): "dose_due" | "followup" | null {
     if (status === "completed") return null;
-    if (minutesSince >= 0 && minutesSince <= 2) return "dose_due";
+    if (minutesSince >= 0 && minutesSince <= DOSE_WINDOW_MIN) return "dose_due";
     if (minutesSince >= 15 && minutesSince <= 60) return "followup";
     return null;
 }

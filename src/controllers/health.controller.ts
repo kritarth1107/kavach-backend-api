@@ -27,6 +27,23 @@ export async function getEngineHealth(req: Request, res: Response): Promise<void
     res.status(engine.ok ? 200 : 503).json({ status: engine.ok ? "ok" : "down", engine, checkedAt: new Date().toISOString() });
 }
 
+/**
+ * GET /api/health/reminders (public): 200 while the reminder tick runs, 503 when its last tick is older than 3 minutes
+ * (trust plan B1.7). Times only, nothing about anyone. The Cloudflare uptime worker checks it every minute.
+ */
+export async function getRemindersHealth(_req: Request, res: Response): Promise<void> {
+    try {
+        const { reminderHeartbeat } = await import("../services/reminderHealth.service");
+        const hb = await reminderHeartbeat();
+        res.status(hb.ok ? 200 : 503).json({
+            status: hb.ok ? "ok" : "stale", lastTickAt: hb.lastTickAt, ageSeconds: hb.ageMs == null ? null : Math.round(hb.ageMs / 1000),
+            checkedAt: new Date().toISOString(),
+        });
+    } catch {
+        res.status(503).json({ status: "error", lastTickAt: null, ageSeconds: null, checkedAt: new Date().toISOString() });
+    }
+}
+
 export async function getHealth(_req: Request, res: Response): Promise<void> {
     try {
         const report = await buildBasicHealthReport();

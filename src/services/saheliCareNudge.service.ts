@@ -11,6 +11,8 @@ import { buildCareNudgeMessages } from "./whatsappMessageComposer.service";
 import { buildCareNudgeText } from "./saheliNudgeCopy.service";
 import { checkCaregiverAlertsForMissedTasks } from "./saheliCaregiverAlert.service";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
+import { doseSlotKey, noteDueFailed, noteDueHeld, noteDueMissed, noteDueSent } from "./dueList.service";
+import { clockNow } from "../utils/clock.util";
 import { formatScheduleSection } from "./saheliContext.service";
 import { medicineDueWindow } from "./saheliFactGuard.service";
 
@@ -126,7 +128,10 @@ export async function deliverCareNudge(input: {
         const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId, medicine: input.medicine });
         if (!gate.ok) {
             console.log(`Care nudge deferred (${gate.reason}) for ${input.recipientUserId} (${input.nudgeKind})`);
-            if (input.medicine && input.nudgeKind === "dose_due") await rememberHeldDose(input, gate.reason || "gate");
+            if (input.medicine && input.nudgeKind === "dose_due") {
+                await rememberHeldDose(input, gate.reason || "gate");
+                await noteDueHeld(doseSlotKey(input.scheduleId, input.dateKey), `held: ${gate.reason || "gate"} (sent once clear)`);
+            }
             return false;
         }
     }
@@ -159,6 +164,7 @@ export async function deliverCareNudge(input: {
             terminal: true,
             reason: "no_valid_recipient",
         });
+        if (input.nudgeKind === "dose_due") await noteDueFailed(doseSlotKey(input.scheduleId, input.dateKey), "no WhatsApp number for them");
         return false;
     }
 
@@ -167,7 +173,10 @@ export async function deliverCareNudge(input: {
         const gate = await canSendProactiveNudge({ familyId: input.familyId, recipientUserId: input.recipientUserId, medicine: input.medicine });
         if (!gate.ok) {
             console.log(`Care nudge dropped at send (${gate.reason}) for ${input.recipientUserId}`);
-            if (input.medicine && input.nudgeKind === "dose_due") await rememberHeldDose(input, gate.reason || "gate");
+            if (input.medicine && input.nudgeKind === "dose_due") {
+                await rememberHeldDose(input, gate.reason || "gate");
+                await noteDueHeld(doseSlotKey(input.scheduleId, input.dateKey), `held: ${gate.reason || "gate"} (sent once clear)`);
+            }
             await finalizeNudgeAttempt(attemptId, {
                 delivered: false,
                 channel: target.channel,
@@ -208,6 +217,14 @@ export async function deliverCareNudge(input: {
         reason: delivery.delivered ? undefined : delivery.reason ?? "send_failed",
         wamid: delivery.messageIds?.[0],
     });
+    if (input.nudgeKind === "dose_due") {
+        // the due list (B1.4): what became of this dose's slot
+        const slot = doseSlotKey(input.scheduleId, input.dateKey);
+        const attempts = await attemptsOf(attemptId);
+        if (delivery.delivered) await noteDueSent(slot, { wamid: delivery.messageIds?.[0], attempts });
+        else if (delivery.reason === "paused") await noteDueHeld(slot, "paused (admin console)");
+        else await noteDueFailed(slot, delivery.reason ?? "send_failed", attempts);
+    }
 
     if (!delivery.delivered) {
         console.warn(
@@ -252,9 +269,7 @@ export function careNudgeDeliveryKind(kind: SaheliNudgeKind): import("../models/
 }
 
 /** A dose's slot on the due list: one per medicine time per day. */
-export function doseSlotKey(scheduleId: string, dateKey: string): string {
-    return `dose:${scheduleId}:${dateKey}`;
-}
+export { doseSlotKey } from "./dueList.service";
 
 /** "2026-10-14" + "08:30" (IST) → the moment. */
 export function slotTime(dateKey: string, hhmm: string): Date | undefined {
@@ -399,6 +414,9 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
                     messagePreview: text,
                     ...(x === first ? { wamid: delivery.messageIds?.[0] } : {}),
                 });
+                const slot = doseSlotKey(x.item.scheduleId, dateKey);
+                if (delivery.delivered) await noteDueSent(slot, { wamid: x === first ? delivery.messageIds?.[0] : undefined, late: true });
+                else await noteDueFailed(slot, `late reminder: ${delivery.reason ?? "failed"}`);
             }
             if (delivery.delivered) sent += 1;
         }
@@ -413,6 +431,7 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
         );
         if (!id) continue;
         await finalizeNudgeAttempt(id, { delivered: false, channel: "dashboard", terminal: true, reason: `missed_while_down: ${item.why}` });
+        await noteDueMissed(doseSlotKey(item.scheduleId, dateKey), `Kavach was down; not sent late (${item.why})`);
         void import("./activityLog.service").then(({ logActivity }) =>
             logActivity({
                 familyId: c.familyId, recipientUserId: c.recipientUserId, kind: "reminder",
@@ -425,7 +444,7 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
     return { sent, handled };
 }
 
-export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number; scanned: number }> {
+export async function runCareNudgeTick(now = clockNow()): Promise<{ sent: number; scanned: number }> {
     const gaps = await noteTick(now);
     const companions = await listEnabledCompanions();
     let sent = 0;
@@ -434,7 +453,11 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
     const nowMinutes = getISTParts(now).minutesSinceMidnight;
 
     for (const companion of companions) {
-        if (isWithinQuietHours(companion, now)) continue;
+        if (isWithinQuietHours(companion, now)) {
+            const { holdRecentDoses } = await import("./dueList.service");
+            await holdRecentDoses(companion.familyId, companion.recipientUserId, "quiet hours", now);
+            continue;
+        }
 
         scanned += 1;
         try {
@@ -451,7 +474,11 @@ export async function runCareNudgeTick(now = new Date()): Promise<{ sent: number
     // Self care: caregivers who keep their own schedule get the same dose reminders, gently, with no family alerts.
     try {
         for (const target of await listSelfCareTargets()) {
-            if (isQuietHourIST(nowMinutes)) break;
+            if (isQuietHourIST(nowMinutes)) {
+                const { holdRecentDoses } = await import("./dueList.service");
+                await holdRecentDoses(target.familyId, target.recipientUserId, "quiet hours (22:00-07:00)", now);
+                continue;
+            }
             scanned += 1;
             try {
                 sent += await nudgeOneCompanion(target, now, dateKey, nowMinutes, { selfCare: true, gaps });
@@ -574,6 +601,10 @@ async function nudgeOneCompanion(
             const minutesUntil = scheduleMinutes - nowMinutes;
             const minutesSince = nowMinutes - scheduleMinutes;
             const due = medicineDueWindow(minutesSince, item.status);
+            if (item.type === "MEDICINE" && item.status === "completed" && minutesSince >= 0 && minutesSince <= 4) {
+                // marked taken before its reminder: not needed, held by rule (shown in the report, never alerted)
+                await noteDueHeld(doseSlotKey(item.scheduleId, dateKey), "already marked taken");
+            }
 
             if (due === "dose_due" && item.type === "MEDICINE") {
                 const ok = await deliverCareNudge({

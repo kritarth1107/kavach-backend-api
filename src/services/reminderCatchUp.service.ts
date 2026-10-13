@@ -42,7 +42,7 @@ export function planCatchUp(input: {
         const at = input.parse(item.time);
         if (at == null) continue;
         const since = input.nowMinutes - at;
-        if (since <= 2) continue; // the normal dose reminder still covers it
+        if (since <= 4) continue; // the normal dose reminder (and its retries) still covers it
         const created = input.createdTodayAt(item);
         if (created != null && created >= at) continue; // added after its time today: never due, nothing missed
         const nextSame = meds
