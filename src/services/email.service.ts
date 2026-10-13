@@ -93,6 +93,21 @@ export async function sendOpsAlert(subject: string, text: string) {
   return { sent: true, to: to.length };
 }
 
+/** The Kavach team's daily report (trust plan C1: the 08:00 IST daily score; a failing nightly world score). Text, with an
+ *  optional HTML body. TEAM_REPORT_TO, else OPS_ALERT_TO, overrides the recipients (comma separated). */
+export async function sendTeamReport(subject: string, text: string, html?: string) {
+  const to = (process.env.TEAM_REPORT_TO || process.env.OPS_ALERT_TO || "kritarth@kavach.care").split(",").map((x) => x.trim()).filter(Boolean);
+  const { error } = await resend().emails.send({
+    from: process.env.TEAM_REPORT_FROM || "Kavach daily score <alerts@emails.kavach.care>",
+    to,
+    subject: subject.slice(0, 160),
+    text: text.slice(0, 30000),
+    ...(html ? { html: html.slice(0, 60000) } : {}),
+  });
+  if (error) throw new AppError(error.message || "Failed to send the team report", 502);
+  return { sent: true, to: to.length };
+}
+
 /** A care alert to the Kavach care team (founder 2026-10-13: a user talking of suicide, self-harm or harming someone, or an
  *  emergency with no one else to tell). CARE_TEAM_ALERT_TO overrides the recipients (comma separated). */
 export async function sendCareTeamAlert(subject: string, text: string) {

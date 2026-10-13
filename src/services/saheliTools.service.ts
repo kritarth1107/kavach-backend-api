@@ -72,6 +72,8 @@ export type SaheliToolName =
     | "cancel_ride"
     | "sync_medicine_schedule"
     | "ops_alert"
+    | "team_report"
+    | "delivery_day"
     | "get_reminder_log"
     | "export_care_record"
     | "claim_schedule_rows"
@@ -122,6 +124,17 @@ export async function executeSaheliTool(input: {
         // Not about a family, so no family check.
         const { sendOpsAlert } = await import("./email.service");
         return sendOpsAlert(String(input.args.subject ?? "Alert"), String(input.args.text ?? ""));
+    }
+    if (input.tool === "team_report") {
+        // Internal only: the engine's 08:00 daily score email and a failing nightly world score → the Kavach team (trust plan C1, C2).
+        const { sendTeamReport } = await import("./email.service");
+        return sendTeamReport(String(input.args.subject ?? "Kavach report"), String(input.args.text ?? ""),
+            typeof input.args.html === "string" ? input.args.html : undefined);
+    }
+    if (input.tool === "delivery_day") {
+        // Internal only: the day's due reminder slots with WhatsApp's receipts, for the engine's daily score (check 1).
+        const { deliveryDay } = await import("./deliveryDay.service");
+        return deliveryDay(String(input.args.day ?? ""));
     }
     await getFamilyForActor(input.familyId, input.actorUserId);
     if (RETIRED_V1_TOOLS.has(input.tool)) {
