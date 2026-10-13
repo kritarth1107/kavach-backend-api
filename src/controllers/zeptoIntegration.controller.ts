@@ -16,7 +16,14 @@ export async function getZeptoConnectHandler(req: Request, res: Response) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "approve_order");
 
-    const result = await startZeptoConnect(familyId, actorUserId);
+    let result;
+    try {
+        result = await startZeptoConnect(familyId, actorUserId);
+    } catch (err) {
+        // Zepto's sign-in server could not be reached or refused: an upstream failure, not a crash of ours
+        console.warn("[zepto] connect failed:", err instanceof Error ? err.message : err);
+        throw new AppError("Zepto could not be reached right now. Please try again in a minute.", 502);
+    }
     res.json({ success: true, data: result });
 }
 

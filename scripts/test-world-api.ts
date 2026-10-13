@@ -135,7 +135,8 @@ async function main() {
                 const status = res ? res.status : 0;
                 (tally[role] ||= {})[String(status)] = ((tally[role] ||= {})[String(status)] || 0) + 1;
                 if (!res) problems.push(`${f.id} ${role} GET ${route}: no answer (the request hung)`);
-                else if (status >= 500) problems.push(`${f.id} ${role} GET ${route}: ${status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
+                // 502/503: an outside service (a store's sign-in, Meta) is unavailable, said plainly; any other 5xx is our crash
+                else if (status >= 500 && status !== 502 && status !== 503) problems.push(`${f.id} ${role} GET ${route}: ${status} ${(await res.text().catch(() => "")).slice(0, 120)}`);
                 else if (role === "outsider" && status < 300) problems.push(`${f.id} OUTSIDER got ${status} on ${route} (another family's data)`);
                 else if (role === "primary" && (status === 401 || status === 403)) problems.push(`${f.id} primary caregiver refused (${status}) on ${route}`);
             }
