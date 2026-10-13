@@ -110,3 +110,13 @@ jobs:
           echo "$BODY" | grep -Eq '"modeEnv":"(auto|playwright)"'
           echo "Health OK; browserWorker.modeEnv is auto|playwright"
           echo "$BODY"
+
+  # quality plan F7: the after-deploy scenarios and the live check against production (read-only); red on any problem,
+  # and the admin API emails the team
+  after-deploy:
+    needs: deploy
+    uses: ./.github/workflows/live-check.yml
+    with:
+      trigger: deploy
+      service: kavach-backend
+    secrets: inherit

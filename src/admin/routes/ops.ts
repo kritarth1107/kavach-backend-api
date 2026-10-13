@@ -112,6 +112,25 @@ export function opsRoutes(): RouteDef[] {
             },
         },
         {
+            // quality plan F8: the hourly live check and the checks after each deploy, newest first
+            method: "get", path: "/live-checks", perm: "system.read", action: "system.live_checks",
+            handler: async ({ query }) => {
+                const { LiveCheck } = await import("../liveCheck");
+                const hours = Math.min(Math.max(Number(query.hours) || 48, 1), 24 * 14);
+                const rows = await LiveCheck.find({ at: { $gte: new Date(Date.now() - hours * 3_600_000) } }).sort({ at: -1 }).limit(400)
+                    .lean<Array<{ hourKey: string; trigger: string; service?: string; sha?: string; at: Date; ok: boolean; problems: string[]; emailed: boolean;
+                        checks: Array<{ key: string; label: string; status: string; value: string }> }>>();
+                return {
+                    detail: { hours, n: rows.length },
+                    data: {
+                        hours,
+                        runs: rows.map((r) => ({ hourKey: r.hourKey, trigger: r.trigger, service: r.service ?? null, sha: r.sha ?? null, at: iso(r.at), ok: r.ok,
+                            problems: r.problems, emailed: r.emailed, checks: r.checks.map(({ key, label, status, value }) => ({ key, label, status, value })) })),
+                    },
+                };
+            },
+        },
+        {
             method: "get", path: "/messages", perm: "users.read", action: "messages.list",
             handler: async ({ query }) => {
                 const page = pageOf(query);

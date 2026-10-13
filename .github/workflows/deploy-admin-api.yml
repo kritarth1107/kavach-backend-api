@@ -23,6 +23,9 @@ on:
       - "src/types/**"
       - "src/config/**"
       - "scripts/test-admin.ts"
+      # the live check (quality plan F7, F8): src/admin/liveCheck.ts reads these
+      - "src/services/reminderHealth.service.ts"
+      - "scripts/test-live-check.ts"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/deploy-admin-api.yml"
@@ -40,6 +43,7 @@ env:
   API_SA: kavach-admin-api@kavach-care.iam.gserviceaccount.com
   WEB_SA: kavach-admin-web@kavach-care.iam.gserviceaccount.com
   AUDIENCE: https://kavach-admin-api-303943038694.asia-south1.run.app
+  JOB_SA: github-deploy@kavach-care.iam.gserviceaccount.com
 
 jobs:
   deploy:
@@ -61,6 +65,7 @@ jobs:
           npm ci --no-audit --no-fund
           npx tsc --noEmit -p .
           npm run test:admin
+          npm run test:live-check
 
       - uses: google-github-actions/auth@v2
         with:
@@ -86,6 +91,8 @@ jobs:
               "ADMIN_OWNER_EMAIL": "kritarth@kavach.care", "ADMIN_ALLOWED_DOMAIN": "kavach.care",
               "ENGINE_URL": "https://kawach-ai-engine-303943038694.asia-south1.run.app", "BACKEND_URL": "https://kavach-backend-303943038694.asia-south1.run.app",
               "GCP_PROJECT_ID": "${{ env.GCP_PROJECT_ID }}",
+              # the only caller of /admin/jobs (the hourly and after-deploy live check, live-check.yml)
+              "ADMIN_JOB_SA": "${{ env.JOB_SA }}",
           }
           # Infrastructure page: which WhatsApp account's bill to read.
           # Waitlist approval email: Saheli's live number and the dashboard address, the same as the backend's.
@@ -101,7 +108,7 @@ jobs:
             --no-allow-unauthenticated \
             --service-account=${{ env.API_SA }} \
             --command=node --args=dist/admin/server.js \
-            --port=8080 --memory=512Mi --cpu=1 --min-instances=0 --max-instances=2 --timeout=60 \
+            --port=8080 --memory=512Mi --cpu=1 --min-instances=0 --max-instances=2 --timeout=120 \
             --env-vars-file=/tmp/admin-env.yaml \
             --set-secrets="MONGODB_URI=admin-mongodb-uri:latest,ADMIN_ASSERTION_KEY=admin-assertion-key:latest,ADMIN_AUDIT_KEY=admin-audit-key:latest,ENGINE_ADMIN_SECRET=engine-admin-secret:latest,ADMIN_TOTP_KEY=admin-totp-key:latest,RESEND_API_KEY=backend-resend-api-key:latest,WHATSAPP_META_ACCESS_TOKEN=backend-whatsapp-meta-access-token:latest,BROWSER_USE_API_KEY=backend-browser-use-api-key:latest" \
             --quiet
