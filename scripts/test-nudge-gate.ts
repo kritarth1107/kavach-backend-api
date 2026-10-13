@@ -140,6 +140,13 @@ async function db(uri: string) {
         assert.deepEqual([g.ok, g.reason, g.paused, g.mode], [false, "paused", true, "on"]);
         F.setFlagSnapshot({});
     });
+    await ok("meal nudges have their own switch (nudge.meals), off unless set", async () => {
+        F.setFlagSnapshot({ "nudge.regular": "on" });
+        assert.equal((await nudgeGate(fam, "u-elder")).meals_mode, "off");
+        F.setFlagSnapshot({ "nudge.regular": "on", "nudge.meals": "shadow" });
+        assert.equal((await nudgeGate(fam, "u-elder")).meals_mode, "shadow");
+        F.setFlagSnapshot({});
+    });
     await ok("someone who is not in the family gets no phone and is not ok", async () => {
         const g = await nudgeGate(fam, "u-stranger");
         assert.equal(g.ok, false);

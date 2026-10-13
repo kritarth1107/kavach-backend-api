@@ -6,12 +6,13 @@
  */
 import OutboundMessage from "../models/outboundMessage.model";
 import WhatsAppWindow from "../models/whatsappWindow.model";
-import { isSaheliPaused, regularNudgeMode } from "./featureFlags.service";
+import { isSaheliPaused, mealNudgeMode, regularNudgeMode } from "./featureFlags.service";
 
 export type NudgeGate = {
     ok: boolean;
     reason: string | null;
     mode: string;
+    meals_mode: string;
     window_open: boolean;
     paused: boolean;
     active_flow: string | null;
@@ -65,6 +66,7 @@ export async function nudgeGate(familyId: string, userId: string, now: Date = ne
         ok: reason === null,
         reason,
         mode,
+        meals_mode: mealNudgeMode(),
         window_open: open,
         paused,
         active_flow: activeFlow,

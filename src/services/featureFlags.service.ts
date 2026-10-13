@@ -26,6 +26,10 @@ export const FLAG_DEFS = {
         type: "enum", values: ["off", "shadow", "on"], env: "NUDGE_REGULAR", label: "Regular nudges",
         help: "Saheli's personal message after each hour of chat silence (Kavach NUdge's plan). shadow: planned and logged in the engine, nothing sent; on: sent; off: the old check-ins.",
     },
+    "nudge.meals": {
+        type: "enum", values: ["off", "shadow", "on"], env: "NUDGE_MEALS", label: "Meal nudges",
+        help: "Regular nudges may ask what was eaten after an unlogged main meal (nutrition plan N5). shadow: written and logged in the engine, nothing sent; on: sent (only while regular nudges are on).",
+    },
     "connectors.mcpFirst": {
         type: "bool", env: "MCP_AGENT_CONNECTOR", envOn: "on", label: "Store connectors first",
         help: "Swiggy, Instamart and Zepto through their connectors first, the browser as fallback.",
@@ -83,6 +87,12 @@ export function flaggedEnv(env: NodeJS.ProcessEnv = process.env, flags = snapsho
     if (Array.isArray(flags["brain.liveFamilies"])) out.BRAIN_V2_LIVE_FAMILIES = (flags["brain.liveFamilies"] as string[]).join(",");
     if (typeof flags["connectors.mcpFirst"] === "boolean") out.MCP_AGENT_CONNECTOR = flags["connectors.mcpFirst"] ? "on" : "off";
     return out;
+}
+
+/** Meal nudges: off | shadow | on (admin flag, else NUDGE_MEALS, else off). */
+export function mealNudgeMode(env: NodeJS.ProcessEnv = process.env, flags = snapshot): "off" | "shadow" | "on" {
+    const v = typeof flags["nudge.meals"] === "string" ? (flags["nudge.meals"] as string) : (env.NUDGE_MEALS || "off").trim().toLowerCase();
+    return v === "shadow" || v === "on" ? v : "off";
 }
 
 /** Regular nudges: off | shadow | on (admin flag, else NUDGE_REGULAR, else off). */
