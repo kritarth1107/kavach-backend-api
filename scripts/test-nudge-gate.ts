@@ -85,9 +85,9 @@ async function db(uri: string) {
         assert.deepEqual(g.last_outbound_preview.map((p) => p.text), ["line 6", "line 5", "line 4", "line 3", "line 2"]);
         assert.equal(g.last_outbound_at, g.last_outbound_preview[0].at);
     });
-    await ok("a closed chat (no message from them in 24 h) is not ok: window_closed", async () => {
-        const g = await nudgeGate(fam, "u-cg"); // never wrote: no window row counts as open, so close it
-        assert.equal(g.window_open, true);
+    await ok("a closed chat (no message from them in 24 h, or never) is not ok: window_closed", async () => {
+        const never = await nudgeGate(fam, "u-cg"); // never wrote: no record of a message from them, so no nudge
+        assert.deepEqual([never.ok, never.reason, never.window_open], [false, "window_closed", false]);
         await WhatsAppWindow.create({ phone: "919000000102", lastInboundAt: new Date(Date.now() - 30 * 3_600_000) });
         const closed = await nudgeGate(fam, "u-cg");
         assert.equal(closed.ok, false);
@@ -117,7 +117,7 @@ async function db(uri: string) {
         const SaheliReminder = (await import("../src/models/saheliReminder.model")).default;
         const { finalizeNudgeAttempt } = await import("../src/services/saheliNudgeAttempt.service");
         await SaheliReminder.create({ reminderId: "rem-gym", familyId: fam, recipientUserId: "u-cg", text: "Get ready for the gym", kind: "multi_time",
-            times: ["18:00"], repeat: "daily", status: "active", createdBy: "u-cg", timezone: "Asia/Kolkata" });
+            times: ["18:00"], repeat: "daily", status: "active", createdBy: "u-cg", timezone: "Asia/Kolkata", aboutKey: "activity:gym" });
         await SaheliNudgeLog.create({ nudgeId: "att-1", familyId: fam, recipientUserId: "u-cg", nudgeKind: "pre_reminder", channel: "whatsapp",
             scheduleId: "reminder:rem-gym:18:00", dateKey: "2026-10-13", attempts: 1, delivered: false, lastAttemptAt: new Date() });
         events.length = 0;
@@ -127,6 +127,7 @@ async function db(uri: string) {
         assert.equal(ev?.kind, "reminder_sent");
         assert.equal(ev?.payload?.preview, "Legs day today? Shoes by the door 👟");
         assert.equal(ev?.payload?.custom, true);
+        assert.equal(ev?.payload?.aboutKey, "activity:gym"); // the engine asks a gym question, never one about a medicine
     });
     await mongoose.disconnect();
 }

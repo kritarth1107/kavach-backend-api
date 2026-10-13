@@ -152,9 +152,10 @@ async function pushNudgeToLedger(nudgeId: string, outcome: { delivered: boolean;
         const [, reminderId, ...rest] = custom;
         const slot = rest.join(":");
         const { default: SaheliReminder } = await import("../models/saheliReminder.model");
-        const rem = await SaheliReminder.findOne({ reminderId }, { text: 1 }).lean().catch(() => null);
+        const rem = await SaheliReminder.findOne({ reminderId }, { text: 1, aboutKey: 1 }).lean().catch(() => null);
         what = `${rem?.text ?? "a reminder"} at ${slot}`;
-        extra = { reminderId, slot, custom: true };
+        // aboutKey: what it is linked to (a medicine gets no 5-minute follow-up question; an activity's gets its data asked)
+        extra = { reminderId, slot, custom: true, ...(rem?.aboutKey ? { aboutKey: rem.aboutKey } : {}) };
     } else {
         const { default: CareSchedule } = await import("../models/careSchedule.model");
         const item = row.scheduleId ? await CareSchedule.findOne({ scheduleId: row.scheduleId }).lean().catch(() => null) : null;

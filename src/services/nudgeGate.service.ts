@@ -35,9 +35,11 @@ export async function nudgeGate(familyId: string, userId: string, now: Date = ne
     let lastInbound: Date | null = null;
     if (!("reason" in found)) {
         const { phoneKey, windowOpen } = await import("./whatsappWindow.service");
-        open = await windowOpen(found.phone, now);
         const row = await WhatsAppWindow.findOne({ phone: phoneKey(found.phone) }).lean<{ lastInboundAt?: Date }>();
         lastInbound = row?.lastInboundAt && new Date(row.lastInboundAt).getTime() > 0 ? new Date(row.lastInboundAt) : null;
+        // Strict for a nudge: a number with no record of a message from them is not an open chat (other sends try it and
+        // let Meta close it; a nudge has no template to fall back on).
+        open = lastInbound !== null && (await windowOpen(found.phone, now));
     }
     const outs = await OutboundMessage.find({ familyId, recipientUserId: userId, direction: "outbound" })
         .sort({ deliveredAt: -1 })
