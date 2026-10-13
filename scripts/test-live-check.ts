@@ -39,7 +39,12 @@ ok("latency: 25 s is slow, shown", judgeLatency({ turns: 12, p50Ms: 6000, p90Ms:
 ok("latency: a quiet hour is fine", judgeLatency({ turns: 0, p50Ms: null, p90Ms: null, maxMs: null }).status === "ok");
 ok("latency: an engine that does not say is unknown (an older engine, never an alarm)", judgeLatency(null).status === "unknown");
 ok("429s: 10 in the hour is a problem", judge429({ "gemini-3.5-flash@asia-south1": 7, "gemini-3.1-pro-preview@global": 3 }).status === "problem");
-ok("429s: a few only show, by route", (() => { const c = judge429({ "gemini-3.5-flash@asia-south1": 2 }); return c.status === "warn" && c.value === "2 (gemini-3.5-flash@asia-south1 2)"; })());
+ok("429s: a few only show, by route", (() => { const c = judge429({ "gemini-3.5-flash@asia-south1": 2 }); return c.status === "warn" && c.value === "2 × 429 (gemini-3.5-flash@asia-south1 2)"; })());
+ok("403s: Google refusing calls under its usage policy is a problem at 5", (() => {
+    const c = judge429({}, { "gemini-3.5-flash@asia-south1": 5 });
+    return c.status === "problem" && c.value.includes("5 × 403 refused by Google's usage policy");
+})());
+ok("403s: one only shows", judge429({}, { "gemini-3.5-flash@asia-south1": 1 }).status === "warn");
 const now = Date.parse("2026-10-14T01:30:00+05:30");
 ok("backup: last night's is fine", judgeBackup({ day: "2026-10-13", ok: true, finishedAt: "2026-10-13T03:40:00+05:30" }, now).status === "ok");
 ok("backup: a failed one is a problem", judgeBackup({ day: "2026-10-13", ok: false, finishedAt: "2026-10-13T03:40:00+05:30" }, now).status === "problem");

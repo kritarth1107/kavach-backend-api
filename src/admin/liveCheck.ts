@@ -68,6 +68,8 @@ export const LIMITS = {
     p90ProblemMs: 35_000, p90WarnMs: 20_000, latencyMinTurns: 5,
     /** Gemini 429s in the hour, all models and regions, retried ones included (trust plan C5.4: >5 in 10 min alerts) */
     gemini429Problem: 10,
+    /** Gemini 403s (a usage-policy block) in the hour */
+    gemini403Problem: 5,
     /** the nightly backup runs at 03:30 IST: older than 26 h means a night was missed */
     backupMaxAgeH: 26,
     /** a service deployed this recently may still be starting: a failed probe is a warning, not a problem */
@@ -113,10 +115,15 @@ export function judgeLatency(l: { turns: number; p50Ms: number | null; p90Ms: nu
     return { ...base, status, value, detail: l };
 }
 
-export function judge429(byRoute: Record<string, number>): LiveCheckItem {
+export function judge429(byRoute: Record<string, number>, refused: Record<string, number> = {}): LiveCheckItem {
     const total = Object.values(byRoute).reduce((a, b) => a + b, 0);
-    const value = total ? `${total} (${Object.entries(byRoute).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(", ")})` : "0";
-    return { key: "gemini429", label: "Gemini 429s in the last hour", status: total >= LIMITS.gemini429Problem ? "problem" : total ? "warn" : "ok", value, detail: { byRoute, total } };
+    const blocked = Object.values(refused).reduce((a, b) => a + b, 0);
+    const list = (m: Record<string, number>) => Object.entries(m).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(", ");
+    const value = [total ? `${total} × 429 (${list(byRoute)})` : "0 × 429", blocked ? `${blocked} × 403 refused by Google's usage policy (${list(refused)})` : ""].filter(Boolean).join("; ");
+    // 403 "rejected in accordance with our terms of use": Google blocking the project's calls (14 Oct, the test project:
+    // every call refused from 01:43 IST). A handful is already a problem: Saheli cannot answer while it lasts.
+    const status: CheckStatus = blocked >= LIMITS.gemini403Problem || total >= LIMITS.gemini429Problem ? "problem" : total || blocked ? "warn" : "ok";
+    return { key: "gemini429", label: "Gemini refusals in the last hour (429, 403)", status, value, detail: { byRoute, total, refused, blocked } };
 }
 
 export function judgeBackup(b: { day?: string; ok?: boolean; finishedAt?: string | null } | null, now: number): LiveCheckItem {
@@ -259,14 +266,15 @@ async function errors(now: number): Promise<LiveCheckItem> {
 }
 
 async function gemini429(now: number): Promise<LiveCheckItem> {
-    const s = await hourSeries('metric.type="aiplatform.googleapis.com/publisher/online_serving/model_invocation_count" AND metric.label.response_code="429"',
-        ["resource.label.model_user_id", "resource.label.location"], now);
-    const byRoute: Record<string, number> = {};
+    const s = await hourSeries('metric.type="aiplatform.googleapis.com/publisher/online_serving/model_invocation_count" AND metric.label.response_code=one_of("429","403")',
+        ["resource.label.model_user_id", "resource.label.location", "metric.label.response_code"], now);
+    const byRoute: Record<string, number> = {}, refused: Record<string, number> = {};
     for (const x of s) {
         const k = `${x.resource?.labels?.model_user_id || "?"}@${x.resource?.labels?.location || "?"}`;
-        byRoute[k] = (byRoute[k] ?? 0) + (x.points || []).reduce((t, p) => t + num(p), 0);
+        const into = x.metric?.labels?.response_code === "403" ? refused : byRoute;
+        into[k] = (into[k] ?? 0) + (x.points || []).reduce((t, p) => t + num(p), 0);
     }
-    return judge429(byRoute);
+    return judge429(byRoute, refused);
 }
 
 async function latency(): Promise<LiveCheckItem> {
@@ -375,7 +383,7 @@ async function refusals(): Promise<LiveCheckItem> {
 type Collector = (now: number, trigger: Trigger) => Promise<LiveCheckItem>;
 const LABELS: Record<string, string> = {
     services: "Every service up", reminders: "Reminder tick", delivery: "WhatsApp delivery (24 h)", errors: "Errors in the last hour",
-    latency: "Saheli's reply time (p90, last hour)", gemini429: "Gemini 429s in the last hour", escalations: "Escalations on time (yesterday)",
+    latency: "Saheli's reply time (p90, last hour)", gemini429: "Gemini refusals in the last hour (429, 403)", escalations: "Escalations on time (yesterday)",
     backup: "Nightly backup", cloudsql: "Cloud SQL (engine database)", refusals: "Forged and unsigned calls are refused", engine_routes: "Engine routes others call",
 };
 
