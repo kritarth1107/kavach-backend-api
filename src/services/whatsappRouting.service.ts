@@ -662,6 +662,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     // A tapped Saheli v2 button ("v2:…" id) goes to the v2 brain, which records it without a model call.
     const v2Button = Boolean(body.interactiveId?.startsWith("v2:"));
     const hasMedia = Boolean(brainMedia || brainMediaNote);
+    const v2Live = (await import("./brainV2.service")).brainV2Mode(identity.familyId) === "live";
     if ((hasMedia || (text && !MEDIA_PLACEHOLDER.test(text))) && (!body.interactiveId || v2Button)) {
         const V2 = await import("./brainV2.service");
         const mode = V2.brainV2Mode(identity.familyId);
@@ -722,6 +723,13 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     }
     // The model's category is ride but it filed "Ola se" as an order change: it is a ride turn.
     if (route && route.category === "ride" && route.intent === "order_modify" && !route.productQuery) route = { ...route, intent: "ride" };
+    // A family on Saheli v2: the old order flow never orders, books, cancels or relays a code (D2.3 step 1).
+    const { v1MustNotOrder, legacyBlockReply } = await import("./legacyGuard.service");
+    const legacy = v1MustNotOrder({ live: v2Live, interactiveId: body.interactiveId, routed: Boolean(route), intent: route?.intent });
+    if (legacy) {
+        console.warn(`[legacy-guard] ${legacy} family=${identity.familyId} intent=${route?.intent ?? "-"} button=${body.interactiveId ?? "-"}`);
+        return outbound(phone, legacyBlockReply(legacy, route?.language));
+    }
     rememberTurn(phone, "user", text);
     // Unusual-activity backstop, before any order chat / search: risky medicines in bulk (sleeping
     // pills / painkillers) → pause, ask her gently, alert caregivers (tiered + deduped).

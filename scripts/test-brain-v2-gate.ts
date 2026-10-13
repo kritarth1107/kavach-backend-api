@@ -1,5 +1,6 @@
 /** Brain v2 rollout switch: off by default, shadow for everyone, live only for named families. */
 import { brainPerson, brainV2Mode, brainRole } from "../src/services/brainV2.service";
+import { legacyBlockReply, v1MustNotOrder } from "../src/services/legacyGuard.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -24,6 +25,20 @@ const noInviter = brainPerson({ userId: "e3", name: "Asha", role: "CARE_RECIPIEN
 ok("a relation with no one it is to is left out", !("relation" in noInviter), noInviter);
 const own = brainPerson({ userId: "e4", name: "Ravi", role: "CO_CAREGIVER", relationship: "Son", invitedBy: "e4" });
 ok("a relation to oneself is left out", !("relation" in own), own);
+
+// A family on v2: the old (v1) order flow never orders, books, cancels or relays a code (D2.3 step 1).
+const live = { live: true, routed: true };
+ok("v1 fallback never orders, books or relays a code", ["order_new", "order_modify", "order_control", "ride", "otp_code", "restaurant_list"]
+    .every((intent) => v1MustNotOrder({ ...live, intent }) === "send_again"));
+ok("v1 fallback still answers chat, health and reminders", ["companion_chat", "health_concern", "reminder_or_meds", "presence_check"]
+    .every((intent) => v1MustNotOrder({ ...live, intent }) === null));
+ok("both models down: the old regex rules do nothing on their own", v1MustNotOrder({ live: true, routed: false }) === "send_again");
+ok("an old order button is refused", ["quick_confirm:abc", "confirm_order", "addr:1", "item:0", "restaurant:2", "recipient:u1", "approve_order:x"]
+    .every((id) => v1MustNotOrder({ live: true, routed: false, interactiveId: id }) === "old_button"));
+ok("a Done tap and a records button still work", ["done:sched-1", "rec:keep:doc1"]
+    .every((id) => v1MustNotOrder({ live: true, routed: false, interactiveId: id }) === null));
+ok("a family not on v2 keeps the old flow", v1MustNotOrder({ live: false, routed: true, intent: "order_new", interactiveId: "confirm_order" }) === null);
+ok("the refusal speaks their language", legacyBlockReply("send_again", "hi").includes("मिनट") && legacyBlockReply("send_again", "en").includes("minute"));
 
 if (fail) {
     console.error(`${fail} failed`);

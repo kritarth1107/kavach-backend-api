@@ -102,6 +102,10 @@ export type SaheliToolName =
     | "nudge_gate"
     | "alert_care_team";
 
+const RETIRED_V1_TOOLS: ReadonlySet<string> = new Set([
+    "quick_order", "confirm_and_place_order", "place_cod_order", "browser_order", "browse_and_shop", "book_ride", "ride_status", "cancel_ride",
+]);
+
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
     args: Record<string, unknown>;
@@ -118,6 +122,12 @@ export async function executeSaheliTool(input: {
         return sendOpsAlert(String(input.args.subject ?? "Alert"), String(input.args.text ?? ""));
     }
     await getFamilyForActor(input.familyId, input.actorUserId);
+    if (RETIRED_V1_TOOLS.has(input.tool)) {
+        // The old order and ride flow (D2.3 step 1): orders and rides go through the engine's task system, with its
+        // options list, guards and for_whom. Nothing calls these now; anything that still does is refused.
+        console.warn(`[legacy-guard] retired tool ${input.tool} refused family=${input.familyId}`);
+        return { ok: false, error: "retired: orders and rides go through Saheli's task system" };
+    }
 
     switch (input.tool) {
         case "get_care_timeline": {
