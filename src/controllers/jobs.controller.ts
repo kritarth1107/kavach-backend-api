@@ -12,9 +12,9 @@ function assertJobAuth(req: Request) {
 export async function postOutreachJob(req: Request, res: Response, next: NextFunction) {
     try {
         assertJobAuth(req);
-        const { runOutreachTick } = await import("../workers/outreachScheduler");
-        await runOutreachTick();
-        res.json({ success: true, job: "outreach-tick" });
+        // The old outreach messages went with the old brain (trust plan A1) and the silence alert reads the delivery ledger
+        // (escalation.service, run by the care-nudge tick, trust plan B2): nothing is left for this tick to do.
+        res.json({ success: true, job: "outreach-tick", retired: true });
     } catch (err) {
         next(err);
     }
@@ -49,14 +49,8 @@ export async function postNudgeSimJob(req: Request, res: Response, next: NextFun
         const streakSvc = await import("../services/saheliNudgeStreak.service");
         let result: unknown = null;
         if (action === "fire") {
-            const { deliverSaheliOutreach } = await import("../services/saheliOutreach.service");
-            result = await deliverSaheliOutreach({
-                familyId,
-                recipientUserId,
-                outreachKind: "casual",
-                force: true,
-                ignoreSpacing: true,
-            });
+            // The old (v1) outreach message is gone (trust plan A1); check-ins come from the engine's regular nudges.
+            result = { retired: true };
         } else if (action === "check") {
             const graceMinutes = Number(req.body?.graceMinutes);
             result = await streakSvc.checkSilenceAndAlert(familyId, recipientUserId, {
@@ -105,92 +99,32 @@ export async function postMemoryDreamJob(req: Request, res: Response, next: Next
     }
 }
 
-export async function getSaheliMemoryContextHandler(
-    req: Request,
-    res: Response,
-    next: NextFunction,
-) {
-    try {
-        assertJobAuth(req);
-        const { buildSaheliMemoryContext, buildSaheliMemoryContextByAiIds } = await import(
-            "../services/saheliMemoryContext.service"
-        );
-        const aiFamilyId = String(req.query.aiFamilyId ?? "");
-        const aiElderId = String(req.query.aiElderId ?? "");
-        if (aiFamilyId && aiElderId) {
-            const ctx = await buildSaheliMemoryContextByAiIds(aiFamilyId, aiElderId);
-            if (!ctx) throw new AppError("AI tenant mapping not found", 404);
-            return res.json({ data: ctx });
-        }
-        const { familyId, recipientUserId } = req.params;
-        if (!familyId || !recipientUserId) {
-            throw new AppError("familyId and recipientUserId required", 400);
-        }
-        const ctx = await buildSaheliMemoryContext(familyId, recipientUserId);
-        if (!ctx) throw new AppError("AI tenant mapping not found", 404);
-        res.json({ data: ctx });
-    } catch (err) {
-        next(err);
-    }
-}
 
 /**
- * Nightly reflection (Cloud Scheduler ~02:30 IST). Auth: X-Kavach-Job-Secret or X-Kavach-Secret.
- * Body: { dayKey?: "YYYY-MM-DD" } for all elders, or { familyId, recipientUserId, dayKey? } / { phone }
- * (phone limited to smoke fixtures) for one elder on demand.
+ * The nightly reflection that wrote the old Mongo profile is retired for every family (trust plan A1): the engine's
+ * nightly brief, mood and baselines replace it. The scheduler's call is answered (and logged) until its job is removed.
  */
 export async function postReflectionJob(req: Request, res: Response, next: NextFunction) {
     try {
         const alt = req.header("X-Kavach-Secret");
         if (!(alt && alt === config.aiEngine.apiSecret)) assertJobAuth(req);
-        const { reflectAll, reflectElderDay } = await import("../services/profile/reflection.service");
-        const dayKey = req.body?.dayKey ? String(req.body.dayKey) : undefined;
-        if (dayKey && !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) throw new AppError("dayKey must be YYYY-MM-DD", 400);
-        let who: { familyId: string; recipientUserId: string } | null = null;
-        if (req.body?.phone) {
-            const phone = String(req.body.phone);
-            const { isSmokeFixturePhone } = await import("../services/smokeFixtures.service");
-            if (!isSmokeFixturePhone(phone)) throw new AppError("phone is limited to smoke fixture phones", 403);
-            const { resolveWhatsAppSender } = await import("../services/identityResolver.service");
-            const r = await resolveWhatsAppSender(phone);
-            who = { familyId: r.familyId, recipientUserId: r.userId };
-        } else if (req.body?.familyId && req.body?.recipientUserId) {
-            who = { familyId: String(req.body.familyId), recipientUserId: String(req.body.recipientUserId) };
-        }
-        if (who) {
-            res.json({ success: true, job: "reflection", result: await reflectElderDay(who, dayKey, {
-                    model: req.body?.model ? String(req.body.model) : undefined,
-                    schema: typeof req.body?.schema === "boolean" ? req.body.schema : undefined,
-                    thinkingLevel: req.body?.thinkingLevel ? String(req.body.thinkingLevel) : undefined,
-                }) });
-            return;
-        }
-        // Long run: answer now, keep working (Cloud Run keeps CPU for in-flight work only with always-on CPU; the
-        // per-elder loop is short, so we await it but cap the scheduler's wait via its own deadline).
-        res.json({ success: true, job: "reflection", ...(await reflectAll(dayKey)) });
+        console.log("[jobs] elder-reflection called: retired (the engine's nightly brief replaces it)");
+        res.json({ success: true, job: "reflection", retired: true });
     } catch (err) {
         next(err);
     }
 }
 
-/**
- * On-demand daily snapshot for a smoke-fixture elder (verification of what caregivers will see).
- * Auth: X-Kavach-Job-Secret or X-Kavach-Secret. Body: { phone (smoke fixtures only), dayKey }.
- * Real families get theirs from the ~21:00 IST tick or the dashboard.
- */
-export async function postDailySnapshotJob(req: Request, res: Response, next: NextFunction) {
+/** The daily "0 writes to the old memory stores" check (trust plan A1): GET the last 7 days, POST to count now. */
+export async function legacyWritesJob(req: Request, res: Response, next: NextFunction) {
     try {
-        const alt = req.header("X-Kavach-Secret");
-        if (!(alt && alt === config.aiEngine.apiSecret)) assertJobAuth(req);
-        const dayKey = String(req.body?.dayKey || "");
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) throw new AppError("dayKey must be YYYY-MM-DD", 400);
-        const phone = String(req.body?.phone || "");
-        const { isSmokeFixturePhone } = await import("../services/smokeFixtures.service");
-        if (!isSmokeFixturePhone(phone)) throw new AppError("phone is limited to smoke fixture phones", 403);
-        const { resolveWhatsAppSender } = await import("../services/identityResolver.service");
-        const r = await resolveWhatsAppSender(phone);
-        const { generateDailySnapshot } = await import("../services/dailySnapshot.service");
-        res.json({ success: true, job: "daily-snapshot", result: await generateDailySnapshot({ familyId: r.familyId, recipientUserId: r.userId, dayKey, source: "on_demand" }) });
+        assertJobAuth(req);
+        const L = await import("../services/legacyWriteCheck.service");
+        if (req.method === "POST") {
+            res.json({ success: true, job: "legacy-writes", result: await L.runLegacyWriteCheck(new Date(), { force: true }) });
+            return;
+        }
+        res.json({ success: true, job: "legacy-writes", ...(await L.legacyWriteReport(Number(req.query.days ?? 7) || 7)) });
     } catch (err) {
         next(err);
     }

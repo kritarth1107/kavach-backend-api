@@ -10,7 +10,6 @@ import {
     isR2Configured,
     uploadFamilyFile,
 } from "./r2Storage.service";
-import { analyzeUploadedDocument } from "./documentMemorySync.service";
 import { getFamilyForActor, requirePermission, requireCareSubject } from "./careRecordAuth.service";
 import { contentHash, isSameSavedFile, medicalUploadProblem } from "./medicalRecordExtract.service";
 
@@ -380,7 +379,6 @@ export async function downloadRecipientDocument(
     throw new AppError("No original file available for this record", 404);
 }
 
-export { analyzeUploadedDocument };
 
 /* ── review before save ─────────────────────────────────────────────────── */
 

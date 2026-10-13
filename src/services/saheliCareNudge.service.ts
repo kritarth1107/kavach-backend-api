@@ -52,6 +52,35 @@ async function composeDoseLine(input: { familyId: string; recipientUserId: strin
     }
 }
 
+/**
+ * The reminder's usual text (when no fresh line comes from the engine): the name to use and the names never to use come
+ * from the care record (trust plan A1, A3: app/care/naming.py for_person, through the engine, cached 60 s and dropped
+ * when it changes), never from the retired Mongo profile.
+ */
+export async function careNudgeFallbackText(input: {
+    familyId: string;
+    recipientUserId: string;
+    displayName: string;
+    title: string;
+    time: string;
+    nudgeKind: SaheliNudgeKind;
+    preferredLanguage?: string;
+}): Promise<{ text: string; person: import("../clients/enginePerson.client").EnginePerson }> {
+    const { getEnginePerson, withoutAvoidedNames } = await import("../clients/enginePerson.client");
+    const person = await getEnginePerson(input.familyId, input.recipientUserId);
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.recipientUserId, input.familyId)).catch(() => null);
+    const text = withoutAvoidedNames(buildCareNudgeText({
+        nudgeKind: input.nudgeKind,
+        title: input.title,
+        time: input.time,
+        displayName: input.displayName,
+        preferredLanguage: input.preferredLanguage,
+        speech,
+        addressAs: person.name ?? undefined,
+    }), person);
+    return { text, person };
+}
+
 export async function deliverCareNudge(input: {
     familyId: string;
     recipientUserId: string;
@@ -66,39 +95,10 @@ export async function deliverCareNudge(input: {
     /** A medicine dose: never held back for recent chat, only for an order in progress (then remembered for later). */
     medicine?: boolean;
 }): Promise<boolean> {
-    const P = await import("./profile/elderProfile.service").catch(() => null);
-    const w = { familyId: input.familyId, recipientUserId: input.recipientUserId };
-    const tuning = P ? await P.profileTuning(w).catch(() => undefined) : undefined;
-    const avoidMaa = Boolean((tuning as { avoidMaa?: boolean } | undefined)?.avoidMaa);
-    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.recipientUserId)).catch(() => null);
-    let text = buildCareNudgeText({
-        nudgeKind: input.nudgeKind,
-        title: input.title,
-        time: input.time,
-        displayName: input.displayName,
-        preferredLanguage: input.preferredLanguage,
-        speech,
-        addressAs: avoidMaa ? undefined : tuning?.addressAs,
-    });
-    if (avoidMaa) {
-        const { stripMaa } = await import("./saheliFactGuard.service");
-        text = stripMaa(text);
-    }
-
-    // Evolving profile: ONE care line from today's care actions (follow up on her knee, ask about
-    // her walk, a sip of water) — like her own child remembering yesterday. Offers stay offers.
-    if (input.nudgeKind === "daily_schedule" && P) {
-        const care = await P.takeCareLine(w).catch(() => "");
-        if (care) text = `${text}\n\n${care}`;
-    }
-    // Instinct: a due usual (medicine top-up / milk) rides inside the once-a-day schedule
-    // message — no extra nudge, no question ending.
-    if (input.nudgeKind === "daily_schedule") {
-        const line = await import("./commerceAutomation/usuals/usuals.service")
-            .then((U) => U.reorderOfferLine({ familyId: input.familyId, recipientUserId: input.recipientUserId }, input.preferredLanguage))
-            .catch(() => "");
-        if (line) text = `${text}\n\n${line}`;
-    }
+    const { withoutAvoidedNames } = await import("../clients/enginePerson.client");
+    const fallback = await careNudgeFallbackText(input);
+    const person = fallback.person;
+    let text = fallback.text;
 
     const build = () =>
         buildCareNudgeMessages({
@@ -140,7 +140,7 @@ export async function deliverCareNudge(input: {
         // twice (founder 2026-10-13); the medicine's name and time stay exact; the usual text goes out if there is none.
         const fresh = await composeDoseLine(input);
         if (fresh) {
-            text = avoidMaa ? (await import("./saheliFactGuard.service")).stripMaa(fresh) : fresh;
+            text = withoutAvoidedNames(fresh, person);
             payloads = build();
         }
     }
@@ -573,12 +573,8 @@ async function nudgeOneCompanion(
         const upcomingToday = day.items.filter(
             (i) => i.status === "upcoming" || i.status === "due",
         );
-        // Learned tuning: send the day's schedule around the hour she actually replies (6–11 IST).
-        const pref = await import("./profile/elderProfile.service")
-            .then((P) => P.profileTuning({ familyId: companion.familyId, recipientUserId: companion.recipientUserId }))
-            .then((t) => t?.preferredNudgeHour)
-            .catch(() => undefined);
-        const winStart = pref && pref >= 6 && pref <= 11 ? pref * 60 : 7 * 60 + 30;
+        // The day's schedule goes at 07:30 IST (the engine's regular nudges learn each person's hours, trust plan A5).
+        const winStart = 7 * 60 + 30;
         if (
             inWindow(nowMinutes, winStart, winStart + 60) &&
             upcomingToday.length > 0

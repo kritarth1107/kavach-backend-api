@@ -22,9 +22,8 @@ import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.
 import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { familyAccess } from "./middleware/familyAccess.middleware";
-import { startOutreachScheduler } from "./workers/outreachScheduler";
 import { startCareNudgeScheduler } from "./workers/careNudgeScheduler";
-import { startMemoryConsolidationScheduler } from "./workers/memoryConsolidationScheduler";
+import { startBrainRetryScheduler } from "./workers/brainRetryScheduler";
 import internalRoutes from "./routes/internal.routes";
 import delegateRoutes from "./routes/delegate.routes";
 import { inviteRouter, waitlistRouter } from "./routes/invite.routes";
@@ -100,9 +99,9 @@ process.on("unhandledRejection", (reason) => {
 
 app.listen(PORT, () => {
   console.log(`Kavach Backend running on port ${PORT}`);
-  startOutreachScheduler();
   startCareNudgeScheduler();
-  startMemoryConsolidationScheduler();
+  // Held WhatsApp turns (the brain could not answer) are retried every 30 s; the daily "0 old-store writes" check.
+  startBrainRetryScheduler();
   // In-chat Ola rides: driver search / assignment watch (durable — resumes after a restart).
   void import("./services/rideBooking/ola/olaInChat.service").then(({ startOlaWatcher }) => startOlaWatcher());
   // Legacy per-person delivery addresses → family address book (idempotent, once per row).

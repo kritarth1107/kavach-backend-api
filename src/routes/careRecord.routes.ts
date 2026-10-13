@@ -24,9 +24,6 @@ import {
 
 import {
     getActivityHandler,
-    getDailySnapshotHandler,
-    listDailySnapshotsHandler,
-    postDailySnapshotHandler,
 } from "../controllers/activity.controller";
 
 import {
@@ -59,9 +56,6 @@ router.put("/:familyId/addresses/:addressId/default", protect, wrap(setDefaultFa
 
 // Caregiver activity feed + daily snapshot (docs/activity-api-contract.md)
 router.get("/:familyId/subjects/:subjectUserId/activity", protect, wrap(getActivityHandler));
-router.get("/:familyId/subjects/:subjectUserId/daily-snapshot", protect, wrap(getDailySnapshotHandler));
-router.post("/:familyId/subjects/:subjectUserId/daily-snapshot", protect, wrap(postDailySnapshotHandler));
-router.get("/:familyId/subjects/:subjectUserId/daily-snapshots", protect, wrap(listDailySnapshotsHandler));
 
 router.get("/:familyId/subjects/:subjectUserId/care-record/events", protect, getCareRecordEventsHandler);
 router.get("/:familyId/subjects/:subjectUserId/care-record/timeline", protect, getCareRecordTimelineHandler);

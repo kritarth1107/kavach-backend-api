@@ -36,6 +36,8 @@ export type OutboundMessage = {
     /** Also speak it: the text goes out first, and the voice note (in this listener's language) follows unless
      *  something newer reached the chat meanwhile (services/voiceAfterText). */
     voiceLater?: { listenerUserId?: string };
+    /** The holding line sent when Saheli's brain could not answer (services/brainHold): never spoken, never sent late. */
+    holding?: boolean;
 };
 
 export interface ChannelAdapter {

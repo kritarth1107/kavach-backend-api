@@ -283,16 +283,19 @@ export async function postMemoryUndo(req: Request, res: Response) {
 export async function getVoicePreference(req: Request, res: Response) {
     await caregiverScope(req);
     const { getVoiceMode, VOICE_MODE_LABEL } = await import("../services/voicePreference.service");
-    const mode = await getVoiceMode(req.params.subjectUserId);
+    const mode = await getVoiceMode(req.params.subjectUserId, req.params.familyId);
     res.json({ success: true, data: { mode, means: VOICE_MODE_LABEL[mode] } });
 }
 
+/** The care record holds the setting (trust plan A1): saved in the engine, which keeps the backend's copy in step. */
 export async function postVoicePreference(req: Request, res: Response) {
-    const { actor } = await caregiverScope(req);
-    const { isVoiceMode, setVoiceMode, VOICE_MODE_LABEL } = await import("../services/voicePreference.service");
+    const { actor, base } = await caregiverScope(req);
+    const { isVoiceMode, VOICE_MODE_LABEL } = await import("../services/voicePreference.service");
     const mode = req.body?.mode;
     if (!isVoiceMode(mode)) throw new AppError("mode must be auto, always or never", 400);
-    await setVoiceMode({ userId: req.params.subjectUserId, familyId: req.params.familyId, mode, by: actor.id });
+    await aiEngineJson("PUT", `${base}/speech`, { actor, voice: mode }, 30_000);
+    const { forgetEnginePerson } = await import("../clients/enginePerson.client");
+    forgetEnginePerson(req.params.familyId, req.params.subjectUserId);
     res.json({ success: true, data: { mode, means: VOICE_MODE_LABEL[mode] } });
 }
 

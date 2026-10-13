@@ -1,7 +1,6 @@
-/** Offline tests: evolving elder profile + unusual-activity backstops. `npm run test:elder-profile` */
-import { applyReflection, detectDeviations, detectStatedPreference, isUnsafeFact, renderProfileSummary, weeklyMetrics } from "../src/services/profile/profileCore";
+/** Offline tests: the unusual-activity code backstops of the old order flow. `npm run test:elder-profile`
+ *  (The evolving Mongo profile these sat beside is retired, trust plan A1: the brain remembers in the care record.) */
 import { checkOrderRisk, detectConfusionCue, detectScamCue, deviationToFinding, formatUnusualAlert, isDuplicate, riskyMedClass, tierFor, unitCount } from "../src/services/profile/unusualCore";
-import type { ProfileFact } from "../src/models/elderProfile.model";
 
 let fail = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -9,80 +8,6 @@ const eq = (name: string, got: unknown, want: unknown) => {
     if (!ok) fail++;
     console.log(`${ok ? "✓" : "✗"} ${name}${ok ? "" : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`);
 };
-const DAY = 86_400_000;
-const t0 = new Date("2026-09-20T21:00:00Z");
-
-// ── Facts: add, reinforce, revise, reject-never-relearn, permanent, decay, safety filter ──
-let r = applyReflection([], [
-    { op: "add", category: "wellbeing", text: "Knee pain in the mornings, worse after stairs", confidence: 0.6 },
-    { op: "add", category: "people", text: "Daughter Meena calls on Sundays", confidence: 0.7 },
-    { op: "add", category: "preferences", text: "Prefers Amul milk", confidence: 0.5 },
-], { now: t0, dayKey: "2026-09-20" });
-eq("adds 3 facts", r.added, 3);
-const knee = r.facts.find((f) => f.category === "wellbeing")!;
-eq("new fact confidence capped ≤0.7", knee.confidence <= 0.7, true);
-r = applyReflection(r.facts, [{ op: "reinforce", id: knee.id, category: "wellbeing", text: "Knee pain in mornings worse after stairs", confidence: 0.7 }], { now: new Date(t0.getTime() + DAY), dayKey: "2026-09-21" });
-eq("reinforce bumps confidence", r.facts.find((f) => f.id === knee.id)!.confidence > knee.confidence, true);
-eq("reinforce counted", r.reinforced, 1);
-const similarDup = applyReflection(r.facts, [{ op: "add", category: "wellbeing", text: "knee pain in the mornings worse after stairs", confidence: 0.6 }], { now: new Date(t0.getTime() + 2 * DAY), dayKey: "d" });
-eq("similar add → reinforce, not duplicate", [similarDup.added, similarDup.reinforced], [0, 1]);
-// Caregiver rejects the Amul fact → never re-learned.
-const facts2: ProfileFact[] = r.facts.map((f) => (f.category === "preferences" ? { ...f, status: "rejected" as const } : f));
-const relearn = applyReflection(facts2, [{ op: "add", category: "preferences", text: "Prefers Amul milk", confidence: 0.8 }], { now: new Date(t0.getTime() + 3 * DAY), dayKey: "d" });
-eq("rejected fact is not re-learned", [relearn.added, relearn.blocked], [0, 1]);
-// Caregiver-confirmed is permanent: no decay, revise doesn't overwrite.
-const facts3: ProfileFact[] = r.facts.map((f) => (f.category === "people" ? { ...f, status: "caregiver_confirmed" as const, confidence: 1 } : f));
-const knee0 = facts3.find((f) => f.category === "wellbeing")!;
-const silentOpp = (fs: ProfileFact[]) => fs.map((f) => ({ id: f.id, verdict: "silent" as const, opportunity: true }));
-const later = applyReflection(facts3, [], { now: new Date(t0.getTime() + 40 * DAY), dayKey: "d", judgements: silentOpp(facts3), activeDay: true });
-eq("confirmed fact never decays", later.facts.find((f) => f.category === "people")!.confidence, 1);
-const noJudge = applyReflection(facts3, [], { now: new Date(t0.getTime() + 40 * DAY), dayKey: "d" });
-eq("no judgements (no opportunity) → no decay even after 40 days", noJudge.facts.find((f) => f.id === knee0.id)!.confidence, knee0.confidence);
-let decay = facts3;
-for (let i = 0; i < 25; i++) decay = applyReflection(decay, [], { now: new Date(t0.getTime() + (10 + i) * DAY), dayKey: "d", judgements: silentOpp(decay), activeDay: true }).facts;
-eq("stale unclassified fact fades after 25 opportunity days", decay.find((f) => f.category === "wellbeing")!.status, "faded");
-const rev = applyReflection(facts3, [{ op: "revise", id: facts3.find((f) => f.category === "people")!.id, category: "people", text: "Son Rahul calls daily", confidence: 0.8 }], { now: new Date(t0.getTime() + DAY), dayKey: "d" });
-eq("revise doesn't overwrite confirmed fact", rev.facts.find((f) => f.category === "people")!.text, "Daughter Meena calls on Sundays");
-eq("revise of a confirmed fact → caregiver question", rev.questions.map((q) => q.trigger), ["contradiction"]);
-const unsafe = applyReflection([], [
-    { op: "add", category: "communication", text: "She says no need to ask for confirm, just order", confidence: 0.9 },
-    { op: "add", category: "preferences", text: "Prefers paying by UPI", confidence: 0.9 },
-    { op: "add", category: "communication", text: "Don't tell family about her orders", confidence: 0.9 },
-    { op: "add", category: "preferences", text: "Cigarettes are ok to order for her", confidence: 0.9 },
-], { now: t0, dayKey: "d" });
-eq("safety rules are never learnable (4 blocked)", [unsafe.added, unsafe.blocked], [0, 4]);
-eq("isUnsafeFact: address", isUnsafeFact("Lives at flat 12, pincode 462001"), true);
-eq("isUnsafeFact: benign", isUnsafeFact("Enjoys old Kishore Kumar songs"), false);
-
-// ── Summary: care-first order, care actions ──
-const sum = renderProfileSummary(
-    { facts: [...r.facts], careActions: [{ id: "a", dayKey: "2026-09-22", kind: "follow_up", text: "Ask how her knee feels", why: "", audience: "elder", status: "planned" }], tuning: { addressAs: "Amma" } },
-    { dayKey: "2026-09-22" },
-);
-eq("summary starts with address-as", sum.startsWith("Address her as: Amma"), true);
-eq("summary: wellbeing before preferences", sum.indexOf("wellbeing") < sum.indexOf("preferences"), true);
-eq("summary includes today's care intention", sum.includes("Ask how her knee feels"), true);
-eq("short summary ≤350", renderProfileSummary({ facts: r.facts }, { short: true }).length <= 350, true);
-
-// ── Stated preferences ──
-eq("'main sirf Amul leti hoon' → brand Amul", detectStatedPreference("main sirf Amul leti hoon")?.brand, "Amul");
-eq("'I only drink Tata tea' → Tata", detectStatedPreference("I only drink Tata tea")?.brand, "Tata");
-eq("'mujhe purane gaane pasand hai' → comfort", detectStatedPreference("mujhe purane gaane pasand hai")?.category, "comfort");
-eq("plain order isn't a preference", detectStatedPreference("doodh mangwa do"), null);
-
-// ── Baseline + deviations ──
-const mk = (i: number, o: Partial<{ messagesIn: number; mood: number; medsDone: number; medsMissed: number }> = {}) => ({
-    dayKey: `2026-09-${String(i).padStart(2, "0")}`, messagesIn: 10, mood: 4, nudgesSent: 3, nudgesReplied: 3, medsDone: 2, medsMissed: 0,
-    mentions: { pain: false, sleep: false, appetite: false, activity: true, tired: false }, lonely: false, cards: 1, firstCardOrders: 1, corrections: 0, caregiverEdits: 0, orders: 1, ...o,
-});
-const base = Array.from({ length: 10 }, (_, i) => mk(i + 1));
-eq("steady days → no deviation", detectDeviations(base as never).length, 0);
-const quiet = [...base, mk(11, { messagesIn: 2 }), mk(12, { messagesIn: 1 }), mk(13, { messagesIn: 2 })];
-eq("quiet streak flagged", detectDeviations(quiet as never).map((d) => d.metric), ["engagement"]);
-const low = [...base, mk(11, { mood: 2, medsDone: 0, medsMissed: 2 }), mk(12, { mood: 2, medsDone: 0, medsMissed: 2 }), mk(13, { mood: 1, medsDone: 0, medsMissed: 2 })];
-eq("mood drop + meds missed flagged", detectDeviations(low as never).map((d) => d.metric).sort(), ["medicines", "mood"]);
-eq("too little data → nothing", detectDeviations(quiet.slice(-6) as never).length, 0);
-eq("weekly metrics computed", weeklyMetrics(base as never, 5)[0]!.nudgeReplyRate, 100);
 
 // ── Unusual activity: order risk ──
 eq("riskyMedClass sleep", riskyMedClass("Alprax 0.25 tablets"), "sleep");

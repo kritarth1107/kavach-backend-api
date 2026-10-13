@@ -1,6 +1,8 @@
 /**
- * Voice replies per person: "auto" (voice when they send voice), "always", or "never". Set on WhatsApp (Saheli's
- * voice_replies tool, through saheliTools) and on the dashboard; the WhatsApp reply path and reminders read it.
+ * Voice replies per person: "auto" (voice when they send voice), "always", or "never", and the language, dialect and
+ * script Saheli uses with them. The engine's care record is the truth (trust plan A1: the language:preferred fact, read
+ * through clients/enginePerson.client.ts, cached 60 s); the Mongo VoicePreference row is only a copy, written by the sync
+ * from the engine (the set_voice_preference host tool), and read when the engine has nothing or cannot be reached.
  */
 import { type VoiceMode, VOICE_MODES } from "../models/voicePreference.model";
 import { normaliseSpeech, type SpeechProfile } from "./language.service";
@@ -13,7 +15,13 @@ export function isVoiceMode(v: unknown): v is VoiceMode {
     return typeof v === "string" && (VOICE_MODES as string[]).includes(v);
 }
 
-export async function getVoiceMode(userId: string): Promise<VoiceMode> {
+export async function getVoiceMode(userId: string, familyId?: string): Promise<VoiceMode> {
+    const fam = familyId || (await familyOf(userId));
+    if (fam) {
+        const { getEnginePerson } = await import("../clients/enginePerson.client");
+        const p = await getEnginePerson(fam, userId).catch(() => null);
+        if (p?.voice) return p.voice;
+    }
     const hit = cache.get(userId);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.mode;
     try {
@@ -27,6 +35,21 @@ export async function getVoiceMode(userId: string): Promise<VoiceMode> {
     }
 }
 
+/** The family a person belongs to (the copy row knows it; else their active family). */
+async function familyOf(userId: string): Promise<string | null> {
+    try {
+        const { default: VP } = await import("../models/voicePreference.model");
+        const row = (await VP.findOne({ userId }, { familyId: 1 }).lean()) as { familyId?: string } | null;
+        if (row?.familyId) return row.familyId;
+        const { default: Family } = await import("../models/family.model");
+        const fam = await Family.findOne({ status: "ACTIVE", members: { $elemMatch: { userId, status: { $nin: ["REMOVED", "REJECTED"] } } } }).lean<{ familyId: string }>();
+        return fam?.familyId ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/** The sync copy of the voice setting: written when the engine saves it (the set_voice_preference host tool). */
 export async function setVoiceMode(input: { userId: string; familyId: string; mode: VoiceMode; by: string }): Promise<VoiceMode> {
     const { default: VP } = await import("../models/voicePreference.model");
     await VP.updateOne(
@@ -38,15 +61,21 @@ export async function setVoiceMode(input: { userId: string; familyId: string; mo
     return input.mode;
 }
 
-/** The language, dialect and script Saheli uses with this person ({} when not known yet). */
-export async function getSpeechProfile(userId: string): Promise<SpeechProfile> {
+/** The language, dialect and script Saheli uses with this person ({} when not known yet): the care record first. */
+export async function getSpeechProfile(userId: string, familyId?: string): Promise<SpeechProfile> {
+    const fam = familyId || (await familyOf(userId));
+    if (fam) {
+        const { getEnginePerson } = await import("../clients/enginePerson.client");
+        const e = await getEnginePerson(fam, userId).catch(() => null);
+        const p = normaliseSpeech({ language: e?.language, dialect: e?.dialect, script: e?.script });
+        if (p.language) return p;
+    }
     const hit = speechCache.get(userId);
     if (hit && Date.now() - hit.at < CACHE_MS) return hit.p;
     try {
         const { default: VP } = await import("../models/voicePreference.model");
         const row = (await VP.findOne({ userId }, { language: 1, dialect: 1, script: 1 }).lean()) as SpeechProfile | null;
-        let p = normaliseSpeech({ language: row?.language, dialect: row?.dialect, script: row?.script });
-        if (!p.language) p = (await speechFromCareRecord(userId)) ?? p;
+        const p = normaliseSpeech({ language: row?.language, dialect: row?.dialect, script: row?.script });
         speechCache.set(userId, { p, at: Date.now() });
         return p;
     } catch {
@@ -54,28 +83,13 @@ export async function getSpeechProfile(userId: string): Promise<SpeechProfile> {
     }
 }
 
-/**
- * Saheli may already know how someone speaks (their care record in the engine) while this copy is empty: languages
- * saved before the two were kept in sync. Read it from there and save it here, so reminders and voice notes stop
- * falling back to English.
- */
-async function speechFromCareRecord(userId: string): Promise<SpeechProfile | null> {
-    try {
-        const { default: Family } = await import("../models/family.model");
-        const fam = await Family.findOne({ status: "ACTIVE", members: { $elemMatch: { userId, status: { $nin: ["REMOVED", "REJECTED"] } } } }).lean<{ familyId: string }>();
-        if (!fam) return null;
-        const { aiEngineJson } = await import("../clients/aiEngine.client");
-        const got = await aiEngineJson<{ language?: string; dialect?: string; script?: string }>("GET", `/v2/dash/${encodeURIComponent(fam.familyId)}/${encodeURIComponent(userId)}/speech`, undefined, 4000);
-        const p = normaliseSpeech(got ?? {});
-        if (!p.language) return null;
-        await setSpeechProfile({ userId, familyId: fam.familyId, by: "system:care-record", ...p });
-        return p;
-    } catch {
-        return null;
-    }
+/** Drop this person's cached copy (the engine changed their setting). */
+export function forgetVoiceCache(userId: string): void {
+    cache.delete(userId);
+    speechCache.delete(userId);
 }
 
-/** Save how Saheli speaks to someone (from onboarding, the dashboard, or Saheli when they tell her on WhatsApp). */
+/** The sync copy of how Saheli speaks to someone: written when the engine saves it (the set_voice_preference host tool). */
 export async function setSpeechProfile(input: { userId: string; familyId: string; by: string } & { language?: unknown; dialect?: unknown; script?: unknown }): Promise<SpeechProfile> {
     const p = normaliseSpeech(input);
     const set: Record<string, unknown> = { familyId: input.familyId, updatedBy: input.by };

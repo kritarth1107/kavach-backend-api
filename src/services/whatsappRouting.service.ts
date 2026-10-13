@@ -1,6 +1,5 @@
 import { scrubStack } from "./stackScrub";
 import type { OutboundMessage } from "../channels/types";
-import { whatsAppMockAdapter } from "../channels/whatsappMock.adapter";
 import { ChannelType, CareRecordSource } from "../types/careRecord.types";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import WhatsappSession from "../models/whatsappSession.model";
@@ -57,6 +56,11 @@ export function hinglishRideCopy(t: string): string {
         .replace(/^Pickup noted: \*([^*]+)\*\. Where to\?$/, "Pickup: *$1*. Kahan jaana hai?")
         .replace(/^Drop noted: \*([^*]+)\*\. Where from\? Share a pin or type the place\.$/, "Drop: *$1*. Kahan se? WhatsApp *location pin* bhejiye ya jagah ka naam likhiye.")
         .replace(/^Where from, and where to\?[\s\S]*$/, "Kahan se kahan jaana hai? WhatsApp *location pin* bhejiye, ya jagah ka naam likhiye.");
+}
+
+/** The same reply shape every WhatsApp answer uses (the held-turn retries send through it, services/brainHold). */
+export function buildWhatsAppOutbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
+    return outbound(phone, text, context);
 }
 
 function outbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
@@ -359,8 +363,8 @@ export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<
     // Voice notes follow the person's choice: by default a voice note gets a voice note back (with the text first),
     // whichever brain or route answered it; "always" voices every reply, "never" none. Fallback copy is never spoken.
     const { getVoiceMode } = await import("./voicePreference.service");
-    const voiceMode = dWho ? await getVoiceMode(dWho.userId) : "auto";
-    if (shouldVoiceReply(body, out, voiceMode)) {
+    const voiceMode = dWho ? await getVoiceMode(dWho.userId, dWho.familyId) : "auto";
+    if (!out?.holding && shouldVoiceReply(body, out, voiceMode)) {
         out = withVoiceReply(out, dWho?.userId);
     } else if (voiceMode === "never" && (out?.modality === "voice" || out?.voiceLater)) {
         out = { ...out, modality: "text", audioBuffer: undefined, audioBase64: undefined, audioMimeType: undefined, voiceLater: undefined };
@@ -562,45 +566,8 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         return outbound(phone, elderEmergencyReply(displayName, text));
     }
 
-    // ── Evolving profile + unusual-activity backstops (elder only). Scam cue with high confidence
-    // answers her immediately (never share OTP) and alerts caregivers; other cues are background.
-    let profileHint = "";
-    if (identity.role === FamilyRole.CARE_RECIPIENT && text && !MEDIA_PLACEHOLDER.test(text)) {
-        const w = { familyId: identity.familyId, recipientUserId: identity.userId };
-        const { detectScamCue } = await import("./profile/unusualCore");
-        const scam = detectScamCue(text);
-        if (scam) {
-            const { raiseUnusual } = await import("./profile/unusualActivity.service");
-            await raiseUnusual(w, scam).catch(() => null);
-            if (scam.confidence >= 0.75 && scam.elderLine) return outbound(phone, scam.elderLine);
-        }
-        void (async () => {
-            const { captureStatedPreference } = await import("./profile/elderProfile.service");
-            await captureStatedPreference(w, text);
-            const ActivityLogM = (await import("../models/activityLog.model")).default;
-            const { istDayKey } = await import("./activityLog.service");
-            const since = new Date(Date.now() - 2 * 3600_000);
-            const prev = await ActivityLogM.find({ familyId: w.familyId, recipientUserId: w.recipientUserId, kind: "message_in", createdAt: { $gte: since } })
-                .sort({ createdAt: -1 })
-                .limit(30)
-                .lean();
-            // Drop this very message (logged just above).
-            const earlier = prev.slice(prev[0] && String(prev[0].detail || prev[0].title || "").includes(text.slice(0, 30)) ? 1 : 0);
-            const ordersToday = await ActivityLogM.find({ familyId: w.familyId, recipientUserId: w.recipientUserId, kind: "order_placed", dayKey: istDayKey() }).limit(5).lean();
-            const { detectConfusionCue } = await import("./profile/unusualCore");
-            const cue = detectConfusionCue({
-                text,
-                recentInbound: earlier.map((m) => ({ text: String(m.detail || m.title || ""), at: m.createdAt as Date })),
-                ordersToday: ordersToday.map((o) => String(o.detail || o.title || "").slice(0, 60)),
-            });
-            if (cue) {
-                const { raiseUnusual } = await import("./profile/unusualActivity.service");
-                await raiseUnusual(w, cue);
-            }
-        })().catch((err) => console.warn("[profile] inbound hooks failed:", err instanceof Error ? err.message : err));
-        const { profileSummary } = await import("./profile/elderProfile.service");
-        profileHint = await profileSummary(w, true).catch(() => "");
-    }
+    // The old Mongo profile is retired (trust plan A1): nothing here writes ElderProfile or ElderUsuals any more. What a
+    // person says is remembered by the brain in the care record, and scam or confusion red flags are the brain's.
 
     // ── Health records: a report or prescription sent as a photo/PDF is read, shown and asked about before anything
     // is saved; its buttons ("rec:…") carry the answer. Not a record (a meal, a selfie) → the usual media flow below.
@@ -664,9 +631,10 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
-    // ── Saheli Brain v2: shadow beside this path on real traffic, or live for switched-over
-    // families. Runs after the emergency and scam backstops; a v2 failure falls through to v1.
-    // A tapped Saheli v2 button ("v2:…" id) goes to the v2 brain, which records it without a model call.
+    // ── Saheli Brain v2 answers every message (live). When it cannot (the engine returns 503, times out or cannot be
+    // reached), the old brain is never used (trust plan A1, C5; founder D9): the person gets one holding line in their
+    // language now and the turn is retried in the background (services/brainHold.service.ts). Shadow mode (local and
+    // tests only) runs it beside the rule routes below. A tapped Saheli v2 button ("v2:…" id) is recorded by the brain.
     const v2Button = Boolean(body.interactiveId?.startsWith("v2:"));
     const hasMedia = Boolean(brainMedia || brainMediaNote);
     const v2Live = (await import("./brainV2.service")).brainV2Mode(identity.familyId) === "live";
@@ -674,22 +642,11 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         const V2 = await import("./brainV2.service");
         const mode = V2.brainV2Mode(identity.familyId);
         if (mode === "live") {
-            const v2Text = v2Button ? String(body.interactiveId) : text;
-            const v2 = await V2.runBrainV2({
-                identity, text: v2Text, messageRef: body.messageId, mode,
-                voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
+            return answerWithBrain({
+                phone, identity, text: v2Button ? String(body.interactiveId) : text, messageRef: body.messageId, button: v2Button,
+                voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined, wasVoice: isVoiceMedia,
                 media: brainMedia, mediaNote: brainMediaNote, location: body.location,
-            }).catch((err) => {
-                console.warn("[brain-v2] live turn failed, using v1:", err instanceof Error ? err.message : err);
-                return null;
             });
-            if (v2?.reply?.trim()) {
-                if (v2.location_request) return outbound(phone, v2.reply, { kind: "location_request" }); // "Send location" button
-                return v2.buttons?.length
-                    ? outbound(phone, v2.reply, { kind: "saheli_buttons", buttons: v2.buttons })
-                    : outbound(phone, v2.reply);
-            }
-            if (v2Button) return outbound(phone, "🙏");
         } else if (mode === "shadow") {
             void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode, voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
                 media: brainMedia, mediaNote: brainMediaNote, location: body.location }).catch((err) =>
@@ -719,7 +676,6 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 familyId: identity.familyId,
                 memberUserId: isCaregiver(identity.role) ? undefined : identity.userId,
             }),
-            profileHint: profileHint || undefined,
         }).catch((err) => {
             console.warn("[saheli-router] failed:", err instanceof Error ? err.message : err);
             return null;
@@ -1354,37 +1310,58 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
-    const { reply } = await whatsAppMockAdapter.receive({
-        channelType: ChannelType.WHATSAPP,
-        channelIdentifier: phone,
-        modality: body.modality ?? "text",
-        content: text,
-        audioBase64: voiceTranscript ? undefined : body.audioBase64,
-        timestamp: new Date(),
-        _routing: {
-            familyId: identity.familyId,
-            userId: identity.userId,
-            role: identity.role,
-            subjectUserId,
-        },
+    // Nothing above handled it: Saheli's brain answers (v1 chat is gone, trust plan A1; founder D9), with the holding
+    // line when it cannot.
+    return answerWithBrain({
+        phone, identity, text, messageRef: body.messageId, button: false,
+        voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined, wasVoice: isVoiceMedia,
+        mediaNote: brainMediaNote, location: body.location,
     });
+}
 
-    let out: ReturnType<typeof outbound>;
-    if (reply.orderFlow?.sessionId) {
-        out = outbound(phone, reply.content, {
-            kind: "order_flow",
-            orderFlow: reply.orderFlow,
-        });
-    } else {
-        out = outbound(phone, reply.content, { kind: "plain" });
+/**
+ * One turn of Saheli's brain (engine /v2/turn) for a WhatsApp message. Messages from this person that are still waiting
+ * (held while the brain was down) go with it, oldest first. When the brain cannot answer, the person gets the holding
+ * line now and the turn is retried every 30 s (services/brainHold.service.ts); the old brain is never called.
+ */
+async function answerWithBrain(a: {
+    phone: string;
+    identity: { familyId: string; userId: string; role: FamilyRole | string };
+    text: string;
+    messageRef?: string;
+    button: boolean;
+    voice?: { confidence?: number; language?: string; engine?: string };
+    wasVoice: boolean;
+    media?: Array<{ mime: string; data: string }>;
+    mediaNote?: string;
+    location?: { lat: number; lng: number; name?: string; address?: string };
+}): Promise<OutboundMessage> {
+    const V2 = await import("./brainV2.service");
+    const H = await import("./brainHold.service");
+    const carried = a.button ? { text: a.text, merged: [] as string[] } : await H.withWaitingTurns(a.identity.userId, a.text);
+    let failure = "";
+    const v2 = await V2.runBrainV2({
+        identity: a.identity, text: carried.text, messageRef: a.messageRef, mode: "live",
+        voice: a.voice, media: a.media, mediaNote: a.mediaNote, location: a.location,
+    }).catch((err) => {
+        failure = err instanceof Error ? err.message : String(err);
+        return null;
+    });
+    if (v2?.reply?.trim() && v2.reply.trim() !== "none") {
+        if (v2.location_request) return outbound(a.phone, v2.reply, { kind: "location_request" }); // "Send location" button
+        return v2.buttons?.length
+            ? outbound(a.phone, v2.reply, { kind: "saheli_buttons", buttons: v2.buttons })
+            : outbound(a.phone, v2.reply);
     }
-
-    // Voice replies in the listener's language and dialect. Error/fallback copy is never spoken.
-    if (isVoiceMedia && out.content?.trim() && !isSaheliFallbackCopy(out.content)) {
-        out = withVoiceReply(out, identity.userId);
-    }
-
-    return out;
+    if (v2?.duplicate) return { ...outbound(a.phone, ""), content: "" }; // a webhook retry of a message being answered
+    if (v2 && a.button) return outbound(a.phone, "🙏");
+    console.warn(`[brain-v2] no answer (${failure || (v2 ? "empty reply" : "no person")}): holding line, retry queued`);
+    const holding = await H.holdTurn({
+        familyId: a.identity.familyId, userId: a.identity.userId, role: String(a.identity.role), phone: a.phone,
+        messageRef: a.messageRef, text: carried.text, button: a.button, voice: a.voice, wasVoice: a.wasVoice,
+        hadMedia: Boolean(a.media?.length), mediaNote: a.mediaNote, location: a.location,
+    });
+    return { ...outbound(a.phone, holding), holding: true };
 }
 
 const COMMERCE_INTENTS = new Set(["order_new", "order_modify", "order_control", "restaurant_list", "otp_code"]);
@@ -1560,20 +1537,6 @@ export async function dispatchRoutedTurn(a: {
                 source: route.blockedItem ? "gemini_router" : "keywords",
             });
             return { reply: blockedReply(cat, text, route.language), legacyGates: false, allowDashboard: false };
-        }
-    }
-    // Instinct: she turned down the single item on a card / swapped it → remember why.
-    if (liveFlow(bd) && (bd!.phase === "awaiting_sku_confirm" || bd!.phase === "awaiting_mcp_confirm" || bd!.phase === "awaiting_confirm")) {
-        const b = bd as unknown as { selectedSku?: { name: string; partner?: string }; catalogOptions?: Array<{ name: string; partner?: string }>; partner?: string };
-        const one = b.selectedSku || (b.catalogOptions?.length === 1 ? b.catalogOptions[0] : null);
-        const swap = (route.intent === "order_modify" || route.intent === "order_new") && route.productQuery && one && !one.name.toLowerCase().includes(route.productQuery.toLowerCase());
-        if (one?.name && (route.control === "cancel" || swap)) {
-            void import("./commerceAutomation/usuals/usuals.service").then(({ noteDecline }) =>
-                noteDecline(
-                    { familyId: a.familyId, recipientUserId: a.recipientUserId },
-                    { item: one.name, partner: String(one.partner || b.partner || ""), reason: text.slice(0, 160), replacedWith: swap ? route.productQuery : null },
-                ),
-            );
         }
     }
     // Instinct: a familiar ask ("doodh mangwa do") → her usual. Instant ack now; the store work
@@ -1931,35 +1894,6 @@ export async function dispatchRoutedTurn(a: {
         }
         // Couldn't place it (e.g. "confirm" for an app order session / caregiver approval) → rule executors.
         return { legacyGates: true, allowDashboard: true };
-    }
-
-    if (
-        process.env.SAHELI_TRAIN === "1" &&
-        (route.intent === "companion_chat" || route.intent === "reminder_or_meds")
-    ) {
-        const { finishElderReply, medicineReminderComplaint, refusesMaa } = await import("./saheliFactGuard.service");
-        const checkIn = /\b(how are you|kaisi ho|kaise ho|kaisa hai)\b/i.test(text);
-        if (medicineReminderComplaint(text) || refusesMaa(text) || checkIn) {
-            const { profileTuning, rememberDoNotCallMaa } = await import("./profile/elderProfile.service");
-            const who = { familyId: a.familyId, recipientUserId: a.recipientUserId };
-            if (refusesMaa(text)) await rememberDoNotCallMaa(who).catch(() => undefined);
-            const tuning = await profileTuning(who).catch(() => undefined);
-            const draft = medicineReminderComplaint(text)
-                ? "I let you rest because you were awake early."
-                : checkIn
-                  ? "Maa, aaj paneer butter masala ki yaad aa rahi thi, jo aap hamesha banati hain."
-                  : "Okay Maa, main yahin hoon. Connection thoda dheema hai — phir bhej dijiye.";
-            return {
-                reply: finishElderReply({
-                    inbound: text,
-                    draft,
-                    savedFacts: "",
-                    refusedMaa: Boolean(tuning?.avoidMaa) || refusesMaa(text),
-                }),
-                legacyGates: false,
-                allowDashboard: false,
-            };
-        }
     }
 
     // Pharmacy step that expects free text (e.g. Rx photo) while the model saw chat.

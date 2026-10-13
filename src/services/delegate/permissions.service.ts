@@ -1,9 +1,12 @@
 /**
- * What Saheli is allowed to do for a family (per-family record, caregiver-editable where safe).
- * Enforced in the WhatsApp turn (delegate turn hook) before a search starts and again at the
- * literal *confirm*. Hard guards stay in code and are shown as locked rules, never settings.
+ * What Saheli is allowed to do for a family. The truth is the family's boundaries in Saheli's care record (the engine's
+ * boundary:policy fact: limits, approvers, categories that always need approval), set on the dashboard's limits page or
+ * on WhatsApp (trust plan A1: SaheliPermissions is retired, read only for the memory move). This view maps it for the
+ * old delegate hooks: every category and store stays allowed (approval is enforced by the engine at the confirm), and
+ * "ask before orders above" is the policy's limit for the care recipient's own orders. Hard guards stay in code and
+ * are shown as locked rules, never settings.
  */
-import SaheliPermissions, { PERMISSION_STORES, type ISaheliPermissions, type PermissionStore } from "../../models/saheliPermissions.model";
+import { PERMISSION_STORES, type ISaheliPermissions, type PermissionStore } from "../../models/saheliPermissions.model";
 
 export type Permissions = Omit<ISaheliPermissions, "history" | "stores"> & {
     stores: Record<PermissionStore, boolean>;
@@ -56,93 +59,47 @@ export const DEFAULTS = {
     resumeNudges: true,
 };
 
-function normalize(familyId: string, row: Partial<ISaheliPermissions> | null): Permissions {
-    const stores = {} as Record<PermissionStore, boolean>;
-    for (const s of PERMISSION_STORES) stores[s] = row?.stores?.[s] !== false;
-    return {
-        familyId,
-        groceries: row?.groceries ?? DEFAULTS.groceries,
-        food: row?.food ?? DEFAULTS.food,
-        medicines: row?.medicines ?? DEFAULTS.medicines,
-        rides: row?.rides ?? DEFAULTS.rides,
-        stores,
-        spendSoftLimitInr: row && "spendSoftLimitInr" in row ? (row.spendSoftLimitInr ?? null) : DEFAULTS.spendSoftLimitInr,
-        deliveryFollowUps: row?.deliveryFollowUps ?? DEFAULTS.deliveryFollowUps,
-        medicineStartCheck: row?.medicineStartCheck ?? DEFAULTS.medicineStartCheck,
-        resumeNudges: row?.resumeNudges ?? DEFAULTS.resumeNudges,
-        history: (row?.history || []).slice(-30),
-        updatedBy: row?.updatedBy,
-        updatedAt: row?.updatedAt ?? undefined,
-    };
-}
+const cache = new Map<string, { at: number; p: Permissions }>();
+const CACHE_MS = 60_000;
 
+/** The family's permissions, read from the engine's boundary policy (cached 60 s; defaults when it cannot be read). */
 export async function getPermissions(familyId: string): Promise<Permissions> {
-    const row = await SaheliPermissions.findOne({ familyId }).lean().catch(() => null);
-    return normalize(familyId, row as Partial<ISaheliPermissions> | null);
+    const hit = cache.get(familyId);
+    if (hit && Date.now() - hit.at < CACHE_MS) return hit.p;
+    let limit: number | null = DEFAULTS.spendSoftLimitInr;
+    try {
+        const { aiEngineJson } = await import("../../clients/aiEngine.client");
+        const got = await aiEngineJson<{ policy?: { elder_order_limit?: number | null } }>(
+            "GET", `/v2/dash/${encodeURIComponent(familyId)}/family/boundaries`, undefined, 4000,
+        );
+        const v = got.policy?.elder_order_limit;
+        limit = typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.round(v) : null;
+    } catch (err) {
+        console.warn(`[permissions] boundary policy read failed: ${err instanceof Error ? err.message : err}`);
+        if (hit) return hit.p;
+    }
+    const stores = {} as Record<PermissionStore, boolean>;
+    for (const s of PERMISSION_STORES) stores[s] = true;
+    const p: Permissions = {
+        familyId,
+        groceries: true,
+        food: true,
+        medicines: true,
+        rides: true,
+        stores,
+        spendSoftLimitInr: limit,
+        deliveryFollowUps: DEFAULTS.deliveryFollowUps,
+        medicineStartCheck: DEFAULTS.medicineStartCheck,
+        resumeNudges: DEFAULTS.resumeNudges,
+        history: [],
+    };
+    cache.set(familyId, { at: Date.now(), p });
+    return p;
 }
 
-const BOOL_FIELDS = ["groceries", "food", "medicines", "rides", "deliveryFollowUps", "medicineStartCheck", "resumeNudges"] as const;
-const FIELD_LABEL: Record<(typeof BOOL_FIELDS)[number], string> = {
-    groceries: "Order groceries",
-    food: "Order food",
-    medicines: "Order medicines",
-    rides: "Book rides",
-    deliveryFollowUps: "Check deliveries arrived",
-    medicineStartCheck: "Check new medicines were started",
-    resumeNudges: "Remind about unfinished orders",
-};
-
-export class PermissionPatchError extends Error {}
-
-/** Caregiver edit. Only known keys; stores can only be switched within the fixed allowlist. */
-export async function updatePermissions(
-    familyId: string,
-    actor: { userId: string; name?: string },
-    patch: Record<string, unknown>,
-): Promise<Permissions> {
-    const cur = await getPermissions(familyId);
-    const set: Record<string, unknown> = {};
-    const changes: string[] = [];
-    for (const f of BOOL_FIELDS) {
-        if (patch[f] === undefined) continue;
-        if (typeof patch[f] !== "boolean") throw new PermissionPatchError(`${f} must be true/false`);
-        if (patch[f] !== cur[f]) {
-            set[f] = patch[f];
-            changes.push(`${FIELD_LABEL[f]}: ${patch[f] ? "on" : "off"}`);
-        }
-    }
-    if (patch.stores !== undefined) {
-        if (!patch.stores || typeof patch.stores !== "object") throw new PermissionPatchError("stores must be an object");
-        for (const [k, v] of Object.entries(patch.stores as Record<string, unknown>)) {
-            if (!(PERMISSION_STORES as readonly string[]).includes(k)) throw new PermissionPatchError(`unknown store ${k}`);
-            if (typeof v !== "boolean") throw new PermissionPatchError(`stores.${k} must be true/false`);
-            if (v !== cur.stores[k as PermissionStore]) {
-                set[`stores.${k}`] = v;
-                changes.push(`${STORE_LABEL[k as PermissionStore]}: ${v ? "allowed" : "off"}`);
-            }
-        }
-    }
-    if (patch.spendSoftLimitInr !== undefined) {
-        const v = patch.spendSoftLimitInr;
-        if (v !== null && (typeof v !== "number" || !Number.isFinite(v) || v < 100 || v > 50000)) {
-            throw new PermissionPatchError("spendSoftLimitInr must be null or ₹100–₹50,000");
-        }
-        const n = v === null ? null : Math.round(v as number);
-        if (n !== cur.spendSoftLimitInr) {
-            set.spendSoftLimitInr = n;
-            changes.push(`Ask before orders above: ${n === null ? "no limit" : `₹${n.toLocaleString("en-IN")}`}`);
-        }
-    }
-    if (!changes.length) return cur;
-    await SaheliPermissions.updateOne(
-        { familyId },
-        {
-            $set: { ...set, updatedBy: actor.userId },
-            $push: { history: { $each: [{ at: new Date(), by: actor.userId, byName: actor.name, change: changes.join(", ") }], $slice: -50 } },
-        } as never,
-        { upsert: true },
-    );
-    return getPermissions(familyId);
+/** Tests only. */
+export function primePermissions(p: Permissions): void {
+    cache.set(p.familyId, { at: Date.now(), p });
 }
 
 export function categoryKey(category: string | null | undefined): "groceries" | "food" | "medicines" | "rides" | null {

@@ -1,18 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { Router } from "express";
 import {
-    careActionHandler,
-    confirmFactHandler,
-    dismissAlertHandler,
-    dismissDeviationHandler,
-    editFactHandler,
-    getProfileHandler,
-    rejectFactHandler,
-    retentionHandler,
-    answerQuestionHandler,
-} from "../controllers/elderProfile.controller";
-import { deleteUsualDeclineHandler, deleteUsualItemHandler, getUsualsHandler } from "../controllers/usuals.controller";
-import {
     acceptInvitation,
     acceptInvitationByIdHandler,
     createFamily,
@@ -43,13 +31,6 @@ import {
     getCompanionSettings,
     getCompanionActivity,
     patchCompanionSettings,
-    triggerOutreach,
-    getFamilyMemories,
-    forgetFamilyMemory,
-    correctFamilyMemory,
-    getSaheliMemoryProfile,
-    getSaheliMemoryEntity,
-    getSaheliMemoryEntityHistory,
 } from "../controllers/saheliCompanion.controller";
 import {
     getActiveOrderSessionHandler,
@@ -64,19 +45,10 @@ import {
 } from "../controllers/orderOrchestrator.controller";
 import { postPlaceCodOrderHandler } from "../controllers/orderAgent.controller";
 import {
-    createCaregiverSaheliChatSessionHandler,
-    createSaheliChatSessionHandler,
     getActivity,
     getBriefing,
-    getCaregiverSaheliChat,
     getOverview,
-    getSaheliChat,
     getSaheliInsightsHandler,
-    listCaregiverSaheliChatSessionsHandler,
-    listSaheliChatSessionsHandler,
-    postCaregiverSaheliChat,
-    postSaheliChat,
-    postSaheliCheckIn,
 } from "../controllers/saheli.controller";
 import {
     deleteRecipientLab,
@@ -98,7 +70,6 @@ import {
     patchNotificationReadHandler,
     postNotificationsReadAllHandler,
 } from "../controllers/dashboard.controller";
-import { postSaheliMemoryRefreshHandler } from "../controllers/saheliCompanion.controller";
 import { familyDocumentUpload, rejectOversizedUpload } from "../middleware/upload.middleware";
 import { postMemberAvatar } from "../controllers/memberAvatar.controller";
 import { protect } from "../middleware/auth.middleware";
@@ -121,35 +92,7 @@ router.get("/:familyId/search", protect, getFamilySearchHandler);
 router.get("/:familyId/notifications", protect, getNotificationsHandler);
 router.patch("/:familyId/notifications/:notificationId/read", protect, patchNotificationReadHandler);
 router.post("/:familyId/notifications/read-all", protect, postNotificationsReadAllHandler);
-router.get("/:familyId/recipients/:recipientUserId/saheli/chat/sessions", protect, listSaheliChatSessionsHandler);
-router.post("/:familyId/recipients/:recipientUserId/saheli/chat/sessions", protect, createSaheliChatSessionHandler);
-router.get("/:familyId/recipients/:recipientUserId/saheli/chat", protect, getSaheliChat);
-router.post("/:familyId/recipients/:recipientUserId/saheli/chat", protect, postSaheliChat);
-router.get(
-    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat/sessions",
-    protect,
-    listCaregiverSaheliChatSessionsHandler,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat/sessions",
-    protect,
-    createCaregiverSaheliChatSessionHandler,
-);
-router.get(
-    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat",
-    protect,
-    getCaregiverSaheliChat,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/caregiver/chat",
-    protect,
-    postCaregiverSaheliChat,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/check-in",
-    protect,
-    postSaheliCheckIn,
-);
+// The dashboard has no chat (founder 2026-10-03); its v1 chat, check-in and memory endpoints are gone (trust plan A1).
 router.get(
     "/:familyId/recipients/:recipientUserId/saheli/companion",
     protect,
@@ -164,46 +107,6 @@ router.get(
     "/:familyId/recipients/:recipientUserId/saheli/companion/activity",
     protect,
     getCompanionActivity,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/outreach",
-    protect,
-    triggerOutreach,
-);
-router.get(
-    "/:familyId/recipients/:recipientUserId/saheli/memories",
-    protect,
-    getFamilyMemories,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/memory/refresh",
-    protect,
-    postSaheliMemoryRefreshHandler,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/memories/:factId/forget",
-    protect,
-    forgetFamilyMemory,
-);
-router.post(
-    "/:familyId/recipients/:recipientUserId/saheli/memories/:factId/correct",
-    protect,
-    correctFamilyMemory,
-);
-router.get(
-    "/:familyId/recipients/:recipientUserId/saheli/memory/profile",
-    protect,
-    getSaheliMemoryProfile,
-);
-router.get(
-    "/:familyId/recipients/:recipientUserId/saheli/memory/entity/:slug",
-    protect,
-    getSaheliMemoryEntity,
-);
-router.get(
-    "/:familyId/recipients/:recipientUserId/saheli/memory/entity/:slug/history",
-    protect,
-    getSaheliMemoryEntityHistory,
 );
 router.get(
     "/:familyId/recipients/:recipientUserId/saheli/insights",
@@ -220,18 +123,7 @@ router.get(
     protect,
     getActiveOrderSessionHandler,
 );
-router.get("/:familyId/recipients/:recipientUserId/saheli/usuals", protect, getUsualsHandler);
-router.delete("/:familyId/recipients/:recipientUserId/saheli/usuals/items", protect, deleteUsualItemHandler);
-router.delete("/:familyId/recipients/:recipientUserId/saheli/usuals/declines", protect, deleteUsualDeclineHandler);
-router.get("/:familyId/recipients/:recipientUserId/saheli/profile", protect, getProfileHandler);
-router.post("/:familyId/recipients/:recipientUserId/saheli/profile/facts/:factId/confirm", protect, confirmFactHandler);
-router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/facts/:factId", protect, editFactHandler);
-router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/facts/:factId", protect, rejectFactHandler);
-router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/care-actions/:actionId", protect, careActionHandler);
-router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/deviations/:id", protect, dismissDeviationHandler);
-router.delete("/:familyId/recipients/:recipientUserId/saheli/profile/alerts/:id", protect, dismissAlertHandler);
-router.patch("/:familyId/recipients/:recipientUserId/saheli/profile/retention", protect, retentionHandler);
-router.post("/:familyId/recipients/:recipientUserId/saheli/profile/questions/:id/answer", protect, answerQuestionHandler);
+// Usuals and the learned profile are read from Saheli's care record (care-memory routes), not the retired Mongo stores.
 router.get("/:familyId/saheli/order-sessions/:sessionId", protect, getOrderSessionHandler);
 router.patch(
     "/:familyId/saheli/order-sessions/:sessionId/address",

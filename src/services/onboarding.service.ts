@@ -588,11 +588,13 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
         }
         // How Saheli speaks to them (voice notes and reminders follow this). Someone who also belongs to another family
         // keeps the settings they already have there.
+        // The care record holds both (trust plan A1): the language fact goes with the other facts below, the voice setting
+        // here; the engine keeps the backend's copy in step.
         if (!shared) {
             try {
-                const V = await import("./voicePreference.service");
-                if (speech.language) await V.setSpeechProfile({ userId: subject, familyId, by: userId, ...speech });
-                await V.setVoiceMode({ userId: subject, familyId, mode: p.reads === "voice" || p.reads === "both" ? "always" : "auto", by: userId });
+                await aiEngineJson("PUT", `/v2/dash/${encodeURIComponent(familyId)}/${encodeURIComponent(subject)}/speech`, {
+                    actor, voice: p.reads === "voice" || p.reads === "both" ? "always" : "auto",
+                }, 30_000);
             } catch {
                 problems.push("voice and language settings");
             }

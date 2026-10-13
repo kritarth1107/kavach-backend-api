@@ -58,6 +58,7 @@ async function shouldSkipStillWorking(from: string | undefined): Promise<boolean
  */
 async function deliverLate(msg: OutboundMessage | undefined): Promise<void> {
     if (!msg || !msg.channelIdentifier || !(msg.content || msg.audioBuffer || msg.audioBase64)) return;
+    if (msg.holding) return; // they already have the "still on it" line; the held turn's answer comes from its retry
     try {
         const meta = await import("../clients/metaWhatsApp.client");
         if (!meta.isMetaWhatsAppEnabled()) return;

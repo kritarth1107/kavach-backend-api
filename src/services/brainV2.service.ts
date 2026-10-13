@@ -54,7 +54,7 @@ export async function runBrainV2(input: {
     /** A shared location pin (a ride's pickup): passed as data. */
     location?: { lat: number; lng: number; name?: string; address?: string };
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }>;
-    location_request?: boolean } | null> {
+    location_request?: boolean; duplicate?: boolean } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
     const joined = (members as BrainMember[]).filter(

@@ -41,8 +41,6 @@ export type SaheliToolName =
     | "select_order_address"
     | "get_order_status"
     | "suggest_reorder"
-    | "recall_memories"
-    | "save_memory"
     | "get_today_schedule"
     | "get_missed_tasks"
     | "get_family_briefing"
@@ -105,11 +103,16 @@ export type SaheliToolName =
     | "nudge_gate"
     | "delivery_status"
     | "escalation_status"
-    | "alert_care_team";
+    | "alert_care_team"
+    | "export_legacy_memory"
+    | "person_memory_changed";
 
 const RETIRED_V1_TOOLS: ReadonlySet<string> = new Set([
     "quick_order", "confirm_and_place_order", "place_cod_order", "browser_order", "browse_and_shop", "book_ride", "ride_status", "cancel_ride",
 ]);
+
+/** The old memory tools (trust plan A1): the engine's remember and recall are the only memory now. */
+const RETIRED_MEMORY_TOOLS: ReadonlySet<string> = new Set(["save_memory", "recall_memories"]);
 
 export async function executeSaheliTool(input: {
     tool: SaheliToolName;
@@ -136,6 +139,15 @@ export async function executeSaheliTool(input: {
         // Internal only: the day's due reminder slots with WhatsApp's receipts, for the engine's daily score (check 1).
         const { deliveryDay } = await import("./deliveryDay.service");
         return deliveryDay(String(input.args.day ?? ""));
+    }
+    if (RETIRED_MEMORY_TOOLS.has(input.tool)) {
+        console.warn(`[legacy-guard] retired memory tool ${input.tool} refused family=${input.familyId}`);
+        return { ok: false, error: "retired: Saheli's memory is the care record (remember and recall)" };
+    }
+    if (input.tool === "export_legacy_memory" && input.args.list) {
+        // The engine's memory move (trust plan A1) asks which families hold old memory: internal, not about one family.
+        const { legacyMemoryFamilies } = await import("./legacyMemory.service");
+        return { families: await legacyMemoryFamilies() };
     }
     await getFamilyForActor(input.familyId, input.actorUserId);
     if (RETIRED_V1_TOOLS.has(input.tool)) {
@@ -541,22 +553,6 @@ export async function executeSaheliTool(input: {
             if (!flow) return { status: "no_order_intent" };
             return { status: "order_flow", kind: "order_flow", orderFlow: flow, message: flow.message };
         }
-        case "recall_memories": {
-            const { aiListFamilyMemories } = await import("../clients/aiEngine.client");
-            const { ensureAiContext } = await import("./aiTenant.service");
-            await getFamilyForActor(input.familyId, input.actorUserId);
-            const ctx = await ensureAiContext(
-                input.familyId,
-                input.recipientUserId,
-                "Care recipient",
-            );
-            const memories = await aiListFamilyMemories({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-                limit: Number(input.args.limit ?? 10),
-            });
-            return { memories: memories.memories };
-        }
         case "get_voice_preference": {
             const { getVoiceMode, getSpeechProfile, VOICE_MODE_LABEL } = await import("./voicePreference.service");
             const { speechLabel } = await import("./language.service");
@@ -656,6 +652,18 @@ export async function executeSaheliTool(input: {
                 active: input.args.active !== false,
                 traceId: input.traceId,
             });
+        }
+        case "export_legacy_memory": {
+            const { exportLegacyMemory } = await import("./legacyMemory.service");
+            return exportLegacyMemory(input.familyId);
+        }
+        case "person_memory_changed": {
+            // The engine changed this person's name-to-use or language/voice fact: drop the cached copies now.
+            const { forgetEnginePerson } = await import("../clients/enginePerson.client");
+            const { forgetVoiceCache } = await import("./voicePreference.service");
+            forgetEnginePerson(input.familyId, input.recipientUserId);
+            forgetVoiceCache(input.recipientUserId);
+            return { ok: true };
         }
         case "export_care_record": {
             const { exportCareRecord } = await import("./careMemorySync.service");
@@ -1149,24 +1157,6 @@ export async function executeSaheliTool(input: {
             return flow
                 ? { status: "order_flow", orderFlow: flow, message: flow.message }
                 : { error: "Could not start reorder flow" };
-        }
-        case "save_memory": {
-            const { aiInboxMemory } = await import("../clients/aiEngine.client");
-            const { ensureAiContext } = await import("./aiTenant.service");
-            const ctx = await ensureAiContext(
-                input.familyId,
-                input.recipientUserId,
-                "Care recipient",
-            );
-            const content = String(input.args.content ?? input.args.memory ?? "");
-            if (!content.trim()) return { error: "content is required" };
-            const result = await aiInboxMemory({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-                content: content.slice(0, 500),
-                sourceRole: "saheli",
-            });
-            return { saved: true, fact_id: result.fact_id, message: "I'll remember that." };
         }
         case "mark_schedule_completed": {
             const { markScheduleCompleted } = await import("./saheliCareAction.service");

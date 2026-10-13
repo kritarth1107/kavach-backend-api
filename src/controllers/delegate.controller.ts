@@ -29,29 +29,6 @@ export async function getDelegateHandler(req: Request, res: Response, next: Next
     }
 }
 
-/** PATCH …/:familyId/saheli/permissions — caregiver-editable toggles (hard guards are not settings). */
-export async function patchPermissionsHandler(req: Request, res: Response, next: NextFunction) {
-    try {
-        if (!req.user) throw new AppError("Not authenticated", 401);
-        const { familyId } = req.params;
-        const { role } = await member(familyId, req.user.userId);
-        caregiverOnly(role);
-        const { updatePermissions, PermissionPatchError } = await import("../services/delegate/permissions.service");
-        try {
-            await updatePermissions(familyId, { userId: req.user.userId, name: await actorName(req.user.userId) }, (req.body || {}) as Record<string, unknown>);
-        } catch (err) {
-            if (err instanceof PermissionPatchError) throw new AppError(err.message, 400);
-            throw err;
-        }
-        const recipientUserId = String(req.query.recipientUserId || "");
-        const { delegateSummary } = await import("../services/delegate/summary.service");
-        const { getPermissions } = await import("../services/delegate/permissions.service");
-        res.json({ success: true, data: recipientUserId ? await delegateSummary(familyId, recipientUserId) : { permissions: await getPermissions(familyId) } });
-    } catch (e) {
-        next(e);
-    }
-}
-
 /** POST …/:familyId/saheli/approvals/:taskId {decision: "approve"|"deny"} */
 export async function decideApprovalHandler(req: Request, res: Response, next: NextFunction) {
     try {
@@ -214,10 +191,7 @@ export async function postMockDelegate(req: Request, res: Response) {
             res.json({ success: true, data: { tick: out, peek: await buildWhatsAppMockPeek(phone) } });
             return;
         }
-        if (action === "set_permissions") {
-            const { updatePermissions } = await import("../services/delegate/permissions.service");
-            await updatePermissions(who.familyId, { userId: who.userId, name: String(req.body?.name || "Caregiver") }, (req.body?.patch || {}) as Record<string, unknown>);
-        } else if (action === "decide") {
+        if (action === "decide") {
             const { decideApproval } = await import("../services/delegate/approvals.service");
             await decideApproval(String(req.body?.taskId || ""), who.familyId, req.body?.decision === "deny" ? "deny" : "approve", { userId: who.userId, name: String(req.body?.name || "Caregiver") });
         } else if (action !== "state") {

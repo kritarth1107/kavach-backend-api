@@ -1,6 +1,4 @@
-import { aiGrepMemory } from "../clients/aiEngine.client";
-import { ensureAiContext } from "./aiTenant.service";
-import { buildSaheliMemoryContext } from "./saheliMemoryContext.service";
+import { careFacts } from "./engineCareFacts.service";
 
 export type CommerceHealthSuggestion = {
     kind: "diet" | "medication" | "preference" | "general";
@@ -45,24 +43,11 @@ export async function buildCommerceHealthSuggestions(input: {
         suggestions.push(s);
     };
 
+    // Her care record in the engine (trust plan A1: the one memory), never the retired Instinct inbox.
     let memoryBlob = "";
     try {
-        const ctx = await buildSaheliMemoryContext(input.familyId, input.recipientUserId);
-        if (ctx?.care_record_context) memoryBlob += `\n${ctx.care_record_context}`;
-
-        const aiCtx = await ensureAiContext(input.familyId, input.recipientUserId, "Care recipient");
-        const grep = await aiGrepMemory({
-            aiFamilyId: aiCtx.aiFamilyId,
-            aiElderId: aiCtx.aiElderId,
-            query: `blood pressure hypertension sodium salt metformin diabetes medication diet ${cartBlob}`.slice(
-                0,
-                400,
-            ),
-            limit: 8,
-        });
-        for (const hit of grep.hits) {
-            memoryBlob += `\n${hit.kind}: ${hit.title} — ${hit.snippet}`;
-        }
+        const facts = await careFacts(input.familyId, input.recipientUserId, ["condition", "medicine", "diet", "allergy", "vital_target"]);
+        memoryBlob = facts.map((f) => `${f.domain}: ${f.text}`).join("\n");
     } catch {
         // Best-effort — never block cart on memory outage.
     }
@@ -91,31 +76,6 @@ export async function buildCommerceHealthSuggestions(input: {
     }
     if (BLOOD_THINNER_RE.test(memoryBlob) && cartHasOtcPain) {
         push({ kind: "medication", text: OTC_THINNER_HINT });
-    }
-
-    // Surface a short memory-backed preference if cart-related entity hit is clear.
-    try {
-        const aiCtx = await ensureAiContext(input.familyId, input.recipientUserId, "Care recipient");
-        const pref = await aiGrepMemory({
-            aiFamilyId: aiCtx.aiFamilyId,
-            aiElderId: aiCtx.aiElderId,
-            query: `preference allergy avoid ${cartBlob}`.slice(0, 300),
-            limit: 3,
-        });
-        for (const hit of pref.hits) {
-            if (hit.kind !== "preference" && hit.kind !== "medication" && hit.kind !== "condition") {
-                continue;
-            }
-            const snippet = (hit.snippet || hit.title || "").trim().slice(0, 140);
-            if (!snippet) continue;
-            push({
-                kind: hit.kind === "medication" ? "medication" : "preference",
-                text: `Suggestion from saved notes (you decide): ${snippet}`,
-            });
-            break;
-        }
-    } catch {
-        /* ignore */
     }
 
     return suggestions;

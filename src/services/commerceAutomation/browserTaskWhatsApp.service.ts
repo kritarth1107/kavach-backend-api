@@ -1593,19 +1593,15 @@ async function shapeFor<T extends { name: string; pricePaise?: number; partner?:
         const doc = ctx ? null : await U.loadUsuals({ familyId: input.familyId, recipientUserId: input.recipientUserId || input.actorUserId });
         const rejections = ctx?.rejections || doc?.rejections || [];
         const r = U.shapeChoices(query, opts, { usual, rejections });
-        // Learned profile: brand she said she prefers first; fewer options if choices confuse her.
+        // A brand she said she prefers goes first (the old usuals, read only since the memory move, trust plan A1).
         const w = { familyId: input.familyId, recipientUserId: input.recipientUserId || input.actorUserId };
-        const [brand, tuning] = await Promise.all([
-            U.brandPreferenceFor(w, query).catch(() => null),
-            import("../profile/elderProfile.service").then((P) => P.profileTuning(w)).catch(() => undefined),
-        ]);
+        const brand = await U.brandPreferenceFor(w, query).catch(() => null);
         if (brand && !r.usualHit) {
             const b = brand.toLowerCase();
             const hit = opts.filter((o) => o.name.toLowerCase().includes(b));
             if (hit.length) r.shown = [...hit.slice(0, 1), ...r.shown.filter((o) => o !== hit[0])];
         }
-        const max = tuning?.maxOptions && tuning.maxOptions >= 1 && tuning.maxOptions <= 3 ? tuning.maxOptions : CATALOG_KEEP;
-        r.shown = r.shown.slice(0, max);
+        r.shown = r.shown.slice(0, CATALOG_KEEP);
         let header = "";
         if (usual && r.usualHit) {
             const now = r.shown[0]!.pricePaise;
@@ -2115,20 +2111,7 @@ async function startParkedCheckoutFromWhatsApp(
             });
             if (run.status === "placed" || run.status === "placed_unverified") {
                 await saveDraft(input.phone, null).catch(() => undefined);
-                if (draft.selectedSku?.name) {
-                    const sku = draft.selectedSku;
-                    void import("./usuals/usuals.service").then(({ recordUsualFromOrder }) =>
-                        recordUsualFromOrder(input, {
-                            query: draft.productQuery || draft.dishQuery,
-                            name: sku.name,
-                            partner: String(sku.partner || draft.partner || "web"),
-                            category: draft.category === "food" ? "food" : draft.category === "pharmacy" ? "pharmacy" : "grocery",
-                            pricePaise: sku.pricePaise,
-                            placeNickname: null,
-                            restaurantName: draft.restaurantName || null,
-                        }),
-                    );
-                }
+                // Her usuals are learned in the care record now (trust plan A1); the old ElderUsuals store is not written.
                 // Caregiver WhatsApp: short order-placed note (item, total, COD, ETA, order id).
                 if (run.status === "placed" && input.actorRole === FamilyRole.CARE_RECIPIENT) {
                     const { notifyCaregiversOrderPlaced } = await import("../saheliCaregiverAlert.service");
@@ -3798,17 +3781,6 @@ async function handleMcpConfirmTurn(
     if (res.status === "placed") {
         await saveDraft(input.phone, null);
         logResult("order_placed", `${label}: order placed ${formatInr(res.totalPaise)} COD`, `${card.itemLine} → ${place.nickname}`);
-        void import("./usuals/usuals.service").then(({ recordUsualFromOrder }) =>
-            recordUsualFromOrder(input, {
-                query: draft.productQuery || draft.dishQuery,
-                name: draft.selectedSku?.name || card.itemLine,
-                partner: String(MCP_TO_PARTNER[card.store] || card.store),
-                category: draft.category === "food" ? "food" : draft.category === "pharmacy" ? "pharmacy" : "grocery",
-                pricePaise: draft.selectedSku?.pricePaise,
-                placeNickname: place.nickname,
-                restaurantName: draft.selectedSku?.mcp?.restaurantName || draft.restaurantName || null,
-            }),
-        );
         if (input.actorRole === FamilyRole.CARE_RECIPIENT) {
             const { notifyCaregiversOrderPlaced } = await import("../saheliCaregiverAlert.service");
             const { getFamilyMembersList } = await import("../familyMember.service");

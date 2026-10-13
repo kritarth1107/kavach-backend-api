@@ -146,11 +146,11 @@ export async function orderChatTurn(input: {
     if (!st.language) st.language = input.language || null;
     else if (wordy && input.language && input.language !== "other" && input.language !== st.language) st.language = input.language;
 
-    const [profile, prefs, learned] = await Promise.all([
+    const [profile, prefs] = await Promise.all([
         loadHealthProfile(input.familyId, input.recipientUserId).catch(() => null),
         import("../usuals/usuals.service").then((U) => U.preferenceNotes({ familyId: input.familyId, recipientUserId: input.recipientUserId })).catch(() => ""),
-        import("../../profile/elderProfile.service").then((P) => P.profileSummary({ familyId: input.familyId, recipientUserId: input.recipientUserId }, true)).catch(() => ""),
     ]);
+    const learned = "";
     const prompt = [
         `Health profile (from Kavach):\n${profile ? healthProfileText(profile) : "(unavailable — do NOT assume any condition)"}`,
         ...(learned ? [`What Saheli has learned about her (context only; never changes COD / confirm / safety rules):\n${learned}`] : []),

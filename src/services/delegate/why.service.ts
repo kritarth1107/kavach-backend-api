@@ -4,7 +4,6 @@
  */
 import { randomUUID } from "crypto";
 import SaheliWhy, { type ISaheliWhy, type WhyUpdate } from "../../models/saheliWhy.model";
-import ElderUsuals from "../../models/elderUsuals.model";
 
 type Who = { familyId: string; recipientUserId: string };
 
@@ -98,31 +97,6 @@ export async function upsertWhy(
     return { why: existing.toObject() as ISaheliWhy, events };
 }
 
-/** Attach the reason to the matching usual (after the order's usual row has been written). */
-export async function attachWhyToUsual(w: Who, itemName: string, why: { whyId: string; reason: string; status?: string }): Promise<void> {
-    const tok = whyToken(itemName);
-    if (!tok) return;
-    try {
-        const doc = await ElderUsuals.findOne({ familyId: w.familyId, recipientUserId: w.recipientUserId });
-        if (!doc) return;
-        let hit = false;
-        for (const u of (doc.items || []) as Array<Record<string, unknown>>) {
-            if (whyToken(String(u.name || "")) === tok || whyToken(String(u.key || "")) === tok) {
-                u.why = why.reason;
-                u.whyId = why.whyId;
-                u.whyStatus = why.status || "active";
-                hit = true;
-            }
-        }
-        if (hit) {
-            doc.markModified("items");
-            await doc.save();
-        }
-    } catch (err) {
-        console.warn("[why] attach to usual failed:", err instanceof Error ? err.message : err);
-    }
-}
-
 export async function listWhys(w: Who, limit = 30): Promise<ISaheliWhy[]> {
     return (await SaheliWhy.find({ familyId: w.familyId, recipientUserId: w.recipientUserId }).sort({ updatedAt: -1 }).limit(limit).lean().catch(() => [])) as ISaheliWhy[];
 }
@@ -143,15 +117,11 @@ export async function applyWhyChange(w: Who, whyId: string, change: WhyUpdate["k
     if (change === "continue" || change === "started") doc.status = "active";
     doc.markModified("updates");
     await doc.save();
-    await attachWhyToUsual(w, doc.subject, { whyId: doc.whyId, reason: doc.reason, status: doc.status });
     return doc.toObject() as ISaheliWhy;
 }
 
 export async function deleteWhy(w: Who, whyId: string): Promise<boolean> {
     const r = await SaheliWhy.deleteOne({ whyId, familyId: w.familyId, recipientUserId: w.recipientUserId });
-    if (r.deletedCount) {
-        await ElderUsuals.updateOne({ familyId: w.familyId, recipientUserId: w.recipientUserId }, { $unset: { "items.$[i].why": "", "items.$[i].whyId": "", "items.$[i].whyStatus": "" } } as never, { arrayFilters: [{ "i.whyId": whyId }] } as never).catch(() => undefined);
-    }
     return r.deletedCount > 0;
 }
 

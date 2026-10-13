@@ -1,9 +1,8 @@
 /**
- * The elder's Kavach health profile for ordering: conditions / allergies / diet notes live in the
- * AI engine memory (category "health"/"preference", family + elder scoped); medicines are the
- * family's MEDICINE care schedules. Nothing is invented — empty data → empty profile.
+ * The elder's Kavach health profile for ordering: conditions, allergies, diet rules and target ranges come from her care
+ * record in the engine (structured domains, trust plan A1: the one memory); medicines are the family's MEDICINE care
+ * schedules. Nothing is invented — empty data → empty profile.
  */
-import AiTenant from "../../../models/aiTenant.model";
 
 export type HealthProfile = { notes: string[]; medicines: string[]; profileMd: string };
 
@@ -18,8 +17,6 @@ export function primeHealthProfile(familyId: string, recipientUserId: string, p:
 export function forgetHealthProfile(familyId: string, recipientUserId: string): void {
     cache.delete(`${familyId}:${recipientUserId}`);
 }
-
-const HEALTHY_WORDS = /\b(allerg|intoleran|diabet|sugar|bp\b|blood pressure|hypertens|cholesterol|kidney|renal|heart|cardiac|thyroid|gout|uric|celiac|gluten|lactose|dairy|veg|vegetarian|vegan|jain|egg|onion|garlic|diet|avoid|salt|sodium|fried|oily|spicy|acidity|gastric|ulcer|liver|pregnan|asthma|warfarin|metformin|insulin|statin|medicine|tablet|condition)/i;
 
 export async function loadHealthProfile(familyId: string, recipientUserId: string): Promise<HealthProfile> {
     const key = `${familyId}:${recipientUserId}`;
@@ -36,25 +33,9 @@ export async function loadHealthProfile(familyId: string, recipientUserId: strin
     );
     tasks.push(
         (async () => {
-            const link = await AiTenant.findOne({ familyId }).lean();
-            const elder = link?.elders?.find((e: { recipientUserId: string }) => e.recipientUserId === recipientUserId) as { aiElderId?: string } | undefined;
-            if (!link?.aiFamilyId || !elder?.aiElderId) return;
-            const { aiListFamilyMemories, aiGetMemoryProfile } = await import("../../../clients/aiEngine.client");
-            const [mem, prof] = await Promise.all([
-                aiListFamilyMemories({ aiFamilyId: link.aiFamilyId, aiElderId: elder.aiElderId, limit: 80 }).catch(() => ({ memories: [] })),
-                aiGetMemoryProfile({ aiFamilyId: link.aiFamilyId, aiElderId: elder.aiElderId }).catch(() => ({ profile_md: "" })),
-            ]);
-            p.notes = mem.memories
-                .filter((m) => !m.superseded_by && (m.category === "health" || (m.category === "preference" && HEALTHY_WORDS.test(m.content))))
-                .map((m) => m.content.trim().slice(0, 200))
-                .filter(Boolean)
-                .slice(0, 15);
-            // Only the health-ish lines of the curated profile (never the whole biography).
-            p.profileMd = String(prof.profile_md || "")
-                .split("\n")
-                .filter((l) => HEALTHY_WORDS.test(l))
-                .join("\n")
-                .slice(0, 1200);
+            const { careFacts } = await import("../../engineCareFacts.service");
+            const facts = await careFacts(familyId, recipientUserId, ["condition", "allergy", "diet", "vital_target"]);
+            p.notes = facts.map((f) => f.text.trim().slice(0, 200)).filter(Boolean).slice(0, 15);
         })().catch(() => undefined),
     );
     await Promise.race([Promise.all(tasks), new Promise((r) => setTimeout(r, 3500))]);

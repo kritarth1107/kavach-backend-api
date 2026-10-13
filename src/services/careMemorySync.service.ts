@@ -124,23 +124,13 @@ export async function reminderLog(input: { familyId: string; recipientUserId: st
     };
 }
 
-/** Everything the backend knows about a care recipient, for seeding Saheli's care memory once. */
+/**
+ * The care schedules (medicines and timed routines), for seeding Saheli's care memory once before a person's first turn.
+ * What the old profile held moved into the care record with the memory move (trust plan A1); it is not read here.
+ */
 export async function exportCareRecord(input: { familyId: string; recipientUserId: string }) {
-    const { default: ElderProfile } = await import("../models/elderProfile.model");
-    const [profile, schedules] = await Promise.all([
-        ElderProfile.findOne({ familyId: input.familyId, recipientUserId: input.recipientUserId }).lean(),
-        CareSchedule.find({ familyId: input.familyId, recipientUserId: input.recipientUserId, active: true }).lean(),
-    ]);
-    const learned = (profile?.facts || [])
-        .filter((f) => f.status !== "rejected" && f.status !== "faded" && !f.blocked && (f.pinned || f.status !== "learned" || f.confidence >= 0.7))
-        .map((f) => ({ category: f.category, text: f.text, confirmed: Boolean(f.pinned) || f.status !== "learned", confidence: f.confidence }));
+    const schedules = await CareSchedule.find({ familyId: input.familyId, recipientUserId: input.recipientUserId, active: true }).lean();
     return {
-        nameToUse: profile?.nameToUse || profile?.tuning?.addressAs || null,
-        avoidMaa: Boolean(profile?.tuning?.avoidMaa),
-        language: profile?.tuning?.language || null,
-        allergies: profile?.allergies || [],
-        dietRules: profile?.dietRules || [],
-        profileMedicines: (profile?.medicines || []).filter((m) => m.active !== false).map((m) => ({ name: m.name, dose: m.dose, time: m.time })),
         schedules: schedules.map((s) => ({
             scheduleId: s.scheduleId,
             type: s.type,
@@ -151,7 +141,6 @@ export async function exportCareRecord(input: { familyId: string; recipientUserI
             daysOfWeek: s.daysOfWeek || [],
             sourceKey: s.sourceKey || null,
         })),
-        learned,
     };
 }
 

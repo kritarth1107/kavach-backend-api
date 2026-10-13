@@ -1,11 +1,5 @@
 import { appendCareRecordEvent, listCareRecordEvents } from "./careRecord.service";
-import {
-    aiGetMemoryProfile,
-    aiListStaleHealthMemory,
-    aiPostCareBrief,
-    aiPostDoctorBrief,
-} from "../clients/aiEngine.client";
-import { ensureAiContext } from "./aiTenant.service";
+import { aiEngineJson, aiPostDoctorBrief } from "../clients/aiEngine.client";
 import { getFamilyMembersList } from "./familyMember.service";
 import {
     CareRecordEventType,
@@ -39,36 +33,20 @@ export async function generateCareBrief(
         .map((e) => `${e.type}: ${e.title} — ${e.detail.slice(0, 160)}`)
         .join("\n");
 
-    let staleHealthBlock = "";
-    try {
-        const ctx = await ensureAiContext(familyId, subjectUserId, subjectName);
-        const stale = await aiListStaleHealthMemory({
-            aiFamilyId: ctx.aiFamilyId,
-            aiElderId: ctx.aiElderId,
-        });
-        if (stale.entities.length) {
-            staleHealthBlock = stale.entities
-                .map(
-                    (e) =>
-                        `- ${e.title} (${e.kind}) review by ${e.review_by ?? "unknown"} — status ${e.status}`,
-                )
-                .join("\n");
-        }
-    } catch {
-        staleHealthBlock = "";
-    }
-
+    // The engine's brief over the care record (trust plan A1: one memory), not the retired Instinct inbox.
     let narrative = "";
     try {
-        const result = await aiPostCareBrief({
-            subjectName,
-            timeline,
-            staleHealth: staleHealthBlock,
-        });
-        narrative = result.brief;
+        const report = await aiEngineJson<{ narrative?: string }>(
+            "GET",
+            `/v2/dash/${encodeURIComponent(familyId)}/${encodeURIComponent(subjectUserId)}/report?days=7&name=${encodeURIComponent(subjectName)}`,
+            undefined,
+            60_000,
+        );
+        narrative = String(report.narrative || "").trim();
     } catch {
-        narrative = buildFallbackBrief(subjectName, events, staleHealthBlock);
+        narrative = "";
     }
+    if (!narrative) narrative = buildFallbackBrief(subjectName, events);
 
     return {
         subjectName,
@@ -86,12 +64,8 @@ export async function generateCareBrief(
 function buildFallbackBrief(
     subjectName: string,
     events: Awaited<ReturnType<typeof listCareRecordEvents>>,
-    staleHealth = "",
 ): string {
     const lines = [`Care Brief for ${subjectName}`, ""];
-    if (staleHealth.trim()) {
-        lines.push("Health memory needs review:", staleHealth, "");
-    }
     const latestVital = events.find((e) => e.type === CareRecordEventType.VITAL);
     if (latestVital) lines.push(`Latest vitals: ${latestVital.detail}`);
     const latestCheckIn = events.find((e) => e.type === CareRecordEventType.CHECK_IN);
@@ -146,34 +120,9 @@ export async function generateDoctorBrief(
         .map((e) => `${e.at ? new Date(e.at).toISOString().slice(0, 10) : "?"} · ${e.type}: ${e.title} — ${e.detail.slice(0, 160)}`)
         .join("\n");
 
-    let staleHealthBlock = "";
-    let memoryProfile = "";
-    try {
-        const ctx = await ensureAiContext(familyId, subjectUserId, subjectName);
-        const [stale, profile] = await Promise.all([
-            aiListStaleHealthMemory({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-            }),
-            aiGetMemoryProfile({
-                aiFamilyId: ctx.aiFamilyId,
-                aiElderId: ctx.aiElderId,
-            }).catch(() => ({ profile_md: "" })),
-        ]);
-        if (stale.entities.length) {
-            staleHealthBlock = stale.entities
-                .map(
-                    (e) =>
-                        `- ${e.title} (${e.kind}) review by ${e.review_by ?? "unknown"} — status ${e.status}`,
-                )
-                .join("\n");
-        }
-        memoryProfile = profile.profile_md ?? "";
-    } catch {
-        staleHealthBlock = "";
-        memoryProfile = "";
-    }
-
+    // The engine reads the current care record itself (family_id + subject_id); the retired Instinct inbox is not read.
+    const staleHealthBlock = "";
+    const memoryProfile = "";
     let narrative = "";
     try {
         const result = await aiPostDoctorBrief({

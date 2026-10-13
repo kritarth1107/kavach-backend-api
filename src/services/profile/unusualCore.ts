@@ -4,8 +4,30 @@
  * against the profile/baseline in the nightly reflection; these rules catch the clear cases in real
  * time. No DB / model calls — unit-tested in scripts/test-elder-profile.ts.
  */
-import type { UnusualAlert } from "../../models/elderProfile.model";
-import { normKey, similar } from "./profileCore";
+type UnusualAlert = {
+    key: string;
+    at: Date;
+    status: string;
+    category: "repeat_order" | "bulk_quantity" | "large_spend" | "risky_meds" | "odd_hours" | "order_change" | "confusion" | "mood_drop" | "meds_missed" | "scam" | "other";
+};
+
+function normKey(text: string): string {
+    return String(text || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0900-\u097f\s]/g, " ")
+        .replace(/\b(she|her|he|his|the|a|an|is|was|has|had|to|of|and|in|on|at|for|with|usually|often|likes?|loves?)\b/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 140);
+}
+
+function similar(a: string, b: string): boolean {
+    const A = new Set(normKey(a).split(" ").filter((w) => w.length > 2));
+    const B = new Set(normKey(b).split(" ").filter((w) => w.length > 2));
+    if (!A.size || !B.size) return false;
+    const inter = [...A].filter((w) => B.has(w)).length;
+    return inter / Math.min(A.size, B.size) >= 0.75 || inter / new Set([...A, ...B]).size >= 0.6;
+}
 
 export type Tier = "whatsapp" | "dashboard";
 export type UnusualFinding = {

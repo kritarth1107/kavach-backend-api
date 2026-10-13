@@ -34,8 +34,6 @@ export function serializeCompanionForApi(doc: ISaheliCompanion) {
         quietHoursEnd: doc.quietHoursEnd ?? "",
         nudgeIntensity: doc.nudgeIntensity ?? "standard",
         preferredLanguage: doc.preferredLanguage ?? "english",
-        birthday: doc.birthday ?? "",
-        importantDates: doc.importantDates ?? [],
         lastOutreachAt: doc.lastOutreachAt?.toISOString?.() ?? null,
         lastWhatsAppInboundAt: doc.lastWhatsAppInboundAt?.toISOString?.() ?? null,
     };
@@ -122,8 +120,7 @@ export async function updateCompanionProfile(
     if (patch.quietHoursEnd !== undefined) allowed.quietHoursEnd = patch.quietHoursEnd;
     if (patch.nudgeIntensity !== undefined) allowed.nudgeIntensity = patch.nudgeIntensity;
     if (patch.preferredLanguage !== undefined) allowed.preferredLanguage = patch.preferredLanguage;
-    if (patch.birthday !== undefined) allowed.birthday = patch.birthday;
-    if (patch.importantDates !== undefined) allowed.importantDates = patch.importantDates;
+    // Birthdays and important dates are occasion facts in Saheli's care record (trust plan A1), never stored here.
 
     // Defaults only for fields this update does not set: Mongo refuses the same path in $set and $setOnInsert
     // ("would create a conflict"), which made every first save that set e.g. `enabled` fail.

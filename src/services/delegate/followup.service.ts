@@ -13,7 +13,7 @@ import { ChannelType } from "../../types/careRecord.types";
 import { FamilyRole } from "../../types/family.types";
 import { extractOrderContext } from "./delegateGemini";
 import { closeTask, recentChat, taskTitle, whenIST, phaseWords } from "./tasks.service";
-import { findWhy, upsertWhy, attachWhyToUsual } from "./why.service";
+import { findWhy, upsertWhy } from "./why.service";
 import { getPermissions, paiseFromLabel } from "./permissions.service";
 import { sendDelegateMessage, type Purpose } from "./send.service";
 
@@ -113,13 +113,12 @@ export async function onOrderPlaced(row: Row): Promise<void> {
     const placedAt = row.createdAt ? new Date(row.createdAt) : new Date();
     const w = { familyId: row.familyId, recipientUserId: row.recipientUserId };
     if (open && open.status === "open") await closeTask(open.taskId, "done", "placed", `Placed: ${item}`);
-    // WHY memory: attach the reason to this item (and her usual), note price jumps.
+    // WHY memory: attach the reason to this item, note price jumps (the retired usuals store is not written, trust plan A1).
     let whyId: string | undefined;
     if (!isRide && item) {
         const pricePaise = paiseFromLabel(row.data?.totalLabel) ?? (typeof row.data?.totalPaise === "number" ? (row.data.totalPaise as number) : null);
         const r = await upsertWhy(w, { subject: item, reason: why, category, source: "order", importance: ctx?.importance || (isMedicine ? "high" : "normal"), ownerUserId, pricePaise, partner }).catch(() => ({ why: null, events: [] }));
         whyId = r.why?.whyId;
-        if (r.why) setTimeout(() => void attachWhyToUsual(w, item, { whyId: r.why!.whyId, reason: r.why!.reason, status: r.why!.status }), 8000).unref?.();
         for (const e of r.events) {
             void log({ ...w, ownerUserId, taskId: "" }, e.kind === "price_up" ? `${item}: costs more than last time` : `${item}: ${e.note}`, e.note, e.kind === "price_up" ? "warn" : "info", { whyId });
         }

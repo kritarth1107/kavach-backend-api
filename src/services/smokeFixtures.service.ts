@@ -78,22 +78,9 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
                 await SaheliProactiveNudge.deleteMany({ familyId: id.familyId });
                 await SaheliCompanion.deleteMany({ familyId: id.familyId });
                 await ActivityLog.deleteMany({ familyId: id.familyId });
-                // Evolving profile, wellbeing days, snapshots, usuals written by reflection runs.
-                for (const mod of ["../models/elderProfile.model", "../models/elderWellbeingDay.model", "../models/dailySnapshot.model", "../models/elderUsuals.model"]) {
-                    const M = (await import(mod).catch(() => null))?.default as { deleteMany?: (q: object) => Promise<unknown> } | undefined;
-                    await M?.deleteMany?.({ familyId: id.familyId }).catch(() => undefined);
-                }
-                // Seeded health memories (AI engine) + the tenant link.
+                // The old memory stores are retired (trust plan A1): nothing to clean there; the tenant link goes.
                 const AiTenant = (await import("../models/aiTenant.model")).default;
-                const link = await AiTenant.findOne({ familyId: id.familyId }).lean();
-                if (link) {
-                    const { aiListFamilyMemories, aiForgetMemory } = await import("../clients/aiEngine.client");
-                    for (const el of link.elders || []) {
-                        const mem = await aiListFamilyMemories({ aiFamilyId: link.aiFamilyId, aiElderId: el.aiElderId, limit: 100 }).catch(() => ({ memories: [] }));
-                        for (const m of mem.memories) await aiForgetMemory({ factId: m.id, forgottenBy: "smoke-fixtures" }).catch(() => undefined);
-                    }
-                    await AiTenant.deleteOne({ familyId: id.familyId });
-                }
+                await AiTenant.deleteOne({ familyId: id.familyId });
                 await Family.deleteOne({ familyId: id.familyId });
                 await User.deleteMany({ userId: { $in: userIds }, email: /@smoke\.kavach\.test$/ });
             }
@@ -154,13 +141,13 @@ export async function manageSmokeFixtures(mode: "create" | "delete"): Promise<st
         let seeded = 0;
         if (health.length) {
             try {
-                const { ensureAiContext } = await import("./aiTenant.service");
-                const { aiInboxMemory } = await import("../clients/aiEngine.client");
-                const ctx = await ensureAiContext(fam.familyId, elder.userId, f.name);
-                for (const content of health) {
-                    const r = await aiInboxMemory({ aiFamilyId: ctx.aiFamilyId, aiElderId: ctx.aiElderId, content, category: "health", topic: "health", sourceRole: "caregiver" });
-                    if (r.saved) seeded++;
-                }
+                // Saheli's memory is the care record in the engine (trust plan A1): the fixture's health lines are a note.
+                const { aiEngineJson } = await import("../clients/aiEngine.client");
+                await aiEngineJson("PUT", `/v2/dash/${encodeURIComponent(fam.familyId)}/${encodeURIComponent(elder.userId)}/notes`, {
+                    actor: { id: cg.userId, name: "Smoke Caregiver" }, subject_id: elder.userId, slug: "health-history", title: "Health history",
+                    body: health.map((h) => `- ${h}`).join("\n"),
+                });
+                seeded = health.length;
             } catch (err) {
                 out.push(`health seed failed: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
             }

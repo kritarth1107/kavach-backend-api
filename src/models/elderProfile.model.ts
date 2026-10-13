@@ -1,5 +1,8 @@
 import mongoose, { Document, Model, Schema } from "mongoose";
-import type { DecayClass, EvidenceBy, EvidenceStrength } from "../services/profile/factPolicy";
+// Retired store (trust plan A1): kept read-only for the memory move, the data export and the nightly "0 writes" check.
+type DecayClass = string;
+type EvidenceBy = string;
+type EvidenceStrength = string;
 
 /**
  * Saheli's evolving, care-first picture of ONE elder (family-scoped: familyId + recipientUserId).

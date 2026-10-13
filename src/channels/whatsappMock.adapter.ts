@@ -3,10 +3,6 @@ import { ChannelType, CareRecordEventType, CareRecordSource } from "../types/car
 import { resolveChannelIdentity } from "../services/identityResolver.service";
 import { appendCareRecordEvent } from "../services/careRecord.service";
 import { speechToText, textToSpeech } from "./voicePipeline";
-import {
-    sendSaheliMessage,
-    sendCaregiverSaheliMessage,
-} from "../services/saheli.service";
 import { FamilyRole } from "../types/family.types";
 
 type TurnResult = {
@@ -14,46 +10,26 @@ type TurnResult = {
     orderFlow?: import("../services/orderOrchestrator.service").OrderFlowPayload;
 };
 
+/** Saheli's brain (engine /v2/turn) answers every channel; the old v1 chat is gone (trust plan A1, founder D9). When the
+ *  brain cannot answer, the holding line (written ahead per language) goes back instead: never silence, never v1. */
 async function handleTurn(
     familyId: string,
     userId: string,
     role: FamilyRole,
-    subjectUserId: string,
+    _subjectUserId: string,
     text: string,
-    channel: ChannelType,
-    source: CareRecordSource,
-    phone: string,
+    _channel: ChannelType,
+    _source: CareRecordSource,
+    _phone: string,
 ): Promise<TurnResult> {
-    const { resolveWhatsAppSaheliSession } = await import("../services/saheliSession.service");
-    const thread = role === FamilyRole.CARE_RECIPIENT ? "elder" : "caregiver";
-    const sessionId = await resolveWhatsAppSaheliSession({
-        phone,
-        familyId,
-        recipientUserId: subjectUserId,
-        actorUserId: userId,
-        thread,
+    const { runBrainV2 } = await import("../services/brainV2.service");
+    const out = await runBrainV2({ identity: { familyId, userId, role }, text, mode: "live" }).catch((err) => {
+        console.warn("[brain-v2] mock channel turn failed:", err instanceof Error ? err.message : err);
+        return null;
     });
-
-    const channelOpts = {
-        skipInboundCareRecord: true,
-        channel,
-        source,
-        sessionId,
-        whatsappPhone: channel === ChannelType.WHATSAPP ? phone : undefined,
-    };
-    if (role === FamilyRole.CARE_RECIPIENT) {
-        const result = await sendSaheliMessage(familyId, userId, userId, text, channelOpts);
-        return { reply: result.reply, orderFlow: result.orderFlow };
-    }
-
-    const result = await sendCaregiverSaheliMessage(
-        familyId,
-        subjectUserId,
-        userId,
-        text,
-        channelOpts,
-    );
-    return { reply: result.reply, orderFlow: result.orderFlow };
+    if (out?.reply?.trim() && out.reply.trim() !== "none") return { reply: out.reply };
+    const H = await import("../services/brainHold.service");
+    return { reply: H.holdLines(await H.speechFor(familyId, userId)).holding };
 }
 
 export class ChannelMockAdapter implements ChannelAdapter {

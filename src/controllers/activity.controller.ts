@@ -4,7 +4,6 @@ import { getFamilyForActor, getMemberRole, requireCareSubject } from "../service
 import { FamilyRole } from "../types/family.types";
 import { listActivity, istDayKey } from "../services/activityLog.service";
 import { ACTIVITY_KINDS, type ActivityKind } from "../models/activityLog.model";
-import { generateDailySnapshot, getDailySnapshot, listDailySnapshots } from "../services/dailySnapshot.service";
 import { getFamilyMembersList } from "../services/familyMember.service";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -51,41 +50,4 @@ export async function getActivityHandler(req: Request, res: Response) {
         success: true,
         data: { items, hasMore, nextBefore: hasMore && items.length ? items[items.length - 1]!.createdAt : null },
     });
-}
-
-export async function getDailySnapshotHandler(req: Request, res: Response) {
-    const { familyId, subjectUserId } = await requireCaregiverOf(req);
-    const day = typeof req.query.day === "string" && req.query.day ? req.query.day : istDayKey();
-    if (!DAY_RE.test(day)) throw new AppError("day must be YYYY-MM-DD", 400);
-    res.json({ success: true, data: { snapshot: await getDailySnapshot(subjectUserId, day, familyId) } });
-}
-
-export async function listDailySnapshotsHandler(req: Request, res: Response) {
-    const { familyId, subjectUserId } = await requireCaregiverOf(req);
-    const limit = Number(req.query.limit ?? 14) || 14;
-    res.json({ success: true, data: { snapshots: await listDailySnapshots(subjectUserId, limit, familyId) } });
-}
-
-const lastRegen = new Map<string, number>();
-export async function postDailySnapshotHandler(req: Request, res: Response) {
-    const { familyId, subjectUserId, actorUserId } = await requireCaregiverOf(req);
-    const day = typeof req.body?.day === "string" && req.body.day ? req.body.day : istDayKey();
-    if (!DAY_RE.test(day)) throw new AppError("day must be YYYY-MM-DD", 400);
-    const key = `${subjectUserId}:${day}`;
-    const prev = lastRegen.get(key);
-    if (prev !== undefined && Date.now() - prev < 120_000) {
-        throw new AppError("Snapshot was just generated — try again in a couple of minutes", 429);
-    }
-    lastRegen.set(key, Date.now());
-    const elderName = await getFamilyMembersList(familyId, actorUserId)
-        .then((p) => p.members.find((m) => m.userId === subjectUserId)?.name)
-        .catch(() => undefined);
-    const snapshot = await generateDailySnapshot({
-        familyId,
-        recipientUserId: subjectUserId,
-        dayKey: day,
-        elderName: elderName || undefined,
-        source: "on_demand",
-    });
-    res.json({ success: true, data: { snapshot } });
 }

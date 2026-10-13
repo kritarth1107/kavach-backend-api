@@ -156,15 +156,6 @@ export async function createCareSchedule(
         updatedBy: actorUserId,
     });
 
-    void import("./saheli.service").then(({ maybeTriggerCheckInOnScheduleCreate }) =>
-        maybeTriggerCheckInOnScheduleCreate(
-            familyId,
-            recipientUserId,
-            actorUserId,
-            item.type as CareScheduleType,
-        ),
-    );
-
     return serializeSchedule(item);
 }
 
