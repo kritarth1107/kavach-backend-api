@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AppError } from "../middleware/error.middleware";
 import { isMcpPartnerKey, type McpPartnerKey } from "../partners/mcp/types";
 import { getPartnerIntegrationDetail } from "../services/integrationPartner.service";
+import { subjectQuery } from "./careRecord.controller";
 import {
     getPartnerOrderSettings,
     updatePartnerOrderSettings,
@@ -17,7 +18,7 @@ function parsePartner(value: string): McpPartnerKey {
 export async function getPartnerIntegrationDetailHandler(req: Request, res: Response) {
     const partner = parsePartner(req.params.partner);
     const { familyId } = req.params;
-    const data = await getPartnerIntegrationDetail(familyId, partner, req.user!.userId);
+    const data = await getPartnerIntegrationDetail(familyId, partner, req.user!.userId, subjectQuery(req));
     res.json({ success: true, data });
 }
 

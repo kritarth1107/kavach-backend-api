@@ -78,9 +78,15 @@ export async function getDoctorBriefHandler(req: Request, res: Response) {
     res.json({ success: true, data: brief });
 }
 
+/** ?subjectUserId=: a person's page asks for only that person's orders. */
+export function subjectQuery(req: Request): string | undefined {
+    const v = req.query.subjectUserId;
+    return typeof v === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : undefined;
+}
+
 export async function getPendingApprovalsHandler(req: Request, res: Response) {
     const { familyId } = req.params;
-    const orders = await listPendingApprovals(familyId, req.user!.userId);
+    const orders = await listPendingApprovals(familyId, req.user!.userId, subjectQuery(req));
     res.json({
         success: true,
         data: {
@@ -134,7 +140,7 @@ export async function postRejectOrderHandler(req: Request, res: Response) {
 
 export async function getOrderHistoryHandler(req: Request, res: Response) {
     const { familyId } = req.params;
-    const orders = await listOrderHistory(familyId, req.user!.userId);
+    const orders = await listOrderHistory(familyId, req.user!.userId, 20, subjectQuery(req));
     res.json({
         success: true,
         data: {

@@ -13,6 +13,7 @@ import {
     getFamilyForActor,
     getMemberRole,
     requireCareRecipient,
+    requireCareSubject,
     requirePermission,
 } from "./careRecordAuth.service";
 import { createCommerceOrder, payCommerceOrder } from "../partners/commerce.adapter";
@@ -111,12 +112,24 @@ export async function suggestOrder(input: {
     return order;
 }
 
-export async function listPendingApprovals(familyId: string, actorUserId: string) {
+/**
+ * A person's page asks for only their orders (subjectUserId): someone the actor may see (a care recipient, or
+ * themselves in self care). Without it, the whole family's (WhatsApp, older callers).
+ * Founder 2026-10-13: his mother's dashboard showed his own orders.
+ */
+function orderSubjectFilter(family: Awaited<ReturnType<typeof getFamilyForActor>>, actorUserId: string, subjectUserId?: string) {
+    if (!subjectUserId) return {};
+    requireCareSubject(family, subjectUserId, actorUserId);
+    return { subjectUserId };
+}
+
+export async function listPendingApprovals(familyId: string, actorUserId: string, subjectUserId?: string) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "read");
 
     return Order.find({
         familyId,
+        ...orderSubjectFilter(family, actorUserId, subjectUserId),
         status: { $in: [OrderStatus.AWAITING_APPROVAL, OrderStatus.APPROVED] },
     })
         .sort({ createdAt: -1 })
@@ -330,11 +343,11 @@ export async function rejectOrder(familyId: string, orderId: string, actorUserId
     return order;
 }
 
-export async function listOrderHistory(familyId: string, actorUserId: string, limit = 20) {
+export async function listOrderHistory(familyId: string, actorUserId: string, limit = 20, subjectUserId?: string) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "read");
 
-    return Order.find({ familyId })
+    return Order.find({ familyId, ...orderSubjectFilter(family, actorUserId, subjectUserId) })
         .sort({ createdAt: -1 })
         .limit(limit)
         .lean();

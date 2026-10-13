@@ -3,7 +3,7 @@ import { getMcpConnectionStatus } from "../partners/mcp/mcpClient.service";
 import { getMcpPartner } from "../partners/mcp/partners";
 import type { McpPartnerKey } from "../partners/mcp/types";
 import { OrderPartner, OrderStatus } from "../types/careRecord.types";
-import { getFamilyForActor, requirePermission } from "./careRecordAuth.service";
+import { getFamilyForActor, requireCareSubject, requirePermission } from "./careRecordAuth.service";
 import { getPartnerOrderSettings } from "./commerceSettings.service";
 import { listPartnerAddresses } from "./partnerAddress.service";
 
@@ -35,16 +35,19 @@ export async function getPartnerIntegrationDetail(
     familyId: string,
     partner: McpPartnerKey,
     actorUserId: string,
+    /** a person's page: only the recent orders for them (the account and its pending count stay the family's) */
+    subjectUserId?: string,
 ) {
     const family = await getFamilyForActor(familyId, actorUserId);
     requirePermission(family, actorUserId, "read");
+    if (subjectUserId) requireCareSubject(family, subjectUserId, actorUserId);
 
     const partnerConfig = getMcpPartner(partner);
     const [status, addresses, orderSettings, recentOrders, pendingCount] = await Promise.all([
         getMcpConnectionStatus(partner, familyId, actorUserId),
         listPartnerAddresses(familyId, partner),
         getPartnerOrderSettings(familyId, partner),
-        Order.find({ familyId, partner: PARTNER_TO_ORDER[partner] })
+        Order.find({ familyId, partner: PARTNER_TO_ORDER[partner], ...(subjectUserId ? { subjectUserId } : {}) })
             .sort({ createdAt: -1 })
             .limit(8)
             .lean(),
@@ -86,6 +89,7 @@ export async function getPartnerIntegrationDetail(
         orderSettings,
         recentOrders: recentOrders.map((o) => ({
             order_id: o.orderId,
+            subject_user_id: o.subjectUserId,
             status: o.status,
             total_paise: o.totalPaise,
             created_at: o.createdAt?.toISOString() ?? null,
