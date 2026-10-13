@@ -34,6 +34,16 @@ export async function currentEmergencyLink(familyId: string, subjectUserId: stri
     return live ? { url: emergencyUrl(live.token), createdAt: live.createdAt, opens: live.opens, lastOpenedAt: live.lastOpenedAt } : null;
 }
 
+/** What the public link may carry of the care card: everything a helper needs, never an identity document number
+ *  (profile.id_note holds things like an Aadhaar number; it stays on the family's own card). */
+export function cardForPublic<T>(card: T): T {
+    if (!card || typeof card !== "object") return card;
+    const c = card as Record<string, unknown>;
+    const profile = c.profile && typeof c.profile === "object" ? { ...(c.profile as Record<string, unknown>) } : c.profile;
+    if (profile && typeof profile === "object") delete (profile as Record<string, unknown>).id_note;
+    return { ...c, profile } as T;
+}
+
 /** The public card: the care facts plus the person's name and the caregivers' phone numbers. */
 export async function publicEmergencyCard(token: string) {
     if (!TOKEN_RE.test(token)) throw new AppError("Link not found", 404);
@@ -63,7 +73,7 @@ export async function publicEmergencyCard(token: string) {
     return {
         person: { name: nameOf(subject) || "Care recipient", photo: subject?.avatarUrl ?? null, phone: phoneOf(subject) },
         caregivers,
-        card,
+        card: cardForPublic(card),
         updatedAt: new Date().toISOString(),
     };
 }
