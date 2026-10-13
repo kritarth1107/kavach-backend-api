@@ -25,7 +25,7 @@ const MANAGER_ROLES = new Set([FamilyRole.PRIMARY_CAREGIVER, FamilyRole.CO_CAREG
 /** How long after its time a reminder may still go out (the scheduler was busy or restarting); the slot claim keeps it to once. */
 export const REMINDER_LATE_MINUTES = 15;
 
-function serialize(doc: ISaheliReminder, now: Date = new Date()) {
+function serialize(doc: ISaheliReminder, now: Date = clockNow()) {
     const nowParts = getISTParts(now);
     const next = doc.status === "active" ? nextOccurrence(doc, toDateKeyIST(now), nowParts.minutesSinceMidnight) : null;
     return {
@@ -238,7 +238,7 @@ export async function createSaheliReminder(input: {
     }
 
     if (input.schedule) {
-        const now = input.now ?? new Date();
+        const now = input.now ?? clockNow();
         const checked = readSchedule(input.schedule, toDateKeyIST(now));
         if (!checked.ok) return { ok: false, error: checked.error };
         const doc = await SaheliReminder.create({
@@ -359,7 +359,7 @@ export async function listSaheliReminders(input: {
     };
     if (input.status === "all") {
         // what is on now, and what stopped or finished in the last 30 days
-        const since = new Date((input.now ?? new Date()).getTime() - 30 * 86_400_000);
+        const since = new Date((input.now ?? clockNow()).getTime() - 30 * 86_400_000);
         filter.$or = [{ status: "active" }, { updatedAt: { $gte: since } }];
     } else filter.status = input.status ?? "active";
     const rows = await SaheliReminder.find(filter).sort({ createdAt: -1 }).limit(60).lean();
@@ -386,7 +386,7 @@ export async function skipSaheliReminder(input: {
     const doc = await ownReminder(input);
     if (!doc) return { ok: false, error: "Reminder not found." };
     if (doc.status !== "active") return { ok: false, error: "That reminder is already stopped." };
-    const now = input.now ?? new Date();
+    const now = input.now ?? clockNow();
     const today = toDateKeyIST(now);
     let day = input.day;
     let time = input.time ? normalTime(input.time) ?? undefined : undefined;
@@ -431,7 +431,7 @@ export async function updateSaheliReminder(input: {
     const doc = await ownReminder(input);
     if (!doc) return { ok: false, error: "Reminder not found." };
     if (doc.status !== "active") return { ok: false, error: "That reminder is stopped; set a new one instead." };
-    const now = input.now ?? new Date();
+    const now = input.now ?? clockNow();
     if (input.schedule) {
         // what is not given stays as it was
         const s = input.schedule;
@@ -504,7 +504,7 @@ export async function remindersForDay(input: {
 }): Promise<{ day: string; occurrences: ReminderOccurrence[]; reminders: ReminderView[] }> {
     await assertCanManageReminder(input.familyId, input.recipientUserId, input.actorUserId);
     if (!isDay(input.day)) throw new AppError("day must be YYYY-MM-DD", 400);
-    const now = input.now ?? new Date();
+    const now = input.now ?? clockNow();
     const dayStart = new Date(`${input.day}T00:00:00+05:30`);
     // the window of a reminder that crosses midnight starts the day before
     const rows = (await SaheliReminder.find({
@@ -888,7 +888,7 @@ export const CHAT_HOLD_MINUTES = 10;
 const CHATTING_MS = 3 * 60_000;
 
 /** Did this person write to Saheli in the last 3 minutes (their WhatsApp chat's last inbound message)? */
-export async function chattingNow(familyId: string, userId: string, now: Date = new Date()): Promise<boolean> {
+export async function chattingNow(familyId: string, userId: string, now: Date = clockNow()): Promise<boolean> {
     const { familyMemberPhone } = await import("./careMemorySync.service");
     const found = await familyMemberPhone(familyId, userId).catch(() => ({ reason: "lookup failed" }));
     if ("reason" in found) return false;
@@ -1053,7 +1053,7 @@ export type ReminderSoon = {
  * The reminders due in the next `hours` hours for these people (at most 6 each), for Saheli's turn: when someone says
  * they already did what one is for, she can skip that time instead of letting it go out anyway.
  */
-export async function remindersSoon(familyId: string, userIds: string[], now = new Date(), hours = 12): Promise<ReminderSoon[]> {
+export async function remindersSoon(familyId: string, userIds: string[], now = clockNow(), hours = 12): Promise<ReminderSoon[]> {
     const ids = [...new Set(userIds.filter(Boolean))];
     if (!ids.length) return [];
     const day = toDateKeyIST(now);

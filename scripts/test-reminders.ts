@@ -101,6 +101,10 @@ async function withDb(uri: string) {
     console.log("with DB");
     await mongoose.connect(uri);
     await mongoose.connection.db!.dropDatabase();
+    // The test's days are fixed (12–14 Oct 2026): the clock is pinned before them, so "once on Tuesday" and "skip
+    // Tuesday" stay in the future whatever day the suite runs (they began failing on 14 Oct with the real clock).
+    const { setClockForTest } = await import("../src/utils/clock.util");
+    setClockForTest(at(SUN, "10:00"));
     const Family = (await import("../src/models/family.model")).default;
     const { FamilyRole, FamilyMemberStatus } = await import("../src/types/family.types");
     await Family.create({

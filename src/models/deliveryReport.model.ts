@@ -28,6 +28,8 @@ export interface IDeliveryReport {
     notDelivered: Array<{ family: string; person: string; medicine: string; time: string; state: string; reason?: string; attempts?: number }>;
     /** Sends with a wamid and with a receipt (the ledger's own health: B1 done-when). */
     ledger?: { sends: number; withWamid: number; withReceipt: number; failed: number };
+    /** Slots sent before the ledger was watching them (the first build after a deploy): no receipt to wait for. */
+    untracked?: number;
     emailedAt?: Date;
     emailError?: string;
 }
@@ -40,6 +42,7 @@ const schema = new Schema<IDeliveryReport>(
         families: { type: Schema.Types.Mixed, default: [] },
         notDelivered: { type: Schema.Types.Mixed, default: [] },
         ledger: { type: Schema.Types.Mixed },
+        untracked: { type: Number },
         emailedAt: { type: Date },
         emailError: { type: String },
     },

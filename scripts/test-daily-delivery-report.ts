@@ -102,6 +102,9 @@ async function withDb(uri: string) {
     await slot("famreport-B", "eb", "b2", { kind: "reminder", medicine: false, title: "Walk", time: "18:00", dueAt: at("18:00"), state: "delivered", sentAt: at("18:05"), deliveredAt: at("18:06") });
     await slot("famreport-B", "eb", "b3", { title: "Vitamin D", time: "21:00", dueAt: at("21:00"), state: "scheduled" }); // never attempted → missed
     await slot("famreport-B", "eb", "b4", { state: "delivered", test: true }); // a test number: left out
+    // sent before tracking began (listed after its time): counted as sent, never "not delivered"
+    await slot("famreport-B", "eb", "b5", { title: "Early", time: "06:00", dueAt: at("06:00"), state: "sent", sentAt: at("06:00"), alertedAt: at("10:00"),
+        alertReason: "listed after its time (not alerted)" });
     await MessageDelivery.create({ wamid: "w1", phone: "1", kind: "dose_reminder", status: "read", sentAt: at("08:00"), receiptAt: at("08:01"), createdAt: at("08:00") });
     await MessageDelivery.create({ wamid: "w2", phone: "1", kind: "reply", status: "sent", sentAt: at("09:00"), createdAt: at("09:00") });
     await MessageDelivery.create({ phone: "1", kind: "dose_reminder", status: "failed", errorTitle: "send_failed", createdAt: at("07:00") });
@@ -115,8 +118,9 @@ async function withDb(uri: string) {
         resetOpsAlerts();
         const r = await R.runDailyDeliveryReport(at("23:30"));
         assert.ok(r);
-        assert.equal(r!.totals.due, 6);
-        assert.equal(r!.totals.sent, 3);
+        assert.equal(r!.totals.due, 7);
+        assert.equal(r!.totals.sent, 4);
+        assert.equal(r!.untracked, 1);
         assert.equal(r!.totals.delivered, 2);
         assert.equal(r!.totals.read, 1);
         assert.equal(r!.totals.missed, 1);
@@ -131,9 +135,10 @@ async function withDb(uri: string) {
         assert.equal(emails.length, 1);
         const e = emails[0]!;
         assert.deepEqual(e.to, ["kritarth@kavach.care"]);
-        assert.match(e.subject, /Kavach reminders 2026-10-14: 3\/6 sent, 2 delivered, 1 read, 3 doses not delivered/);
-        assert.match(e.text, /All families: due 6, sent 3, delivered 2, read 1, missed 1/);
-        assert.match(e.text, /on time 3\/5 \(60%\)/);
+        assert.match(e.subject, /Kavach reminders 2026-10-14: 4\/7 sent, 2 delivered, 1 read, 3 doses not delivered/);
+        assert.match(e.text, /All families: due 7, sent 4, delivered 2, read 1, missed 1/);
+        assert.match(e.text, /on time 4\/6 \(67%\)/);
+        assert.match(e.text, /1 slot\(s\) were sent before tracking began/);
         assert.match(e.text, /family famrepor · Gopal · Thyronorm at 07:00 · failed \(WhatsApp 131047 Re-engagement message\) · 3 attempts/);
         assert.ok(!e.text.includes("Devi")); // first names only
         const saved = await DeliveryReport.findOne({ dateKey: DAY }).lean();

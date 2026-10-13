@@ -165,8 +165,11 @@ export async function buildDeliveryReport(dateKey: string, now = clockNow(), opt
         people: [...new Set(rows.map((r) => names.get(`${r.familyId}|${r.recipientUserId}`) || "someone"))],
         counts: countSlots(rows, now),
     }));
+    // A slot sent before the ledger was watching it (the first build after a deploy) has no receipt to wait for: it is
+    // counted as sent, but never listed as "not delivered" (13 Oct, the first night: 15 doses sent before tracking began).
+    const beforeTracking = (s: IDueSlot) => s.state === "sent" && String(s.alertReason ?? "").startsWith("listed after its time");
     const notDelivered = slots
-        .filter((s) => s.medicine && new Date(s.dueAt).getTime() <= now.getTime() && !["delivered", "read", "held"].includes(s.state))
+        .filter((s) => s.medicine && new Date(s.dueAt).getTime() <= now.getTime() && !["delivered", "read", "held"].includes(s.state) && !beforeTracking(s))
         .sort((a, b) => new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime())
         .map((s) => ({ family: short(s.familyId), person: names.get(`${s.familyId}|${s.recipientUserId}`) || "someone", medicine: s.title, time: s.time,
                        state: s.state, ...(s.reason ? { reason: s.reason } : {}), ...(s.attempts ? { attempts: s.attempts } : {}) }));
@@ -180,7 +183,8 @@ export async function buildDeliveryReport(dateKey: string, now = clockNow(), opt
         MessageDelivery.countDocuments({ ...range, wamid: { $type: "string" }, receiptAt: { $exists: true } }),
         MessageDelivery.countDocuments({ ...range, status: "failed" }),
     ]);
-    return { dateKey, builtAt: now, totals: countSlots(slots, now), families, notDelivered, ledger: { sends, withWamid, withReceipt, failed } };
+    const untracked = slots.filter(beforeTracking).length;
+    return { dateKey, builtAt: now, totals: countSlots(slots, now), families, notDelivered, ledger: { sends, withWamid, withReceipt, failed }, ...(untracked ? { untracked } : {}) };
 }
 
 export function reportText(r: IDeliveryReport): { subject: string; text: string } {
@@ -197,6 +201,7 @@ export function reportText(r: IDeliveryReport): { subject: string; text: string 
         r.notDelivered.length ? "Doses that did not reach the phone:" : "Every dose that was due reached the phone (or was held on purpose).",
         ...r.notDelivered.map((d) => `• family ${d.family} · ${d.person} · ${d.medicine} at ${d.time} · ${d.state}${d.reason ? ` (${d.reason})` : ""}${d.attempts ? ` · ${d.attempts} attempt${d.attempts === 1 ? "" : "s"}` : ""}`),
         "",
+        r.untracked ? `${r.untracked} slot(s) were sent before tracking began today (no WhatsApp receipt was kept for them).` : "",
         r.ledger ? `WhatsApp sends today: ${r.ledger.sends}, with a wamid ${r.ledger.withWamid} (${pct(r.ledger.withWamid, r.ledger.sends)}), with a receipt ${r.ledger.withReceipt} (${pct(r.ledger.withReceipt, r.ledger.withWamid)}), failed ${r.ledger.failed}.` : "",
         "On time = sent within 2 minutes of the time for doses, within 15 minutes for other reminders. Held = not sent on purpose (already marked taken, quiet hours, paused, an order in progress, skipped).",
         "Full report: admin console, Delivery.",
