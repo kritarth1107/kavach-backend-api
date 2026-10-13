@@ -11,6 +11,8 @@
  *    dashboard turns into the waitlist form.
  *  - Existing accounts never come here, and neither do family members a caregiver adds (their account is made by the
  *    family invitation itself).
+ *  - Sign-up is on the web only (founder 2026-10-13: "onboarding can not be done via sending hi with invite code on
+ *    whatsapp"): the invitee signs up and sets up on the web, then meets Saheli on WhatsApp (whatsappWebFirst.service).
  */
 import { createHash, randomInt, randomUUID } from "crypto";
 import config from "../config/app.config";
@@ -51,17 +53,16 @@ export function normalizeInviteToken(raw: unknown): string | null {
 
 export const hashInviteToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
-/** "hi KAVACH-7Q…" (what the wa.me link pre-fills). Never a 6-digit number, so it can't be read as a phone-verify code. */
+/**
+ * "hi KAVACH-7Q…" sent to Saheli on WhatsApp (what the first invite links typed in). WhatsApp never signs anyone up:
+ * the code only lets Saheli answer with that invite's join link. Never a 6-digit number, so it can't be read as a
+ * phone-verify code.
+ */
 const CODE_IN_TEXT = /\bKAVACH[-\s]?([0-9A-Za-z]{26})\b/i;
 
 export function inviteCodeFromText(text: unknown): string | null {
     const m = CODE_IN_TEXT.exec(String(text ?? ""));
     return m ? normalizeInviteToken(m[1]) : null;
-}
-
-/** The message without the code ("hi KAVACH-…" → "hi"), so Saheli's setup chat never sees it. */
-export function stripInviteCode(text: string): string {
-    return text.replace(CODE_IN_TEXT, "").replace(/\s+/g, " ").trim();
 }
 
 /* ── links ────────────────────────────────────────────────────────────────── */
@@ -74,12 +75,6 @@ export const saheliNumber = () => config.whatsapp.kavachNumber;
 
 export function joinUrl(token: string): string {
     return `${dashboardBaseUrl()}/join/${token}`;
-}
-
-/** wa.me link to Saheli with "hi" (and the invite code) typed in. */
-export function saheliWhatsAppUrl(token?: string | null): string {
-    const digits = String(saheliNumber()).replace(/\D/g, "");
-    return `https://wa.me/${digits}?text=${encodeURIComponent(token ? `hi KAVACH-${token}` : "hi")}`;
 }
 
 /* ── states ───────────────────────────────────────────────────────────────── */
@@ -131,10 +126,8 @@ export type InviteView = {
     usedAt: string | null;
     usedByName: string | null;
     revokedAt: string | null;
-    /** Only while the link can still be used. */
+    /** Only while the link can still be used. The friend signs up on the web with it, then meets Saheli on WhatsApp. */
     link: string | null;
-    whatsappLink: string | null;
-    code: string | null;
 };
 
 function viewOf(inv: IInvite & { token?: string | null }, now: Date, usedByName: string | null = null): InviteView {
@@ -149,8 +142,6 @@ function viewOf(inv: IInvite & { token?: string | null }, now: Date, usedByName:
         usedByName,
         revokedAt: iso(inv.revokedAt),
         link: token ? joinUrl(token) : null,
-        whatsappLink: token ? saheliWhatsAppUrl(token) : null,
-        code: token ? `KAVACH-${token}` : null,
     };
 }
 
@@ -233,12 +224,12 @@ export type PublicInvite = {
     inviterName: string | null;
     expiresAt: string | null;
     saheliNumber: string;
-    whatsappLink: string | null;
 };
 
+/** What the join page shows. The invite is used only by signing up on the web; WhatsApp comes after the setup there. */
 export async function lookupInvite(raw: unknown, now = new Date()): Promise<PublicInvite> {
     const token = normalizeInviteToken(raw);
-    const none: PublicInvite = { state: "invalid", kind: null, inviterName: null, expiresAt: null, saheliNumber: saheliNumber(), whatsappLink: null };
+    const none: PublicInvite = { state: "invalid", kind: null, inviterName: null, expiresAt: null, saheliNumber: saheliNumber() };
     if (!token) return none;
     const inv = await Invite.findOne({ tokenHash: hashInviteToken(token) }).lean<IInvite>();
     if (!inv) return none;
@@ -255,7 +246,6 @@ export async function lookupInvite(raw: unknown, now = new Date()): Promise<Publ
         inviterName,
         expiresAt: iso(inv.expiresAt),
         saheliNumber: saheliNumber(),
-        whatsappLink: state === "active" ? saheliWhatsAppUrl(token) : null,
     };
 }
 
@@ -359,8 +349,11 @@ export async function gatedSignup<T extends { userId: string }>(
     return user;
 }
 
-/** A personal link for an approved waitlist entry (the one in the approval email). Earlier unused ones stop working. */
-export async function createWaitlistInvite(waitlistId: string, now = new Date()): Promise<{ token: string; link: string; whatsappLink: string; expiresAt: Date }> {
+/**
+ * A personal link for an approved waitlist entry (the "Complete your sign-up" button in the approval email). Earlier
+ * unused ones stop working.
+ */
+export async function createWaitlistInvite(waitlistId: string, now = new Date()): Promise<{ token: string; link: string; expiresAt: Date }> {
     await Invite.updateMany(
         { waitlistId, kind: "waitlist", status: "active" },
         { $set: { status: "revoked", revokedAt: now, token: null } },
@@ -377,7 +370,7 @@ export async function createWaitlistInvite(waitlistId: string, now = new Date())
         expiresAt,
         createdAt: now,
     });
-    return { token, link: joinUrl(token), whatsappLink: saheliWhatsAppUrl(token), expiresAt };
+    return { token, link: joinUrl(token), expiresAt };
 }
 
 export async function revokeWaitlistInvites(waitlistId: string, now = new Date()): Promise<void> {

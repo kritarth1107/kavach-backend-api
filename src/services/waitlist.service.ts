@@ -165,7 +165,6 @@ export type ApprovalResult = {
     emailSent: boolean;
     emailError: string | null;
     link: string;
-    whatsappLink: string;
 };
 
 /**
@@ -188,7 +187,7 @@ export async function approveWaitlist(waitlistId: string, approvedBy: string, no
     if (entry.email) {
         try {
             const { sendWaitlistApprovedEmail } = await import("./email.service");
-            await sendWaitlistApprovedEmail({ to: entry.email, name: entry.name || "", registerUrl: link.link, whatsappUrl: link.whatsappLink });
+            await sendWaitlistApprovedEmail({ to: entry.email, name: entry.name || "", registerUrl: link.link });
             emailSent = true;
         } catch (err) {
             emailError = (err instanceof Error ? err.message : String(err)).slice(0, 200);
@@ -201,7 +200,7 @@ export async function approveWaitlist(waitlistId: string, approvedBy: string, no
         { $set: emailSent ? { approvalEmailSentAt: now, approvalEmailError: null } : { approvalEmailError: emailError } },
     );
     const fresh = (await WaitlistEntry.findOne({ waitlistId }).lean<IWaitlistEntry>())!;
-    return { entry: fresh, emailSent, emailError, link: link.link, whatsappLink: link.whatsappLink };
+    return { entry: fresh, emailSent, emailError, link: link.link };
 }
 
 export async function rejectWaitlist(waitlistId: string, rejectedBy: string, now = new Date()): Promise<IWaitlistEntry> {

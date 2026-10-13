@@ -602,8 +602,8 @@ export async function executeSaheliTool(input: {
             return { ok: true, firstName: first, lastName: last || null };
         }
         case "finish_setup": {
-            const { finishSetup } = await import("./whatsappSignup.service");
-            await finishSetup(input.actorUserId);
+            // Only the web onboarding marks an account set up (founder 2026-10-13: web first, then WhatsApp); anyone who
+            // reaches Saheli here has finished it already, so this just says where the dashboard is.
             const appConfig = (await import("../config/app.config")).default;
             return { ok: true, dashboard: "https://app.kavach.care", signIn: "with this WhatsApp number (a code comes on WhatsApp)", saheliNumber: appConfig.whatsapp.kavachNumber };
         }

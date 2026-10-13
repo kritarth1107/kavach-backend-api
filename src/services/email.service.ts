@@ -64,8 +64,8 @@ export async function sendFamilyInviteEmail(params: {
   }
 }
 
-/** The waitlist approval email: a big "Send hi to Saheli" button plus the personal registration link. */
-export async function sendWaitlistApprovedEmail(params: { to: string; name: string; registerUrl: string; whatsappUrl: string }) {
+/** The waitlist approval email: a big "Complete your sign-up" button with the personal one-time web link. */
+export async function sendWaitlistApprovedEmail(params: { to: string; name: string; registerUrl: string }) {
   const { renderWaitlistApprovedEmail } = await import("./waitlistEmail.template");
   const { APPROVAL_LINK_TTL_DAYS } = await import("./invite.service");
   const mail = renderWaitlistApprovedEmail({ ...params, validDays: APPROVAL_LINK_TTL_DAYS });

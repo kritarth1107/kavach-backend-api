@@ -1,7 +1,10 @@
 /**
- * Sign-up on WhatsApp (founder 2026-10-12: "if a new user sends hi on WhatsApp, start their onboarding directly"):
- * a new number gets an account and a family, limits stop a flood, the profile name is read from the webhook, and the
- * setup tools Saheli uses (add the person cared for, set my name, finish setup).
+ * WhatsApp never signs anyone up (founder 2026-10-13: "people can only access saheli via whatsapp when they have
+ * completed the onboarding via web ... onboarding can not be done via sending hi with invite code on whatsapp"). With
+ * sign-up open (invite-only off) a new number still gets no account and no family, only the way to the web; the profile
+ * name is read from the webhook; the tools Saheli keeps for people already on Kavach (set my name, add the person cared
+ * for) work, and finish_setup never marks an account set up (only the web onboarding does).
+ * Invite codes, the waitlist and the "finish on the web" gate are in scripts/test-invites.ts.
  * Pure checks always; the DB checks need TEST_MONGODB_URI (a throwaway local mongod).
  * Usage: TEST_MONGODB_URI=mongodb://127.0.0.1:27999/signuptest NODE_ENV=test npx tsx scripts/test-whatsapp-signup.ts
  */
@@ -9,6 +12,8 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { parseMetaWebhookMessages } from "../src/clients/metaWhatsApp.client";
 import { testDbUri } from "./test-db";
+
+process.env.DASHBOARD_URL = "https://app.example.com";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -47,57 +52,36 @@ async function withDb(uri: string) {
     console.log("with DB");
     await mongoose.connect(uri);
     await mongoose.connection.db!.dropDatabase();
-    // the sign-up mechanics with sign-up open; invite-only (invite codes, the waitlist) is in scripts/test-invites.ts
+    // sign-up open: even then WhatsApp makes no account (invite-only and the waitlist are in scripts/test-invites.ts)
     process.env.INVITE_ONLY = "off";
-    const S = await import("../src/services/whatsappSignup.service");
+    const WF = await import("../src/services/whatsappWebFirst.service");
     const User = (await import("../src/models/users.model")).default;
     const Family = (await import("../src/models/family.model")).default;
     const { FamilyRole } = await import("../src/types/family.types");
+    const { createDefaultFamilyForUser } = await import("../src/services/family.service");
     const { executeSaheliTool } = await import("../src/services/saheliTools.service");
 
-    let userId = "", familyId = "";
-    await ok("a new number gets an account and a family, the number proven by the message itself", async () => {
-        const r = await S.startWhatsAppSignup("+919000000101", { profileName: "Ravi 😊 Kumar" });
-        assert.equal(r.ok, true);
-        if (!r.ok) return;
-        userId = r.userId;
-        familyId = r.familyId;
-        const u = await User.findOne({ userId }).lean<Record<string, any>>();
-        assert.equal(u!.firstName, "Ravi");
-        assert.equal(u!.signupSource, "whatsapp");
-        assert.equal(u!.onboarding.status, "pending");
-        assert.ok(u!.phoneVerifiedAt);
-        assert.equal(u!.phone.number, "9000000101");
-        const fam = await Family.findOne({ familyId }).lean<Record<string, any>>();
-        assert.equal(fam!.members[0].userId, userId);
-        assert.equal(fam!.members[0].role, FamilyRole.PRIMARY_CAREGIVER);
-        assert.equal(await S.setupPending(userId), true);
+    await ok("a new number gets no account and no family, whatever it says: just the way to the web sign-up", async () => {
+        for (const text of ["hi", "hi KAVACH-7K2M9QXA4TBC8D1EFGHJ5NPRSV", "I want to sign up for my mother"]) {
+            const r = await WF.answerUnknownNumber("+919000000101", { profileName: "Ravi 😊 Kumar", text });
+            assert.equal(r?.kind, "open");
+            assert.equal(r?.reply, "Namaste 🙏 I'm Saheli from Kavach. Sign up at https://app.example.com/auth/login, finish setting up there, then say hi here.");
+        }
+        assert.equal(await User.countDocuments({}), 0);
+        assert.equal(await Family.countDocuments({}), 0);
+        assert.equal(await WF.answerUnknownNumber("123"), null, "a broken number gets the usual line");
+        assert.equal(await WF.answerUnknownNumber("+991234567890"), null, "the internal placeholder code is never a real number");
     });
 
-    await ok("the same number again never makes a second account; a broken number makes none", async () => {
-        assert.deepEqual(await S.startWhatsAppSignup("+919000000101"), { ok: true, userId, familyId, created: false });
-        assert.equal(await User.countDocuments({ phoneKey: { $regex: "9000000101$" } }), 1);
-        assert.deepEqual(await S.startWhatsAppSignup("123"), { ok: false, reason: "invalid" });
-    });
-
-    await ok("a flood of strangers stops at the hourly limit", async () => {
-        const now = new Date();
-        const docs = Array.from({ length: S.SIGNUPS_PER_HOUR }, (_, i) => ({
-            userId: `flood-${i}`, email: `flood${i}@pending.kavach`, firstName: "X", passwordHash: "x", signupSource: "whatsapp",
-            phoneKey: `+91${8000000000 + i}`, createdAt: now, updatedAt: now,
-        }));
-        await User.collection.insertMany(docs);
-        assert.deepEqual(await S.startWhatsAppSignup("+919000000202"), { ok: false, reason: "limit" });
-        await User.collection.deleteMany({ userId: { $regex: "^flood-" } });
-        process.env.WHATSAPP_SIGNUP = "off";
-        assert.deepEqual(await S.startWhatsAppSignup("+919000000202"), { ok: false, reason: "off" });
-        delete process.env.WHATSAPP_SIGNUP;
-    });
-
+    // a caregiver whose family was set up on the web, talking to Saheli on WhatsApp
+    const u = await User.create({ email: "ravi@example.com", firstName: "Ravi", passwordHash: "x", emailVerified: true,
+                                  phone: { countryCode: "+91", number: "9000000102" }, phoneKey: "+919000000102", onboarding: { status: "done" } });
+    const familyId = (await createDefaultFamilyForUser(u)).familyId;
+    const userId = u.userId;
     const tool = (name: string, args: Record<string, unknown>, actor = userId) =>
         executeSaheliTool({ tool: name as never, args, familyId, recipientUserId: actor, actorUserId: actor }) as Promise<Record<string, any>>;
 
-    await ok("setup on WhatsApp: their name, the person they look after, then done", async () => {
+    await ok("Saheli's tools for people already on Kavach: their name, the person they look after", async () => {
         const named = await tool("set_my_name", { firstName: "Ravi", lastName: "Kumar" });
         assert.equal(named.ok, true);
         assert.equal((await User.findOne({ userId }).lean<Record<string, any>>())!.lastName, "Kumar");
@@ -111,9 +95,14 @@ async function withDb(uri: string) {
         const again = await tool("add_family_member", { name: "Someone Else", phone: "9000000404" });
         assert.equal(again.ok, false, "one person cared for per family here; others on the dashboard");
         assert.equal((await tool("add_family_member", { name: "X", phone: "9000000505" }, added.userId)).ok, false, "only a caregiver adds");
+    });
+
+    await ok("finish_setup on WhatsApp never marks an account set up: only the web onboarding does", async () => {
+        await User.updateOne({ userId }, { $set: { onboarding: { status: "pending" } } });
         const done = await tool("finish_setup", {});
         assert.equal(done.ok, true);
-        assert.equal(await S.setupPending(userId), false);
+        assert.equal((await User.findOne({ userId }).lean<Record<string, any>>())!.onboarding.status, "pending");
+        assert.equal(await WF.webSetupUnfinished({ userId, role: FamilyRole.PRIMARY_CAREGIVER }), true);
     });
 }
 

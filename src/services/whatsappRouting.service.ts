@@ -344,6 +344,17 @@ export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<
     // Onboarding: "KAVACH 123456" from a parent's (or caregiver's) phone verifies that number, before anything else.
     const verify = await import("./onboarding.service").then((O) => O.verifyFromWhatsApp(dPhone, String(body.text ?? ""))).catch(() => null);
     if (verify) return outbound(dPhone, verify.reply);
+    // Saheli on WhatsApp only after the web setup (founder 2026-10-13): a caregiver or self-care account that hasn't
+    // finished it gets one line pointing there, and the message goes no further (no brain, no flows). People cared for
+    // and family members a caregiver added are never stopped here.
+    if (dWho) {
+        const W = await import("./whatsappWebFirst.service");
+        const unfinished = await W.webSetupUnfinished(dWho).catch((err) => {
+            console.warn("[web-first] setup check failed:", err instanceof Error ? err.message : err);
+            return false;
+        });
+        if (unfinished) return outbound(dPhone, await W.finishOnWebLine());
+    }
     let out = await handleWhatsAppInboundCore(body);
     // Voice notes follow the person's choice: by default a voice note gets a voice note back (with the text first),
     // whichever brain or route answered it; "always" voices every reply, "never" none. Fallback copy is never spoken.
@@ -393,24 +404,16 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     try {
         identity = await resolveWhatsAppSender(phone);
     } catch {
-        // A number Kavach does not know: an account and a family now, then Saheli's setup chat (founder 2026-10-12).
-        // Over the sign-up limits, or switched off, the old "sign up on the website" answer goes out.
-        // Invite-only (2026-10-13): without a valid invite code or an approved waitlist entry, one line and the waitlist.
-        const signup = await import("./whatsappSignup.service")
-            .then((S) => S.startWhatsAppSignup(phone, { profileName: body.profileName, text }))
+        // A number Kavach can't place in a family. WhatsApp never signs anyone up or sets anyone up (founder 2026-10-13:
+        // that happens on the web, then they meet Saheli here): one short line pointing to the web (with a valid invite
+        // code, its join link; the invite stays unused), or the waitlist line and entry.
+        const known = await import("./whatsappWebFirst.service")
+            .then((W) => W.answerUnknownNumber(phone, { profileName: body.profileName, text }))
             .catch((err) => {
-                console.warn("[whatsapp-signup] failed:", err instanceof Error ? err.message : err);
+                console.warn("[web-first] unknown number:", err instanceof Error ? err.message : err);
                 return null;
             });
-        if (signup && !signup.ok && signup.reason === "waitlist") return outbound(phone, signup.reply);
-        if (!signup?.ok) return handleGuestMessage(phone);
-        // the setup chat starts from their hello, not from the invite code
-        text = await import("./invite.service").then((I) => I.stripInviteCode(text) || "hi");
-        try {
-            identity = await resolveWhatsAppSender(phone);
-        } catch {
-            return handleGuestMessage(phone);
-        }
+        return known ? outbound(phone, known.reply) : handleGuestMessage(phone);
     }
 
     // STT runs BEFORE emergency / language / intent checks so spoken emergencies escalate.

@@ -216,7 +216,6 @@ export async function aiPostBrainTurn(payload: {
     images?: Array<{ mime: string; data: string }>;
     media_note?: string;
     reminders_soon?: Array<{ id: string; person: string; text: string; day: string; time: string; repeat: string; item: string | null }>;
-    onboarding?: boolean;
     location?: { lat: number; lng: number; name: string; address: string };
     /** Messages that waited while their WhatsApp chat was closed (they got a template instead). */
     waiting?: Array<{ purpose: string; text: string; at: string }>;

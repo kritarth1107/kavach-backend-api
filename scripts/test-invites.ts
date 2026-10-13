@@ -1,11 +1,17 @@
 /**
  * Invite links, invite-only sign-up and the waitlist (founder 2026-10-13): links made one at a time, 5 per person in any
  * 7 days, one registration each (also under a race), 14-day expiry and revoke; every way a new account is made (email,
- * mobile, Google, WhatsApp "hi") refuses anyone without an invite or an approved waitlist entry and puts them on the
- * waitlist; admin approval sends the email (faked) and lets them register; family members a caregiver adds and
- * existing accounts work exactly as before.
+ * mobile, Google) refuses anyone without an invite or an approved waitlist entry and puts them on the waitlist; admin
+ * approval sends the email (faked) and lets them register; family members a caregiver adds and existing accounts work
+ * exactly as before.
+ * Web first, then WhatsApp (founder 2026-10-13: "people can only access saheli via whatsapp when they have completed the
+ * onboarding via web"): a WhatsApp hi never makes an account or a family (with a valid invite code it gets the join link
+ * and the invite stays unused; an approved number is pointed to the web; anyone else goes on the waitlist), and a
+ * caregiver who hasn't finished the web onboarding gets one line pointing there while the brain is never called. People
+ * cared for, family members a caregiver added and families already set up reach Saheli as before.
  * Pure checks always; the DB checks need TEST_MONGODB_URI (a throwaway local mongod). No real email or WhatsApp is sent:
- * the email client and Meta's Graph API are faked, and WhatsApp runs on the mock provider.
+ * the email client, Meta's Graph API and the AI engine are faked, WhatsApp runs on the mock provider, and any other
+ * outside request is refused.
  * Usage: TEST_MONGODB_URI=mongodb://127.0.0.1:27999/x NODE_ENV=test npx tsx scripts/test-invites.ts
  */
 import assert from "node:assert/strict";
@@ -22,6 +28,9 @@ process.env.AES_SECRET = process.env.AES_SECRET || "invite-test-aes-secret";
 process.env.WHATSAPP_PROVIDER = "mock";
 process.env.PHONE_OTP_ENABLED = "true";
 process.env.DASHBOARD_URL = "https://app.example.com";
+process.env.AI_ENGINE_URL = "http://ai-engine.test";
+process.env.BRAIN_V2 = "live"; // every family on Saheli's brain, so "reaches Saheli" means "the brain was called"
+delete process.env.BRAIN_V2_LIVE_FAMILIES;
 delete process.env.INVITE_ONLY; // the default: invite-only on
 
 let passed = 0;
@@ -39,16 +48,31 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
             },
         );
 
-/** Meta's Graph API, faked: nothing may go out from these paths, and anything that tries is recorded. */
+/**
+ * Meta's Graph API, faked: nothing may go out from these paths, and anything that tries is recorded. The AI engine,
+ * faked: every brain turn (/v2/turn) is recorded and answered with BRAIN_REPLY. Any other outside request is refused.
+ */
 const metaSent: Array<{ url: string; body: unknown }> = [];
+const brainTurns: Array<{ speaker: { id: string; role: string }; text: string }> = [];
+const BRAIN_REPLY = "Namaste, Saheli's brain here.";
 const realFetch = globalThis.fetch;
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
-    const u = String(url);
+    const u = String(url instanceof Request ? url.url : url);
     if (u.includes("graph.facebook.com")) {
         metaSent.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : {} });
-        return new Response(JSON.stringify({ messages: [{ id: `wamid.T${metaSent.length}` }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return json({ messages: [{ id: `wamid.T${metaSent.length}` }] });
     }
-    return realFetch(url as string, init);
+    if (u.startsWith("http://ai-engine.test")) {
+        if (u.endsWith("/v2/turn")) {
+            const body = JSON.parse(String(init?.body ?? "{}"));
+            brainTurns.push({ speaker: body.speaker, text: body.text });
+            return json({ reply: BRAIN_REPLY, actions: [], alerts: [], model: "fake" });
+        }
+        return json({}, 404);
+    }
+    if (/^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(u)) return realFetch(url as string, init);
+    return json({ error: "no outside requests in this test" }, 503);
 }) as typeof fetch;
 
 /** The email client, faked: every message is kept; failNext makes the next send fail like Resend would. */
@@ -79,7 +103,7 @@ async function pure() {
         assert.equal(I.normalizeInviteToken(undefined), null);
     });
 
-    await ok("the WhatsApp text carries the code; it is never read as a phone-verify code; it is stripped before setup", () => {
+    await ok("a code sent on WhatsApp is recognised (to answer with its join link); never read as a phone-verify code", () => {
         const t = I.newInviteToken();
         assert.equal(I.inviteCodeFromText(`hi KAVACH-${t}`), t);
         assert.equal(I.inviteCodeFromText(`Hi kavach-${t.toLowerCase()} 🙏`), t);
@@ -87,11 +111,6 @@ async function pure() {
         assert.equal(I.inviteCodeFromText("KAVACH 123456"), null);
         assert.equal(VERIFY_RE.test(`hi KAVACH-${t}`), false);
         assert.equal(VERIFY_RE.test(`KAVACH-${t}`), false);
-        assert.equal(I.stripInviteCode(`hi KAVACH-${t}`), "hi");
-        const url = I.saheliWhatsAppUrl(t);
-        assert.match(url, /^https:\/\/wa\.me\/\d{10,15}\?text=/);
-        assert.equal(decodeURIComponent(url.split("text=")[1]), `hi KAVACH-${t}`);
-        assert.equal(decodeURIComponent(I.saheliWhatsAppUrl().split("text=")[1]), "hi");
         assert.equal(I.joinUrl(t), `https://app.example.com/join/${t}`);
     });
 
@@ -103,24 +122,24 @@ async function pure() {
         assert.equal(inviteOnlyEnabled({}, { "signup.inviteOnly": false }), false);
     });
 
-    await ok("the approval email: big WhatsApp button, registration link, plain text, brand rules, name escaped", () => {
-        const mail = renderWaitlistApprovedEmail({
-            name: "Asha <script>alert(1)</script> Rao",
-            registerUrl: "https://app.example.com/join/ABC",
-            whatsappUrl: "https://wa.me/919999900000?text=hi%20KAVACH-ABC",
-        });
+    await ok("the approval email: one big 'Complete your sign-up' button (the web link), the Send hi button promised at the end of setup, no WhatsApp-first button", () => {
+        const mail = renderWaitlistApprovedEmail({ name: "Asha <script>alert(1)</script> Rao", registerUrl: "https://app.example.com/join/ABC" });
         assert.match(mail.subject, /^Asha, your place on Kavach is ready$/);
-        assert.ok(mail.html.includes('href="https://wa.me/919999900000?text=hi%20KAVACH-ABC"'));
-        assert.ok(mail.html.includes("Send hi to Saheli on WhatsApp"));
-        assert.ok(mail.html.includes('href="https://app.example.com/join/ABC"'));
+        const button = /<a href="([^"]+)"[^>]*>\s*Complete your sign-up &rarr;\s*<\/a>/.exec(mail.html);
+        assert.ok(button, "the primary button");
+        assert.equal(button![1], "https://app.example.com/join/ABC");
+        assert.ok(/At the end of setup you'll get a .*Send&nbsp;hi&nbsp;to&nbsp;Saheli.* button/.test(mail.html), "says the Send hi button comes at the end of setup");
+        assert.ok(!mail.html.includes("wa.me"), "no WhatsApp link");
+        assert.ok(!/already typed|personal code|Send hi to Saheli on WhatsApp &rarr;/i.test(mail.html), "no WhatsApp-first button or its note");
         assert.ok(!mail.html.includes("<script>"), "the name is escaped");
         assert.ok(!/gradient/i.test(mail.html), "flat: no gradients");
         assert.ok(mail.html.includes("#165246"), "jade pine button");
         // marigold fills carry the dark ink, never white
         for (const m of mail.html.matchAll(/background:#ec9a2f;[^"]*color:([^;"]+)/g)) assert.equal(m[1], "#2a1804");
-        assert.ok(mail.text.includes("https://wa.me/919999900000?text=hi%20KAVACH-ABC"));
-        assert.ok(mail.text.includes("https://app.example.com/join/ABC"));
-        const anon = renderWaitlistApprovedEmail({ name: "", registerUrl: "https://x/j", whatsappUrl: "https://wa.me/1" });
+        assert.ok(mail.text.includes("Complete your sign-up:\nhttps://app.example.com/join/ABC"));
+        assert.ok(mail.text.includes('"Send hi to Saheli" button'));
+        assert.ok(!mail.text.includes("wa.me"));
+        const anon = renderWaitlistApprovedEmail({ name: "", registerUrl: "https://x/j" });
         assert.equal(anon.subject, "Your place on Kavach is ready");
     });
 }
@@ -149,11 +168,15 @@ async function withDb(uri: string) {
     const I = await import("../src/services/invite.service");
     const W = await import("../src/services/waitlist.service");
     const A = await import("../src/services/auth.service");
-    const S = await import("../src/services/whatsappSignup.service");
+    const WF = await import("../src/services/whatsappWebFirst.service");
     const { handleWhatsAppInbound } = await import("../src/services/whatsappRouting.service");
+    const { startVerification } = await import("../src/services/onboarding.service");
+    const Family = (await import("../src/models/family.model")).default;
+    const { OnboardingDraft } = await import("../src/models/onboarding.model");
+    const { FamilyMemberStatus, FamilyRole } = await import("../src/types/family.types");
     const { createOtpToken } = await import("../src/services/otp.service");
     const { inviteFamilyMember } = await import("../src/services/familyMember.service");
-    const { createDefaultFamilyForUser } = await import("../src/services/family.service");
+    const { createDefaultFamilyForUser, ensureDefaultFamily } = await import("../src/services/family.service");
     const { resolveWhatsAppSender } = await import("../src/services/identityResolver.service");
     const { executeSaheliTool } = await import("../src/services/saheliTools.service");
     const { waitlistRoutes } = await import("../src/admin/routes/waitlist");
@@ -196,6 +219,16 @@ async function withDb(uri: string) {
         return call("POST", "/api/auth/otp/register", { channel: "email", email, code, otpToken, name, ...(inviteToken ? { inviteToken } : {}) });
     };
     const tokenOf = (link: string | null) => link!.split("/join/")[1];
+    /** A WhatsApp message to Saheli, through the real router, and whether it reached the brain. */
+    const whatsapp = async (from: string, text: string, profileName?: string) => {
+        const turns = brainTurns.length;
+        const out = await handleWhatsAppInbound({ from, text, messageId: `wamid.${randomUUID()}`, ...(profileName ? { profileName } : {}) } as never);
+        return { content: String(out.content ?? ""), brain: brainTurns.length > turns };
+    };
+    const familyCount = () => Family.countDocuments({});
+    /** A WhatsApp number of their own on an account (what a mobile sign-in or the finished web setup leaves). */
+    const givePhone = (userId: string, number: string) =>
+        User.updateOne({ userId }, { $set: { phone: { countryCode: "+91", number }, phoneKey: `+91${number}`, phoneVerifiedAt: new Date() } });
 
     const inviter = await caregiver("inviter@example.com", "Meera");
 
@@ -211,7 +244,7 @@ async function withDb(uri: string) {
             assert.equal(r.status, 201, JSON.stringify(r.json));
             assert.equal(r.json.data.quota.left, 4 - i);
             assert.match(r.json.data.invite.link, /^https:\/\/app\.example\.com\/join\/[0-9A-HJKMNP-TV-Z]{26}$/);
-            assert.equal(decodeURIComponent(r.json.data.invite.whatsappLink.split("text=")[1]), `hi KAVACH-${tokenOf(r.json.data.invite.link)}`);
+            assert.ok(!("whatsappLink" in r.json.data.invite) && !("code" in r.json.data.invite), "only the web link: no WhatsApp-first link or code");
         }
         const sixth = await call("POST", "/api/invites", {}, inviter.token);
         assert.equal(sixth.status, 429);
@@ -253,13 +286,14 @@ async function withDb(uri: string) {
     // fresh weekly room for the inviter
     await Invite.deleteMany({ inviterUserId: inviter.user.userId });
 
-    await ok("the join page shows who invited and that the link works", async () => {
+    await ok("the join page shows who invited and that the link works (sign-up on the web; no WhatsApp-first link)", async () => {
         const { token } = await freshLink();
         const r = await call("GET", `/api/invites/lookup/${token}`);
         assert.equal(r.status, 200);
         assert.equal(r.json.data.state, "active");
         assert.equal(r.json.data.inviterName, "Meera Tester");
-        assert.equal(decodeURIComponent(r.json.data.whatsappLink.split("text=")[1]), `hi KAVACH-${token}`);
+        assert.ok(r.json.data.saheliNumber, "Saheli's number, for the end of setup");
+        assert.ok(!("whatsappLink" in r.json.data));
         assert.equal((await call("GET", `/api/invites/lookup/${token.toLowerCase()}`)).json.data.state, "active");
         assert.equal((await call("GET", "/api/invites/lookup/not-a-token")).json.data.state, "invalid");
         assert.equal((await call("GET", `/api/invites/lookup/${I.newInviteToken()}`)).json.data.state, "invalid");
@@ -384,40 +418,50 @@ async function withDb(uri: string) {
         assert.equal(inv!.usedByUserId, u.userId);
     });
 
-    await ok("WhatsApp hi from an unknown number: no account, one short line, a waitlist entry (once)", async () => {
-        const out = await handleWhatsAppInbound({ from: "+919000000301", text: "hi", profileName: "Kiran 😊 Wala" } as never);
+    await ok("WhatsApp hi from an unknown number: no account, no family, one short line, a waitlist entry (once); the brain is not called", async () => {
+        const families = await familyCount();
+        const out = await whatsapp("+919000000301", "hi", "Kiran 😊 Wala");
         assert.match(out.content, /invite-only/);
         assert.match(out.content, /waitlist/);
         assert.equal(out.content.split("\n").length, 1, "one line");
+        assert.equal(out.brain, false);
         assert.equal(await User.countDocuments({ phoneKey: "+919000000301" }), 0);
         const e = await WaitlistEntry.findOne({ phoneDigits: "919000000301" }).lean<Record<string, any>>();
         assert.equal(e!.source, "whatsapp");
         assert.equal(e!.status, "pending");
         assert.equal(e!.name, "Kiran Wala");
-        await handleWhatsAppInbound({ from: "+919000000301", text: "hello?" } as never);
+        await whatsapp("+919000000301", "hello?");
         assert.equal(await WaitlistEntry.countDocuments({ phoneDigits: "919000000301" }), 1);
         assert.equal((await WaitlistEntry.findOne({ phoneDigits: "919000000301" }).lean<Record<string, any>>())!.attempts, 2);
-        const wrong = await handleWhatsAppInbound({ from: "+919000000302", text: `hi KAVACH-${I.newInviteToken()}` } as never);
+        const wrong = await whatsapp("+919000000302", `hi KAVACH-${I.newInviteToken()}`);
         assert.match(wrong.content, /couldn't find that invite code/);
         assert.equal(await User.countDocuments({ phoneKey: "+919000000302" }), 0);
+        assert.equal(await familyCount(), families, "no family was made");
         assert.equal(metaSent.length, 0, "nothing went to Meta");
     });
 
-    await ok("WhatsApp hi with a valid invite code signs up (and the code is then used up)", async () => {
+    await ok("WhatsApp hi with a valid invite code: no account, no family, the join link back, and the invite stays usable (on the web)", async () => {
         const { token, inviteId } = await freshLink();
-        const r = await S.startWhatsAppSignup("+919000000311", { profileName: "Lata Iyer", text: `hi kavach-${token.toLowerCase()}` });
-        assert.equal(r.ok, true, JSON.stringify(r));
-        if (!r.ok) return;
-        assert.equal(r.created, true);
-        const u = await User.findOne({ userId: r.userId }).lean<Record<string, any>>();
-        assert.equal(u!.signupSource, "whatsapp");
-        assert.equal(u!.firstName, "Lata");
+        const families = await familyCount();
+        for (const text of [`hi kavach-${token.toLowerCase()}`, `hi KAVACH-${token}`]) {
+            const out = await whatsapp("+919000000311", text, "Lata Iyer");
+            assert.equal(out.content, `Namaste 🙏 Please open your invite link to sign up on the web: https://app.example.com/join/${token}`);
+            assert.equal(out.brain, false);
+        }
+        assert.equal(await User.countDocuments({ phoneKey: "+919000000311" }), 0, "no account");
+        assert.equal(await familyCount(), families, "no family");
+        assert.equal(await WaitlistEntry.countDocuments({ phoneDigits: "919000000311" }), 0, "an invited person isn't put on the waitlist");
         const inv = await Invite.findOne({ inviteId }).lean<Record<string, any>>();
-        assert.equal(inv!.status, "used");
-        assert.equal(inv!.usedVia, "whatsapp");
-        const again = await S.startWhatsAppSignup("+919000000312", { text: `hi KAVACH-${token}` });
-        assert.equal(again.ok, false);
-        assert.match((again as { reply: string }).reply, /already been used/);
+        assert.equal(inv!.status, "active", "the invite is not used up");
+        assert.equal(inv!.usedVia ?? null, null);
+        assert.equal((await I.lookupInvite(token)).state, "active");
+        // the same invite then signs them up on the web, once
+        const reg = await register("lata@example.com", "Lata Iyer", token);
+        assert.equal(reg.status, 201, JSON.stringify(reg.json));
+        assert.equal((await Invite.findOne({ inviteId }).lean<Record<string, any>>())!.usedVia, "email");
+        // a used code on WhatsApp: no account, and the waitlist line
+        const again = await whatsapp("+919000000312", `hi KAVACH-${token}`);
+        assert.match(again.content, /already been used/);
         assert.equal(await User.countDocuments({ phoneKey: "+919000000312" }), 0);
     });
 
@@ -439,7 +483,7 @@ async function withDb(uri: string) {
 
     /* ── approval ──────────────────────────────────────────────────────────── */
 
-    await ok("approve: the email goes out (faked) with the WhatsApp button and a personal link; then they can register", async () => {
+    await ok("approve: the email goes out (faked) with 'Complete your sign-up' (their personal link); then they can register", async () => {
         const e = await WaitlistEntry.findOne({ email: "nisha@example.com" }).lean<Record<string, any>>();
         const n = mails.length;
         const res = await W.approveWaitlist(e!.waitlistId, "owner@kavach.care");
@@ -449,9 +493,10 @@ async function withDb(uri: string) {
         assert.equal(mail.to, "nisha@example.com");
         assert.match(mail.subject, /Nisha, your place on Kavach is ready/);
         const token = tokenOf(res.link);
-        assert.ok(String(mail.html).includes(`https://wa.me/`) && String(mail.html).includes(encodeURIComponent(`hi KAVACH-${token}`)));
-        assert.ok(String(mail.html).includes(`https://app.example.com/join/${token}`));
+        assert.ok(new RegExp(`<a href="https://app\\.example\\.com/join/${token}"[^>]*>\\s*Complete your sign-up`).test(String(mail.html)));
+        assert.ok(!String(mail.html).includes("wa.me") && !String(mail.html).includes(`KAVACH-${token}`), "no WhatsApp-first button");
         assert.ok(String(mail.text).includes(`https://app.example.com/join/${token}`));
+        assert.ok(!("whatsappLink" in res));
         const after = await WaitlistEntry.findOne({ waitlistId: e!.waitlistId }).lean<Record<string, any>>();
         assert.equal(after!.status, "approved");
         assert.equal(after!.approvedBy, "owner@kavach.care");
@@ -470,15 +515,73 @@ async function withDb(uri: string) {
         await assert.rejects(W.approveWaitlist(e!.waitlistId, "owner@kavach.care"), (x: { code?: string }) => x.code === "already_registered");
     });
 
-    await ok("approve a WhatsApp waitlist entry: no email to send, and hi from that number now signs up", async () => {
+    let kiranId = "";
+    await ok("an approved WhatsApp waitlist number: no account or family from a hi, just the way to the web sign-up", async () => {
         const e = await WaitlistEntry.findOne({ phoneDigits: "919000000301" }).lean<Record<string, any>>();
         const res = await W.approveWaitlist(e!.waitlistId, "help@kavach.care");
         assert.equal(res.emailSent, false);
         assert.equal(res.emailError, "no_email");
-        const r = await S.startWhatsAppSignup("+919000000301", { text: "hi" });
-        assert.equal(r.ok, true, JSON.stringify(r));
-        assert.equal(await User.countDocuments({ phoneKey: "+919000000301" }), 1);
+        const families = await familyCount();
+        const out = await whatsapp("+919000000301", "hi");
+        assert.equal(out.content, "Namaste 🙏 You're off the waitlist! Sign up on the web with this number at https://app.example.com/auth/login, then say hi here once you've finished setting up.");
+        assert.equal(out.brain, false);
+        assert.equal(await User.countDocuments({ phoneKey: "+919000000301" }), 0, "no account");
+        assert.equal(await familyCount(), families, "no family");
+        assert.equal((await WaitlistEntry.findOne({ waitlistId: e!.waitlistId }).lean<Record<string, any>>())!.registeredUserId ?? null, null);
+        // they sign up on the web with that number (mobile sign-in; the sign-in gives them their family)
+        const u = await A.findOrCreatePhoneUser("+91", "9000000301", "Kiran Wala");
+        await ensureDefaultFamily(u);
+        kiranId = u.userId;
+        assert.equal((await User.findOne({ userId: u.userId }).lean<Record<string, any>>())!.onboarding.status, "pending");
         assert.ok((await WaitlistEntry.findOne({ waitlistId: e!.waitlistId }).lean<Record<string, any>>())!.registeredUserId);
+    });
+
+    await ok("a caregiver who hasn't finished the web onboarding gets one line pointing there; the brain is never called", async () => {
+        const finish = "Namaste 🙏 Finish setting up at https://app.example.com/onboarding, then say hi here.";
+        assert.equal(await WF.finishOnWebLine(), finish);
+        const families = await familyCount();
+        for (const text of ["hi", "remind my mother of her BP tablet at 8"]) {
+            const out = await whatsapp("+919000000301", text);
+            assert.equal(out.content, finish);
+            assert.equal(out.brain, false, "the message never reaches the brain");
+        }
+        // "Finish later" on the web (skipped) is not finished either
+        await User.updateOne({ userId: kiranId }, { $set: { onboarding: { status: "skipped", at: new Date() } } });
+        const skipped = await whatsapp("+919000000301", "hello");
+        assert.equal(skipped.content, finish);
+        assert.equal(skipped.brain, false);
+        assert.equal(await familyCount(), families, "no family was made");
+        // the web onboarding's own WhatsApp check ("KAVACH 123456" sent from their phone) still goes through
+        const v = await startVerification(kiranId, { target: "self", phone: "+919000000301", method: "message" });
+        const verified = await whatsapp("+919000000301", String(v.text));
+        assert.match(verified.content, /नंबर जुड़ गया|number is connected/, "Saheli's 'your number is connected' thank-you");
+        assert.equal(verified.brain, false);
+        // once the web onboarding is done (what completeOnboarding writes), Saheli answers
+        await User.updateOne({ userId: kiranId }, { $set: { onboarding: { status: "done", at: new Date() } } });
+        const after = await whatsapp("+919000000301", "hi");
+        assert.equal(after.brain, true);
+        assert.equal(after.content, BRAIN_REPLY);
+        assert.equal(brainTurns.at(-1)!.speaker.id, kiranId);
+    });
+
+    await ok("part-way through the web setup: their own proven number, or the number of someone they're adding, is pointed to the web, not the waitlist", async () => {
+        const reg = await register("halfway@example.com", "Zoya Halfway");
+        assert.equal(reg.status, 403, "uninvited");
+        const { token } = await freshLink();
+        assert.equal((await register("halfway@example.com", "Zoya Halfway", token)).status, 201);
+        const u = (await User.findOne({ email: "halfway@example.com" }))!;
+        await ensureDefaultFamily(u);
+        const mine = await startVerification(u.userId, { target: "self", phone: "+919000000341", method: "message" });
+        assert.match((await whatsapp("+919000000341", String(mine.text))).content, /नंबर जुड़ गया|number is connected/);
+        const out = await whatsapp("+919000000341", "hi");
+        assert.equal(out.content, "Namaste 🙏 Finish setting up at https://app.example.com/onboarding, then say hi here.");
+        const theirs = await startVerification(u.userId, { target: "person:0", phone: "+919000000342", method: "message" });
+        await whatsapp("+919000000342", String(theirs.text));
+        const parent = await whatsapp("+919000000342", "namaste");
+        assert.match(parent.content, /still setting me up/);
+        assert.equal(out.brain || parent.brain, false);
+        assert.equal(await WaitlistEntry.countDocuments({ phoneDigits: { $in: ["919000000341", "919000000342"] } }), 0);
+        assert.equal(await User.countDocuments({ phoneKey: { $in: ["+919000000341", "+919000000342"] } }), 0);
     });
 
     await ok("the personal link from the email works once, whichever email they register with", async () => {
@@ -541,14 +644,20 @@ async function withDb(uri: string) {
 
     /* ── nothing else changes ──────────────────────────────────────────────── */
 
-    await ok("family members a caregiver adds still work: a parent on WhatsApp, a co-caregiver signing in, Saheli's add tool", async () => {
+    await ok("family members a caregiver adds still work and reach Saheli on WhatsApp with no web step: a parent, a co-caregiver; Saheli's add tool", async () => {
         const fam = await caregiver("family.head@example.com", "Sunita");
         await inviteFamilyMember(fam.familyId, fam.user, { role: "care_recipient", name: "Kamla Devi", relationship: "mother", phone: "9000000401", phoneCountryCode: "+91", notify: false });
         const who = await resolveWhatsAppSender("+919000000401");
         assert.equal(who.familyId, fam.familyId);
-        const r = await S.startWhatsAppSignup("+919000000401", { text: "hi" });
-        assert.notEqual((r as { reason?: string }).reason, "waitlist");
+        const elder = await whatsapp("+919000000401", "namaste");
+        assert.equal(elder.brain, true, "the person cared for reaches Saheli");
+        assert.equal(elder.content, BRAIN_REPLY);
+        assert.equal(brainTurns.at(-1)!.speaker.id, who.userId);
         assert.equal(await WaitlistEntry.countDocuments({ phoneDigits: "919000000401" }), 0);
+        // even while the caregiver who added her is still part-way through the web setup
+        await User.updateOne({ userId: fam.user.userId }, { $set: { onboarding: { status: "pending" } } });
+        assert.equal((await whatsapp("+919000000401", "aaj kya hai?")).brain, true);
+        await User.updateOne({ userId: fam.user.userId }, { $unset: { onboarding: "" } });
 
         await inviteFamilyMember(fam.familyId, fam.user, { role: "co_caregiver", name: "Cousin Arjun", email: "cousin@example.com" });
         const before = mails.length;
@@ -558,6 +667,15 @@ async function withDb(uri: string) {
         const verify = await call("POST", "/api/auth/otp/verify", { channel: "email", email: "cousin@example.com", code, otpToken: send.json.data.otpToken });
         assert.equal(verify.status, 200, JSON.stringify(verify.json));
         assert.equal(verify.json.data.registered, true);
+        // he accepts (joining marks his own onboarding "skipped"), has an empty family of his own, and writes to Saheli
+        const arjun = (await User.findOne({ email: "cousin@example.com" }))!;
+        await Family.updateOne({ familyId: fam.familyId, "members.userId": arjun.userId }, { $set: { "members.$.status": FamilyMemberStatus.JOINED } });
+        await User.updateOne({ userId: arjun.userId }, { $set: { onboarding: { status: "skipped", at: new Date() } } });
+        await createDefaultFamilyForUser(arjun);
+        await givePhone(arjun.userId, "9000000403");
+        const co = await whatsapp("+919000000403", "hi");
+        assert.equal(co.brain, true, "a co-caregiver a caregiver added reaches Saheli");
+        assert.equal(await WF.webSetupUnfinished({ userId: arjun.userId, role: FamilyRole.PRIMARY_CAREGIVER }), false, "even from his own empty family");
 
         const signedUp = await caregiver("wa.head@example.com", "Vikram");
         const added = (await executeSaheliTool({ tool: "add_family_member" as never, args: { name: "Bhagwati Devi", relationship: "mother", phone: "9000000402" },
@@ -574,11 +692,28 @@ async function withDb(uri: string) {
         assert.equal(verify.json.data.registered, true);
         const g = await A.findOrCreateGoogleUser({ googleId: "g-inviter", email: "inviter@example.com", name: "Meera Tester", emailVerified: true });
         assert.equal(g.userId, inviter.user.userId);
-        const phoneUser = await A.findOrCreatePhoneUser("+91", "9000000311", "Lata Iyer");
-        assert.equal(phoneUser.phone?.number, "9000000311");
-        assert.equal(await User.countDocuments({ phoneKey: "+919000000311" }), 1);
-        const owner = await S.startWhatsAppSignup("+919000000311", { text: "hi" });
-        assert.equal(owner.ok && owner.created, false);
+        const phoneUser = await A.findOrCreatePhoneUser("+91", "9000000301", "Kiran Wala");
+        assert.equal(phoneUser.userId, kiranId);
+        assert.equal(await User.countDocuments({ phoneKey: "+919000000301" }), 1);
+    });
+
+    await ok("families already set up reach Saheli as before: no onboarding status (accounts from before onboarding), or done with a draft left open", async () => {
+        const old = await caregiver("before.onboarding@example.com", "Asha");
+        assert.equal((await User.findOne({ userId: old.user.userId }).lean<Record<string, any>>())!.onboarding?.status, undefined);
+        await inviteFamilyMember(old.familyId, old.user, { role: "care_recipient", name: "Ramesh Rao", relationship: "father", phone: "9000000411", phoneCountryCode: "+91", notify: false });
+        await givePhone(old.user.userId, "9000000412");
+        const cg = await whatsapp("+919000000412", "hi");
+        assert.equal(cg.brain, true, "the caregiver of a family set up before onboarding existed");
+        assert.equal(cg.content, BRAIN_REPLY);
+        assert.equal((await whatsapp("+919000000411", "namaste")).brain, true, "and the person they care for");
+        // self care, finished on the web, with an onboarding draft that was never closed
+        const done = await caregiver("done.draft@example.com", "Ira");
+        await User.updateOne({ userId: done.user.userId }, { $set: { onboarding: { status: "done", at: new Date() } } });
+        await OnboardingDraft.create({ userId: done.user.userId, familyId: done.familyId, answers: {}, step: "welcome" });
+        await givePhone(done.user.userId, "9000000413");
+        const self = await whatsapp("+919000000413", "hi");
+        assert.equal(self.brain, true);
+        assert.equal(brainTurns.at(-1)!.speaker.id, done.user.userId);
     });
 
     await ok("invite-only switched off (admin flag): sign-up is open again; a link given is still used up", async () => {
@@ -589,6 +724,12 @@ async function withDb(uri: string) {
             const { token, inviteId } = await freshLink();
             assert.equal((await register("open2@example.com", "Open Two", token)).status, 201);
             assert.equal((await Invite.findOne({ inviteId }).lean<Record<string, any>>())!.status, "used");
+            // still no sign-up on WhatsApp: the way to the web, no account, no waitlist
+            const open = await whatsapp("+919000000421", "hi");
+            assert.equal(open.content, "Namaste 🙏 I'm Saheli from Kavach. Sign up at https://app.example.com/auth/login, finish setting up there, then say hi here.");
+            assert.equal(open.brain, false);
+            assert.equal(await User.countDocuments({ phoneKey: "+919000000421" }), 0);
+            assert.equal(await WaitlistEntry.countDocuments({ phoneDigits: "919000000421" }), 0);
         } finally {
             setFlagSnapshot({});
         }

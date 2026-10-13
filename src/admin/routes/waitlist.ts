@@ -79,11 +79,11 @@ export function waitlistRoutes(): RouteDef[] {
                 return {
                     target: `waitlist:${params.waitlistId}`,
                     detail: { emailSent: r.emailSent, emailError: r.emailError },
-                    // the personal link goes to whoever may reveal contacts (to pass on by hand when there is no email)
+                    // the personal sign-up link goes to whoever may reveal contacts (to pass on by hand when there is no
+                    // email); they sign up on the web with it, then meet Saheli on WhatsApp
                     data: {
                         entry: entryOut(r.entry), emailSent: r.emailSent, emailError: r.emailError,
                         link: can(admin.role, "pii.reveal") ? r.link : null,
-                        whatsappLink: can(admin.role, "pii.reveal") ? r.whatsappLink : null,
                     },
                 };
             },

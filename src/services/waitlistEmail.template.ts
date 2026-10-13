@@ -1,8 +1,11 @@
 /**
  * The waitlist approval email (founder 2026-10-13: "send email to user when admin approves their waitlist, create an
- * awesome designed email, with a send hi to Saheli on WhatsApp button"). Care OS v3: jade pine for filled elements,
- * marigold accent with dark text on it, charcoal ink on sage-grey neutrals, flat, Geist/system fonts. Table layout and
- * inline styles only, so Gmail, Outlook and phone mail apps all draw it the same; a plain-text part goes with it.
+ * awesome designed email"). Web first, then WhatsApp (founder 2026-10-13: "people can only access saheli via whatsapp
+ * when they have completed the onboarding via web. so send saheli hi should appear at end of onboarding"): the one
+ * button is "Complete your sign-up" (their personal one-time web link); the "Send hi to Saheli" button comes at the end
+ * of the setup there. Care OS v3: jade pine for filled elements, marigold accent with dark text on it, charcoal ink on
+ * sage-grey neutrals, flat, Geist/system fonts. Table layout and inline styles only, so Gmail, Outlook and phone mail
+ * apps all draw it the same; a plain-text part goes with it.
  */
 
 const C = {
@@ -32,14 +35,12 @@ export type WaitlistApprovedEmail = { subject: string; html: string; text: strin
 export function renderWaitlistApprovedEmail(input: {
     name?: string | null;
     registerUrl: string;
-    whatsappUrl: string;
     validDays?: number;
 }): WaitlistApprovedEmail {
     const first = String(input.name ?? "").trim().split(/\s+/)[0]?.slice(0, 40) || "";
     const hello = first ? `${first}, your place` : "Your place";
     const subject = first ? `${first}, your place on Kavach is ready` : "Your place on Kavach is ready";
     const days = input.validDays ?? 30;
-    const wa = esc(input.whatsappUrl);
     const reg = esc(input.registerUrl);
 
     const point = (title: string, body: string) => `
@@ -73,7 +74,7 @@ export function renderWaitlistApprovedEmail(input: {
 </head>
 <body style="margin:0;padding:0;background:${C.page};-webkit-text-size-adjust:100%;">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:${C.page};font-size:1px;line-height:1px;">
-    You're off the waitlist. Say hi to Saheli on WhatsApp and start in a minute.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;
+    You're off the waitlist. Complete your sign-up and meet Saheli in a few minutes.&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;
   </div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.page};">
     <tr>
@@ -107,8 +108,9 @@ export function renderWaitlistApprovedEmail(input: {
                 </tr>
                 <tr>
                   <td class="k-pad" style="padding:16px 40px 0 40px;font-family:${FONT};font-size:16px;line-height:25px;color:${C.ink2};">
-                    Thank you for waiting. Saheli, our care companion on WhatsApp, is ready to meet you and the people you look after.
-                    Send her a hi and she'll set things up with you in a few minutes, right in the chat.
+                    Thank you for waiting. Saheli, our care companion, is ready to meet you and the people you look after.
+                    Complete your sign&#8209;up on the web and she'll get to know your family in a short chat: who you care for,
+                    their medicines, the language they speak.
                   </td>
                 </tr>
                 <tr>
@@ -116,8 +118,8 @@ export function renderWaitlistApprovedEmail(input: {
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                       <tr>
                         <td class="k-btn" align="center" bgcolor="${C.solid}" style="background:${C.solid};border-radius:16px;">
-                          <a href="${wa}" target="_blank" style="display:block;padding:20px 24px;font-family:${FONT};font-size:18px;line-height:22px;font-weight:600;color:${C.onSolid};text-decoration:none;border-radius:16px;">
-                            Send hi to Saheli on WhatsApp &rarr;
+                          <a href="${reg}" target="_blank" style="display:block;padding:20px 24px;font-family:${FONT};font-size:18px;line-height:22px;font-weight:600;color:${C.onSolid};text-decoration:none;border-radius:16px;">
+                            Complete your sign-up &rarr;
                           </a>
                         </td>
                       </tr>
@@ -125,13 +127,8 @@ export function renderWaitlistApprovedEmail(input: {
                   </td>
                 </tr>
                 <tr>
-                  <td class="k-pad" align="center" style="padding:10px 40px 0 40px;font-family:${FONT};font-size:13px;line-height:19px;color:${C.ink3};">
-                    Opens WhatsApp with your hello and personal code already typed. Just press send.
-                  </td>
-                </tr>
-                <tr>
-                  <td class="k-pad" align="center" style="padding:18px 40px 0 40px;font-family:${FONT};font-size:15px;line-height:22px;">
-                    <a href="${reg}" target="_blank" style="color:${C.solid};font-weight:600;text-decoration:underline;">Open your dashboard and complete registration</a>
+                  <td class="k-pad" align="center" style="padding:12px 40px 0 40px;font-family:${FONT};font-size:14px;line-height:21px;color:${C.ink2};">
+                    It takes a few minutes. At the end of setup you'll get a <span style="color:${C.ink};font-weight:600;">Send&nbsp;hi&nbsp;to&nbsp;Saheli</span> button, and she'll greet you on WhatsApp.
                   </td>
                 </tr>
                 <tr>
@@ -175,13 +172,13 @@ export function renderWaitlistApprovedEmail(input: {
     const text = [
         first ? `${first}, your place on Kavach is ready.` : "Your place on Kavach is ready.",
         "",
-        "Thank you for waiting. Saheli, our care companion on WhatsApp, is ready to meet you and the people you look after.",
+        "Thank you for waiting. Saheli, our care companion, is ready to meet you and the people you look after.",
+        "Complete your sign-up on the web and she'll get to know your family in a short chat.",
         "",
-        "Send hi to Saheli on WhatsApp (your code is already typed in):",
-        input.whatsappUrl,
-        "",
-        "Or open your dashboard and complete registration:",
+        "Complete your sign-up:",
         input.registerUrl,
+        "",
+        "It takes a few minutes. At the end of setup you'll get a \"Send hi to Saheli\" button, and she'll greet you on WhatsApp.",
         "",
         `Your personal link works once and stays valid for ${days} days. Please don't forward this email.`,
         "You can also sign in at the dashboard with this email address.",
