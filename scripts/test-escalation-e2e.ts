@@ -184,6 +184,7 @@ async function main(uri: string) {
     const f2 = await family("b");
     await ok("a reply at any point → no alert (after the third, inside the grace; and before the third)", async () => {
         await reply(f2.cg.phone, at(D2, "08:00"));
+        await reply(f2.elder.phone, at(D2, "07:00")); // their chat is open (they wrote this morning)
         await engineSend(f2, at(D2, "09:00"), "nudge");
         await engineSend(f2, at(D2, "10:00"), "checkin");
         await engineSend(f2, at(D2, "11:00"), "nudge");
@@ -207,6 +208,7 @@ async function main(uri: string) {
     const f3 = await family("c");
     await ok("the caregiver's quiet hours (22:00–07:00) → deferred, then sent when they end (±1 tick)", async () => {
         await reply(f3.cg.phone, at(D3, "19:00"));
+        await reply(f3.elder.phone, at(D3, "19:00"));
         await engineSend(f3, at(D3, "20:00"), "checkin");
         await engineSend(f3, at(D3, "20:30"), "nudge");
         await engineSend(f3, at(D3, "21:00"), "checkin");
@@ -251,6 +253,7 @@ async function main(uri: string) {
     const f5 = await family("e", { selfCare: true });
     await ok("self-care → no family alert, never to the person; none recorded when there is no emergency contact", async () => {
         contacts = [];
+        await reply(f5.elder.phone, at(D5, "08:00"));
         await engineSend(f5, at(D5, "09:00"), "nudge");
         await engineSend(f5, at(D5, "10:00"), "checkin");
         await engineSend(f5, at(D5, "11:00"), "nudge");
@@ -312,6 +315,7 @@ async function main(uri: string) {
         const D6 = "2026-10-26";
         const f6 = await family("f");
         await reply(f6.cg.phone, at(D6, "08:00"));
+        await reply(f6.elder.phone, at(D6, "08:00"));
         await engineSend(f6, at(D6, "09:00"), "nudge");
         await engineSend(f6, at(D6, "09:30"), "checkin");
         await engineSend(f6, at(D6, "10:00"), "nudge");
@@ -319,6 +323,7 @@ async function main(uri: string) {
         await tickEvery(at(D6, "11:30"), at(D6, "11:30")); // the tick was late (down for 30 minutes)
         // a missing one: three unanswered and no tick at all
         const f7 = await family("g");
+        await reply(f7.elder.phone, at(D6, "11:00"));
         await engineSend(f7, at(D6, "12:00"), "nudge");
         await engineSend(f7, at(D6, "12:30"), "checkin");
         await engineSend(f7, at(D6, "13:00"), "nudge");

@@ -32,12 +32,13 @@ export async function noteClosed(phone: string, at: Date = clockNow()): Promise<
 }
 
 /**
- * Is the chat with this number open? A number with no row yet (it has not written since windows were kept) counts as
- * open: the message is tried as before, and if Meta says the chat was closed (131047) the row records it.
+ * Is the chat with this number open? A number with no row has not written to Saheli since windows were kept (12 Oct,
+ * more than 24 hours ago), so its chat is closed (trust plan B3.1: a free message to it would fail quietly). Every inbound
+ * message writes the row before it is answered, so a reply always finds it open.
  */
 export async function windowOpen(phone: string, now: Date = clockNow()): Promise<boolean> {
     const row = await WhatsAppWindow.findOne({ phone: phoneKey(phone) }).lean<{ lastInboundAt?: Date; closedAt?: Date }>();
-    if (!row) return true;
+    if (!row) return false;
     const last = row.lastInboundAt ? new Date(row.lastInboundAt).getTime() : 0;
     if (row.closedAt && new Date(row.closedAt).getTime() >= last) return false;
     return now.getTime() - last < WINDOW_MS;
@@ -65,6 +66,32 @@ export async function keepWaiting(input: { phone: string; familyId: string; toUs
     const text = input.text.trim();
     if (!text) return;
     await WhatsAppWaiting.create({ phone: phoneKey(input.phone), familyId: input.familyId, toUserId: input.toUserId, purpose: input.purpose, text: text.slice(0, 4000) });
+}
+
+/**
+ * Everything that waited for this number (oldest first), taken to be given now (trust plan B3.4: on every message they
+ * send, all of it). Marked given.
+ */
+export async function takeWaitingByPhone(phone: string): Promise<Array<{ purpose: string; text: string; at: string; toUserId?: string }>> {
+    const key = phoneKey(phone);
+    if (key.length < 8) return [];
+    const rows = await WhatsAppWaiting.find({ phone: key, deliveredAt: { $exists: false } }).sort({ createdAt: 1 }).limit(200)
+        .lean<Array<{ _id: unknown; purpose: string; text: string; createdAt: Date; toUserId?: string }>>();
+    if (!rows.length) return [];
+    await WhatsAppWaiting.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { deliveredAt: clockNow() } });
+    return rows.map((r) => ({ purpose: r.purpose, text: r.text, at: new Date(r.createdAt).toISOString(), ...(r.toUserId ? { toUserId: r.toUserId } : {}) }));
+}
+
+/** At most this many waiting messages go one by one; more become one summary, newest first. */
+export const WAITING_ONE_BY_ONE = 8;
+
+/** Pure: the WhatsApp texts for what waited (each with its time if it is older than 30 minutes; > 8 → one summary). */
+export function waitingTexts(items: Array<{ text: string; at: string }>, now: Date = clockNow()): string[] {
+    const clock = (iso: string) => new Date(iso).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true });
+    const stamp = (w: { at: string }) => (now.getTime() - new Date(w.at).getTime() > 30 * 60_000 ? `🕘 ${clock(w.at)}` : "");
+    if (items.length <= WAITING_ONE_BY_ONE) return items.map((w) => [stamp(w), w.text].filter(Boolean).join("\n"));
+    const newest = [...items].reverse();
+    return [[`📬 ${items.length}`, ...newest.map((w) => `🕘 ${clock(w.at)}\n${w.text}`)].join("\n\n")];
 }
 
 /** What waited for this person (oldest first, from any of their families), now handed to Saheli's turn: marked given. */

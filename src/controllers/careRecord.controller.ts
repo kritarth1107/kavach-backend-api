@@ -581,6 +581,23 @@ async function processMetaInboundMessages(
     }
 }
 
+/** Send what waited for this number (oldest first; more than 8 → one summary, newest first) and note it on the turn. */
+export async function deliverWaiting(from: string): Promise<Array<{ purpose: string; text: string; at: string }>> {
+    const W = await import("../services/whatsappWindow.service");
+    const items = await W.takeWaitingByPhone(from);
+    if (!items.length) return [];
+    const L = await import("../services/deliveryLedger.service");
+    const { sendViaMetaWhatsApp } = await import("../clients/metaWhatsApp.client");
+    const replyTo = String(from ?? "").replace(/\D/g, "");
+    await L.withDelivery({ kind: "waiting", replyTo }, async () => {
+        for (const text of W.waitingTexts(items)) await sendViaMetaWhatsApp(from, text);
+    });
+    const ctx = L.currentDelivery();
+    if (ctx) ctx.given = items.map(({ purpose, text, at }) => ({ purpose, text, at }));
+    console.log(`WhatsApp: ${items.length} waiting message(s) delivered on their message`);
+    return items;
+}
+
 async function processOneMetaInbound(
     rawBody: unknown,
     parsedCount: number,
@@ -599,6 +616,19 @@ async function processOneMetaInbound(
 ) {
     const { handleWhatsAppInbound, formatMetaSendError, isMetaWhatsAppEnabled, markMetaWhatsAppInboundSeen, sendViaMetaWhatsApp,
         startMetaWhatsAppTypingRefresh, recordWhatsAppWebhookEvent, VOICE_NOT_CAUGHT_REPLY, WARM_NEUTRAL_REPLY } = deps;
+    // Everything that waited while their chat was closed goes first, word for word, all of it (trust plan B3.4): on every
+    // message they send, a tap on the opener included, even when the brain is busy. Saheli's turn is told what was given.
+    if (isMetaWhatsAppEnabled()) {
+        const given = await deliverWaiting(inbound.from).catch((err) => {
+            console.warn("Delivering waiting messages failed:", err instanceof Error ? err.message : err);
+            return [];
+        });
+        if (given.length && String(inbound.interactiveId ?? "") === "open:waiting") {
+            // the opener's "Show message": what waited was the answer; no turn needed
+            recordWhatsAppWebhookEvent({ body: rawBody, messagesParsed: parsedCount, processed: 1, replySent: true, replyPreview: `[${given.length} waiting message(s)]`, replyTo: inbound.from });
+            return;
+        }
+    }
     {
         let replySent = false;
         let replyPreview: string | undefined;

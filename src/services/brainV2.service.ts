@@ -76,10 +76,13 @@ export async function runBrainV2(input: {
     const soon = await import("./saheliReminder.service")
         .then((R) => R.remindersSoon(input.identity.familyId, [input.identity.userId, elder.userId]))
         .catch(() => []);
-    // Messages that could not reach them while their WhatsApp chat was closed (they got a template): Saheli gives them now.
-    const waiting = await import("./whatsappWindow.service")
+    // Messages that could not reach them while their WhatsApp chat was closed (they got a template): the webhook already
+    // gave them word for word (B3.4; Saheli is told, and never repeats them); anything still left, Saheli gives now.
+    const given = (await import("./deliveryLedger.service").then((L) => L.currentDelivery()?.given).catch(() => undefined)) ?? [];
+    const left = await import("./whatsappWindow.service")
         .then((W) => W.takeWaiting(input.identity.userId))
         .catch(() => []);
+    const waiting = [...given.slice(-8).map((w) => ({ ...w, delivered: true })), ...left].slice(-8);
     const { aiPostBrainTurn } = await import("../clients/aiEngine.client");
     const started = Date.now();
     const out = await aiPostBrainTurn({

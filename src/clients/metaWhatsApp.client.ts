@@ -2,7 +2,7 @@ import { scrubStack } from "../services/stackScrub";
 import config from "../config/app.config";
 import { assertSendableWhatsAppRecipient } from "../services/whatsappRecipientGuard.service";
 import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
-import { recordNotSent, recordSent } from "../services/deliveryLedger.service";
+import { currentDelivery, recordNotSent, recordSent } from "../services/deliveryLedger.service";
 
 export function isMetaWhatsAppEnabled(): boolean {
     const meta = config.whatsapp.meta;
@@ -181,6 +181,22 @@ async function accepted(to: string, res: Response, template?: string): Promise<s
     return wamid;
 }
 
+/**
+ * Never free text outside the 24-hour window (trust plan B3.2): it would fail quietly at Meta. An answer to the number
+ * that just wrote is always inside it; anything else checks the window and, when it is closed, is refused here (and
+ * recorded), whichever code path tried it. Templates are the way to reach a closed chat.
+ */
+async function assertChatOpen(to: string): Promise<void> {
+    const digits = toMetaRecipient(to);
+    const ctx = currentDelivery();
+    if (ctx?.replyTo && ctx.replyTo === digits) return;
+    const { windowOpen } = await import("../services/whatsappWindow.service");
+    if (await windowOpen(to).catch(() => true)) return;
+    await briefly(recordNotSent({ phone: to, reason: "outside_window: free text refused (their 24-hour window is closed)" }));
+    throw Object.assign(new Error("Meta WhatsApp: their 24-hour window is closed; free text is not sent (a template is needed)"),
+        { ledgerRecorded: true, outsideWindow: true });
+}
+
 /** Meta refused it: a failed ledger row, and the error the caller throws. */
 async function refused(to: string, res: Response, template?: string): Promise<Error> {
     const body = await res.text().catch(() => "");
@@ -206,6 +222,7 @@ async function sendSingleMetaWhatsAppText(
     if (!meta.phoneNumberId || !meta.accessToken) {
         throw new Error("Meta WhatsApp is not configured");
     }
+    await assertChatOpen(to);
 
     const res = await fetch(`${graphBase()}/${meta.phoneNumberId}/messages`, {
         method: "POST",
@@ -237,6 +254,7 @@ async function sendSingleMetaWhatsAppPayload(
     if (!meta.phoneNumberId || !meta.accessToken) {
         throw new Error("Meta WhatsApp is not configured");
     }
+    await assertChatOpen(to);
 
     const res = await fetch(`${graphBase()}/${meta.phoneNumberId}/messages`, {
         method: "POST",

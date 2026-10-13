@@ -94,8 +94,8 @@ async function withDb(uri: string) {
     const PHONE = "+919000000201";
     const t0 = new Date("2026-10-12T10:00:00Z");
 
-    await ok("a number with no row yet is tried as before; its message opens the chat for 24 hours (a little less)", async () => {
-        assert.equal(await W.windowOpen(PHONE, t0), true);
+    await ok("a number with no row is closed (B3.1: it has not written since windows were kept); its message opens the chat for 24 hours (a little less)", async () => {
+        assert.equal(await W.windowOpen(PHONE, t0), false);
         await W.noteInbound(PHONE, t0);
         assert.equal(await W.windowOpen("919000000201", new Date(t0.getTime() + 23 * 3_600_000)), true);
         assert.equal(await W.windowOpen(PHONE, new Date(t0.getTime() + 24 * 3_600_000 - 60_000)), false);
@@ -151,21 +151,121 @@ async function withDb(uri: string) {
         assert.equal(waiting[0]!.text, "Maa says her chest hurts.\nPlease call her.");
         assert.deepEqual(await W.takeWaiting("son-w"), []); // given once
     });
-    await ok("a nudge to a closed chat is not sent (no template fits) and nothing waits", async () => {
+    await ok("a nudge to a closed chat with no opener approved yet: never free text; it waits and the ledger says not sent", async () => {
         sent.length = 0;
-        const d = await deliverOutboundMessage({ ...base, purpose: "proactive", content: "How was your walk today?" });
+        const { default: MessageDelivery } = await import("../src/models/messageDelivery.model");
+        const d = await deliverOutboundMessage({ ...base, purpose: "proactive", content: "How was your walk today?", delivery: { kind: "nudge", refId: "nudge:w1" } });
         assert.equal(d.delivered, false);
         assert.equal(d.reason, "outside_window");
+        assert.equal(d.waiting, true);
         assert.equal(sent.length, 0);
+        const row = await MessageDelivery.findOne({ refId: "nudge:w1" }).lean();
+        assert.equal(row!.status, "failed");
+        assert.match(row!.errorTitle!, /^outside_window: waiting for their next message \(no approved template/);
+        const w = await W.takeWaiting("elder-w");
+        assert.deepEqual(w.map((x) => x.text), ["How was your walk today?"]);
     });
-    await ok("no template for it approved yet (Meta still reviewing): the message itself is tried, as before, and nothing waits", async () => {
+    await ok("no template for it approved yet (Meta still reviewing): never free text either; it waits", async () => {
         sent.length = 0;
         const d = await deliverOutboundMessage({ ...base, toUserId: "son-w", purpose: "proactive", content: "Your ride is booked",
             template: { purpose: "order", params: ["Uber ride", "booked"] } });
-        assert.equal(d.delivered, true);
-        assert.equal(d.via, undefined);
-        assert.equal(sent[0]?.body.type, "text");
-        assert.deepEqual(await W.takeWaiting("son-w"), []);
+        assert.equal(d.delivered, false);
+        assert.equal(d.waiting, true);
+        assert.equal(sent.length, 0);
+        assert.equal((await W.takeWaiting("son-w")).length, 1);
+    });
+    await ok("the general opener for what has no template: once a day for nudges and check-ins, never twice before they answer", async () => {
+        T.setTemplateCatalogForTest(["kavach_saheli_message_hi|hi", "kavach_saheli_update_en|en", "kavach_care_reminder|hi"]);
+        const { default: User } = await import("../src/models/users.model");
+        await User.create({ userId: "elder-o", firstName: "Asha Rani", email: "asha-o@world.kavach.test", passwordHash: "x" });
+        const OPEN_PHONE = "+919000000203";
+        await W.noteInbound(OPEN_PHONE, new Date(Date.now() - 30 * 3_600_000));
+        const ob = { familyId: "fam-w", recipientUserId: "elder-o", channel: "whatsapp" as const, channelIdentifier: OPEN_PHONE, purpose: "proactive" as const };
+        sent.length = 0;
+        const d1 = await deliverOutboundMessage({ ...ob, content: "Kaisi hain aap aaj?", delivery: { kind: "checkin" } });
+        assert.equal(d1.delivered, true);
+        assert.equal(d1.via, "template");
+        assert.equal(d1.waiting, true);
+        const tpl = sent[0]!.body.template as { name: string; language: { code: string }; components: Array<Record<string, unknown>> };
+        assert.equal(tpl.name, "kavach_saheli_update_en"); // the account-update wording (the first was filed marketing)
+        assert.deepEqual(tpl.components[0], { type: "body", parameters: [{ type: "text", text: "Asha" }] });
+        assert.deepEqual(tpl.components[1], { type: "button", sub_type: "quick_reply", index: "0", parameters: [{ type: "payload", payload: "open:waiting" }] });
+        // a second nudge the same day: no second opener; it only waits
+        sent.length = 0;
+        const d2 = await deliverOutboundMessage({ ...ob, content: "Aur haan, paani piya?", delivery: { kind: "nudge" } });
+        assert.equal(d2.delivered, false);
+        assert.equal(d2.waiting, true);
+        assert.equal(sent.length, 0);
+        // a free-text alert (no template of its own) before they answered: no second opener either, but the team hears
+        const d3 = await deliverOutboundMessage({ ...ob, toUserId: "elder-o", purpose: "alert", content: "A note for you" });
+        assert.equal(d3.delivered, false);
+        assert.equal(sent.length, 0);
+        // they tap "Show message": everything that waited, in order, word for word
+        const { deliverWaiting } = await import("../src/controllers/careRecord.controller");
+        await W.noteInbound(OPEN_PHONE, new Date());
+        const given = await deliverWaiting(OPEN_PHONE);
+        assert.deepEqual(given.map((g) => g.text), ["Kaisi hain aap aaj?", "Aur haan, paani piya?", "A note for you"]);
+        assert.deepEqual(sent.map((m) => (m.body.text as { body: string }).body), ["Kaisi hain aap aaj?", "Aur haan, paani piya?", "A note for you"]);
+        assert.deepEqual(await deliverWaiting(OPEN_PHONE), []); // given once
+        // then free chat
+        sent.length = 0;
+        const d4 = await deliverOutboundMessage({ ...ob, content: "Bahut accha!", delivery: { kind: "message" } });
+        assert.equal(d4.delivered, true);
+        assert.equal(sent[0]!.body.type, "text");
+    });
+    await ok("more than 8 waiting: all of them, as one summary, newest first", async () => {
+        const MANY = "+919000000204";
+        for (let i = 1; i <= 10; i++) {
+            await W.keepWaiting({ phone: MANY, familyId: "fam-w", toUserId: "elder-m", purpose: "message", text: `message ${i}` });
+            await new Promise((r) => setTimeout(r, 3));
+        }
+        await W.noteInbound(MANY, new Date());
+        sent.length = 0;
+        const { deliverWaiting } = await import("../src/controllers/careRecord.controller");
+        const given = await deliverWaiting(MANY);
+        assert.equal(given.length, 10);
+        assert.equal(sent.length, 1);
+        const body = (sent[0]!.body.text as { body: string }).body;
+        assert.ok(body.startsWith("📬 10"));
+        assert.ok(body.indexOf("message 10") < body.indexOf("message 1\n") || body.indexOf("message 10") < body.lastIndexOf("message 1"));
+        for (let i = 1; i <= 10; i++) assert.ok(body.includes(`message ${i}`), `message ${i} included`);
+        assert.deepEqual(W.waitingTexts([{ text: "a", at: new Date().toISOString() }]), ["a"]); // fresh: no time stamp
+    });
+    await ok("never free text to a closed chat, whichever code path tries it (the Meta client refuses and records it)", async () => {
+        const { sendViaMetaWhatsApp } = await import("../src/clients/metaWhatsApp.client");
+        const { default: MessageDelivery } = await import("../src/models/messageDelivery.model");
+        const NEVER = "+919000000205";
+        sent.length = 0;
+        await assert.rejects(sendViaMetaWhatsApp(NEVER, "hello"), /window is closed/);
+        assert.equal(sent.length, 0);
+        assert.equal(await MessageDelivery.countDocuments({ phone: "919000000205", status: "failed" }), 1);
+        // an answer to the number that just wrote always goes
+        const L = await import("../src/services/deliveryLedger.service");
+        await L.withDelivery({ kind: "reply", replyTo: "919000000205" }, () => sendViaMetaWhatsApp(NEVER, "hello back"));
+        assert.equal(sent.length, 1);
+    });
+    await ok("a dose reminder with no template approved: waits, failed in the ledger and on the due list, and the team is alerted", async () => {
+        T.setTemplateCatalogForTest([]);
+        process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || "re_test_key";
+        const { default: DueSlot } = await import("../src/models/dueSlot.model");
+        const DOSE = "+919000000206";
+        await W.noteInbound(DOSE, new Date(Date.now() - 30 * 3_600_000));
+        const due = new Date(Date.now() - 6 * 60_000);
+        const { toDateKeyIST } = await import("../src/utils/istTime.util");
+        await DueSlot.create({ slotKey: "dose:w-dose:2026-10-14", dateKey: toDateKeyIST(due), familyId: "fam-w", recipientUserId: "elder-d", kind: "dose", refId: "w-dose",
+            title: "Metformin", time: "08:00", dueAt: due, medicine: true, state: "scheduled" });
+        sent.length = 0;
+        const d = await deliverOutboundMessage({ familyId: "fam-w", recipientUserId: "elder-d", channel: "whatsapp", channelIdentifier: DOSE, purpose: "proactive",
+            content: "Metformin ka samay", template: { purpose: "reminder", params: ["Metformin", "8:00 AM"] }, delivery: { kind: "dose_reminder", refId: "dose:w-dose:2026-10-14" } });
+        assert.equal(d.delivered, false);
+        assert.equal(sent.length, 0);
+        const { noteDueFailed } = await import("../src/services/dueList.service");
+        await noteDueFailed("dose:w-dose:2026-10-14", d.reason ?? "send_failed"); // as the dose sender does
+        const { runDoseAlertCheck, doseAlertReason } = await import("../src/services/deliveryReport.service");
+        const slot = await DueSlot.findOne({ slotKey: "dose:w-dose:2026-10-14" }).lean();
+        assert.match(doseAlertReason(slot!, new Date())!, /failed: outside_window/);
+        const out = await runDoseAlertCheck(new Date());
+        assert.ok(out.alerted >= 1);
     });
     await ok("the nightly summary notice is the template or nothing (never a placeholder sent as a message)", async () => {
         const { sendTemplateNotice } = await import("../src/services/channelOutbound.service");

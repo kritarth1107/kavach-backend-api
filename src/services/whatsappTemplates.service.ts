@@ -22,7 +22,9 @@ export type TemplatePurpose =
     | "alert_health"
     | "alert_approval"
     | "alert"
-    | "order";
+    | "order"
+    /** The general opener (B3.3): for everything without its own template; {{1}} = the reader's name, button "open:waiting". */
+    | "message";
 
 /** Template names per purpose, in order: a reworded alternate is tried where Meta did not file the first as UTILITY. */
 export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
@@ -37,11 +39,13 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
     // is approved and these go as before; kept for the engine's hints
     alert: ["kavach_alert"],
     order: ["kavach_order_update"],
+    // the general opener; the account-update rewording where Meta filed the first MARKETING (2026-10-14: all 11 were)
+    message: ["kavach_saheli_message", "kavach_saheli_update"],
 };
 
 /** Params each template takes (Meta refuses a send with the wrong count). */
 export const TEMPLATE_PARAMS: Record<TemplatePurpose, number> = {
-    reminder: 2, summary: 1, alert_dose: 1, alert_noreply: 1, alert_health: 1, alert_approval: 1, alert: 2, order: 2,
+    reminder: 2, summary: 1, alert_dose: 1, alert_noreply: 1, alert_health: 1, alert_approval: 1, alert: 2, order: 2, message: 1,
 };
 
 /** The fixed alert template for a caregiver alert's kind (backend notifyCaregivers kinds); none for the rest. */

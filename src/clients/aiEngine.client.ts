@@ -218,7 +218,8 @@ export async function aiPostBrainTurn(payload: {
     reminders_soon?: Array<{ id: string; person: string; text: string; day: string; time: string; repeat: string; item: string | null }>;
     location?: { lat: number; lng: number; name: string; address: string };
     /** Messages that waited while their WhatsApp chat was closed (they got a template instead). */
-    waiting?: Array<{ purpose: string; text: string; at: string }>;
+    /** delivered: the backend already gave it word for word on this message (trust plan B3.4); Saheli must not repeat it. */
+    waiting?: Array<{ purpose: string; text: string; at: string; delivered?: boolean }>;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }>;
     buttons?: Array<{ id: string; title: string }>; location_request?: boolean }> {
     const res = await aiFetch(

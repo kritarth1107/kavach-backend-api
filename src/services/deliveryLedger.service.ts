@@ -25,6 +25,8 @@ export type DeliveryCtx = {
     replyTo?: string;
     /** Internal: how many WhatsApp messages this send has made so far (a long text or text + buttons is several). */
     _parts?: number;
+    /** Messages that waited and were just given to them word for word (Saheli's turn is told, never repeats them). */
+    given?: Array<{ purpose: string; text: string; at: string }>;
 };
 
 const als = new AsyncLocalStorage<DeliveryCtx>();
