@@ -30,6 +30,10 @@ export const FLAG_DEFS = {
         type: "enum", values: ["off", "shadow", "on"], env: "NUDGE_MEALS", label: "Meal nudges",
         help: "Regular nudges may ask what was eaten after an unlogged main meal (nutrition plan N5). shadow: written and logged in the engine, nothing sent; on: sent (only while regular nudges are on).",
     },
+    "nutrition.page": {
+        type: "bool", env: "NUTRITION_PAGE", envOn: "on", label: "Food & nutrition page",
+        help: "On: caregivers and self-care users see the Food & nutrition page on the dashboard and can make doctor links (nutrition plan N8, N10). Off (also when unset): no menu entry, the page and new doctor links are closed; Saheli still tracks food.",
+    },
     "connectors.mcpFirst": {
         type: "bool", env: "MCP_AGENT_CONNECTOR", envOn: "on", label: "Store connectors first",
         help: "Swiggy, Instamart and Zepto through their connectors first, the browser as fallback.",
@@ -105,6 +109,13 @@ export function regularNudgeMode(env: NodeJS.ProcessEnv = process.env, flags = s
 export function inviteOnlyEnabled(env: NodeJS.ProcessEnv = process.env, flags = snapshot): boolean {
     if (typeof flags["signup.inviteOnly"] === "boolean") return flags["signup.inviteOnly"] as boolean;
     return !["off", "false", "0", "no"].includes(String(env.INVITE_ONLY ?? "on").trim().toLowerCase());
+}
+
+/** The Food & nutrition page and its doctor links: the admin switch if set, else NUTRITION_PAGE=on, else off (the founder
+ *  approves the screenshots before anyone sees it). */
+export function nutritionPageEnabled(env: NodeJS.ProcessEnv = process.env, flags = snapshot): boolean {
+    if (typeof flags["nutrition.page"] === "boolean") return flags["nutrition.page"] as boolean;
+    return String(env.NUTRITION_PAGE ?? "").trim().toLowerCase() === "on";
 }
 
 export function isSaheliPaused(familyId: string, flags = snapshot): boolean {

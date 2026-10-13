@@ -81,6 +81,7 @@ export type SaheliToolName =
     | "browser_profile"
     | "record_review"
     | "emergency_link"
+    | "nutrition_share_link"
     | "delivery_place"
     | "connector_status"
     | "ride_place"
@@ -904,6 +905,21 @@ export async function executeSaheliTool(input: {
             }
             const link = await ensureEmergencyLink(input.familyId, input.recipientUserId, input.actorUserId);
             return { url: link.url };
+        }
+        case "nutrition_share_link": {
+            // A doctor's link to the food report (nutrition plan §N10, founder Q8): only when a caregiver or a self-care user
+            // asks; never the person cared for, and only once the Food & nutrition page is switched on.
+            const family = await getFamilyForActor(input.familyId, input.actorUserId);
+            const { canShareNutrition, createNutritionShare } = await import("./nutritionShare.service");
+            if (!canShareNutrition(family, input.recipientUserId, input.actorUserId)) {
+                return { url: null, error: "only a caregiver, or someone managing their own care, can share this with a doctor" };
+            }
+            const { flagsLoadedAt, nutritionPageEnabled, refreshFlags } = await import("./featureFlags.service");
+            if (!flagsLoadedAt()) await refreshFlags().catch(() => undefined);
+            if (!nutritionPageEnabled()) return { url: null, error: "doctor links are not available yet" };
+            const days = [7, 14, 30].includes(Number(input.args.days)) ? Number(input.args.days) : 7;
+            const share = await createNutritionShare({ familyId: input.familyId, subjectUserId: input.recipientUserId, createdBy: input.actorUserId, days });
+            return { url: share.url, expiresAt: share.expiresAt, days: share.days };
         }
         case "send_song": {
             const { sendSongNote } = await import("./songNote.service");

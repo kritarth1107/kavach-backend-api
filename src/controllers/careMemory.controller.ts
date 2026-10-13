@@ -227,8 +227,9 @@ export async function postRestoreForgotten(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("POST", `${base}/forgotten/${id}/restore`, { actor }) });
 }
 
-// mirrors the engine's app/care/versions.py KINDS (D-13 added "link": its history drawer filtered on nothing before)
-const HISTORY_KINDS = new Set(["note", "fact", "skill", "style", "link"]);
+// mirrors the engine's app/care/versions.py KINDS (D-13 added "link": its history drawer filtered on nothing before;
+// "food" is the food log's own history, nutrition plan §N2)
+const HISTORY_KINDS = new Set(["note", "fact", "skill", "style", "link", "food"]);
 
 /** What changed in this person's memory (notes, care record, skills, style), with the family member's name on each change. */
 export async function getMemoryHistory(req: Request, res: Response) {
@@ -394,4 +395,178 @@ export async function deleteEmergencyLink(req: Request, res: Response) {
     await caregiverScope(req);
     const { revokeEmergencyLinks } = await import("../services/emergencyCard.service");
     res.json({ success: true, data: await revokeEmergencyLinks(req.params.familyId, req.params.subjectUserId) });
+}
+
+// ── food and nutrition (nutrition plan §N8, §N10; engine INTERFACES.md §3) ──────────────────────────────────────────────
+// The same tools Saheli uses on WhatsApp (log_food, change_food, nutrition_target, nutrition_settings, pantry), run by the
+// engine with the caregiver as actor. Field names are camelCase here and snake_case at the engine.
+
+const MEALS = new Set(["breakfast", "lunch", "snack", "dinner", "other"]);
+
+function str(v: unknown, max: number): string | undefined {
+    return typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined;
+}
+
+function positive(v: unknown, max: number): number | undefined {
+    if (v === undefined || v === null || v === "") return undefined;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0 || n > max) throw new AppError(`a number between 0 and ${max} is needed`, 400);
+    return n;
+}
+
+function eatenAt(v: unknown): string | undefined {
+    const s = str(v, 40);
+    if (s && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) throw new AppError("eatenAt must be YYYY-MM-DDTHH:MM (IST)", 400);
+    return s;
+}
+
+function meal(v: unknown): string | undefined {
+    const s = str(v, 16);
+    if (s && !MEALS.has(s)) throw new AppError("meal must be breakfast, lunch, snack, dinner or other", 400);
+    return s;
+}
+
+export async function getNutrition(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const day = typeof req.query.day === "string" && DAY_RE.test(req.query.day) ? req.query.day : undefined;
+    const days = ["1", "7", "30"].includes(String(req.query.days)) ? String(req.query.days) : undefined;
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/nutrition${qs({ days, day })}`, undefined, 45_000) });
+}
+
+export async function getNutritionFoods(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 80) : "";
+    const limit = String(Math.min(Math.max(Number(req.query.limit) || 10, 1), 20));
+    if (!q) return void res.json({ success: true, data: { foods: [] } });
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/nutrition/foods${qs({ q, limit })}`) });
+}
+
+export async function getNutritionReport(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const days = ["7", "14", "30"].includes(String(req.query.days)) ? String(req.query.days) : "7";
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/nutrition/report${qs({ days })}`, undefined, 45_000) });
+}
+
+export async function postNutritionEntries(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    // answerTo: the caregiver answers the question Saheli's food agent asked about this log (how many, which one), or
+    // cancels it ("never mind": nothing is saved) or says they don't know (a usual portion, marked estimate)
+    const answerTo = str(req.body?.answerTo, 64);
+    const cancel = answerTo ? req.body?.cancel === true : undefined;
+    const unsure = answerTo ? req.body?.unsure === true : undefined;
+    const raw = Array.isArray(req.body?.items) ? (req.body.items as Array<Record<string, unknown>>) : [];
+    if (raw.length > 15 || (!raw.length && !(answerTo && (cancel || unsure)))) throw new AppError("1 to 15 items", 400);
+    const items = raw.map((i) => {
+        const name = str(i?.name, 200);
+        if (!name) throw new AppError("each item needs a name", 400);
+        return { name, quantity: positive(i.quantity, 5000), unit: str(i.unit, 16), brand: str(i.brand, 120), food_id: str(i.foodId, 64) };
+    });
+    const body = {
+        actor, items, meal: meal(req.body?.meal), eaten_at: eatenAt(req.body?.eatenAt),
+        answer_to: answerTo ? id(answerTo, "question id") : undefined, cancel: cancel || undefined, unsure: unsure || undefined,
+    };
+    // a new food is looked up on the web (grounded search): the same budget as Saheli's own slow path
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/entries`, body, 60_000) });
+}
+
+export async function postNutritionEntryChange(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const entryId = id(req.params.entryId, "entry id");
+    const s = (req.body?.set ?? {}) as Record<string, unknown>;
+    const set = { quantity: positive(s.quantity, 5000), unit: str(s.unit, 16), eaten_at: eatenAt(s.eatenAt), meal: meal(s.meal), item: str(s.item, 200) };
+    if (Object.values(set).every((v) => v === undefined)) throw new AppError("Nothing to change", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/entries/${entryId}`, { actor, set }, 60_000) });
+}
+
+export async function postNutritionEntryDelete(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const entryId = id(req.params.entryId, "entry id");
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/entries/${entryId}/delete`, { actor }) });
+}
+
+const TARGET_SETTERS = new Set(["caregiver", "self", "doctor", "dietitian", "trainer", "other"]);
+
+export async function postNutritionTargets(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const setBy = String(req.body?.setBy ?? "caregiver");
+    if (!TARGET_SETTERS.has(setBy)) throw new AppError("setBy must be caregiver, self, doctor, dietitian, trainer or other", 400);
+    const how = req.body?.how === "strict" ? "strict" : "guide";
+    const set = req.body?.set && typeof req.body.set === "object" && !Array.isArray(req.body.set) ? req.body.set : {};
+    const rules = Array.isArray(req.body?.rules) ? (req.body.rules as unknown[]).slice(0, 10) : [];
+    const remove = Array.isArray(req.body?.remove) ? (req.body.remove as unknown[]).map((k) => String(k).slice(0, 40)).slice(0, 20) : [];
+    if (!Object.keys(set).length && !rules.length && !remove.length) throw new AppError("Nothing to change", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/targets`, { actor, set, rules, set_by: setBy, how, remove }) });
+}
+
+export async function postNutritionSettings(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const b = req.body ?? {};
+    const body = {
+        actor,
+        tracking: str(b.tracking, 8),
+        ask: str(b.ask, 12),
+        daily_summary_to: Array.isArray(b.dailySummaryTo) ? (b.dailySummaryTo as unknown[]).map(String).slice(0, 6) : undefined,
+        sizes: b.sizes && typeof b.sizes === "object" && !Array.isArray(b.sizes) ? b.sizes : undefined,
+        counters: Array.isArray(b.counters) ? (b.counters as unknown[]).map((c) => String(c).slice(0, 60)).slice(0, 10) : undefined,
+    };
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/settings`, body) });
+}
+
+export async function postNutritionPantry(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const action = String(req.body?.action ?? "");
+    if (!["add", "used", "remove"].includes(action)) throw new AppError("action must be add, used or remove", 400);
+    const pid = str(req.body?.id, 64);
+    const body = { actor, action, item: str(req.body?.item, 200), count: positive(req.body?.count, 1000), unit: str(req.body?.unit, 8), id: pid ? id(pid, "pantry id") : undefined };
+    if (!body.item && !body.id) throw new AppError("item or id required", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/pantry`, body, 45_000) });
+}
+
+/** "Waiting: did they eat it?" for a delivered meal: only a Yes or Part logs food (plan §N6.1). */
+export async function postNutritionConsumed(req: Request, res: Response) {
+    const { base, actor } = await caregiverScope(req);
+    const taskId = id(String(req.body?.taskId ?? ""), "task id");
+    const consumed = String(req.body?.consumed ?? "");
+    if (!["yes", "part", "no"].includes(consumed)) throw new AppError("consumed must be yes, part or no", 400);
+    const portion = str(req.body?.portionEaten, 8);
+    if (portion && !["all", "most", "half", "little"].includes(portion)) throw new AppError("portionEaten must be all, most, half or little", 400);
+    res.json({ success: true, data: await aiEngineJson("POST", `${base}/nutrition/consumed`, { actor, task_id: taskId, consumed, portion_eaten: portion }, 60_000) });
+}
+
+// Doctor links (§N10, founder Q8): made only by a caregiver or a self-care user, never automatically. caregiverScope already
+// refuses the person cared for, view-only members and doctors.
+
+async function sharesOpen(): Promise<boolean> {
+    const { flagsLoadedAt, nutritionPageEnabled, refreshFlags } = await import("../services/featureFlags.service");
+    if (!flagsLoadedAt()) await refreshFlags().catch(() => undefined);
+    return nutritionPageEnabled();
+}
+
+export async function getNutritionShares(req: Request, res: Response) {
+    await caregiverScope(req);
+    const { listNutritionShares } = await import("../services/nutritionShare.service");
+    res.json({ success: true, data: { shares: await listNutritionShares(req.params.familyId, req.params.subjectUserId) } });
+}
+
+export async function postNutritionShare(req: Request, res: Response) {
+    const { actor } = await caregiverScope(req);
+    if (!(await sharesOpen())) throw new AppError("Doctor links open with the Food & nutrition page", 403);
+    const { createNutritionShare } = await import("../services/nutritionShare.service");
+    const share = await createNutritionShare({
+        familyId: req.params.familyId, subjectUserId: req.params.subjectUserId, createdBy: actor.id,
+        days: req.body?.days, expiresInDays: req.body?.expiresInDays, label: req.body?.label,
+    });
+    res.json({ success: true, data: share });
+}
+
+export async function deleteNutritionShare(req: Request, res: Response) {
+    await caregiverScope(req);
+    const { revokeNutritionShare } = await import("../services/nutritionShare.service");
+    res.json({ success: true, data: await revokeNutritionShare(req.params.familyId, req.params.subjectUserId, String(req.params.shareId)) });
+}
+
+/** Dashboard switches the family's pages depend on (admin feature flags). */
+export async function getFeatures(req: Request, res: Response) {
+    await getFamilyForActor(req.params.familyId, req.user!.userId);
+    res.json({ success: true, data: { nutritionPage: await sharesOpen() } });
 }

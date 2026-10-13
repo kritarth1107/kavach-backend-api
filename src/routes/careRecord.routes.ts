@@ -135,6 +135,25 @@ router.get(`${cm}/emergency-link`, protect, wrap(careMemory.getEmergencyLink));
 router.post(`${cm}/emergency-link`, protect, wrap(careMemory.postEmergencyLink));
 router.delete(`${cm}/emergency-link`, protect, wrap(careMemory.deleteEmergencyLink));
 
+// Food and nutrition (nutrition plan §N8): the engine's food log, run as the caregiver; doctor links (§N10)
+const nu = `${cm}/nutrition`;
+router.get(nu, protect, wrap(careMemory.getNutrition));
+router.get(`${nu}/foods`, protect, wrap(careMemory.getNutritionFoods));
+router.get(`${nu}/report`, protect, wrap(careMemory.getNutritionReport));
+router.post(`${nu}/entries`, protect, wrap(careMemory.postNutritionEntries));
+router.post(`${nu}/entries/:entryId`, protect, wrap(careMemory.postNutritionEntryChange));
+router.post(`${nu}/entries/:entryId/delete`, protect, wrap(careMemory.postNutritionEntryDelete));
+router.post(`${nu}/targets`, protect, wrap(careMemory.postNutritionTargets));
+router.post(`${nu}/settings`, protect, wrap(careMemory.postNutritionSettings));
+router.post(`${nu}/pantry`, protect, wrap(careMemory.postNutritionPantry));
+router.post(`${nu}/consumed`, protect, wrap(careMemory.postNutritionConsumed));
+router.get(`${nu}/shares`, protect, wrap(careMemory.getNutritionShares));
+router.post(`${nu}/shares`, protect, wrap(careMemory.postNutritionShare));
+router.delete(`${nu}/shares/:shareId`, protect, wrap(careMemory.deleteNutritionShare));
+
+// Which dashboard pages are switched on (admin feature flags)
+router.get("/:familyId/features", protect, wrap(careMemory.getFeatures));
+
 // A person's Saheli reminders: the calendar and the "All reminders" list (caregivers; the same is possible on WhatsApp)
 const rm = "/:familyId/subjects/:subjectUserId/reminders";
 router.get(rm, protect, wrap(reminders.getReminders));
