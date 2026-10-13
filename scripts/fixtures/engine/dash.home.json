@@ -1,0 +1,309 @@
+{
+ "doses": [
+  {
+   "dose": "1 mg",
+   "id": "medicine:glimepiride@08:00",
+   "name": "Glimepiride",
+   "status": "unmarked",
+   "time": "08:00"
+  },
+  {
+   "dose": "40 mg",
+   "id": "medicine:telmisartan@08:00",
+   "name": "Telmisartan",
+   "status": "unmarked",
+   "time": "08:00"
+  },
+  {
+   "dose": "2.5 mg",
+   "id": "medicine:apixaban@08:30",
+   "name": "Apixaban",
+   "status": "unmarked",
+   "time": "08:30"
+  },
+  {
+   "dose": "5 mg",
+   "id": "medicine:amlodipine@09:00",
+   "name": "Amlodipine",
+   "status": "unmarked",
+   "time": "09:00"
+  },
+  {
+   "dose": "500 mg",
+   "id": "medicine:metformin@09:00",
+   "name": "Metformin",
+   "status": "unmarked",
+   "time": "09:00"
+  },
+  {
+   "dose": "650 mg",
+   "id": "medicine:paracetamol@09:00",
+   "name": "Paracetamol",
+   "status": "unmarked",
+   "time": "09:00"
+  },
+  {
+   "dose": "1 tablet",
+   "id": "medicine:multivitamin@13:00",
+   "name": "Multivitamin",
+   "status": "upcoming",
+   "time": "13:00"
+  },
+  {
+   "dose": "650 mg",
+   "id": "medicine:paracetamol@14:00",
+   "name": "Paracetamol",
+   "status": "upcoming",
+   "time": "14:00"
+  },
+  {
+   "dose": "650 mg",
+   "id": "medicine:paracetamol@21:30",
+   "name": "Paracetamol",
+   "status": "upcoming",
+   "time": "21:30"
+  },
+  {
+   "dose": "2.5 mg",
+   "id": "medicine:apixaban@22:00",
+   "name": "Apixaban",
+   "status": "upcoming",
+   "time": "22:00"
+  },
+  {
+   "dose": "50 mg",
+   "id": "medicine:losartan@22:00",
+   "name": "Losartan",
+   "status": "upcoming",
+   "time": "22:00"
+  },
+  {
+   "dose": "500 mg",
+   "id": "medicine:metformin@22:00",
+   "name": "Metformin",
+   "status": "upcoming",
+   "time": "22:00"
+  },
+  {
+   "dose": "0.4 mg",
+   "id": "medicine:tamsulosin@22:00",
+   "name": "Tamsulosin",
+   "status": "upcoming",
+   "time": "22:00"
+  }
+ ],
+ "followUps": [
+  {
+   "createdAt": "2026-10-19T00:30:00+00:00",
+   "detail": {
+    "activity_key": "activity:namaz",
+    "date": "2026-10-19"
+   },
+   "id": "2ddd4854-dd1e-4799-a9d6-1e3c7ef7eee4",
+   "kind": "activity",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Ask how Namaz went",
+   "wakeAt": "2026-10-19T02:15:00+00:00"
+  },
+  {
+   "createdAt": "2026-10-19T00:30:00+00:00",
+   "detail": {
+    "activity_key": "activity:yoga",
+    "date": "2026-10-19"
+   },
+   "id": "a1bef8a4-7000-4734-b375-1c3a3503a781",
+   "kind": "activity",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Ask how Yoga went",
+   "wakeAt": "2026-10-19T02:25:00+00:00"
+  },
+  {
+   "createdAt": "2026-10-19T00:30:00+00:00",
+   "detail": {
+    "activity_key": "activity:physiotherapy",
+    "date": "2026-10-19"
+   },
+   "id": "a8554389-5899-4b08-9567-f77210c89606",
+   "kind": "activity",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Ask how Physiotherapy exercises went",
+   "wakeAt": "2026-10-19T06:15:00+00:00"
+  }
+ ],
+ "lastHeardAt": "2026-10-18T04:23:00+00:00",
+ "mood": {
+  "at": "2026-10-18T14:00:00+00:00",
+  "score": 4,
+  "source": "chat",
+  "summary": "mood 4/5",
+  "word": "good"
+ },
+ "needsYou": [
+  {
+   "id": "fact:medicine:amlodipine",
+   "key": "medicine:amlodipine",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Amlodipine 5 mg at 09:00"
+  },
+  {
+   "id": "fact:medicine:apixaban",
+   "key": "medicine:apixaban",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Apixaban 2.5 mg at 08:30, 22:00"
+  },
+  {
+   "id": "fact:medicine:cholecalciferol",
+   "key": "medicine:cholecalciferol",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Cholecalciferol 60000 IU at 09:00"
+  },
+  {
+   "id": "fact:medicine:glimepiride",
+   "key": "medicine:glimepiride",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Glimepiride 1 mg at 08:00"
+  },
+  {
+   "id": "fact:medicine:losartan",
+   "key": "medicine:losartan",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Losartan 50 mg at 22:00"
+  },
+  {
+   "id": "fact:medicine:metformin",
+   "key": "medicine:metformin",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Metformin 500 mg at 09:00, 22:00"
+  },
+  {
+   "id": "fact:medicine:multivitamin",
+   "key": "medicine:multivitamin",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Multivitamin 1 tablet at 13:00"
+  },
+  {
+   "id": "fact:medicine:paracetamol",
+   "key": "medicine:paracetamol",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Paracetamol 650 mg at 09:00, 14:00, 21:30"
+  },
+  {
+   "id": "fact:medicine:tamsulosin",
+   "key": "medicine:tamsulosin",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Tamsulosin 0.4 mg at 22:00"
+  },
+  {
+   "id": "fact:medicine:telmisartan",
+   "key": "medicine:telmisartan",
+   "kind": "fact",
+   "meta": "Reported in chat; waits for your OK",
+   "title": "Telmisartan 40 mg at 08:00"
+  },
+  {
+   "id": "loop:2ddd4854-dd1e-4799-a9d6-1e3c7ef7eee4",
+   "kind": "stuck",
+   "meta": "Stuck (past its deadline): checks back",
+   "title": "Ask how Namaz went"
+  },
+  {
+   "id": "loop:a1bef8a4-7000-4734-b375-1c3a3503a781",
+   "kind": "stuck",
+   "meta": "Stuck (past its deadline): checks back",
+   "title": "Ask how Yoga went"
+  }
+ ],
+ "nextAppointment": {
+  "doctor": "Dr Jahid Uddin",
+  "key": "appointment:dr_jahid_uddin_2026_10_23",
+  "place": "Ashirwad Hospital, Silchar",
+  "purpose": "sugar review",
+  "questions": [
+   "Is the knee pain from the new tablet?"
+  ],
+  "status": "planned",
+  "text": "Abdul Karim sees Dr Jahid Uddin on 2026-10-23 at 17:30",
+  "upcoming": true,
+  "when": "2026-10-23T17:30"
+ },
+ "now": "2026-10-19T12:00:00+05:30",
+ "tasks": [],
+ "timeline": [],
+ "vitals": {
+  "bp": {
+   "at": "2026-10-18T01:15:00+00:00",
+   "change": {
+    "dir": "down",
+    "pct": 10
+   },
+   "redFlag": null,
+   "trend": [
+    125.0,
+    166.0,
+    167.0,
+    129.0,
+    124.0,
+    164.0,
+    147.0
+   ],
+   "unit": "mmHg",
+   "value": "147/93"
+  },
+  "spo2": null,
+  "sugar": null,
+  "temperature": null,
+  "weight": null
+ },
+ "week": {
+  "adherence": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   8,
+   46,
+   31,
+   15,
+   23,
+   23,
+   21,
+   0
+  ],
+  "days": [
+   "2026-10-06",
+   "2026-10-07",
+   "2026-10-08",
+   "2026-10-09",
+   "2026-10-10",
+   "2026-10-11",
+   "2026-10-12",
+   "2026-10-13",
+   "2026-10-14",
+   "2026-10-15",
+   "2026-10-16",
+   "2026-10-17",
+   "2026-10-18",
+   "2026-10-19"
+  ],
+  "scheduled": 92,
+  "streakDays": 0,
+  "taken": 21
+ }
+}

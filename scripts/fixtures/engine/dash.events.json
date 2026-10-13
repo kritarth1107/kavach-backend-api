@@ -1,0 +1,198 @@
+{
+ "events": [
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T00:40:00+00:00",
+   "day": "2026-10-16",
+   "id": 400152,
+   "kind": "activity_skipped",
+   "payload": {
+    "key": "activity:morning_walk",
+    "label": "Morning walk"
+   },
+   "summary": "Morning walk: skipped"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T00:45:00+00:00",
+   "day": "2026-10-16",
+   "id": 400150,
+   "kind": "vital",
+   "payload": {
+    "kind": "bp",
+    "unit": "mmHg",
+    "value": "119/99"
+   },
+   "summary": "BP 119/99"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T02:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400139,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Telmisartan",
+    "time": "08:00"
+   },
+   "summary": "Telmisartan 40 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T02:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400151,
+   "kind": "vital",
+   "payload": {
+    "kind": "sugar_fasting",
+    "unit": "mg/dL",
+    "value": "173"
+   },
+   "summary": "Fasting sugar 173"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400138,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Amlodipine",
+    "time": "08:30"
+   },
+   "summary": "Amlodipine 5 mg missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400140,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Budesonide-Formoterol inhaler",
+    "time": "08:30"
+   },
+   "summary": "Budesonide-Formoterol inhaler 2 puffs missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400147,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Metformin",
+    "time": "08:30"
+   },
+   "summary": "Metformin 1000 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:15:00+00:00",
+   "day": "2026-10-16",
+   "id": 400144,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Aspart",
+    "time": "08:45"
+   },
+   "summary": "Insulin Aspart 6 units taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400149,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Folic acid",
+    "time": "09:00"
+   },
+   "summary": "Folic acid 5 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T07:45:00+00:00",
+   "day": "2026-10-16",
+   "id": 400145,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Aspart",
+    "time": "13:15"
+   },
+   "summary": "Insulin Aspart 6 units missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T15:15:00+00:00",
+   "day": "2026-10-16",
+   "id": 400146,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Aspart",
+    "time": "20:45"
+   },
+   "summary": "Insulin Aspart 6 units missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T15:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400143,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Glargine",
+    "time": "21:00"
+   },
+   "summary": "Insulin Glargine 14 units taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T16:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400142,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Montelukast",
+    "time": "21:30"
+   },
+   "summary": "Montelukast 10 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T16:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400148,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Omega-3",
+    "time": "21:30"
+   },
+   "summary": "Omega-3 1 g taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T16:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400141,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Budesonide-Formoterol inhaler",
+    "time": "22:00"
+   },
+   "summary": "Budesonide-Formoterol inhaler 2 puffs missed"
+  }
+ ]
+}

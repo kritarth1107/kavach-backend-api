@@ -1,0 +1,24 @@
+{
+ "forgotten": [],
+ "issues": [
+  {
+   "ask": "What time is Cetirizine taken? I'll set the reminder.",
+   "key": "notime:medicine:cetirizine",
+   "kind": "no_time",
+   "problem": "Kuni takes Cetirizine 10 mg as needed: no time saved, so no reminder"
+  },
+  {
+   "ask": "What time is Paracetamol taken? I'll set the reminder.",
+   "key": "notime:medicine:paracetamol",
+   "kind": "no_time",
+   "problem": "Kuni takes Paracetamol 650 mg as needed: no time saved, so no reminder"
+  },
+  {
+   "ask": "A change has been waiting a week for your OK: \"Kuni takes Amlodipine 5 mg 08:00 (elder says the dose was doubled)\". Should I keep it or drop it?",
+   "key": "pending:medicine:amlodipine",
+   "kind": "stale_pending",
+   "problem": "waiting for a caregiver since 2026-05-22: Kuni takes Amlodipine 5 mg 08:00 (elder says the dose was doubled)"
+  }
+ ],
+ "profileCard": null
+}

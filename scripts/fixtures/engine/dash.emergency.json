@@ -1,0 +1,150 @@
+{
+ "allergies": [
+  {
+   "allergen": "brinjal",
+   "reaction": null,
+   "text": "Keshav Dutt is allergic to brinjal"
+  },
+  {
+   "allergen": "dust",
+   "reaction": null,
+   "text": "Keshav Dutt is allergic to dust"
+  },
+  {
+   "allergen": "shellfish",
+   "reaction": null,
+   "text": "Keshav Dutt is allergic to shellfish"
+  }
+ ],
+ "conditions": [
+  "Keshav Dutt has osteoarthritis (knees)",
+  "Keshav Dutt has type 2 diabetes"
+ ],
+ "contacts": [],
+ "diet": [
+  "Keshav Dutt follows a low sugar diet"
+ ],
+ "doctors": [
+  {
+   "name": "Dr Hema Tewari",
+   "phone": "+919000002062",
+   "speciality": "orthopaedic",
+   "text": "Keshav Dutt's doctor is Dr Hema Tewari (orthopaedic)"
+  }
+ ],
+ "familyRules": [],
+ "home": null,
+ "hospital": [
+  {
+   "address": null,
+   "name": "Medicare Hospital, Almora",
+   "phone": null,
+   "text": "Preferred hospital: Medicare Hospital, Almora"
+  }
+ ],
+ "medicines": [
+  {
+   "dose": "5 mg",
+   "name": "Amlodipine",
+   "text": "Amlodipine 5 mg at 09:00",
+   "times": [
+    "09:00"
+   ]
+  },
+  {
+   "dose": "500 mg",
+   "name": "Calcium + Vitamin D3",
+   "text": "Keshav Dutt takes Calcium + Vitamin D3 500 mg 13:00",
+   "times": [
+    "13:00"
+   ]
+  },
+  {
+   "dose": "20 mg",
+   "name": "Furosemide",
+   "text": "Keshav Dutt takes Furosemide 20 mg 09:00",
+   "times": [
+    "09:00"
+   ]
+  },
+  {
+   "dose": "1 mg",
+   "name": "Glimepiride",
+   "text": "Keshav Dutt takes Glimepiride 1 mg 08:00",
+   "times": [
+    "08:00"
+   ]
+  },
+  {
+   "dose": "250 mg",
+   "name": "Magnesium",
+   "text": "Keshav Dutt takes Magnesium 250 mg 21:30",
+   "times": [
+    "21:30"
+   ]
+  },
+  {
+   "dose": "500 mg",
+   "name": "Metformin",
+   "text": "Keshav Dutt takes Metformin 500 mg 09:00, 22:00",
+   "times": [
+    "09:00",
+    "22:00"
+   ]
+  },
+  {
+   "dose": "1 g",
+   "name": "Omega-3",
+   "text": "Keshav Dutt takes Omega-3 1 g 22:00",
+   "times": [
+    "22:00"
+   ]
+  },
+  {
+   "dose": "4 mg",
+   "name": "Ondansetron",
+   "text": "Keshav Dutt takes Ondansetron 4 mg as needed",
+   "times": []
+  },
+  {
+   "dose": "100 mg",
+   "name": "Sitagliptin",
+   "text": "Keshav Dutt takes Sitagliptin 100 mg 09:00",
+   "times": [
+    "09:00"
+   ]
+  },
+  {
+   "dose": "0.4 mg",
+   "name": "Tamsulosin",
+   "text": "Keshav Dutt takes Tamsulosin 0.4 mg 21:00",
+   "times": [
+    "21:00"
+   ]
+  },
+  {
+   "dose": "40 mg",
+   "name": "Telmisartan",
+   "text": "Telmisartan 40 mg at 08:00",
+   "times": [
+    "08:00"
+   ]
+  },
+  {
+   "dose": "1500 mcg",
+   "name": "Vitamin B12",
+   "text": "Keshav Dutt takes Vitamin B12 1500 mcg 08:00",
+   "times": [
+    "08:00"
+   ]
+  }
+ ],
+ "none": {
+  "allergy": false,
+  "condition": false,
+  "medicine": false
+ },
+ "profile": {
+  "blood_group": "B+"
+ }
+}

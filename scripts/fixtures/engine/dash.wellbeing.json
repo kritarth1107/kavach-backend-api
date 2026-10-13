@@ -1,0 +1,157 @@
+{
+ "concerns": [],
+ "days": [
+  {
+   "day": "2026-10-06",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": false
+  },
+  {
+   "day": "2026-10-07",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": false
+  },
+  {
+   "day": "2026-10-08",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-09",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-10",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": false
+  },
+  {
+   "day": "2026-10-11",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-12",
+   "level": "info",
+   "mood": [
+    "mood 4/5"
+   ],
+   "symptoms": [],
+   "talked": false
+  },
+  {
+   "day": "2026-10-13",
+   "level": "info",
+   "mood": [
+    "mood 4/5"
+   ],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-14",
+   "level": "info",
+   "mood": [
+    "mood 5/5"
+   ],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-15",
+   "level": "info",
+   "mood": [
+    "mood 4/5"
+   ],
+   "symptoms": [],
+   "talked": false
+  },
+  {
+   "day": "2026-10-16",
+   "level": "info",
+   "mood": [
+    "mood 5/5"
+   ],
+   "symptoms": [],
+   "talked": false
+  },
+  {
+   "day": "2026-10-17",
+   "level": "info",
+   "mood": [
+    "mood 3/5"
+   ],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-18",
+   "level": "info",
+   "mood": [
+    "mood 4/5"
+   ],
+   "symptoms": [],
+   "talked": true
+  },
+  {
+   "day": "2026-10-19",
+   "level": "info",
+   "mood": [],
+   "symptoms": [],
+   "talked": false
+  }
+ ],
+ "daysTalked": 7,
+ "lastHeard": "2026-10-18T04:23:00+00:00",
+ "recentMood": [
+  {
+   "at": "2026-10-12T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 4/5"
+  },
+  {
+   "at": "2026-10-13T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 4/5"
+  },
+  {
+   "at": "2026-10-14T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 5/5"
+  },
+  {
+   "at": "2026-10-15T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 4/5"
+  },
+  {
+   "at": "2026-10-16T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 5/5"
+  },
+  {
+   "at": "2026-10-17T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 3/5"
+  },
+  {
+   "at": "2026-10-18T14:00:00+00:00",
+   "level": "info",
+   "text": "mood 4/5"
+  }
+ ],
+ "streak": 0
+}

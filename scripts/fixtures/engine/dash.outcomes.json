@@ -1,0 +1,18 @@
+{
+ "consent": {
+  "at": null,
+  "by": null,
+  "granted": false
+ },
+ "kinds": {
+  "all_fine": "All fine",
+  "doctor_visit": "Doctor visit",
+  "er_visit": "Emergency room",
+  "fall": "Fall",
+  "hospital_visit": "Hospital visit",
+  "medicine_changed": "Medicine changed",
+  "other": "Other",
+  "recovered": "Better / recovered"
+ },
+ "outcomes": []
+}

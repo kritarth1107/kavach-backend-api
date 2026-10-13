@@ -1,0 +1,1871 @@
+{
+ "day": "2026-10-16",
+ "domains": {
+  "activity": "Activities and habits with days and times: gym, walks, yoga, pooja, classes, giving up smoking (saved with the activity tool)",
+  "allergy": "Allergies: food, medicine or other, with reaction",
+  "appointment": "Doctor appointments: doctor, when (YYYY-MM-DDTHH:MM IST), place, purpose, questions to ask",
+  "condition": "Health conditions",
+  "contact": "Other people and numbers",
+  "diet": "Diet rules: low_salt, low_sugar, fasting, no_onion, no_spice, vegetarian, …",
+  "dish": "Dishes they actually cook or eat",
+  "doctor": "Doctors, family doctor",
+  "family": "Who to call first, who pays, who must not be told, caregiver away, neighbour",
+  "home": "Helpers, cook, maid, home setup",
+  "hospital": "Hospital preference",
+  "language": "Preferred language",
+  "medicine": "Medicines: name, dose, times of day, food timing, days",
+  "naming": "The name to use, words to avoid",
+  "no_order": "Items never to order again",
+  "occasion": "Pension day, festivals, birthdays",
+  "preference": "Likes and dislikes that matter for care",
+  "profile": "Emergency profile: blood_group, height, weight, insurance, mobility, id_note (one fact each)",
+  "routine": "Wake, sleep and meal times, maid or cook time (a habit with a time, like the gym or a walk, is an activity)",
+  "vital_target": "Target ranges for BP, sugar, weight"
+ },
+ "doses": [
+  {
+   "dose": "40 mg",
+   "id": "medicine:telmisartan@08:00",
+   "name": "Telmisartan",
+   "status": "taken",
+   "time": "08:00"
+  },
+  {
+   "dose": "5 mg",
+   "id": "medicine:amlodipine@08:30",
+   "name": "Amlodipine",
+   "status": "missed",
+   "time": "08:30"
+  },
+  {
+   "dose": "2 puffs",
+   "id": "medicine:budesonide_formoterol_inhaler@08:30",
+   "name": "Budesonide-Formoterol inhaler",
+   "status": "missed",
+   "time": "08:30"
+  },
+  {
+   "dose": "1000 mg",
+   "id": "medicine:metformin@08:30",
+   "name": "Metformin",
+   "status": "taken",
+   "time": "08:30"
+  },
+  {
+   "dose": "1500 mcg",
+   "id": "medicine:vitamin_b12@08:30",
+   "name": "Vitamin B12",
+   "status": "unmarked",
+   "time": "08:30"
+  },
+  {
+   "dose": "6 units",
+   "id": "medicine:insulin_aspart@08:45",
+   "name": "Insulin Aspart",
+   "status": "taken",
+   "time": "08:45"
+  },
+  {
+   "dose": "5 mg",
+   "id": "medicine:folic_acid@09:00",
+   "name": "Folic acid",
+   "status": "taken",
+   "time": "09:00"
+  },
+  {
+   "dose": "6 units",
+   "id": "medicine:insulin_aspart@13:15",
+   "name": "Insulin Aspart",
+   "status": "missed",
+   "time": "13:15"
+  },
+  {
+   "dose": "100 mg",
+   "id": "medicine:iron@14:00",
+   "name": "Iron",
+   "status": "unmarked",
+   "time": "14:00"
+  },
+  {
+   "dose": "6 units",
+   "id": "medicine:insulin_aspart@20:45",
+   "name": "Insulin Aspart",
+   "status": "missed",
+   "time": "20:45"
+  },
+  {
+   "dose": "14 units",
+   "id": "medicine:insulin_glargine@21:00",
+   "name": "Insulin Glargine",
+   "status": "taken",
+   "time": "21:00"
+  },
+  {
+   "dose": "10 mg",
+   "id": "medicine:montelukast@21:30",
+   "name": "Montelukast",
+   "status": "taken",
+   "time": "21:30"
+  },
+  {
+   "dose": "1 g",
+   "id": "medicine:omega@21:30",
+   "name": "Omega-3",
+   "status": "taken",
+   "time": "21:30"
+  },
+  {
+   "dose": "2 puffs",
+   "id": "medicine:budesonide_formoterol_inhaler@22:00",
+   "name": "Budesonide-Formoterol inhaler",
+   "status": "missed",
+   "time": "22:00"
+  }
+ ],
+ "events": [
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T00:40:00+00:00",
+   "day": "2026-10-16",
+   "id": 400152,
+   "kind": "activity_skipped",
+   "payload": {
+    "key": "activity:morning_walk",
+    "label": "Morning walk"
+   },
+   "summary": "Morning walk: skipped"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T00:45:00+00:00",
+   "day": "2026-10-16",
+   "id": 400150,
+   "kind": "vital",
+   "payload": {
+    "kind": "bp",
+    "unit": "mmHg",
+    "value": "119/99"
+   },
+   "summary": "BP 119/99"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T02:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400139,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Telmisartan",
+    "time": "08:00"
+   },
+   "summary": "Telmisartan 40 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T02:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400151,
+   "kind": "vital",
+   "payload": {
+    "kind": "sugar_fasting",
+    "unit": "mg/dL",
+    "value": "173"
+   },
+   "summary": "Fasting sugar 173"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400138,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Amlodipine",
+    "time": "08:30"
+   },
+   "summary": "Amlodipine 5 mg missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400140,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Budesonide-Formoterol inhaler",
+    "time": "08:30"
+   },
+   "summary": "Budesonide-Formoterol inhaler 2 puffs missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400147,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Metformin",
+    "time": "08:30"
+   },
+   "summary": "Metformin 1000 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:15:00+00:00",
+   "day": "2026-10-16",
+   "id": 400144,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Aspart",
+    "time": "08:45"
+   },
+   "summary": "Insulin Aspart 6 units taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T03:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400149,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Folic acid",
+    "time": "09:00"
+   },
+   "summary": "Folic acid 5 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T07:45:00+00:00",
+   "day": "2026-10-16",
+   "id": 400145,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Aspart",
+    "time": "13:15"
+   },
+   "summary": "Insulin Aspart 6 units missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T15:15:00+00:00",
+   "day": "2026-10-16",
+   "id": 400146,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Aspart",
+    "time": "20:45"
+   },
+   "summary": "Insulin Aspart 6 units missed"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T15:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400143,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Insulin Glargine",
+    "time": "21:00"
+   },
+   "summary": "Insulin Glargine 14 units taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T16:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400142,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Montelukast",
+    "time": "21:30"
+   },
+   "summary": "Montelukast 10 mg taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T16:00:00+00:00",
+   "day": "2026-10-16",
+   "id": 400148,
+   "kind": "dose_taken",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Omega-3",
+    "time": "21:30"
+   },
+   "summary": "Omega-3 1 g taken"
+  },
+  {
+   "actorId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "at": "2026-10-16T16:30:00+00:00",
+   "day": "2026-10-16",
+   "id": 400141,
+   "kind": "dose_missed",
+   "payload": {
+    "day": "2026-10-16",
+    "medicine": "Budesonide-Formoterol inhaler",
+    "time": "22:00"
+   },
+   "summary": "Budesonide-Formoterol inhaler 2 puffs missed"
+  }
+ ],
+ "facts": [
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "activity",
+   "id": "da5f016d-3ac5-4067-aa83-5a6b8c90c23c",
+   "key": "activity:morning_walk",
+   "links": [],
+   "name": "morning_walk",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj: Morning walk",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "days": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "kind": "habit",
+    "label": "Morning walk",
+    "minutes": 30,
+    "start": "06:10",
+    "type": "morning_walk"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": null,
+   "domain": "activity",
+   "id": "fd4817eb-44a8-4f78-93e4-150c8220f943",
+   "key": "activity:sleep",
+   "links": [],
+   "name": "sleep",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "inferred",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj: Sleep",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "days": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "kind": "routine",
+    "label": "Sleep",
+    "start": "21:30",
+    "type": "sleep"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": null,
+   "domain": "activity",
+   "id": "c23e728a-7e39-445e-991c-1e8dc43fb97a",
+   "key": "activity:wake_up",
+   "links": [],
+   "name": "wake_up",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "inferred",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj: Wake up",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "days": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6
+    ],
+    "kind": "routine",
+    "label": "Wake up",
+    "start": "05:30",
+    "type": "wake_up"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "allergy",
+   "id": "8d2c8cd5-c17a-4c46-a393-8b7d46b7dd1f",
+   "key": "allergy:peanuts",
+   "links": [],
+   "name": "peanuts",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj is allergic to peanuts",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "item": "peanuts"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "condition",
+   "id": "cc81a73c-30e7-4e5d-8631-113566f38019",
+   "key": "condition:copd_asthma",
+   "links": [],
+   "name": "copd_asthma",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj has copd / asthma",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "name": "COPD / asthma"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "condition",
+   "id": "c5ce2204-b314-468f-8512-a48ee94ff272",
+   "key": "condition:hypertension",
+   "links": [],
+   "name": "hypertension",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj has high blood pressure",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "name": "High blood pressure"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "condition",
+   "id": "0fdf53c5-f2d6-4bc4-8d36-17931c7a0bfe",
+   "key": "condition:t2_diabetes_insulin",
+   "links": [],
+   "name": "t2_diabetes_insulin",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj has type 2 diabetes on insulin",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "name": "Type 2 diabetes on insulin"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "diet",
+   "id": "046e460b-49ad-42e6-83f0-232b4221a5c6",
+   "key": "diet:low_salt",
+   "links": [],
+   "name": "low_salt",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj follows a low salt diet",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "rule": "low_salt"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "diet",
+   "id": "083d7671-6869-48b2-8ce9-30a9eb921081",
+   "key": "diet:low_sugar",
+   "links": [],
+   "name": "low_sugar",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj follows a low sugar diet",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "rule": "low_sugar"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "doctor",
+   "id": "b5d02769-3598-403c-98e8-4ab90ffb39e2",
+   "key": "doctor:dr_pradeep_bhat",
+   "links": [],
+   "name": "dr_pradeep_bhat",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj's doctor is Dr Pradeep Bhat (physician)",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "name": "Dr Pradeep Bhat",
+    "phone": "+919000002056",
+    "specialty": "physician"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "hospital",
+   "id": "c6f97650-fd82-480b-bb4d-0173a50f52ec",
+   "key": "hospital:preferred",
+   "links": [],
+   "name": "preferred",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Preferred hospital: Medicare Hospital, Bengaluru",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "name": "Medicare Hospital, Bengaluru"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "language",
+   "id": "efa2ebc6-cda8-405c-aa74-f7ee76f4a602",
+   "key": "language:preferred",
+   "links": [],
+   "name": "preferred",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj prefers Kannada",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "language": "Kannada"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "bc2ebdae-fd76-4d2e-b8c0-32912b624092",
+   "key": "medicine:amlodipine",
+   "links": [],
+   "name": "amlodipine",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Amlodipine 5 mg 08:30",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "5 mg",
+    "food": "any",
+    "name": "Amlodipine",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "a331ae4d-daab-441a-a8cd-94e0af986a44",
+   "key": "medicine:amlodipine",
+   "links": [],
+   "name": "amlodipine",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Amlodipine 5 mg at 08:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "5 mg",
+    "food": "any",
+    "instructions": "any",
+    "name": "Amlodipine",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "636f220e-f37e-47ee-8c88-14a09a25994a",
+   "key": "medicine:budesonide_formoterol_inhaler",
+   "links": [],
+   "name": "budesonide_formoterol_inhaler",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Budesonide-Formoterol inhaler 2 puffs 08:30, 22:00",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "2 puffs",
+    "food": "any",
+    "name": "Budesonide-Formoterol inhaler",
+    "times": [
+     "08:30",
+     "22:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "a462e25f-1103-4fd9-856c-59df3f9251a4",
+   "key": "medicine:budesonide_formoterol_inhaler",
+   "links": [],
+   "name": "budesonide_formoterol_inhaler",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Budesonide-Formoterol inhaler 2 puffs at 08:30, 22:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "2 puffs",
+    "food": "any",
+    "instructions": "any",
+    "name": "Budesonide-Formoterol inhaler",
+    "times": [
+     "08:30",
+     "22:00"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "e91fd9fb-b706-4aff-a857-1476df15a1ff",
+   "key": "medicine:folic_acid",
+   "links": [],
+   "name": "folic_acid",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Folic acid 5 mg 09:00",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "5 mg",
+    "food": "after_food",
+    "name": "Folic acid",
+    "times": [
+     "09:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "f1c2e802-fe09-41dd-a324-50f574b7a770",
+   "key": "medicine:folic_acid",
+   "links": [],
+   "name": "folic_acid",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Folic acid 5 mg at 09:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "5 mg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Folic acid",
+    "times": [
+     "09:00"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "c6fc6f06-04e0-4dd6-9c17-59a2bf1a9fd7",
+   "key": "medicine:insulin_aspart",
+   "links": [],
+   "name": "insulin_aspart",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Insulin Aspart 6 units 08:45, 13:15, 20:45",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "6 units",
+    "food": "before_food",
+    "name": "Insulin Aspart",
+    "times": [
+     "08:45",
+     "13:15",
+     "20:45"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "11e45e6a-4c5c-49a3-9a6d-ea54a888332d",
+   "key": "medicine:insulin_aspart",
+   "links": [],
+   "name": "insulin_aspart",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Insulin Aspart 6 units at 08:45, 13:15, 20:45",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "6 units",
+    "food": "before_food",
+    "instructions": "before food",
+    "name": "Insulin Aspart",
+    "times": [
+     "08:45",
+     "13:15",
+     "20:45"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "6a056a31-e92a-4f90-84d4-7fe8cc1a0ed2",
+   "key": "medicine:insulin_glargine",
+   "links": [],
+   "name": "insulin_glargine",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Insulin Glargine 14 units 21:00",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "14 units",
+    "food": "any",
+    "name": "Insulin Glargine",
+    "times": [
+     "21:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "4286704d-d4f8-4940-8a1f-24a94a606078",
+   "key": "medicine:insulin_glargine",
+   "links": [],
+   "name": "insulin_glargine",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Insulin Glargine 14 units at 21:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "14 units",
+    "food": "any",
+    "instructions": "any",
+    "name": "Insulin Glargine",
+    "times": [
+     "21:00"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "c31d585e-f81f-4fa5-8f7e-2d846c11f490",
+   "key": "medicine:iron",
+   "links": [],
+   "name": "iron",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Iron 100 mg 14:00",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "100 mg",
+    "food": "after_food",
+    "name": "Iron",
+    "times": [
+     "14:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "314c32ea-3723-409f-b38d-8e2eb4d59560",
+   "key": "medicine:iron",
+   "links": [],
+   "name": "iron",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Iron 100 mg at 14:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "100 mg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Iron",
+    "times": [
+     "14:00"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "8476c5d4-84eb-4f26-afee-7bd4b65acb01",
+   "key": "medicine:metformin",
+   "links": [],
+   "name": "metformin",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Metformin 1000 mg 08:30",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1000 mg",
+    "food": "after_food",
+    "name": "Metformin",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "10aade12-815e-4ec6-b0ee-cf57758241f4",
+   "key": "medicine:metformin",
+   "links": [],
+   "name": "metformin",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Metformin 1000 mg at 08:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1000 mg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Metformin",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "b778104b-ad48-43aa-afb3-d4c70187136b",
+   "key": "medicine:montelukast",
+   "links": [],
+   "name": "montelukast",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Montelukast 10 mg 21:30",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "10 mg",
+    "food": "any",
+    "name": "Montelukast",
+    "times": [
+     "21:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "6a8682be-53e2-424b-9a1f-6129525aad69",
+   "key": "medicine:montelukast",
+   "links": [],
+   "name": "montelukast",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Montelukast 10 mg at 21:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "10 mg",
+    "food": "any",
+    "instructions": "any",
+    "name": "Montelukast",
+    "times": [
+     "21:30"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "b89e003c-e188-481b-92b9-535933a601f8",
+   "key": "medicine:omega",
+   "links": [],
+   "name": "omega",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Omega-3 1 g 21:30",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1 g",
+    "food": "after_food",
+    "name": "Omega-3",
+    "times": [
+     "21:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "06ebe720-7974-4e12-8fa2-2a7305cb41d9",
+   "key": "medicine:omega",
+   "links": [],
+   "name": "omega",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Omega-3 1 g at 21:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1 g",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Omega-3",
+    "times": [
+     "21:30"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "e5c02600-4543-46a5-9f4a-28196c04934c",
+   "key": "medicine:telmisartan",
+   "links": [],
+   "name": "telmisartan",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Telmisartan 40 mg 08:00",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "40 mg",
+    "food": "any",
+    "name": "Telmisartan",
+    "times": [
+     "08:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "d06ea469-bdb9-4320-ae59-e412743ff3c8",
+   "key": "medicine:telmisartan",
+   "links": [],
+   "name": "telmisartan",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Telmisartan 40 mg at 08:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "40 mg",
+    "food": "any",
+    "instructions": "any",
+    "name": "Telmisartan",
+    "times": [
+     "08:00"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "medicine",
+   "id": "7cc7a94b-ad29-42bb-aaf6-76b9a8925751",
+   "key": "medicine:vitamin_b12",
+   "links": [],
+   "name": "vitamin_b12",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Basavaraj takes Vitamin B12 1500 mcg 08:30",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1500 mcg",
+    "food": "after_food",
+    "name": "Vitamin B12",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "d491fd13-4183-484d-9bc7-e5c728fa9a54",
+   "key": "medicine:vitamin_b12",
+   "links": [],
+   "name": "vitamin_b12",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Vitamin B12 1500 mcg at 08:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1500 mcg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Vitamin B12",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "naming",
+   "id": "d9d90aa5-ee0c-4b84-aeac-07c1c1bb7a80",
+   "key": "naming:address_as",
+   "links": [],
+   "name": "address_as",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Call Basavaraj 'Baba'",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "name": "Baba"
+   }
+  },
+  {
+   "confidence": 1.0,
+   "confirmedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "domain": "profile",
+   "id": "1b345176-c1c2-4f43-bd25-97ec4abbd08d",
+   "key": "profile:blood_group",
+   "links": [],
+   "name": "blood_group",
+   "note": null,
+   "recordedAt": "2026-09-29T04:30:00+00:00",
+   "source": "caregiver_said",
+   "statedBy": "9f27b5b0-d5fc-50e6-aa0d-6fb032f2e4e1",
+   "status": "active",
+   "text": "Blood group B+",
+   "validFrom": "2026-09-29T04:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "value": "B+"
+   }
+  }
+ ],
+ "loops": [
+  {
+   "createdAt": "2026-10-19T00:30:00+00:00",
+   "detail": {
+    "activity_key": "activity:morning_walk",
+    "date": "2026-10-19"
+   },
+   "id": "f073d6fa-300e-4407-8762-97f876d617bd",
+   "kind": "activity",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Ask how Morning walk went",
+   "wakeAt": "2026-10-19T01:25:00+00:00"
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "a331ae4d-daab-441a-a8cd-94e0af986a44",
+    "key": "medicine:amlodipine",
+    "new": {
+     "dose": "5 mg",
+     "food": "any",
+     "instructions": "any",
+     "name": "Amlodipine",
+     "times": [
+      "08:30"
+     ]
+    },
+    "old": {
+     "dose": "5 mg",
+     "food": "any",
+     "name": "Amlodipine",
+     "times": [
+      "08:30"
+     ]
+    }
+   },
+   "id": "c1ac42ea-3f4e-4c1c-a459-703c048cea9b",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Amlodipine 5 mg 08:30 → Amlodipine 5 mg at 08:30",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "d06ea469-bdb9-4320-ae59-e412743ff3c8",
+    "key": "medicine:telmisartan",
+    "new": {
+     "dose": "40 mg",
+     "food": "any",
+     "instructions": "any",
+     "name": "Telmisartan",
+     "times": [
+      "08:00"
+     ]
+    },
+    "old": {
+     "dose": "40 mg",
+     "food": "any",
+     "name": "Telmisartan",
+     "times": [
+      "08:00"
+     ]
+    }
+   },
+   "id": "626877c2-a151-4032-87a8-bec10e950e0c",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Telmisartan 40 mg 08:00 → Telmisartan 40 mg at 08:00",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "a462e25f-1103-4fd9-856c-59df3f9251a4",
+    "key": "medicine:budesonide_formoterol_inhaler",
+    "new": {
+     "dose": "2 puffs",
+     "food": "any",
+     "instructions": "any",
+     "name": "Budesonide-Formoterol inhaler",
+     "times": [
+      "08:30",
+      "22:00"
+     ]
+    },
+    "old": {
+     "dose": "2 puffs",
+     "food": "any",
+     "name": "Budesonide-Formoterol inhaler",
+     "times": [
+      "08:30",
+      "22:00"
+     ]
+    }
+   },
+   "id": "7c66a0e5-04b8-4de2-805c-1e26237b641a",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Budesonide-Formoterol inhaler 2 puffs 08:30, 22:00 → Budesonide-Formoterol inhaler 2 puffs at 08:30, 22:00",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "6a8682be-53e2-424b-9a1f-6129525aad69",
+    "key": "medicine:montelukast",
+    "new": {
+     "dose": "10 mg",
+     "food": "any",
+     "instructions": "any",
+     "name": "Montelukast",
+     "times": [
+      "21:30"
+     ]
+    },
+    "old": {
+     "dose": "10 mg",
+     "food": "any",
+     "name": "Montelukast",
+     "times": [
+      "21:30"
+     ]
+    }
+   },
+   "id": "65afc431-2417-458e-98fa-d1be99bfd877",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Montelukast 10 mg 21:30 → Montelukast 10 mg at 21:30",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "4286704d-d4f8-4940-8a1f-24a94a606078",
+    "key": "medicine:insulin_glargine",
+    "new": {
+     "dose": "14 units",
+     "food": "any",
+     "instructions": "any",
+     "name": "Insulin Glargine",
+     "times": [
+      "21:00"
+     ]
+    },
+    "old": {
+     "dose": "14 units",
+     "food": "any",
+     "name": "Insulin Glargine",
+     "times": [
+      "21:00"
+     ]
+    }
+   },
+   "id": "b3f3dffd-e317-409c-b5db-51c501486377",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Insulin Glargine 14 units 21:00 → Insulin Glargine 14 units at 21:00",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "11e45e6a-4c5c-49a3-9a6d-ea54a888332d",
+    "key": "medicine:insulin_aspart",
+    "new": {
+     "dose": "6 units",
+     "food": "before_food",
+     "instructions": "before food",
+     "name": "Insulin Aspart",
+     "times": [
+      "08:45",
+      "13:15",
+      "20:45"
+     ]
+    },
+    "old": {
+     "dose": "6 units",
+     "food": "before_food",
+     "name": "Insulin Aspart",
+     "times": [
+      "08:45",
+      "13:15",
+      "20:45"
+     ]
+    }
+   },
+   "id": "7d3616c1-44c8-43a3-91bc-963f1c783f8c",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Insulin Aspart 6 units 08:45, 13:15, 20:45 → Insulin Aspart 6 units at 08:45, 13:15, 20:45",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "10aade12-815e-4ec6-b0ee-cf57758241f4",
+    "key": "medicine:metformin",
+    "new": {
+     "dose": "1000 mg",
+     "food": "after_food",
+     "instructions": "after food",
+     "name": "Metformin",
+     "times": [
+      "08:30"
+     ]
+    },
+    "old": {
+     "dose": "1000 mg",
+     "food": "after_food",
+     "name": "Metformin",
+     "times": [
+      "08:30"
+     ]
+    }
+   },
+   "id": "3692fc6a-be29-4002-abef-c474bbad6b35",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Metformin 1000 mg 08:30 → Metformin 1000 mg at 08:30",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "d491fd13-4183-484d-9bc7-e5c728fa9a54",
+    "key": "medicine:vitamin_b12",
+    "new": {
+     "dose": "1500 mcg",
+     "food": "after_food",
+     "instructions": "after food",
+     "name": "Vitamin B12",
+     "times": [
+      "08:30"
+     ]
+    },
+    "old": {
+     "dose": "1500 mcg",
+     "food": "after_food",
+     "name": "Vitamin B12",
+     "times": [
+      "08:30"
+     ]
+    }
+   },
+   "id": "8ec17c97-bfc8-4f95-a4bf-8441182119a8",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Vitamin B12 1500 mcg 08:30 → Vitamin B12 1500 mcg at 08:30",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "06ebe720-7974-4e12-8fa2-2a7305cb41d9",
+    "key": "medicine:omega",
+    "new": {
+     "dose": "1 g",
+     "food": "after_food",
+     "instructions": "after food",
+     "name": "Omega-3",
+     "times": [
+      "21:30"
+     ]
+    },
+    "old": {
+     "dose": "1 g",
+     "food": "after_food",
+     "name": "Omega-3",
+     "times": [
+      "21:30"
+     ]
+    }
+   },
+   "id": "a5738c83-a733-4831-8c0e-d69d607dbbe4",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Omega-3 1 g 21:30 → Omega-3 1 g at 21:30",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "314c32ea-3723-409f-b38d-8e2eb4d59560",
+    "key": "medicine:iron",
+    "new": {
+     "dose": "100 mg",
+     "food": "after_food",
+     "instructions": "after food",
+     "name": "Iron",
+     "times": [
+      "14:00"
+     ]
+    },
+    "old": {
+     "dose": "100 mg",
+     "food": "after_food",
+     "name": "Iron",
+     "times": [
+      "14:00"
+     ]
+    }
+   },
+   "id": "b72b28a1-f258-49dd-b709-68f35efe62ba",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Iron 100 mg 14:00 → Iron 100 mg at 14:00",
+   "wakeAt": null
+  },
+  {
+   "createdAt": "2026-10-19T06:30:00+00:00",
+   "detail": {
+    "fact_id": "f1c2e802-fe09-41dd-a324-50f574b7a770",
+    "key": "medicine:folic_acid",
+    "new": {
+     "dose": "5 mg",
+     "food": "after_food",
+     "instructions": "after food",
+     "name": "Folic acid",
+     "times": [
+      "09:00"
+     ]
+    },
+    "old": {
+     "dose": "5 mg",
+     "food": "after_food",
+     "name": "Folic acid",
+     "times": [
+      "09:00"
+     ]
+    }
+   },
+   "id": "caacd1f2-0a8d-482a-9289-55b803cd4019",
+   "kind": "confirm_fact",
+   "ownerId": null,
+   "rule": null,
+   "status": "open",
+   "title": "Confirm change: Basavaraj takes Folic acid 5 mg 09:00 → Folic acid 5 mg at 09:00",
+   "wakeAt": null
+  }
+ ],
+ "notes": [
+  {
+   "body": "Basavaraj (66) lives in Bengaluru. Speaks Kannada. chatty on chat.",
+   "slug": "about",
+   "subjectId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "title": "About Basavaraj",
+   "updatedAt": "2026-10-15T20:45:00+00:00",
+   "version": 1
+  },
+  {
+   "body": "She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. She talked about her childhood village, the mango trees, her brother's wedding and the winter of the flood. ",
+   "slug": "life_story",
+   "subjectId": "fc735b8f-b3b9-5cd7-9ced-f411cf4844f9",
+   "title": "Life story",
+   "updatedAt": "2026-10-15T20:45:00+00:00",
+   "version": 1
+  }
+ ],
+ "pending": [
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "a331ae4d-daab-441a-a8cd-94e0af986a44",
+   "key": "medicine:amlodipine",
+   "name": "amlodipine",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Amlodipine 5 mg at 08:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "5 mg",
+    "food": "any",
+    "instructions": "any",
+    "name": "Amlodipine",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "a462e25f-1103-4fd9-856c-59df3f9251a4",
+   "key": "medicine:budesonide_formoterol_inhaler",
+   "name": "budesonide_formoterol_inhaler",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Budesonide-Formoterol inhaler 2 puffs at 08:30, 22:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "2 puffs",
+    "food": "any",
+    "instructions": "any",
+    "name": "Budesonide-Formoterol inhaler",
+    "times": [
+     "08:30",
+     "22:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "f1c2e802-fe09-41dd-a324-50f574b7a770",
+   "key": "medicine:folic_acid",
+   "name": "folic_acid",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Folic acid 5 mg at 09:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "5 mg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Folic acid",
+    "times": [
+     "09:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "11e45e6a-4c5c-49a3-9a6d-ea54a888332d",
+   "key": "medicine:insulin_aspart",
+   "name": "insulin_aspart",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Insulin Aspart 6 units at 08:45, 13:15, 20:45",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "6 units",
+    "food": "before_food",
+    "instructions": "before food",
+    "name": "Insulin Aspart",
+    "times": [
+     "08:45",
+     "13:15",
+     "20:45"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "4286704d-d4f8-4940-8a1f-24a94a606078",
+   "key": "medicine:insulin_glargine",
+   "name": "insulin_glargine",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Insulin Glargine 14 units at 21:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "14 units",
+    "food": "any",
+    "instructions": "any",
+    "name": "Insulin Glargine",
+    "times": [
+     "21:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "314c32ea-3723-409f-b38d-8e2eb4d59560",
+   "key": "medicine:iron",
+   "name": "iron",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Iron 100 mg at 14:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "100 mg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Iron",
+    "times": [
+     "14:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "10aade12-815e-4ec6-b0ee-cf57758241f4",
+   "key": "medicine:metformin",
+   "name": "metformin",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Metformin 1000 mg at 08:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1000 mg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Metformin",
+    "times": [
+     "08:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "6a8682be-53e2-424b-9a1f-6129525aad69",
+   "key": "medicine:montelukast",
+   "name": "montelukast",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Montelukast 10 mg at 21:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "10 mg",
+    "food": "any",
+    "instructions": "any",
+    "name": "Montelukast",
+    "times": [
+     "21:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "06ebe720-7974-4e12-8fa2-2a7305cb41d9",
+   "key": "medicine:omega",
+   "name": "omega",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Omega-3 1 g at 21:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1 g",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Omega-3",
+    "times": [
+     "21:30"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "d06ea469-bdb9-4320-ae59-e412743ff3c8",
+   "key": "medicine:telmisartan",
+   "name": "telmisartan",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Telmisartan 40 mg at 08:00",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "40 mg",
+    "food": "any",
+    "instructions": "any",
+    "name": "Telmisartan",
+    "times": [
+     "08:00"
+    ]
+   }
+  },
+  {
+   "confidence": 0.95,
+   "confirmedBy": null,
+   "domain": "medicine",
+   "id": "d491fd13-4183-484d-9bc7-e5c728fa9a54",
+   "key": "medicine:vitamin_b12",
+   "name": "vitamin_b12",
+   "note": null,
+   "recordedAt": "2026-10-19T06:30:00+00:00",
+   "source": "import",
+   "statedBy": null,
+   "status": "pending",
+   "text": "Vitamin B12 1500 mcg at 08:30",
+   "validFrom": "2026-10-19T06:30:00+00:00",
+   "validTo": null,
+   "value": {
+    "dose": "1500 mcg",
+    "food": "after_food",
+    "instructions": "after food",
+    "name": "Vitamin B12",
+    "times": [
+     "08:30"
+    ]
+   }
+  }
+ ],
+ "tasks": []
+}

@@ -1,0 +1,43 @@
+{
+ "contacts": [],
+ "doctors": [
+  {
+   "name": "Dr Chetan Shetty",
+   "phone": "+919000002012",
+   "speciality": "neurologist",
+   "text": "Shivanna's doctor is Dr Chetan Shetty (neurologist)"
+  }
+ ],
+ "helpers": [
+  {
+   "name": "Pradeep",
+   "phone": "+919000000120",
+   "text": "Pradeep is the helper at home"
+  }
+ ],
+ "hospital": [
+  {
+   "address": null,
+   "name": "Lifeline Multispeciality, Bengaluru",
+   "phone": null,
+   "text": "Preferred hospital: Lifeline Multispeciality, Bengaluru"
+  }
+ ],
+ "past": [],
+ "upcoming": [
+  {
+   "doctor": "Dr Chetan Shetty",
+   "key": "appointment:dr_chetan_shetty_2026_10_21",
+   "place": "Lifeline Multispeciality, Bengaluru",
+   "purpose": "routine check-up",
+   "questions": [
+    "Should the sugar test be repeated?",
+    "Can the BP dose be lowered?"
+   ],
+   "status": "planned",
+   "text": "Shivanna sees Dr Chetan Shetty on 2026-10-21 at 10:30",
+   "upcoming": true,
+   "when": "2026-10-21T10:30"
+  }
+ ]
+}

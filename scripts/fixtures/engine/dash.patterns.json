@@ -1,0 +1,352 @@
+{
+ "patterns": [
+  {
+   "detail": "Missed or not confirmed on 10 Oct, 11 Oct, 12 Oct, 16 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-16",
+    "2026-10-18"
+   ],
+   "key": "dose:apixaban:08:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Apixaban (morning, 08:00) is often missed or not confirmed: 10 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 11 Oct, 14 Oct, 16 Oct, 17 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-14",
+    "2026-10-16",
+    "2026-10-17",
+    "2026-10-18"
+   ],
+   "key": "dose:apixaban:21:30",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Apixaban (night, 21:30) is often missed or not confirmed: 11 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 11 Oct, 13 Oct, 14 Oct, 16 Oct, 17 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-16",
+    "2026-10-17"
+   ],
+   "key": "dose:aspirin:14:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Aspirin (afternoon, 14:00) is often missed or not confirmed: 11 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 11 Oct, 12 Oct, 13 Oct, 16 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-16",
+    "2026-10-18"
+   ],
+   "key": "dose:clopidogrel:14:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Clopidogrel (afternoon, 14:00) is often missed or not confirmed: 11 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 09 Oct, 10 Oct, 11 Oct, 17 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-17",
+    "2026-10-18"
+   ],
+   "key": "dose:glimepiride:09:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Glimepiride (morning, 09:00) is often missed or not confirmed: 9 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 12 Oct, 13 Oct, 14 Oct, 15 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-18"
+   ],
+   "key": "dose:metformin:08:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Metformin (morning, 08:00) is often missed or not confirmed: 12 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 10 Oct, 11 Oct, 13 Oct, 14 Oct, 17 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-17"
+   ],
+   "key": "dose:metformin:21:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Metformin (night, 21:00) is often missed or not confirmed: 10 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 10 Oct, 11 Oct, 13 Oct, 15 Oct, 17 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-13",
+    "2026-10-15",
+    "2026-10-17"
+   ],
+   "key": "dose:metoprolol:08:30",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Metoprolol (morning, 08:30) is often missed or not confirmed: 10 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 09 Oct, 10 Oct, 11 Oct, 12 Oct, 16 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-16"
+   ],
+   "key": "dose:metoprolol:21:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Metoprolol (night, 21:00) is often missed or not confirmed: 9 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 12 Oct, 13 Oct, 14 Oct, 15 Oct, 17 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-17"
+   ],
+   "key": "dose:omega:21:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Omega-3 (night, 21:00) is often missed or not confirmed: 12 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 10 Oct, 11 Oct, 12 Oct, 16 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-16",
+    "2026-10-18"
+   ],
+   "key": "dose:paracetamol:09:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Paracetamol (morning, 09:00) is often missed or not confirmed: 10 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 14 Oct, 15 Oct, 16 Oct, 17 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-17",
+    "2026-10-18"
+   ],
+   "key": "dose:paracetamol:14:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Paracetamol (afternoon, 14:00) is often missed or not confirmed: 12 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 12 Oct, 15 Oct, 16 Oct, 17 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-17",
+    "2026-10-18"
+   ],
+   "key": "dose:paracetamol:22:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Paracetamol (night, 22:00) is often missed or not confirmed: 12 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 10 Oct, 11 Oct, 14 Oct, 17 Oct, 18 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-14",
+    "2026-10-17",
+    "2026-10-18"
+   ],
+   "key": "dose:rosuvastatin:21:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Rosuvastatin (night, 21:00) is often missed or not confirmed: 10 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 12 Oct, 14 Oct, 15 Oct, 16 Oct, 17 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-14",
+    "2026-10-15",
+    "2026-10-16",
+    "2026-10-17"
+   ],
+   "key": "dose:sitagliptin:08:30",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Sitagliptin (morning, 08:30) is often missed or not confirmed: 12 of the last 14 days"
+  },
+  {
+   "detail": "Missed or not confirmed on 10 Oct, 11 Oct, 12 Oct, 13 Oct, 15 Oct.",
+   "evidence": [
+    "2026-10-05",
+    "2026-10-06",
+    "2026-10-07",
+    "2026-10-08",
+    "2026-10-09",
+    "2026-10-10",
+    "2026-10-11",
+    "2026-10-12",
+    "2026-10-13",
+    "2026-10-15"
+   ],
+   "key": "dose:tamsulosin:22:00",
+   "kind": "dose_slot",
+   "severity": "watch",
+   "subject_id": "f19e48b8-63fa-53cd-9d63-686e28966210",
+   "suggestion": "Ask what gets in the way at that time; a reminder at a better moment or someone checking in may help.",
+   "title": "Tamsulosin (night, 22:00) is often missed or not confirmed: 10 of the last 14 days"
+  }
+ ],
+ "windowDays": 14
+}

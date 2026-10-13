@@ -1,0 +1,94 @@
+{
+ "alerts": [],
+ "comingUp": [
+  {
+   "at": "2026-10-19T06:45:00+00:00",
+   "familyId": "5cb69515-cd03-5e14-b3c2-067b20593654",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:45:00+00:00",
+   "familyId": "0b9633ed-3675-5538-bd45-53074d6fa387",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:45:00+00:00",
+   "familyId": "930d2f28-def5-53e1-8187-d98c1da2cf67",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "0b788aa4-1cc7-560b-984e-c2ad9a690df0",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "297f73e8-b41a-5e3d-835d-fda88f0e828e",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "84ffa7a8-a8e3-5ab9-bbf2-e73ec29836b7",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "bbd36ec3-3e8f-5077-89bc-a76f601d405d",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "0f7eec08-2bf1-5c69-af65-47caa17fbdc7",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "5d477ee6-b88f-5bef-9cad-e1ead53806db",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T06:55:00+00:00",
+   "familyId": "a9ddb90f-7067-5d57-9aec-3df5e2fa13b2",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T07:25:00+00:00",
+   "familyId": "5d477ee6-b88f-5bef-9cad-e1ead53806db",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T07:25:00+00:00",
+   "familyId": "a9ddb90f-7067-5d57-9aec-3df5e2fa13b2",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T07:25:00+00:00",
+   "familyId": "c71e7fdd-b250-5b2c-ad62-96bddbe4ab0e",
+   "kind": "activity",
+   "personId": null
+  },
+  {
+   "at": "2026-10-19T07:30:00+00:00",
+   "familyId": "5d477ee6-b88f-5bef-9cad-e1ead53806db",
+   "kind": "activity",
+   "personId": null
+  }
+ ],
+ "conversations": [],
+ "now": "2026-10-19T06:30:00+00:00",
+ "outreach": [],
+ "tasks": [],
+ "windowMinutes": 120
+}

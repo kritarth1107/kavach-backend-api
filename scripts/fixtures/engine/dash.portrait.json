@@ -1,0 +1,1087 @@
+{
+ "activities": [
+  {
+   "category": "spiritual",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "end": "09:00",
+   "goal": null,
+   "key": "activity:namaz",
+   "kind": "habit",
+   "label": "Namaz",
+   "last": {
+    "at": "2026-10-18T03:15:00+00:00",
+    "done": true,
+    "summary": "Namaz: done"
+   },
+   "paused": false,
+   "start": "08:45",
+   "streak": 1,
+   "text": "Namaz (every day, 08:45–09:00)",
+   "today": "not_heard",
+   "type": "namaz",
+   "week_done": 5
+  },
+  {
+   "category": "fitness",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5
+   ],
+   "end": "11:30",
+   "goal": null,
+   "key": "activity:physiotherapy",
+   "kind": "habit",
+   "label": "Physiotherapy exercises",
+   "last": {
+    "at": "2026-10-17T05:30:00+00:00",
+    "done": true,
+    "summary": "Physiotherapy exercises: done"
+   },
+   "paused": false,
+   "start": "11:00",
+   "streak": 4,
+   "text": "Physiotherapy exercises (Mon–Sat, 11:00–11:30)",
+   "today": "not_heard",
+   "type": "physiotherapy",
+   "week_done": 4
+  },
+  {
+   "category": "sleep",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "end": null,
+   "goal": null,
+   "key": "activity:sleep",
+   "kind": "routine",
+   "label": "Sleep",
+   "last": null,
+   "paused": false,
+   "start": "23:30",
+   "streak": 0,
+   "text": "Sleep (every day, 23:30)",
+   "today": "routine",
+   "type": "sleep",
+   "week_done": 0
+  },
+  {
+   "category": "sleep",
+   "days": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ],
+   "end": null,
+   "goal": null,
+   "key": "activity:wake_up",
+   "kind": "routine",
+   "label": "Wake up",
+   "last": null,
+   "paused": false,
+   "start": "07:30",
+   "streak": 0,
+   "text": "Wake up (every day, 07:30)",
+   "today": "routine",
+   "type": "wake_up",
+   "week_done": 0
+  }
+ ],
+ "avoid": [],
+ "day": [],
+ "enjoys": [],
+ "gaps": {
+  "items": [
+   {
+    "key": "medicine",
+    "known": true
+   },
+   {
+    "key": "allergy",
+    "known": true
+   },
+   {
+    "key": "condition",
+    "known": true
+   },
+   {
+    "key": "blood_group",
+    "known": true
+   },
+   {
+    "key": "emergency_contact",
+    "known": true
+   },
+   {
+    "key": "doctor",
+    "known": true
+   },
+   {
+    "key": "hospital",
+    "known": true
+   },
+   {
+    "key": "address",
+    "known": false
+   },
+   {
+    "key": "routine",
+    "known": true
+   },
+   {
+    "key": "weight",
+    "known": false
+   },
+   {
+    "key": "enjoys",
+    "known": false
+   },
+   {
+    "key": "language",
+    "known": true
+   }
+  ],
+  "known": 9,
+  "total": 12
+ },
+ "knownSince": "2026-10-05T13:38:00+00:00",
+ "learned": [
+  {
+   "at": "2026-10-17T04:30:00+00:00",
+   "domain": "medicine",
+   "id": "463ef54b-a02e-40d0-bf88-2fe00af1e08e",
+   "key": "medicine:clopidogrel",
+   "said": null,
+   "source": "elder_said",
+   "statedBy": "Ranchhodbhai Chavda",
+   "status": "pending",
+   "text": "Ranchhodbhai takes Clopidogrel 75 mg 14:00 (elder says the dose was doubled)"
+  }
+ ],
+ "mood": {
+  "days": [
+   {
+    "at": "2026-10-12T14:00:00+00:00",
+    "day": "2026-10-12",
+    "score": 4,
+    "source": "chat",
+    "summary": "mood 4/5",
+    "word": "good"
+   },
+   {
+    "at": "2026-10-13T14:00:00+00:00",
+    "day": "2026-10-13",
+    "score": 3,
+    "source": "chat",
+    "summary": "mood 3/5",
+    "word": "okay"
+   },
+   {
+    "at": "2026-10-14T14:00:00+00:00",
+    "day": "2026-10-14",
+    "score": 4,
+    "source": "chat",
+    "summary": "mood 4/5",
+    "word": "good"
+   },
+   {
+    "at": "2026-10-15T14:00:00+00:00",
+    "day": "2026-10-15",
+    "score": 4,
+    "source": "chat",
+    "summary": "mood 4/5",
+    "word": "good"
+   },
+   {
+    "at": "2026-10-16T14:00:00+00:00",
+    "day": "2026-10-16",
+    "score": 3,
+    "source": "chat",
+    "summary": "mood 3/5",
+    "word": "okay"
+   },
+   {
+    "at": "2026-10-17T14:00:00+00:00",
+    "day": "2026-10-17",
+    "score": 4,
+    "source": "chat",
+    "summary": "mood 4/5",
+    "word": "good"
+   }
+  ],
+  "now": null
+ },
+ "people": [
+  {
+   "id": "e8e0e53d-99db-5b56-8ba8-b074c8be4d4b",
+   "kind": "member",
+   "name": "Maniben Chavda",
+   "relation": "primary caregiver"
+  },
+  {
+   "key": "doctor:dr_hardik_chavda",
+   "kind": "doctor",
+   "name": "Dr Hardik Chavda",
+   "note": "Ranchhodbhai's doctor is Dr Hardik Chavda (cardiologist)",
+   "phone": "+919000002015",
+   "relation": "doctor"
+  }
+ ],
+ "person": {
+  "address": null,
+  "age": null,
+  "callAs": null,
+  "city": null,
+  "language": "Ranchhodbhai prefers Kathiawadi",
+  "livesWith": null,
+  "mobility": null,
+  "name": "Ranchhodbhai Chavda"
+ },
+ "stats": {
+  "known": 27,
+  "learnedWeek": 1,
+  "pending": 12
+ },
+ "week": [
+  {
+   "day": "2026-10-13",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "taken",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "unmarked",
+     "time": "22:00"
+    }
+   ]
+  },
+  {
+   "day": "2026-10-14",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "unmarked",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "taken",
+     "time": "22:00"
+    }
+   ]
+  },
+  {
+   "day": "2026-10-15",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "unmarked",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "taken",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "unmarked",
+     "time": "22:00"
+    }
+   ]
+  },
+  {
+   "day": "2026-10-16",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "unmarked",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "taken",
+     "time": "22:00"
+    }
+   ]
+  },
+  {
+   "day": "2026-10-17",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "unmarked",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "missed",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "taken",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "missed",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "taken",
+     "time": "22:00"
+    }
+   ]
+  },
+  {
+   "day": "2026-10-18",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "taken",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "taken",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "unmarked",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "missed",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "taken",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "taken",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "unmarked",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "taken",
+     "time": "22:00"
+    }
+   ]
+  },
+  {
+   "day": "2026-10-19",
+   "doses": [
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@08:00",
+     "name": "Apixaban",
+     "status": "unmarked",
+     "time": "08:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@08:00",
+     "name": "Metformin",
+     "status": "unmarked",
+     "time": "08:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@08:30",
+     "name": "Metoprolol",
+     "status": "unmarked",
+     "time": "08:30"
+    },
+    {
+     "dose": "100 mg",
+     "id": "medicine:sitagliptin@08:30",
+     "name": "Sitagliptin",
+     "status": "unmarked",
+     "time": "08:30"
+    },
+    {
+     "dose": "1 mg",
+     "id": "medicine:glimepiride@09:00",
+     "name": "Glimepiride",
+     "status": "unmarked",
+     "time": "09:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@09:00",
+     "name": "Paracetamol",
+     "status": "unmarked",
+     "time": "09:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:aspirin@14:00",
+     "name": "Aspirin",
+     "status": "upcoming",
+     "time": "14:00"
+    },
+    {
+     "dose": "75 mg",
+     "id": "medicine:clopidogrel@14:00",
+     "name": "Clopidogrel",
+     "status": "upcoming",
+     "time": "14:00"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@14:00",
+     "name": "Paracetamol",
+     "status": "upcoming",
+     "time": "14:00"
+    },
+    {
+     "dose": "500 mg",
+     "id": "medicine:metformin@21:00",
+     "name": "Metformin",
+     "status": "upcoming",
+     "time": "21:00"
+    },
+    {
+     "dose": "25 mg",
+     "id": "medicine:metoprolol@21:00",
+     "name": "Metoprolol",
+     "status": "upcoming",
+     "time": "21:00"
+    },
+    {
+     "dose": "1 g",
+     "id": "medicine:omega@21:00",
+     "name": "Omega-3",
+     "status": "upcoming",
+     "time": "21:00"
+    },
+    {
+     "dose": "10 mg",
+     "id": "medicine:rosuvastatin@21:00",
+     "name": "Rosuvastatin",
+     "status": "upcoming",
+     "time": "21:00"
+    },
+    {
+     "dose": "2.5 mg",
+     "id": "medicine:apixaban@21:30",
+     "name": "Apixaban",
+     "status": "upcoming",
+     "time": "21:30"
+    },
+    {
+     "dose": "650 mg",
+     "id": "medicine:paracetamol@22:00",
+     "name": "Paracetamol",
+     "status": "upcoming",
+     "time": "22:00"
+    },
+    {
+     "dose": "0.4 mg",
+     "id": "medicine:tamsulosin@22:00",
+     "name": "Tamsulosin",
+     "status": "upcoming",
+     "time": "22:00"
+    }
+   ]
+  }
+ ]
+}

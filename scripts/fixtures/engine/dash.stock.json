@@ -1,0 +1,145 @@
+{
+ "medicines": [
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "5 mg",
+   "key": "medicine:amlodipine",
+   "low": false,
+   "name": "Amlodipine",
+   "perDay": 2.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "60000 IU",
+   "key": "medicine:cholecalciferol",
+   "low": false,
+   "name": "Cholecalciferol",
+   "perDay": 0.14,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "10 mg",
+   "key": "medicine:domperidone",
+   "low": false,
+   "name": "Domperidone",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "10 mg",
+   "key": "medicine:escitalopram",
+   "low": false,
+   "name": "Escitalopram",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "5 mg",
+   "key": "medicine:folic_acid",
+   "low": false,
+   "name": "Folic acid",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "20 mg",
+   "key": "medicine:furosemide",
+   "low": false,
+   "name": "Furosemide",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "1 mg",
+   "key": "medicine:glimepiride",
+   "low": false,
+   "name": "Glimepiride",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "250 mg",
+   "key": "medicine:magnesium",
+   "low": false,
+   "name": "Magnesium",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "1 tablet",
+   "key": "medicine:multivitamin",
+   "low": false,
+   "name": "Multivitamin",
+   "perDay": 2.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "1 g",
+   "key": "medicine:omega",
+   "low": false,
+   "name": "Omega-3",
+   "perDay": 2.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "10 mg",
+   "key": "medicine:rosuvastatin",
+   "low": false,
+   "name": "Rosuvastatin",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "100 mg",
+   "key": "medicine:sitagliptin",
+   "low": false,
+   "name": "Sitagliptin",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "40 mg",
+   "key": "medicine:telmisartan",
+   "low": false,
+   "name": "Telmisartan",
+   "perDay": 1.0,
+   "stock": null
+  },
+  {
+   "asOf": null,
+   "daysLeft": null,
+   "dose": "1500 mcg",
+   "key": "medicine:vitamin_b12",
+   "low": false,
+   "name": "Vitamin B12",
+   "perDay": 1.0,
+   "stock": null
+  }
+ ],
+ "refillWithinDays": 5
+}

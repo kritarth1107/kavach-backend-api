@@ -1,3 +1,4 @@
+import "./utils/asyncRouteErrors";
 import onboardingRoutes from "./routes/onboarding.routes";
 import express from "express";
 import cors from "cors";
@@ -20,6 +21,7 @@ import callsRoutes from "./routes/calls.routes";
 import zeptoPublicRoutes, { familyZeptoRouter } from "./routes/zeptoIntegration.routes";
 import mcpPublicRoutes, { familyMcpRouter } from "./routes/mcpIntegration.routes";
 import { errorHandler } from "./middleware/error.middleware";
+import { familyAccess } from "./middleware/familyAccess.middleware";
 import { startOutreachScheduler } from "./workers/outreachScheduler";
 import { startCareNudgeScheduler } from "./workers/careNudgeScheduler";
 import { startMemoryConsolidationScheduler } from "./workers/memoryConsolidationScheduler";
@@ -30,9 +32,13 @@ dotenv.config();
 
 const app = express();
 const PORT = config.server.port || 5000;
+// Run as the server (node dist/app.js), or imported by a test that wants the app without a port, timers or a DB connect.
+const IS_SERVER = require.main === module;
 
-connectDB();
-void import("./services/featureFlags.service").then(({ startFlagRefresh }) => startFlagRefresh());
+if (IS_SERVER) {
+  connectDB();
+  void import("./services/featureFlags.service").then(({ startFlagRefresh }) => startFlagRefresh());
+}
 
 app.use(
   cors({
@@ -56,6 +62,8 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+// every /api/families/<familyId>/… route: a joined member of that family (each route still checks the role it needs)
+app.use("/api/families/:familyId", familyAccess);
 app.use("/api/families", familyRoutes);
 app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/families", careRecordRoutes);
@@ -77,6 +85,9 @@ app.use("/internal", internalRoutes);
 
 app.use(errorHandler);
 
+export default app;
+
+if (IS_SERVER) {
 // A stray rejected promise (async route without try/catch, background browser work) must
 // never take the whole service down mid-conversation for every family.
 process.on("unhandledRejection", (reason) => {
@@ -132,3 +143,4 @@ app.listen(PORT, () => {
       });
   }
 });
+}

@@ -1,0 +1,49 @@
+{
+ "approvers": [
+  {
+   "id": "b78fe89e-951e-5a3d-9bd9-cff028e62452",
+   "name": "Subhashree Mohanty"
+  }
+ ],
+ "categories": [
+  "grocery",
+  "food",
+  "pharmacy",
+  "ride"
+ ],
+ "members": [
+  {
+   "id": "77a87b10-dcf9-5c6f-8884-dbeb016f1292",
+   "name": "ପ୍ରଫୁଲ୍ଲ",
+   "role": "elder"
+  },
+  {
+   "id": "b78fe89e-951e-5a3d-9bd9-cff028e62452",
+   "name": "Subhashree Mohanty",
+   "role": "primary caregiver"
+  },
+  {
+   "id": "22907334-5710-527c-98e6-44b80c840934",
+   "name": "Lipsa Mohanty",
+   "role": "caregiver"
+  },
+  {
+   "id": "fc61ad5e-d728-5f31-923d-f5417e26dc36",
+   "name": "Biswajit Mohanty",
+   "role": "caregiver"
+  }
+ ],
+ "monthSpent": 0.0,
+ "plain": "orders the care recipient asks for over ₹1500 and rides over ₹800 need approval. Approver: the primary caregiver.",
+ "policy": {
+  "anyone_over": null,
+  "approval_categories": [],
+  "approvers": [],
+  "elder_order_limit": 1500,
+  "elder_ride_limit": 800,
+  "login_codes": {},
+  "members": {},
+  "monthly_cap": null
+ },
+ "waiting": []
+}
