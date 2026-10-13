@@ -189,6 +189,14 @@ export async function familyMemberPhone(familyId: string, userId: string): Promi
     return { reason: "no WhatsApp number" };
 }
 
+/** Is this member the person cared for in this family? */
+export async function isCareRecipient(familyId: string, userId: string): Promise<boolean> {
+    const { default: Family } = await import("../models/family.model");
+    const family = await Family.findOne({ familyId, status: "ACTIVE" }).lean();
+    const member = family?.members.find((m) => m.userId === userId && m.status !== "REMOVED");
+    return String(member?.role ?? "") === "CARE_RECIPIENT";
+}
+
 /** The kinds the engine may give its sends (anything else is recorded as "message"). */
 const ENGINE_KINDS = ["nudge", "checkin", "brief", "message", "reminder", "alert"] as const;
 
@@ -254,6 +262,10 @@ export async function sendSaheliWhatsApp(input: {
 }) {
     const text = input.text.trim();
     if (!text) return { delivered: false, reason: "empty" };
+    if (engineDeliveryKind(input.kind) === "brief" && (await isCareRecipient(input.familyId, input.toUserId))) {
+        // The nightly brief is about the person cared for and goes only to their caregivers, never to them.
+        return { delivered: false, reason: "a brief goes only to caregivers" };
+    }
     const found = await familyMemberPhone(input.familyId, input.toUserId);
     if ("reason" in found) return { delivered: false, reason: found.reason };
     const { phone } = found;
