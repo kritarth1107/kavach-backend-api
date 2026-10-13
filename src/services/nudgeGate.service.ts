@@ -23,11 +23,11 @@ export type NudgeGate = {
 export async function nudgeGate(familyId: string, userId: string, now: Date = new Date()): Promise<NudgeGate> {
     const paused = isSaheliPaused(familyId);
     const mode = regularNudgeMode();
-    // The active-flow part of the proactive gate only (medicine: true skips its own 60-minute quiet check; the engine
-    // keeps the clock). It fails closed: an error reads as a flow in progress.
-    const { canSendProactiveNudge } = await import("./saheliNudgeGate.service");
-    const flow = await canSendProactiveNudge({ familyId, recipientUserId: userId, now, medicine: true });
-    const activeFlow = flow.ok ? null : flow.reason || "gate_error";
+    // An order, ride or login page in progress (fresh ones only). It fails closed: an error reads as a flow in progress.
+    const { activeFlowFor } = await import("./saheliNudgeGate.service");
+    const activeFlow = await activeFlowFor({ familyId, recipientUserId: userId, now })
+        .then((f) => (f ? `active_flow:${f}` : null))
+        .catch(() => "gate_error");
 
     const { familyMemberPhone } = await import("./careMemorySync.service");
     const found = await familyMemberPhone(familyId, userId);
@@ -41,7 +41,10 @@ export async function nudgeGate(familyId: string, userId: string, now: Date = ne
         // let Meta close it; a nudge has no template to fall back on).
         open = lastInbound !== null && (await windowOpen(found.phone, now));
     }
-    const outs = await OutboundMessage.find({ familyId, recipientUserId: userId, direction: "outbound" })
+    // What went out to THIS person's number (recipientUserId on these rows is the person cared for, so messages to a
+    // caregiver about her carry her id too).
+    const digits = "reason" in found ? "" : String(found.phone).replace(/\D/g, "");
+    const outs = !digits ? [] : await OutboundMessage.find({ familyId, channelIdentifier: { $in: [`+${digits}`, digits] }, direction: "outbound" })
         .sort({ deliveredAt: -1 })
         .limit(5)
         .select({ content: 1, deliveredAt: 1 })

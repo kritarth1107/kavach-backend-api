@@ -101,6 +101,39 @@ async function db(uri: string) {
         assert.match(String(g.active_flow), /^active_flow:ride:/);
         await WhatsappSession.deleteMany({ userId: "u-elder" });
     });
+    await ok("an order session nobody touched for 30 minutes is not in progress (six days of a mother's doses were held by one)", async () => {
+        await WhatsappSession.create({ userId: "u-elder", phone: "919000000101", orderSessionId: "old", orderPhase: "browse",
+            expiresAt: new Date(Date.now() + 86_400_000) });
+        await WhatsappSession.collection.updateOne({ userId: "u-elder" }, { $set: { updatedAt: new Date(Date.now() - 6 * 86_400_000) } });
+        const g = await nudgeGate(fam, "u-elder");
+        assert.equal(g.active_flow, null, JSON.stringify(g));
+        const { canSendProactiveNudge, sessionHasActiveFlow } = await import("../src/services/saheliNudgeGate.service");
+        assert.equal(sessionHasActiveFlow({ orderSessionId: "x", orderPhase: "browse", updatedAt: new Date(Date.now() - 31 * 60_000) }), null);
+        assert.match(String(sessionHasActiveFlow({ orderSessionId: "x", orderPhase: "browse", updatedAt: new Date() })), /order_session/);
+        assert.equal(sessionHasActiveFlow({ orderSessionId: "x", orderPhase: "browse", expiresAt: new Date(Date.now() - 1000) }), null);
+        // a medicine reminder goes even while a fresh order flow is open (founder: medicines are always on time)
+        await WhatsappSession.collection.updateOne({ userId: "u-elder" }, { $set: { updatedAt: new Date() } });
+        assert.equal((await canSendProactiveNudge({ familyId: fam, recipientUserId: "u-elder", medicine: true })).ok, true);
+        assert.match(String((await nudgeGate(fam, "u-elder")).active_flow), /order_session/); // a fresh v1 draft, v1 family
+        // a family on Saheli v2: old v1 drafts never count (they cannot run any more)
+        process.env.BRAIN_V2 = "live";
+        assert.equal((await nudgeGate(fam, "u-elder")).active_flow, null);
+        delete process.env.BRAIN_V2;
+        await WhatsappSession.deleteMany({ userId: "u-elder" });
+    });
+    await ok("the previews are what went to this person's own number, not messages about them sent to a caregiver", async () => {
+        await OutboundMessage.create({ messageId: "m-cg", familyId: fam, recipientUserId: "u-elder", channel: "whatsapp", channelIdentifier: "+919000000102",
+            content: "Summary of Asha's day for Ravi", deliveredAt: new Date() });
+        const g = await nudgeGate(fam, "u-elder");
+        assert.ok(!g.last_outbound_preview.some((p) => p.text.includes("for Ravi")), JSON.stringify(g.last_outbound_preview));
+    });
+    await ok("a caregiver alert template names the person (never \"-\")", async () => {
+        const { alertPersonName } = await import("../src/services/saheliCaregiverAlert.service");
+        const fresh = await Family.findOne({ familyId: fam }).lean();
+        assert.equal(await alertPersonName(fresh as never, "u-elder"), "Asha");
+        assert.equal(await alertPersonName({ members: [] }, "u-cg"), "Ravi"); // from the user's first name
+        assert.equal(await alertPersonName({ members: [] }, "nobody"), "your family member");
+    });
     await ok("Saheli paused for the family is not ok, whatever else", async () => {
         F.setFlagSnapshot({ "nudge.regular": "on", "saheli.pausedFamilies": [fam] });
         const g = await nudgeGate(fam, "u-elder");

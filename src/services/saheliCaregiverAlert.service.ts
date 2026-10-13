@@ -52,6 +52,16 @@ export function claimCaregiverAlert(key: string, windowMs: number, now = Date.no
     return true;
 }
 
+/** The person an alert is about, as the family names them (users have no "name" field: live 2026-10-13 the template read
+ *  "a medicine for - is not marked as taken"). */
+export async function alertPersonName(family: { members?: Array<{ userId: string; name?: string }> } | null, userId: string): Promise<string> {
+    const fromFamily = (family?.members ?? []).find((m) => m.userId === userId)?.name?.trim();
+    if (fromFamily) return fromFamily.split(/\s+/)[0]!;
+    const { default: User } = await import("../models/users.model");
+    const u = await User.findOne({ userId }).select("firstName lastName").lean<{ firstName?: string; lastName?: string }>().catch(() => null);
+    return (u?.firstName || "").trim().split(/\s+/)[0] || "your family member";
+}
+
 export async function notifyCaregivers(input: {
     familyId: string;
     recipientUserId: string;
@@ -105,9 +115,7 @@ export async function notifyCaregivers(input: {
     const { alertTemplateFor } = await import("./whatsappTemplates.service");
     const purpose = allowWhatsApp ? alertTemplateFor(input.kind) : null;
     if (purpose) {
-        const { default: User } = await import("../models/users.model");
-        const who = await User.findOne({ userId: input.recipientUserId }).select("name").lean<{ name?: string }>().catch(() => null);
-        template = { purpose, params: [(who?.name || "").trim().split(/\s+/)[0] || "-"] };
+        template = { purpose, params: [await alertPersonName(family, input.recipientUserId)] };
     }
 
     for (const caregiverId of caregiverIds) {

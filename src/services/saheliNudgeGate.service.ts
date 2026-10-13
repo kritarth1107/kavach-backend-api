@@ -23,9 +23,16 @@ export function nudgeQuietMs(): number {
 
 const IDLE_PHASES = new Set(["idle", "done", "", undefined, null]);
 
-/** Pure: is any draft in this WhatsApp session mid-flow? */
-export function sessionHasActiveFlow(row: Record<string, unknown> | null | undefined): string | null {
+/** A flow nobody touched for this long is not in progress (live 2026-10-13: an old order session left on "browse" held
+ *  back every one of a care recipient's dose reminders for six days). */
+export const ACTIVE_FLOW_FRESH_MS = 30 * 60_000;
+
+/** Pure: is any draft in this WhatsApp session mid-flow (and still fresh)? */
+export function sessionHasActiveFlow(row: Record<string, unknown> | null | undefined, now: number = Date.now()): string | null {
     if (!row) return null;
+    const expires = row.expiresAt ? new Date(row.expiresAt as string | Date).getTime() : Number.POSITIVE_INFINITY;
+    const touched = row.updatedAt ? new Date(row.updatedAt as string | Date).getTime() : null;
+    if (expires <= now || (touched !== null && now - touched > ACTIVE_FLOW_FRESH_MS)) return null;
     const phase = (d: unknown) => (d && typeof d === "object" ? (d as { phase?: string }).phase : undefined);
     const bd = row.browserTaskDraft;
     if (bd && !IDLE_PHASES.has(phase(bd))) return `browser_order:${phase(bd)}`;
@@ -45,46 +52,57 @@ export function quietLongEnough(lastConversationAt: Date | null | undefined, now
     return now - new Date(lastConversationAt).getTime() >= quietMs;
 }
 
+/** An order, ride or login page in progress for this person (a fresh one), or null. Throws if it cannot tell. */
+export async function activeFlowFor(input: { familyId: string; recipientUserId: string; now?: Date }): Promise<string | null> {
+    const now = (input.now ?? new Date()).getTime();
+    // in-memory browser state first (cheap, authoritative for live pages)
+    const actorIds = new Set<string>([input.recipientUserId]);
+    // Their WhatsApp number as outbound messages find it (never the internal "+99" placeholder).
+    const { resolveRecipientWhatsAppPhone } = await import("./identityResolver.service");
+    const phoneDigits = String(
+        (await resolveRecipientWhatsAppPhone(input.recipientUserId, input.familyId).catch(() => null)) ?? "",
+    ).replace(/\D/g, "");
+    const or: Record<string, unknown>[] = [
+        { userId: input.recipientUserId },
+        { pendingRecipientUserId: input.recipientUserId },
+    ];
+    if (phoneDigits) {
+        or.push({ phone: phoneDigits }, { phone: `+${phoneDigits}` });
+    }
+    // The old (v1) WhatsApp order drafts can no longer run for a family on Saheli v2 (legacyGuard), so they never count
+    // there; elsewhere only a fresh one does.
+    const { brainV2Mode } = await import("./brainV2.service");
+    const v1Drafts = brainV2Mode(input.familyId) !== "live";
+    const sessions = await WhatsappSession.find({ $or: or }).lean();
+    for (const s of sessions) {
+        if (s.userId) actorIds.add(String(s.userId));
+        const active = v1Drafts ? sessionHasActiveFlow(s as unknown as Record<string, unknown>, now) : null;
+        if (active) return active;
+    }
+    for (const actor of actorIds) {
+        if (isCheckoutInFlight(input.familyId, actor)) return "checkout_in_flight";
+        if (hasParkedBrowserOtpSession(input.familyId, actor)) return "otp_page_open";
+        if (peekParkedCheckout(input.familyId, actor)) return "confirm_card_open";
+    }
+    return null;
+}
+
 export async function canSendProactiveNudge(input: {
     familyId: string;
     recipientUserId: string;
     now?: Date;
-    /**
-     * A medicine dose reminder: never held back because she chatted recently (a reminder in the middle of a chat is
-     * what a caring person does), only while an order or login page is in progress.
-     */
+    /** A medicine dose reminder: always goes at its time (never held back by a chat, an order, a ride or a login page). */
     medicine?: boolean;
 }): Promise<{ ok: boolean; reason?: string }> {
     const now = (input.now ?? new Date()).getTime();
     const quietMs = nudgeQuietMs();
+    // Founder: "medicines are always on time". Saheli v2 runs orders in the engine's task system, and a reminder in the
+    // middle of that chat is what a caring person does (live 2026-10-13: a stale order session held back six days of doses).
+    if (input.medicine) return { ok: true };
     try {
-        // (2) active jobs/flows — in-memory browser state first (cheap, authoritative for live pages)
-        const actorIds = new Set<string>([input.recipientUserId]);
-        // Their WhatsApp number as outbound messages find it (never the internal "+99" placeholder).
-        const { resolveRecipientWhatsAppPhone } = await import("./identityResolver.service");
-        const phoneDigits = String(
-            (await resolveRecipientWhatsAppPhone(input.recipientUserId, input.familyId).catch(() => null)) ?? "",
-        ).replace(/\D/g, "");
-        const or: Record<string, unknown>[] = [
-            { userId: input.recipientUserId },
-            { pendingRecipientUserId: input.recipientUserId },
-        ];
-        if (phoneDigits) {
-            or.push({ phone: phoneDigits }, { phone: `+${phoneDigits}` });
-        }
-        const sessions = await WhatsappSession.find({ $or: or }).lean();
-        for (const s of sessions) {
-            if (s.userId) actorIds.add(String(s.userId));
-            const active = sessionHasActiveFlow(s as unknown as Record<string, unknown>);
-            if (active) return { ok: false, reason: `active_flow:${active}` };
-        }
-        for (const actor of actorIds) {
-            if (isCheckoutInFlight(input.familyId, actor)) return { ok: false, reason: "active_flow:checkout_in_flight" };
-            if (hasParkedBrowserOtpSession(input.familyId, actor)) return { ok: false, reason: "active_flow:otp_page_open" };
-            if (peekParkedCheckout(input.familyId, actor)) return { ok: false, reason: "active_flow:confirm_card_open" };
-        }
-
-        if (input.medicine) return { ok: true };
+        // (2) active jobs/flows
+        const active = await activeFlowFor({ familyId: input.familyId, recipientUserId: input.recipientUserId, now: input.now });
+        if (active) return { ok: false, reason: `active_flow:${active}` };
 
         // (1) last conversation (inbound or non-nudge outbound) ≥ quiet window
         const companion = await SaheliCompanion.findOne({
