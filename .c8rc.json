@@ -1,0 +1,10 @@
+{
+  "all": true,
+  "src": ["src"],
+  "include": ["src/**/*.ts"],
+  "reporter": ["text-summary"],
+  "check-coverage": true,
+  "lines": 24,
+  "functions": 56,
+  "branches": 71
+}

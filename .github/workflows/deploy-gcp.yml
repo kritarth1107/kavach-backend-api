@@ -47,7 +47,7 @@ jobs:
           NODE_ENV: test
         run: |
           npm ci --no-audit --no-fund
-          npm run test:ci
+          npm run test:coverage  # every suite, with a line-coverage floor (.c8rc.json) that may only go up
 
       - uses: google-github-actions/auth@v2
         with:
