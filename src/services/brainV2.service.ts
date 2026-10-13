@@ -68,7 +68,10 @@ export async function runBrainV2(input: {
             (m) =>
                 m.userId === input.identity.userId &&
                 (m.role === FamilyRole.PRIMARY_CAREGIVER || m.role === FamilyRole.CO_CAREGIVER),
-        );
+        ) ||
+        // Anyone else in a family with no one cared for yet: the brain about the speaker (v1 used to answer them; a held
+        // turn could never be answered and would only be retried for 3 hours).
+        joined.find((m) => m.userId === input.identity.userId);
     if (!elder) return null;
     const speaker = joined.find((m) => m.userId === input.identity.userId);
     const person = brainPerson;

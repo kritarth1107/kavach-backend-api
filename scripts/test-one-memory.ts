@@ -196,6 +196,31 @@ async function withDb(uri: string) {
         assert.equal(await BrainRetryTurn.countDocuments({ userId: elder.userId, status: "merged" }), 1);
     });
 
+    await ok("a held turn the retry is trying right now is left to it (never answered twice)", async () => {
+        await BrainRetryTurn.deleteMany({});
+        const now = Date.now();
+        await BrainRetryTurn.create({ familyId: fam.familyId, userId: elder.userId, role: FamilyRole.CARE_RECIPIENT, phone, messageRef: `wamid.${randomUUID()}`,
+                                      text: "dawai kab leni hai", status: "queued", attempts: 1, nextAt: new Date(now - 1000), firstFailedAt: new Date(now - 40_000),
+                                      lockedUntil: new Date(now + 60_000) });
+        const r = await H.withWaitingTurns(elder.userId, "aur sar dard bhi hai", new Date(now));
+        assert.deepEqual(r, { text: "aur sar dard bhi hai", merged: [] });
+        assert.equal(await BrainRetryTurn.countDocuments({ status: "queued" }), 1);
+        await BrainRetryTurn.deleteMany({});
+    });
+
+    await ok("someone who is not a caregiver, in a family with no one cared for yet, gets the brain about themselves, never a held turn", async () => {
+        const member = await mk("Sunil");
+        const solo = await Family.create({ name: "Test family 2", createdBy: member.userId,
+            members: [{ userId: member.userId, role: FamilyRole.VIEW_ONLY, status: FamilyMemberStatus.JOINED, name: "Sunil" }] });
+        const soloPhone = "+919000054321";
+        await ChannelIdentity.create({ channelType: ChannelType.WHATSAPP, channelIdentifier: soloPhone, familyId: solo.familyId, userId: member.userId,
+                                       role: FamilyRole.VIEW_ONLY, active: true });
+        engine.turn = () => ({ status: 200, body: { reply: "Namaste Sunil ji", actions: [], alerts: [], model: "fake" } });
+        const out = await handleWhatsAppInbound({ from: soloPhone, text: "hello", messageId: `wamid.${randomUUID()}` } as never);
+        assert.equal(String(out.content ?? ""), "Namaste Sunil ji");
+        assert.equal(await BrainRetryTurn.countDocuments({ userId: member.userId }), 0);
+    });
+
     const held = async (ago: number) => {
         await BrainRetryTurn.deleteMany({});
         const now = Date.now();

@@ -104,10 +104,12 @@ export async function holdTurn(turn: HeldTurn, now = new Date()): Promise<string
  * first, so the person gets one answer in order. Returns the text to send instead of `text`.
  */
 export async function withWaitingTurns(userId: string, text: string, now = new Date()): Promise<{ text: string; merged: string[] }> {
-    const rows = await BrainRetryTurn.find({ userId, status: "queued" }).sort({ createdAt: 1 }).limit(5).lean<IBrainRetryTurn[]>().catch(() => []);
+    // A turn the retry tick is trying right now (locked) is left to it, so it is never answered twice.
+    const free = { status: "queued", $or: [{ lockedUntil: null }, { lockedUntil: { $lte: now } }] };
+    const rows = await BrainRetryTurn.find({ userId, ...free }).sort({ createdAt: 1 }).limit(5).lean<IBrainRetryTurn[]>().catch(() => []);
     if (!rows.length) return { text, merged: [] };
     const refs = rows.map((r) => r.messageRef);
-    await BrainRetryTurn.updateMany({ messageRef: { $in: refs }, status: "queued" }, { $set: { status: "merged", answeredAt: now } }).catch(() => undefined);
+    await BrainRetryTurn.updateMany({ messageRef: { $in: refs }, ...free }, { $set: { status: "merged", answeredAt: now } }).catch(() => undefined);
     const earlier = rows
         .filter((r) => r.text?.trim())
         .map((r) => `(An earlier message of theirs you could not answer yet, sent ${istTime(r.firstFailedAt)}: ${r.text.trim()})`);
