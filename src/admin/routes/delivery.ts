@@ -10,6 +10,7 @@ import { daysAgo, iso } from "./shared";
 import DeliveryReport from "../../models/deliveryReport.model";
 import DueSlot, { type IDueSlot } from "../../models/dueSlot.model";
 import OpsAlertLog from "../../models/opsAlertLog.model";
+import { EscalationCheck } from "../../models/escalation.model";
 
 const IST = 330 * 60_000;
 const dayKey = (d: Date) => new Date(d.getTime() + IST).toISOString().slice(0, 10);
@@ -51,6 +52,24 @@ export function deliveryRoutes(): RouteDef[] {
                         })),
                         alerts: alerts.map((a) => ({ kind: a.kind, subject: a.kind === "dose" ? `${a.items.length} dose slot(s)` : a.subject, emailed: a.emailed, at: iso(a.at),
                             items: a.items.map((i) => masked(i as { person?: string; medicine?: string })) })),
+                    },
+                };
+            },
+        },
+        {
+            // B2.5b: the 09:00 check of each day, "escalations on time: x/y" with every case
+            method: "get", path: "/delivery/escalations", perm: "users.read", action: "delivery.escalations",
+            handler: async ({ query }) => {
+                const days = Math.min(Math.max(Number(query.days) || 14, 1), 90);
+                const rows = await EscalationCheck.find({ checkedAt: { $gte: daysAgo(days + 1) } }).sort({ dateKey: -1 }).limit(days)
+                    .lean<Array<{ dateKey: string; onTime: number; total: number; cases: Array<{ family: string; person: string; thirdAt: Date; outcome: string;
+                        reason?: string; alertAt?: Date; onTime: boolean }> }>>();
+                return {
+                    detail: { days, n: rows.length },
+                    data: {
+                        days: rows.map((r) => ({ day: r.dateKey, onTime: r.onTime, total: r.total, misses: r.total - r.onTime })),
+                        cases: rows.flatMap((r) => r.cases.map((c) => ({ day: r.dateKey, family: c.family, person: maskName(c.person) || "someone",
+                            thirdAt: iso(c.thirdAt), outcome: c.outcome, reason: c.reason ?? null, alertAt: iso(c.alertAt), onTime: c.onTime }))),
                     },
                 };
             },

@@ -101,6 +101,7 @@ export type SaheliToolName =
     | "whatsapp_window"
     | "nudge_gate"
     | "delivery_status"
+    | "escalation_status"
     | "alert_care_team";
 
 const RETIRED_V1_TOOLS: ReadonlySet<string> = new Set([
@@ -916,6 +917,12 @@ export async function executeSaheliTool(input: {
                 kind: input.args.kind,
                 ref: input.args.ref,
             });
+        }
+        case "escalation_status": {
+            // The no-reply streak of a person (trust plan B2): how many proactive messages are unanswered, and whether the
+            // caregiver is being told (the regular-nudge ladder stops adding to a streak that is escalating).
+            const { escalationStatus } = await import("./escalation.service");
+            return escalationStatus(input.familyId, String(input.args.to ?? input.recipientUserId));
         }
         case "delivery_status": {
             // How far messages got, by the wamids send_whatsapp returned (WhatsApp's receipts: sent, delivered, read, failed).

@@ -44,6 +44,10 @@ async function runTick() {
         const { markMissed } = await import("../services/dueList.service");
         await markMissed().catch((e) => console.warn("due list missed-marking failed:", e instanceof Error ? e.message : e));
         await R.runDailyDeliveryReport().catch((e) => console.warn("daily delivery report failed:", e instanceof Error ? e.message : e));
+        // 3 unanswered proactive messages + 60 min → the caregiver hears (B2); at 09:00 the day before is checked (B2.5b)
+        const E = await import("../services/escalation.service");
+        await E.runEscalationTick().catch((e) => console.warn("escalation tick failed:", e instanceof Error ? e.message : e));
+        await E.runEscalationCheck().catch((e) => console.warn("escalation check failed:", e instanceof Error ? e.message : e));
     } catch (err) {
         console.warn("Care nudge tick failed:", err);
     } finally {

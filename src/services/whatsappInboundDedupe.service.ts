@@ -34,7 +34,10 @@ export async function claimWhatsAppInboundMessage(
         // Ensure the unique index exists before the first claim (no-op afterwards).
         indexReady ??= WhatsappInboundDedupe.init().catch(() => undefined);
         await indexReady;
-        await WhatsappInboundDedupe.create({ messageId: id, from: from?.slice(-4), ...(media?.mediaId ? { mediaId: media.mediaId, mediaType: media.mediaType } : {}) });
+        const { clockNow } = await import("../utils/clock.util");
+        const phone = String(from ?? "").replace(/\D/g, "");
+        await WhatsappInboundDedupe.create({ messageId: id, from: from?.slice(-4), ...(phone.length >= 8 ? { phone } : {}), createdAt: clockNow(),
+            ...(media?.mediaId ? { mediaId: media.mediaId, mediaType: media.mediaType } : {}) });
         return true;
     } catch (err) {
         const code = (err as { code?: number } | null)?.code;

@@ -126,16 +126,8 @@ export async function runOutreachTick() {
             const timezone = companion.timezone || "Asia/Kolkata";
             const dateKey = localDateParts(timezone).date;
 
-            // Elder silent through N consecutive check-ins → one caregiver WhatsApp alert per streak.
-            try {
-                const { checkSilenceAndAlert } = await import("../services/saheliNudgeStreak.service");
-                await checkSilenceAndAlert(companion.familyId, companion.recipientUserId, { now });
-            } catch (err) {
-                console.warn(
-                    `Silence check failed for ${companion.familyId}/${companion.recipientUserId}:`,
-                    err instanceof Error ? err.message : err,
-                );
-            }
+            // The silence alert (3 unanswered → caregivers) now reads every proactive message from the delivery ledger,
+            // for every family (escalation.service, run by the care-nudge tick): one counter, one alert path (trust plan B2).
 
             // Saheli v2 families: check-ins come from the engine (today's unmarked schedule after a chat, how they feel,
             // readings, reports, weight), written with the person's whole context and only by day. The generic random /

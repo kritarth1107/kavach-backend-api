@@ -8,6 +8,7 @@
  * can skip the ledger, whichever code path sent it. A send with no context is recorded as kind "message".
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { clockNow } from "../utils/clock.util";
 import MessageDelivery, { DELIVERY_KINDS, type DeliveryKind, type DeliveryStatus, type IMessageDelivery } from "../models/messageDelivery.model";
 
 export type DeliveryCtx = {
@@ -59,7 +60,7 @@ function pruneEarly(now = Date.now()) {
 /** Meta accepted a message: one ledger row, from the send's context. Never throws (a ledger problem never stops a send). */
 export async function recordSent(input: { wamid?: string; phone: string; template?: string; part?: number; at?: Date }): Promise<void> {
     const ctx = currentDelivery();
-    const at = input.at ?? new Date();
+    const at = input.at ?? clockNow();
     const part = input.part ?? (ctx ? (ctx._parts = (ctx._parts ?? 0) + 1) - 1 : 0);
     try {
         const row: Partial<IMessageDelivery> = {
@@ -87,7 +88,7 @@ export async function recordSent(input: { wamid?: string; phone: string; templat
 /** A message that never reached Meta (closed chat and no template, a failed call): a failed row, never "delivered". */
 export async function recordNotSent(input: { phone: string; reason: string; errorCode?: number; template?: string; ctx?: DeliveryCtx; at?: Date }): Promise<void> {
     const ctx = input.ctx ?? currentDelivery();
-    const at = input.at ?? new Date();
+    const at = input.at ?? clockNow();
     try {
         await MessageDelivery.create({
             phone: digits(input.phone),

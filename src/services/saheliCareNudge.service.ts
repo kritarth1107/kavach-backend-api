@@ -193,6 +193,10 @@ export async function deliverCareNudge(input: {
         ? undefined
         : { purpose: "reminder" as const, params: [input.title, clockTime(input.time)], quickReplyPayloads: [`done:${input.scheduleId}`] };
     const { attemptsOf } = await import("./saheliNudgeAttempt.service");
+    // a medicine marked critical: an unanswered streak with it is escalated even in the caregivers' quiet hours (B2.2)
+    const critical = input.medicine && input.scheduleId !== "daily_schedule"
+        ? Boolean(await import("../models/careSchedule.model").then((M) => M.default.exists({ scheduleId: input.scheduleId, critical: true })).catch(() => null))
+        : false;
     const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
@@ -207,6 +211,7 @@ export async function deliverCareNudge(input: {
             nudgeId: attemptId,
             attempt: await attemptsOf(attemptId),
             ...(input.time ? { dueAt: slotTime(input.dateKey, input.time) } : {}),
+            ...(critical ? { critical: true } : {}),
         },
     });
 
@@ -279,6 +284,15 @@ export function slotTime(dateKey: string, hhmm: string): Date | undefined {
     return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
+/** The second follow-up goes only after the first went, and at least 30 minutes after it (never two in one minute). */
+async function firstFollowupWentAWhileAgo(c: { familyId: string; recipientUserId: string }, scheduleId: string, dateKey: string, now: Date): Promise<boolean> {
+    const { default: SaheliNudgeLog } = await import("../models/saheliNudgeLog.model");
+    const first = await SaheliNudgeLog.findOne({ familyId: c.familyId, recipientUserId: c.recipientUserId, scheduleId, dateKey, nudgeKind: "missed_followup", delivered: true },
+        { lastAttemptAt: 1, createdAt: 1 }).lean<{ lastAttemptAt?: Date; createdAt?: Date }>().catch(() => null);
+    const at = first?.lastAttemptAt ?? first?.createdAt;
+    return Boolean(at) && now.getTime() - new Date(at!).getTime() >= 30 * 60_000;
+}
+
 /** A medicine dose reminder the gate held back (an order in progress): remembered so the catch-up sends it once clear. */
 async function rememberHeldDose(input: { familyId: string; recipientUserId: string; scheduleId: string; dateKey: string }, reason: string) {
     try {
@@ -339,7 +353,7 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
     const attempted = new Set<string>(
         (await SaheliNudgeLog.distinct("scheduleId", {
             familyId: c.familyId, recipientUserId: c.recipientUserId, dateKey,
-            nudgeKind: { $in: ["dose_due", "pre_reminder", "missed_followup"] },
+            nudgeKind: { $in: ["dose_due", "pre_reminder", "missed_followup", "missed_followup_2"] },
         })).map(String),
     );
     const plan = planCatchUp({
@@ -509,13 +523,19 @@ export async function listSelfCareTargets(): Promise<NudgeTarget[]> {
     const byFamily = new Map<string, string[]>();
     for (const r of rows) byFamily.set(r._id.familyId, [...(byFamily.get(r._id.familyId) ?? []), r._id.recipientUserId]);
     const out: NudgeTarget[] = [];
+    const { default: SaheliCompanion } = await import("../models/saheliCompanion.model");
     for (const [familyId, userIds] of byFamily) {
         const family = await Family.findOne({ familyId, status: "ACTIVE" }).lean();
         if (!family) continue;
         for (const userId of userIds) {
             const m = family.members.find((x) => x.userId === userId && x.status === FamilyMemberStatus.JOINED);
             if (m && (m.role === FamilyRole.PRIMARY_CAREGIVER || m.role === FamilyRole.CO_CAREGIVER)) {
-                out.push({ familyId, recipientUserId: userId, nudgeIntensity: "gentle", preferredLanguage: "english", preferredChannel: "whatsapp" });
+                // their own setting (trust plan B2.4: no longer always gentle); gentle when they never chose
+                const own = await SaheliCompanion.findOne({ familyId, recipientUserId: userId }, { nudgeIntensity: 1, preferredLanguage: 1, preferredChannel: 1 })
+                    .lean<{ nudgeIntensity?: NudgeTarget["nudgeIntensity"]; preferredLanguage?: NudgeTarget["preferredLanguage"]; preferredChannel?: NudgeTarget["preferredChannel"] }>()
+                    .catch(() => null);
+                out.push({ familyId, recipientUserId: userId, nudgeIntensity: own?.nudgeIntensity ?? "gentle", preferredLanguage: own?.preferredLanguage ?? "english",
+                    preferredChannel: own?.preferredChannel ?? "whatsapp" });
             }
         }
     }
@@ -663,8 +683,10 @@ async function nudgeOneCompanion(
             if (
                 intensity === "persistent" &&
                 (item.status === "missed" || item.status === "due") &&
-                inWindow(minutesSince, 55, 95)
+                inWindow(minutesSince, 55, 95) &&
+                (await firstFollowupWentAWhileAgo(companion, item.scheduleId, dateKey, _now))
             ) {
+                // the second follow-up has its own slot (trust plan B2.4): under the first's slot key it never sent
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
                     recipientUserId: companion.recipientUserId,
@@ -672,7 +694,7 @@ async function nudgeOneCompanion(
                     scheduleId: item.scheduleId,
                     title: item.title,
                     time: item.time,
-                    nudgeKind: "missed_followup",
+                    nudgeKind: "missed_followup_2",
                     dateKey,
                     preferredChannel: companion.preferredChannel,
                     preferredLanguage,

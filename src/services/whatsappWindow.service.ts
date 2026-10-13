@@ -9,6 +9,7 @@
  */
 import WhatsAppWindow from "../models/whatsappWindow.model";
 import WhatsAppWaiting from "../models/whatsappWaiting.model";
+import { clockNow } from "../utils/clock.util";
 
 /** A little under 24 hours, so a message sent at the edge never lands just after the window shut. */
 export const WINDOW_MS = 24 * 3_600_000 - 10 * 60_000;
@@ -17,14 +18,14 @@ export function phoneKey(phone: string): string {
     return String(phone ?? "").replace(/\D/g, "");
 }
 
-export async function noteInbound(phone: string, at: Date = new Date()): Promise<void> {
+export async function noteInbound(phone: string, at: Date = clockNow()): Promise<void> {
     const key = phoneKey(phone);
     if (key.length < 8) return;
     await WhatsAppWindow.updateOne({ phone: key }, { $set: { lastInboundAt: at }, $unset: { closedAt: 1 } }, { upsert: true });
 }
 
 /** Meta could not deliver a free message (outside the window): close it, so the next send uses a template. */
-export async function noteClosed(phone: string, at: Date = new Date()): Promise<void> {
+export async function noteClosed(phone: string, at: Date = clockNow()): Promise<void> {
     const key = phoneKey(phone);
     if (key.length < 8) return;
     await WhatsAppWindow.updateOne({ phone: key }, { $set: { closedAt: at }, $setOnInsert: { lastInboundAt: new Date(0) } }, { upsert: true });
@@ -34,7 +35,7 @@ export async function noteClosed(phone: string, at: Date = new Date()): Promise<
  * Is the chat with this number open? A number with no row yet (it has not written since windows were kept) counts as
  * open: the message is tried as before, and if Meta says the chat was closed (131047) the row records it.
  */
-export async function windowOpen(phone: string, now: Date = new Date()): Promise<boolean> {
+export async function windowOpen(phone: string, now: Date = clockNow()): Promise<boolean> {
     const row = await WhatsAppWindow.findOne({ phone: phoneKey(phone) }).lean<{ lastInboundAt?: Date; closedAt?: Date }>();
     if (!row) return true;
     const last = row.lastInboundAt ? new Date(row.lastInboundAt).getTime() : 0;
