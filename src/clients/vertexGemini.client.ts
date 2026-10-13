@@ -42,6 +42,31 @@ function projectId(): string {
 /** Gemini 3.1 Pro is global-only. A regional location returns 404. */
 export const GEMINI_PRO_MODEL = "gemini-3.1-pro-preview";
 
+/**
+ * People's data stays in India (founder decision D5, 13 Oct 2026: "remove the global fallback; health data stays in
+ * India"). Every call through this client carries a person's words, photos or health records, so it runs on the model
+ * Mumbai serves (Gemini 3.5 Flash; 3.1 Pro exists only at global). VERTEX_INDIA_ONLY=off brings the old Pro-at-global
+ * routing back. Browser automation (store pages) uses its own models and is not routed here.
+ */
+export const GEMINI_INDIA_MODEL = "gemini-3.5-flash";
+
+export function indiaOnly(): boolean {
+    return (process.env.VERTEX_INDIA_ONLY || "on").trim().toLowerCase() !== "off";
+}
+
+export function indiaModel(): string {
+    return process.env.VERTEX_INDIA_MODEL?.trim() || GEMINI_INDIA_MODEL;
+}
+
+export function indiaRegion(): string {
+    return process.env.GCP_REGION?.trim() || "asia-south1";
+}
+
+/** The model and region for a call that carries people's data (photos, voice, records, chats). */
+export function personalRoute(model: string): { model: string; location: string } {
+    return indiaOnly() ? { model: indiaModel(), location: indiaRegion() } : { model, location: vertexLocationForModel(model) };
+}
+
 /** Flash and Gemini 2.5 are refused. An empty or forbidden name becomes 3.1 Pro. */
 export function preferPro(raw?: string | null): string {
     const m = (raw || "").trim();
@@ -101,8 +126,14 @@ export async function vertexGenerateText(input: {
     attempt?: number;
 }): Promise<string | null> {
     if (process.env.NODE_ENV === "test" || process.env.VERTEX_DISABLED === "1") return null;
-    const forced = preferPro(input.model);
-    if (forced !== input.model) return vertexGenerateText({ ...input, model: forced });
+    if (indiaOnly()) {
+        if (input.model !== indiaModel() || input.location !== indiaRegion()) {
+            return vertexGenerateText({ ...input, model: indiaModel(), location: indiaRegion() });
+        }
+    } else {
+        const forced = preferPro(input.model);
+        if (forced !== input.model) return vertexGenerateText({ ...input, model: forced });
+    }
     const started = Date.now();
     const budget = input.timeoutMs ?? 8000;
     const ctrl = new AbortController();
@@ -143,7 +174,7 @@ export async function vertexGenerateText(input: {
                 return vertexGenerateText({ ...input, thinkingLevel: undefined });
             }
             console.warn(`vertex ${input.model}@${location} ${lastVertexError}`);
-            // 429 / 500 / 503: one retry, still on 3.1 Pro at global, after a jittered pause.
+            // 429 / 500 / 503: one retry on the same model and region (India stays India), after a jittered pause.
             // A short fixed pause makes every waiter hit the pool again together.
             if ([429, 500, 503].includes(res.status) && (input.attempt ?? 0) < 2) {
                 const left = budget - (Date.now() - started);
@@ -151,7 +182,7 @@ export async function vertexGenerateText(input: {
                 if (left > wait + 1500) {
                     clearTimeout(timer);
                     await new Promise((r) => setTimeout(r, wait));
-                    const retry = nextCapacityRoute(input.model, location, input.attempt ?? 0);
+                    const retry = indiaOnly() ? { model: input.model, location } : nextCapacityRoute(input.model, location, input.attempt ?? 0);
                     return vertexGenerateText({ ...input, model: retry.model, location: retry.location, timeoutMs: left - wait, attempt: (input.attempt ?? 0) + 1 });
                 }
             }

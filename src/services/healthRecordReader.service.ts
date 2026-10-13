@@ -7,7 +7,7 @@
  * JSON was cut after 31 tokens and every photo became "could not be read", silently. This reader gives the model room,
  * keeps thinking low, waits long enough, and logs why a read failed.
  */
-import { vertexGenerateText, lastVertexError, resetVertexError, parseJsonLoose, GEMINI_PRO_MODEL } from "../clients/vertexGemini.client";
+import { vertexGenerateText, lastVertexError, resetVertexError, parseJsonLoose, GEMINI_PRO_MODEL, personalRoute } from "../clients/vertexGemini.client";
 
 export type Flag = "low" | "high" | "normal";
 export type ReadValue = { name: string; value: string; unit: string | null; range: string | null; flag: Flag | null };
@@ -198,9 +198,9 @@ export async function readHealthRecord(input: { buffer?: Buffer; mimeType?: stri
     if (!reading) {
         const error = raw ? `unreadable answer (${lastVertexError || "bad JSON"})` : lastVertexError || "no answer";
         console.warn(`health record read failed (${ms} ms): ${error}`);
-        return { status: "failed", reading: emptyReading(), error, model: GEMINI_PRO_MODEL, ms };
+        return { status: "failed", reading: emptyReading(), error, model: personalRoute(GEMINI_PRO_MODEL).model, ms };
     }
     const status = statusOf(reading);
     if (status === "failed") console.warn(`health record read found nothing usable (${ms} ms)`);
-    return { status, reading: status === "failed" ? { ...reading, unread: ["the page"] } : reading, model: GEMINI_PRO_MODEL, ms };
+    return { status, reading: status === "failed" ? { ...reading, unread: ["the page"] } : reading, model: personalRoute(GEMINI_PRO_MODEL).model, ms };
 }

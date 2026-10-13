@@ -54,6 +54,7 @@
     "test:invites": "tsx scripts/test-invites.ts",
     "test:window": "tsx scripts/test-whatsapp-window.ts",
     "test:brief-recipient": "tsx scripts/test-brief-recipient.ts",
+    "test:vertex-india": "tsx scripts/test-vertex-india.ts",
     "test:nutrition": "tsx scripts/test-nutrition.ts",
     "test:nudge-gate": "tsx scripts/test-nudge-gate.ts",
     "test:care-team": "tsx scripts/test-care-team-alert.ts",

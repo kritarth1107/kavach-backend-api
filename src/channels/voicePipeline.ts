@@ -11,7 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
-import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
+import { personalRoute, preferPro } from "../clients/vertexGemini.client";
 import { dialectBase, speechLabel } from "../services/language.service";
 
 export type SttInput = {
@@ -74,11 +74,12 @@ function speechLocation(): string {
 }
 
 function vertexSttModel(): string {
-    return preferPro(process.env.VERTEX_STT_MODEL);
+    // a voice note is a person's own words: it stays in India (D5) unless VERTEX_INDIA_ONLY=off
+    return personalRoute(preferPro(process.env.VERTEX_STT_MODEL)).model;
 }
 
 function vertexLocation(): string {
-    return vertexLocationForModel(vertexSttModel());
+    return personalRoute(preferPro(process.env.VERTEX_STT_MODEL)).location;
 }
 
 async function getAccessToken(): Promise<string | null> {

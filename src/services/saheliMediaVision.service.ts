@@ -4,7 +4,7 @@
  * Never diagnoses — extract printed facts / visible meal description only.
  */
 import { GoogleAuth } from "google-auth-library";
-import { preferPro, vertexLocationForModel } from "../clients/vertexGemini.client";
+import { personalRoute, preferPro } from "../clients/vertexGemini.client";
 
 export type VisionMediaKind = "food" | "prescription" | "other";
 
@@ -34,11 +34,12 @@ function gcpProjectId(): string {
 }
 
 function visionModel(): string {
-    return preferPro(process.env.VERTEX_VISION_MODEL || process.env.VERTEX_STT_MODEL);
+    // a photo from a family stays in India (D5) unless VERTEX_INDIA_ONLY=off
+    return personalRoute(preferPro(process.env.VERTEX_VISION_MODEL || process.env.VERTEX_STT_MODEL)).model;
 }
 
 function visionLocation(): string {
-    return vertexLocationForModel(visionModel());
+    return personalRoute(preferPro(process.env.VERTEX_VISION_MODEL || process.env.VERTEX_STT_MODEL)).location;
 }
 
 async function getAccessToken(): Promise<string | null> {
