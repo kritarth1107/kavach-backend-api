@@ -305,8 +305,7 @@ async function cloudSql(): Promise<LiveCheckItem> {
  *  were lost to a 404 while the route was not deployed yet). The schedules' own targets are added from Cloud Scheduler. */
 export const ENGINE_ROUTES = [
     "/health", "/v2/turn", "/v2/events", "/v2/brain/compose-reminder", "/v2/voice/prepare", "/v2/calls/turn", "/v2/calls/summary",
-    "/v2/admin/health", "/v2/admin/eval-scores", "/v2/admin/daily-score", "/v2/admin/live", "/v2/jobs/morning-report",
-    // "/v2/admin/latency" joins once engine 451c0de is live (the latency check shows "unknown" until then)
+    "/v2/admin/health", "/v2/admin/latency", "/v2/admin/eval-scores", "/v2/admin/daily-score", "/v2/admin/live", "/v2/jobs/morning-report",
 ];
 
 export function judgeRoutes(paths: string[] | null, wanted: string[]): LiveCheckItem {
