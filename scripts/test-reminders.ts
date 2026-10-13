@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { describe as words, doseFor, nextOccurrence, readSchedule, slotsOn, upcoming } from "../src/services/reminderSchedule.service";
+import { testDbUri } from "./test-db";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -313,7 +314,7 @@ async function withDb(uri: string) {
 
 (async () => {
     await pure();
-    const uri = process.env.TEST_MONGODB_URI;
+    const uri = testDbUri("remtest");
     if (uri) {
         try {
             await withDb(uri);

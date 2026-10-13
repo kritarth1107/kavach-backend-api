@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { parseMetaWebhookMessages } from "../src/clients/metaWhatsApp.client";
+import { testDbUri } from "./test-db";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -116,7 +117,7 @@ async function withDb(uri: string) {
 
 (async () => {
     await pure();
-    const uri = process.env.TEST_MONGODB_URI;
+    const uri = testDbUri("signuptest");
     if (uri) {
         try {
             await withDb(uri);

@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
+import { testDbUri } from "./test-db";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -79,7 +80,7 @@ async function withDb(uri: string) {
 }
 
 (async () => {
-    const uri = process.env.TEST_MONGODB_URI;
+    const uri = testDbUri("remcompose");
     if (uri) await withDb(uri);
     else console.log("(DB checks skipped: set TEST_MONGODB_URI)");
     console.log(`\n${passed} passed${process.exitCode ? ", some FAILED" : ""}`);

@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
+import { testDbUri } from "./test-db";
 
 let passed = 0;
 const ok = (name: string, fn: () => void | Promise<void>) =>
@@ -148,7 +149,7 @@ async function withDb(uri: string) {
 
 (async () => {
     await pure();
-    const uri = process.env.TEST_MONGODB_URI;
+    const uri = testDbUri("pltest");
     if (uri) {
         if (/cosmos|azure|mongodb\+srv/i.test(uri)) throw new Error("TEST_MONGODB_URI must be a throwaway local DB");
         await withDb(uri);
