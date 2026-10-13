@@ -203,9 +203,9 @@ export async function aiEngineJson<T>(method: "GET" | "POST" | "PUT", path: stri
 
 export async function aiPostBrainTurn(payload: {
     family_id: string;
-    elder: { id: string; name: string; role: string };
-    speaker: { id: string; name: string; role: string };
-    members: Array<{ id: string; name: string; role: string }>;
+    elder: { id: string; name: string; role: string; relation?: string; relation_to?: string };
+    speaker: { id: string; name: string; role: string; relation?: string; relation_to?: string };
+    members: Array<{ id: string; name: string; role: string; relation?: string; relation_to?: string }>;
     text: string;
     message_ref?: string;
     channel: string;

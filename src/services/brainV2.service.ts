@@ -27,6 +27,20 @@ export function brainRole(role: string): string {
     return "family member";
 }
 
+type BrainMember = { userId: string; name?: string; role: string; status?: string; relationship?: string; invitedBy?: string };
+
+/** A member as the brain sees them. The relationship the family gave when adding someone is to the member who added
+ *  them ("mother" of the caregiver): without it Saheli guessed, and called a patient's husband her son. */
+export function brainPerson(m: BrainMember): { id: string; name: string; role: string; relation?: string; relation_to?: string } {
+    const relation = (m.relationship || "").trim();
+    return {
+        id: m.userId,
+        name: (m.name || "").trim(),
+        role: brainRole(m.role),
+        ...(relation && m.invitedBy && m.invitedBy !== m.userId ? { relation: relation.slice(0, 40), relation_to: m.invitedBy } : {}),
+    };
+}
+
 export async function runBrainV2(input: {
     identity: Identity;
     text: string;
@@ -43,7 +57,7 @@ export async function runBrainV2(input: {
     location_request?: boolean } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
     const { members } = await getFamilyMembersList(input.identity.familyId, input.identity.userId);
-    const joined = (members as Array<{ userId: string; name?: string; role: string; status?: string }>).filter(
+    const joined = (members as BrainMember[]).filter(
         (m) => m.userId && m.status !== "REMOVED" && m.status !== "REJECTED",
     );
     const elder =
@@ -57,11 +71,7 @@ export async function runBrainV2(input: {
         );
     if (!elder) return null;
     const speaker = joined.find((m) => m.userId === input.identity.userId);
-    const person = (m: { userId: string; name?: string; role: string }) => ({
-        id: m.userId,
-        name: (m.name || "").trim(),
-        role: brainRole(m.role),
-    });
+    const person = brainPerson;
     // Setup not finished (a new WhatsApp sign-up, or an account that never finished onboarding): Saheli runs the setup chat.
     const onboarding = await import("./whatsappSignup.service")
         .then((S) => S.setupPending(input.identity.userId))
