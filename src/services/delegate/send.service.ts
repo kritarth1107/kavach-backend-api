@@ -139,6 +139,8 @@ export async function sendDelegateMessage(
         channel: "whatsapp",
         channelIdentifier: task.phone,
         replyToMessageId: replyTo,
+        // a delivery check / resume nudge to the elder waits for an answer like a check-in does; to a caregiver it is news
+        delivery: { kind: isElder ? "nudge" : "message", refId: `task:${task.taskId}:${purpose}` },
     }).catch((err) => {
         console.warn("[delegate] send failed:", err instanceof Error ? err.message : err);
         return null;

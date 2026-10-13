@@ -175,7 +175,9 @@ async function withDb(uri: string) {
         assert.deepEqual(await sendTemplateNotice(notice), { sent: false, reason: "no approved template" });
         assert.equal(sent.length, 0);
         T.setTemplateCatalogForTest(["kavach_daily_summary|en"]);
-        assert.deepEqual(await sendTemplateNotice(notice), { sent: true, template: "kavach_daily_summary" });
+        const out = await sendTemplateNotice(notice);
+        assert.deepEqual({ ...out, wamid: undefined }, { sent: true, template: "kavach_daily_summary", wamid: undefined });
+        assert.ok(out.wamid?.startsWith("wamid.")); // the engine keeps it (delivery ledger)
         const tpl = sent[0]!.body.template as { name: string; components: Array<{ parameters: Array<{ text: string }> }> };
         assert.equal(tpl.name, "kavach_daily_summary");
         assert.equal(tpl.components[0]!.parameters[0]!.text, "Maa");

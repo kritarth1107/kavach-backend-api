@@ -87,7 +87,33 @@ async function alsoSendVoice(payload: { recipientUserId: string; toUserId?: stri
     }
 }
 
-export async function deliverOutboundMessage(payload: {
+/** What a send is for, for the delivery ledger (trust plan B1.1): the kind, the slot or nudge it belongs to. */
+export type OutboundDeliveryInfo = {
+    kind: import("../models/messageDelivery.model").DeliveryKind;
+    refId?: string;
+    nudgeId?: string;
+    dueAt?: Date;
+    attempt?: number;
+    critical?: boolean;
+};
+
+export async function deliverOutboundMessage(payload: Parameters<typeof deliverOutboundMessageNow>[0] & { delivery?: OutboundDeliveryInfo }): Promise<OutboundDelivery> {
+    const { withDelivery } = await import("./deliveryLedger.service");
+    const info = payload.delivery;
+    return withDelivery({
+        kind: info?.kind ?? (payload.purpose === "alert" ? "alert" : "message"),
+        ...(info?.refId ? { refId: info.refId } : {}),
+        ...(info?.nudgeId ? { nudgeId: info.nudgeId } : {}),
+        ...(info?.dueAt ? { dueAt: info.dueAt } : {}),
+        ...(info?.attempt ? { attempt: info.attempt } : {}),
+        ...(info?.critical ? { critical: true } : {}),
+        familyId: payload.familyId,
+        toUserId: payload.toUserId || payload.recipientUserId,
+        aboutUserId: payload.recipientUserId,
+    }, () => deliverOutboundMessageNow(payload));
+}
+
+async function deliverOutboundMessageNow(payload: {
     familyId: string;
     recipientUserId: string;
     /** Who reads it, when that is not the person it is about (a caregiver getting news of the elder). */
@@ -155,6 +181,8 @@ export async function deliverOutboundMessage(payload: {
         console.warn(
             `Outbound ${payload.channel} send skipped: placeholder recipient number for user ${payload.recipientUserId}`,
         );
+        const { recordNotSent } = await import("./deliveryLedger.service");
+        await recordNotSent({ phone: payload.channelIdentifier, reason: "invalid_recipient" });
         return {
             channel: "dashboard",
             channelIdentifier: "dashboard",
@@ -203,6 +231,13 @@ export async function deliverOutboundMessage(payload: {
             messageIds,
         };
     } catch (err) {
+        if (payload.channel === "whatsapp" && !(err as { ledgerRecorded?: boolean } | null)?.ledgerRecorded) {
+            const { recordNotSent } = await import("./deliveryLedger.service");
+            await recordNotSent({
+                phone: payload.channelIdentifier,
+                reason: isWhatsAppPlaceholderRecipientError(err) ? "invalid_recipient" : `send_failed: ${err instanceof Error ? err.message : String(err)}`,
+            });
+        }
         if (isWhatsAppPlaceholderRecipientError(err)) {
             return {
                 channel: "dashboard",
@@ -229,17 +264,21 @@ export async function sendTemplateNotice(input: {
     toUserId: string;
     phone: string;
     template: OutboundTemplate;
-}): Promise<{ sent: boolean; reason?: string; template?: string }> {
+}): Promise<{ sent: boolean; reason?: string; template?: string; wamid?: string }> {
     const T = await import("./whatsappTemplates.service");
     const lang = input.template.lang || (await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.toUserId)).catch(() => null))?.language;
     const chosen = await T.pickTemplate(input.template.purpose, lang);
-    if (!chosen) return { sent: false, reason: "no approved template" };
+    if (!chosen) {
+        const { recordNotSent } = await import("./deliveryLedger.service");
+        await recordNotSent({ phone: input.phone, reason: "no_template" });
+        return { sent: false, reason: "no approved template" };
+    }
     const params = Array.from({ length: T.TEMPLATE_PARAMS[input.template.purpose] }, (_, i) => T.templateParam(input.template.params[i] ?? ""));
     try {
-        await sendMetaWhatsAppTemplate({ to: input.phone, templateName: chosen.name, languageCode: chosen.language, bodyParameters: params });
+        const wamid = await sendMetaWhatsAppTemplate({ to: input.phone, templateName: chosen.name, languageCode: chosen.language, bodyParameters: params });
         await OutboundMessage.create({ messageId: randomUUID(), familyId: input.familyId, recipientUserId: input.recipientUserId, channel: "whatsapp",
             channelIdentifier: input.phone, content: `[${chosen.name} ${chosen.language}] ${params.join(" | ")}`, direction: "outbound", deliveredAt: new Date() });
-        return { sent: true, template: chosen.name };
+        return { sent: true, template: chosen.name, ...(wamid ? { wamid } : {}) };
     } catch (err) {
         console.warn(`WhatsApp template ${chosen.name} failed:`, err instanceof Error ? err.message : err);
         return { sent: false, reason: "send failed" };
@@ -257,7 +296,11 @@ async function deliverOutsideWindow(
     record: Record<string, unknown>,
 ): Promise<OutboundDelivery | null> {
     const t = payload.template;
-    if (!t) return { channel: "dashboard", channelIdentifier: "dashboard", delivered: false, reason: "outside_window" };
+    if (!t) {
+        const { recordNotSent } = await import("./deliveryLedger.service");
+        await recordNotSent({ phone: payload.channelIdentifier, reason: "outside_window: no template for this message" });
+        return { channel: "dashboard", channelIdentifier: "dashboard", delivered: false, reason: "outside_window" };
+    }
     const phone = payload.channelIdentifier;
     const reader = payload.toUserId || payload.recipientUserId;
     const T = await import("./whatsappTemplates.service");

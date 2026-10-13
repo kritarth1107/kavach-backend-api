@@ -109,6 +109,17 @@ export async function claimNudgeAttempt(
     return row.nudgeId ?? null;
 }
 
+/** Reasons that mean a send was tried and did not reach WhatsApp (as opposed to held back on purpose: gated, done, paused). */
+export function sendFailedReason(reason?: string): boolean {
+    return /^(send_failed|outside_window|invalid_recipient|no_valid_recipient|no_template|late_reminder_)/.test(String(reason ?? ""));
+}
+
+/** How many sends this slot has had (for the delivery ledger's attempt count). */
+export async function attemptsOf(nudgeId: string): Promise<number> {
+    const row = await SaheliNudgeLog.findOne({ nudgeId }, { attempts: 1 }).lean<{ attempts?: number }>().catch(() => null);
+    return Math.max(1, row?.attempts ?? 1);
+}
+
 export async function finalizeNudgeAttempt(
     nudgeId: string,
     outcome: {
@@ -117,8 +128,11 @@ export async function finalizeNudgeAttempt(
         messagePreview?: string;
         terminal?: boolean;
         reason?: string;
+        /** The WhatsApp message id Meta gave the send (the delivery ledger links receipts back to this row). */
+        wamid?: string;
     },
 ): Promise<void> {
+    const deliveryStatus = outcome.delivered ? "sent" : sendFailedReason(outcome.reason) ? "failed" : undefined;
     await SaheliNudgeLog.updateOne(
         { nudgeId },
         {
@@ -130,7 +144,11 @@ export async function finalizeNudgeAttempt(
                 ...(outcome.messagePreview
                     ? { messagePreview: outcome.messagePreview.slice(0, 200) }
                     : {}),
+                ...(outcome.wamid ? { wamid: outcome.wamid } : {}),
+                ...(deliveryStatus ? { deliveryStatus } : {}),
+                ...(deliveryStatus === "failed" ? { failedAt: new Date() } : {}),
             },
+            ...(outcome.delivered ? { $unset: { failedAt: 1, errorCode: 1 } } : {}),
         },
     ).catch((err) => {
         console.warn("finalizeNudgeAttempt failed:", err instanceof Error ? err.message : err);
@@ -139,7 +157,7 @@ export async function finalizeNudgeAttempt(
 }
 
 /** Saheli's ledger must know every reminder that went out or failed, or she cannot answer "was I reminded?". */
-async function pushNudgeToLedger(nudgeId: string, outcome: { delivered: boolean; terminal?: boolean; reason?: string; messagePreview?: string }) {
+async function pushNudgeToLedger(nudgeId: string, outcome: { delivered: boolean; terminal?: boolean; reason?: string; messagePreview?: string; wamid?: string }) {
     if (!outcome.delivered && !outcome.terminal) return;
     const row = await SaheliNudgeLog.findOne({ nudgeId }).lean().catch(() => null);
     if (!row) return;
@@ -168,7 +186,9 @@ async function pushNudgeToLedger(nudgeId: string, outcome: { delivered: boolean;
         subject_id: row.recipientUserId,
         kind: outcome.delivered ? "reminder_sent" : "reminder_failed",
         summary: `${label}: ${what}${outcome.delivered ? "" : ` (not delivered: ${outcome.reason || "unknown"})`}`,
-        payload: { nudgeKind: row.nudgeKind, scheduleId: row.scheduleId, dateKey: row.dateKey, preview: outcome.messagePreview?.slice(0, 200), ...extra },
+        // the wamid: the engine can ask how far it got (delivered, read) and link its reply to it (trust plan B1.3)
+        payload: { nudgeKind: row.nudgeKind, scheduleId: row.scheduleId, dateKey: row.dateKey, preview: outcome.messagePreview?.slice(0, 200),
+                   ...(outcome.wamid ? { wamid: outcome.wamid } : {}), ...extra },
         ref: `nudge:${nudgeId}:${outcome.delivered ? "sent" : "failed"}`,
     });
 }

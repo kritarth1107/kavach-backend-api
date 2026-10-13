@@ -498,10 +498,11 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { recordWhatsAppWebhookEvent } = await import("../services/whatsappWebhookLog.service");
 
     const messages = parseMetaWebhookMessages(req.body);
-    // A free message Meta refused because the person's 24-hour window was closed: close it, so later sends use a template.
-    void import("../services/whatsappWindow.service")
-        .then((W) => W.noteStatusFailures(req.body))
-        .catch(() => undefined);
+    // WhatsApp's receipts (sent, delivered, read, failed) update the delivery ledger by wamid (trust plan B1.2); a free
+    // message Meta refused because the 24-hour window was closed (131047) also closes it, so later sends use a template.
+    void import("../services/deliveryLedger.service")
+        .then((L) => L.applyStatuses(req.body))
+        .catch((err) => console.warn("WhatsApp receipts failed:", err instanceof Error ? err.message : err));
     if (!messages.length) {
         const objectType =
             req.body && typeof req.body === "object"
@@ -570,7 +571,35 @@ async function processMetaInboundMessages(
         "../services/saheliElderFacts.service"
     );
 
+    const { withDelivery } = await import("../services/deliveryLedger.service");
     for (const inbound of messages) {
+        // everything sent while answering this message is Saheli's reply to it (the delivery ledger's kind "reply")
+        await withDelivery({ kind: "reply", replyTo: String(inbound.from ?? "").replace(/\D/g, "") }, () =>
+            processOneMetaInbound(rawBody, parsedCount, inbound, { handleWhatsAppInbound, formatMetaSendError, isMetaWhatsAppEnabled,
+                markMetaWhatsAppInboundSeen, sendViaMetaWhatsApp, startMetaWhatsAppTypingRefresh, recordWhatsAppWebhookEvent,
+                VOICE_NOT_CAUGHT_REPLY, WARM_NEUTRAL_REPLY }));
+    }
+}
+
+async function processOneMetaInbound(
+    rawBody: unknown,
+    parsedCount: number,
+    inbound: import("../clients/metaWhatsApp.client").MetaInboundMessage,
+    deps: {
+        handleWhatsAppInbound: typeof import("../services/whatsappInbound.service").handleWhatsAppInbound;
+        formatMetaSendError: typeof import("../clients/metaWhatsApp.client").formatMetaSendError;
+        isMetaWhatsAppEnabled: typeof import("../clients/metaWhatsApp.client").isMetaWhatsAppEnabled;
+        markMetaWhatsAppInboundSeen: typeof import("../clients/metaWhatsApp.client").markMetaWhatsAppInboundSeen;
+        sendViaMetaWhatsApp: typeof import("../clients/metaWhatsApp.client").sendViaMetaWhatsApp;
+        startMetaWhatsAppTypingRefresh: typeof import("../clients/metaWhatsApp.client").startMetaWhatsAppTypingRefresh;
+        recordWhatsAppWebhookEvent: typeof import("../services/whatsappWebhookLog.service").recordWhatsAppWebhookEvent;
+        VOICE_NOT_CAUGHT_REPLY: string;
+        WARM_NEUTRAL_REPLY: string;
+    },
+) {
+    const { handleWhatsAppInbound, formatMetaSendError, isMetaWhatsAppEnabled, markMetaWhatsAppInboundSeen, sendViaMetaWhatsApp,
+        startMetaWhatsAppTypingRefresh, recordWhatsAppWebhookEvent, VOICE_NOT_CAUGHT_REPLY, WARM_NEUTRAL_REPLY } = deps;
+    {
         let replySent = false;
         let replyPreview: string | undefined;
         let error: string | undefined;

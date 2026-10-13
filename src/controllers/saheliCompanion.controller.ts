@@ -275,6 +275,10 @@ export async function getCompanionActivity(
                     channel: n.channel,
                     reason: n.reason ?? null,
                     doseStatus: n.delivered ? "sent" : n.terminal || n.reason === "no_valid_recipient" ? "skipped" : "failed",
+                    // WhatsApp's own receipt (trust plan B1.3): sent ✓, delivered ✓✓ (on the phone), read (blue ✓✓), failed
+                    delivery: n.deliveryStatus ?? (n.delivered ? "sent" : null),
+                    deliveredAt: n.deliveredAt?.toISOString?.() ?? null,
+                    readAt: n.readAt?.toISOString?.() ?? null,
                     createdAt: n.createdAt?.toISOString?.() ?? null,
                 })),
                 escalations: escalations.map((e) => ({

@@ -73,7 +73,11 @@ export async function notifyCaregivers(input: {
     dedupeKey?: string;
     /** The engine's why-trail id (D-13): the admin console's alert list links to why it was sent. */
     traceId?: string;
-}): Promise<{ notifiedCount: number; channels: string[]; others: number }> {
+    /** What the alert is about, for the delivery ledger (an escalation's streak key). */
+    refId?: string;
+    /** Only these caregivers (the rest are in their quiet hours, or already told). */
+    onlyUserIds?: string[];
+}): Promise<{ notifiedCount: number; channels: string[]; others: number; notifiedUserIds: string[] }> {
     const allowWhatsApp = caregiverWhatsAppAllowed(input.kind, input.urgency);
     {
         const { logActivity } = await import("./activityLog.service");
@@ -94,7 +98,7 @@ export async function notifyCaregivers(input: {
         });
     }
     const family = await Family.findOne({ familyId: input.familyId, status: "ACTIVE" }).lean();
-    if (!family) return { notifiedCount: 0, channels: [], others: 0 };
+    if (!family) return { notifiedCount: 0, channels: [], others: 0, notifiedUserIds: [] };
 
     const caregiverIds = family.members
         .filter(
@@ -105,9 +109,11 @@ export async function notifyCaregivers(input: {
         .map((m) => m.userId)
         // never the person the alert is about: caring for themselves, they are their own primary caregiver (founder
         // 2026-10-13: a self-care user got five "urgent care alert" messages about himself)
-        .filter((id) => id !== input.recipientUserId);
+        .filter((id) => id !== input.recipientUserId)
+        .filter((id) => !input.onlyUserIds || input.onlyUserIds.includes(id));
 
     let notifiedCount = 0;
+    const notifiedUserIds: string[] = [];
     const channels: string[] = [];
     // A caregiver whose WhatsApp chat is closed (24 hours since they wrote) gets the alert template for this kind, naming
     // the person; the full alert waits and Saheli gives it when they tap or write.
@@ -166,15 +172,17 @@ export async function notifyCaregivers(input: {
                 channelIdentifier: phone,
                 whatsappPayloads: payloads,
                 ...(template ? { template } : {}),
+                delivery: { kind: "alert", refId: input.refId ?? `alert:${input.kind || "care_alert"}` },
             });
             if (delivery.delivered) {
                 notifiedCount += 1;
+                notifiedUserIds.push(caregiverId);
                 channels.push("whatsapp");
             }
         }
     }
 
-    return { notifiedCount, channels, others: caregiverIds.length };
+    return { notifiedCount, channels, others: caregiverIds.length, notifiedUserIds };
 }
 
 /** Durable check across restarts: notification dedupe keys are stored as `<caregiverId>:<key>`. */

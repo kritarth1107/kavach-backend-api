@@ -2,6 +2,7 @@ import { scrubStack } from "../services/stackScrub";
 import config from "../config/app.config";
 import { assertSendableWhatsAppRecipient } from "../services/whatsappRecipientGuard.service";
 import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
+import { recordNotSent, recordSent } from "../services/deliveryLedger.service";
 
 export function isMetaWhatsAppEnabled(): boolean {
     const meta = config.whatsapp.meta;
@@ -167,6 +168,33 @@ async function readWamid(res: Response): Promise<string | undefined> {
     return parsed.messages?.[0]?.id;
 }
 
+/** The ledger write never holds a message back for long (a slow database must not slow Saheli's replies). */
+function briefly(p: Promise<void>, ms = 1500): Promise<void> {
+    return Promise.race([p, new Promise<void>((resolve) => setTimeout(resolve, ms).unref?.())]);
+}
+
+/** Meta accepted it: the wamid goes to the delivery ledger (trust plan B1.1), whichever code path sent it. */
+async function accepted(to: string, res: Response, template?: string): Promise<string | undefined> {
+    noteChatSend(to);
+    const wamid = await readWamid(res);
+    await briefly(recordSent({ wamid, phone: to, ...(template ? { template } : {}) }));
+    return wamid;
+}
+
+/** Meta refused it: a failed ledger row, and the error the caller throws. */
+async function refused(to: string, res: Response, template?: string): Promise<Error> {
+    const body = await res.text().catch(() => "");
+    let code: number | undefined;
+    try {
+        code = Number((JSON.parse(body) as { error?: { code?: number } }).error?.code) || undefined;
+    } catch {
+        // not JSON
+    }
+    const message = formatMetaSendError(res.status, body);
+    await briefly(recordNotSent({ phone: to, reason: `send_failed: ${message}`, ...(code ? { errorCode: code } : {}), ...(template ? { template } : {}) }));
+    return Object.assign(new Error(message), { ledgerRecorded: true, metaCode: code });
+}
+
 async function sendSingleMetaWhatsAppText(
     to: string,
     text: string,
@@ -195,12 +223,8 @@ async function sendSingleMetaWhatsAppText(
         }),
     });
 
-    if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(formatMetaSendError(res.status, body));
-    }
-    noteChatSend(to);
-    return readWamid(res);
+    if (!res.ok) throw await refused(to, res);
+    return accepted(to, res);
 }
 
 async function sendSingleMetaWhatsAppPayload(
@@ -229,12 +253,8 @@ async function sendSingleMetaWhatsAppPayload(
         }),
     });
 
-    if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(formatMetaSendError(res.status, body));
-    }
-    noteChatSend(to);
-    return readWamid(res);
+    if (!res.ok) throw await refused(to, res);
+    return accepted(to, res);
 }
 
 function scrubPayload(p: MetaWhatsAppPayload): MetaWhatsAppPayload {
@@ -349,12 +369,8 @@ export async function sendMetaWhatsAppTemplate(input: {
         }),
     });
 
-    if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(formatMetaSendError(res.status, body));
-    }
-    noteChatSend(input.to);
-    return readWamid(res);
+    if (!res.ok) throw await refused(input.to, res, input.templateName);
+    return accepted(input.to, res, input.templateName);
 }
 
 export async function sendViaMetaWhatsApp(

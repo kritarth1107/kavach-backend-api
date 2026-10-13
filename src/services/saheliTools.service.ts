@@ -100,6 +100,7 @@ export type SaheliToolName =
     | "send_template"
     | "whatsapp_window"
     | "nudge_gate"
+    | "delivery_status"
     | "alert_care_team";
 
 const RETIRED_V1_TOOLS: ReadonlySet<string> = new Set([
@@ -912,7 +913,15 @@ export async function executeSaheliTool(input: {
                 buttons: Array.isArray(input.args.buttons) ? (input.args.buttons as Array<{ id: string; title: string }>) : undefined,
                 locationRequest: input.args.location_request === true,
                 template: engineTemplate(input.args.template),
+                kind: input.args.kind,
+                ref: input.args.ref,
             });
+        }
+        case "delivery_status": {
+            // How far messages got, by the wamids send_whatsapp returned (WhatsApp's receipts: sent, delivered, read, failed).
+            const { deliveryOf } = await import("./deliveryLedger.service");
+            const wamids = Array.isArray(input.args.wamids) ? (input.args.wamids as unknown[]).map(String) : input.args.wamid ? [String(input.args.wamid)] : [];
+            return { messages: await deliveryOf(wamids) };
         }
         case "alert_care_team": {
             // The Kavach care team (founder 2026-10-13): talk of suicide, self-harm or harming someone, or an emergency with no
@@ -954,6 +963,8 @@ export async function executeSaheliTool(input: {
                 recipientUserId: input.recipientUserId,
                 toUserId: String(input.args.to ?? input.recipientUserId),
                 template,
+                kind: input.args.kind,
+                ref: input.args.ref,
             });
         }
         case "claim_schedule_rows": {

@@ -189,6 +189,13 @@ export async function familyMemberPhone(familyId: string, userId: string): Promi
     return { reason: "no WhatsApp number" };
 }
 
+/** The kinds the engine may give its sends (anything else is recorded as "message"). */
+const ENGINE_KINDS = ["nudge", "checkin", "brief", "message", "reminder", "alert"] as const;
+
+export function engineDeliveryKind(raw: unknown): (typeof ENGINE_KINDS)[number] {
+    return (ENGINE_KINDS as readonly string[]).includes(String(raw)) ? (String(raw) as (typeof ENGINE_KINDS)[number]) : "message";
+}
+
 /** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */
 /** A template hint from the engine ({purpose, params, lang}), checked: anything else is dropped. */
 export function engineTemplate(raw: unknown): import("./channelOutbound.service").OutboundTemplate | undefined {
@@ -209,6 +216,8 @@ export async function sendTemplateOnly(input: {
     recipientUserId: string;
     toUserId: string;
     template: import("./channelOutbound.service").OutboundTemplate;
+    kind?: unknown;
+    ref?: unknown;
 }) {
     const found = await familyMemberPhone(input.familyId, input.toUserId);
     if ("reason" in found) return { sent: false, reason: found.reason };
@@ -220,7 +229,12 @@ export async function sendTemplateOnly(input: {
     const { isMetaWhatsAppEnabled } = await import("../clients/metaWhatsApp.client");
     if (!isMetaWhatsAppEnabled()) return { sent: false, reason: "whatsapp off" };
     const { sendTemplateNotice } = await import("./channelOutbound.service");
-    return sendTemplateNotice({ familyId: input.familyId, recipientUserId: input.recipientUserId, toUserId: input.toUserId, phone: found.phone, template: input.template });
+    const { withDelivery } = await import("./deliveryLedger.service");
+    return withDelivery({
+        kind: input.template.purpose === "summary" ? "brief" : engineDeliveryKind(input.kind),
+        familyId: input.familyId, toUserId: input.toUserId, aboutUserId: input.recipientUserId,
+        ...(typeof input.ref === "string" && input.ref.trim() ? { refId: input.ref.trim().slice(0, 160) } : {}),
+    }, () => sendTemplateNotice({ familyId: input.familyId, recipientUserId: input.recipientUserId, toUserId: input.toUserId, phone: found.phone, template: input.template }));
 }
 
 export async function sendSaheliWhatsApp(input: {
@@ -233,6 +247,10 @@ export async function sendSaheliWhatsApp(input: {
     locationRequest?: boolean;
     /** Sent instead when their WhatsApp chat is closed (the message then waits for their next one). */
     template?: import("./channelOutbound.service").OutboundTemplate;
+    /** What it is, for the delivery ledger (trust plan B1.1): the escalation streak counts nudges and check-ins. */
+    kind?: unknown;
+    /** The engine's own id for it (a nudge row, a check-in turn), kept on the ledger row. */
+    ref?: unknown;
 }) {
     const text = input.text.trim();
     if (!text) return { delivered: false, reason: "empty" };
@@ -259,9 +277,17 @@ export async function sendSaheliWhatsApp(input: {
         channelIdentifier: phone,
         ...(whatsappPayloads ? { whatsappPayloads } : {}),
         ...(input.template ? { template: input.template } : {}),
+        delivery: {
+            kind: engineDeliveryKind(input.kind),
+            ...(typeof input.ref === "string" && input.ref.trim() ? { refId: input.ref.trim().slice(0, 160) } : {}),
+        },
     });
+    // The wamid goes back to the engine (B1.1): it keeps it on its own row (a nudge, a check-in) and can ask how far the
+    // message got with the delivery_status tool (sent, delivered, read, failed).
+    const wamids = delivery.messageIds ?? [];
     return {
         delivered: Boolean(delivery.delivered),
+        ...(wamids.length ? { wamid: wamids[0], wamids } : {}),
         ...(delivery.via ? { via: delivery.via } : {}),
         ...(delivery.waiting ? { waiting: true } : {}),
         ...(delivery.reason ? { reason: delivery.reason } : {}),

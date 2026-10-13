@@ -104,7 +104,9 @@ export async function deliverCareNudge(input: {
             nudgeKind:
                 input.nudgeKind === "daily_schedule" || input.nudgeKind === "dose_due"
                     ? "pre_reminder"
-                    : input.nudgeKind,
+                    : input.nudgeKind === "missed_followup_2"
+                      ? "missed_followup"
+                      : input.nudgeKind,
             scheduleId: input.scheduleId,
             title: input.title,
             time: input.time,
@@ -181,6 +183,7 @@ export async function deliverCareNudge(input: {
     const template = input.nudgeKind === "daily_schedule"
         ? undefined
         : { purpose: "reminder" as const, params: [input.title, clockTime(input.time)], quickReplyPayloads: [`done:${input.scheduleId}`] };
+    const { attemptsOf } = await import("./saheliNudgeAttempt.service");
     const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
@@ -189,6 +192,13 @@ export async function deliverCareNudge(input: {
         channelIdentifier: target.channelIdentifier,
         whatsappPayloads: payloads,
         ...(template ? { template } : {}),
+        delivery: {
+            kind: careNudgeDeliveryKind(input.nudgeKind),
+            refId: input.nudgeKind === "daily_schedule" ? `schedule:${input.dateKey}` : doseSlotKey(input.scheduleId, input.dateKey),
+            nudgeId: attemptId,
+            attempt: await attemptsOf(attemptId),
+            ...(input.time ? { dueAt: slotTime(input.dateKey, input.time) } : {}),
+        },
     });
 
     await finalizeNudgeAttempt(attemptId, {
@@ -196,6 +206,7 @@ export async function deliverCareNudge(input: {
         channel: target.channel,
         terminal: delivery.reason === "invalid_recipient",
         reason: delivery.delivered ? undefined : delivery.reason ?? "send_failed",
+        wamid: delivery.messageIds?.[0],
     });
 
     if (!delivery.delivered) {
@@ -220,6 +231,37 @@ export async function deliverCareNudge(input: {
         });
     }
     return delivery.delivered;
+}
+
+/** The delivery ledger's kind for a care-schedule send. */
+export function careNudgeDeliveryKind(kind: SaheliNudgeKind): import("../models/messageDelivery.model").DeliveryKind {
+    switch (kind) {
+        case "dose_due":
+            return "dose_reminder";
+        case "missed_followup":
+        case "missed_followup_2":
+            return "dose_followup";
+        case "pre_reminder":
+        case "appointment_prep":
+            return "reminder";
+        case "daily_schedule":
+            return "brief";
+        default:
+            return "message";
+    }
+}
+
+/** A dose's slot on the due list: one per medicine time per day. */
+export function doseSlotKey(scheduleId: string, dateKey: string): string {
+    return `dose:${scheduleId}:${dateKey}`;
+}
+
+/** "2026-10-14" + "08:30" (IST) → the moment. */
+export function slotTime(dateKey: string, hhmm: string): Date | undefined {
+    const m = String(hhmm ?? "").match(/^(\d{1,2}):(\d{2})/);
+    if (!m) return undefined;
+    const d = new Date(`${dateKey}T${m[1]!.padStart(2, "0")}:${m[2]}:00+05:30`);
+    return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
 /** A medicine dose reminder the gate held back (an order in progress): remembered so the catch-up sends it once clear. */
@@ -343,15 +385,19 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
                 params: [claims.map((x) => x.item.title).join(", "), clockTime(claims[0]!.item.time)],
                 ...(one ? { quickReplyPayloads: [`done:${one.scheduleId}`] } : {}),
             };
-            const delivery = target && target.channel !== "dashboard"
+            const first = claims[0]!;
+            const delivery: { delivered: boolean; channel: string; reason?: string; messageIds?: string[] } = target && target.channel !== "dashboard"
                 ? await deliverOutboundMessage({ purpose: "proactive", familyId: c.familyId, recipientUserId: c.recipientUserId, content: text,
-                                                 channel: target.channel, channelIdentifier: target.channelIdentifier, template })
+                                                 channel: target.channel, channelIdentifier: target.channelIdentifier, template,
+                                                 delivery: { kind: "dose_followup", refId: doseSlotKey(first.item.scheduleId, dateKey), nudgeId: first.id,
+                                                             dueAt: slotTime(dateKey, first.item.time) } })
                 : { delivered: false, channel: "dashboard" as const, reason: "invalid_recipient" as const };
             for (const x of claims) {
                 await finalizeNudgeAttempt(x.id, {
                     delivered: delivery.delivered, channel: delivery.channel,
                     terminal: !delivery.delivered, reason: delivery.delivered ? undefined : `late_reminder_${delivery.reason ?? "failed"}`,
                     messagePreview: text,
+                    ...(x === first ? { wamid: delivery.messageIds?.[0] } : {}),
                 });
             }
             if (delivery.delivered) sent += 1;

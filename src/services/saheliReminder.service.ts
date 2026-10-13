@@ -488,6 +488,8 @@ export type ReminderOccurrence = {
     /** More than three times that day (an hourly one): the calendar shows these smaller. */
     many: boolean;
     stopped: boolean;
+    /** WhatsApp's own receipt for a sent one (trust plan B1.3): ✓ sent, ✓✓ delivered, read (blue), or failed. */
+    delivery?: "sent" | "delivered" | "read" | "failed";
 };
 
 /** One person's reminders on one day, each time with what happened (for the calendar). */
@@ -547,7 +549,9 @@ export async function remindersForDay(input: {
                 reason = log.reason;
             } else if (past) status = "not_sent";
             else status = "scheduled";
+            const delivery = log?.deliveryStatus ?? (log?.delivered ? "sent" : undefined);
             occurrences.push({ reminderId: r.reminderId, text: r.text, time: t, status, ...(reason ? { reason } : {}),
+                               ...(delivery && (status === "sent" || status === "failed") ? { delivery } : {}),
                                schedule: describe(r), many: slots.length > 3, stopped: r.status !== "active" });
         }
     }
@@ -711,6 +715,11 @@ export async function composeReminderLine(familyId: string, recipientUserId: str
     }
 }
 
+/** A reminder time's slot on the due list: one per reminder time per day. */
+export function reminderSlotKey(reminderId: string, hhmm: string, dateKey: string): string {
+    return `reminder:${reminderId}:${hhmm}:${dateKey}`;
+}
+
 async function fireReminderMessage(input: {
     familyId: string;
     recipientUserId: string;
@@ -766,6 +775,7 @@ async function fireReminderMessage(input: {
 
     // Their WhatsApp chat closed (no message from them in 24 hours): the reminder still reaches them, as the template.
     const { clockTime } = await import("./whatsappTemplates.service");
+    const { attemptsOf } = await import("./saheliNudgeAttempt.service");
     const delivery = await deliverOutboundMessage({ purpose: "proactive",
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
@@ -773,6 +783,13 @@ async function fireReminderMessage(input: {
         channel: target.channel,
         channelIdentifier: target.channelIdentifier,
         template: { purpose: "reminder", params: [input.reminder.text, clockTime(input.slotKey)] },
+        delivery: {
+            kind: "reminder",
+            refId: reminderSlotKey(input.reminder.reminderId, input.slotKey, input.dateKey),
+            nudgeId: attemptId,
+            attempt: await attemptsOf(attemptId),
+            dueAt: new Date(`${input.dateKey}T${input.slotKey}:00+05:30`),
+        },
     });
 
     if (delivery.reason === "paused") {
@@ -789,6 +806,7 @@ async function fireReminderMessage(input: {
         // The line that actually went out (composed fresh), not the stored text: Saheli's ledger and the engine's turn for
         // this reminder show what the person read (Kavach NUdge's plan §4.1).
         messagePreview: text,
+        wamid: delivery.messageIds?.[0],
     });
     void import("./activityLog.service").then(({ logActivity }) =>
         logActivity({

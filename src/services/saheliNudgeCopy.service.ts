@@ -1,7 +1,7 @@
 import type { SaheliNudgeKind } from "../models/saheliNudgeLog.model";
 import { type SpeechProfile } from "./language.service";
 
-type Copy = Record<SaheliNudgeKind | "default", (who: string, title: string, time: string) => string>;
+type Copy = Record<Exclude<SaheliNudgeKind, "missed_followup_2"> | "default", (who: string, title: string, time: string) => string>;
 
 /**
  * Saheli's care nudges — written like her own child would say it: warm, respectful ("aap"), short, never nagging.
@@ -164,6 +164,8 @@ export function buildCareNudgeText(input: {
 }): string {
     const copy = COPY[nudgeLanguage(input.speech, input.preferredLanguage)];
     const who = input.addressAs?.trim() || input.displayName;
-    const make = copy[input.nudgeKind] || copy.default;
+    // the second follow-up after a missed dose reads like the first (it has its own slot only so that it can send)
+    const kind = input.nudgeKind === "missed_followup_2" ? "missed_followup" : input.nudgeKind;
+    const make = copy[kind] || copy.default;
     return make(who, input.title, input.time);
 }

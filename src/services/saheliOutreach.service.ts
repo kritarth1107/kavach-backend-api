@@ -335,6 +335,8 @@ export async function deliverSaheliOutreach(payload: {
             channel: channelTarget.channel,
             channelIdentifier: channelTarget.channelIdentifier,
             replyToMessageId: followUp?.replyTo,
+            // the escalation streak counts both (trust plan B2.1): a fresh check-in, or a follow-up on an unanswered one
+            delivery: { kind: followUp ? "nudge" : "checkin", refId: `outreach:${topicHint ?? topicBucket ?? "check_in"}` },
         });
         delivered = delivery.delivered;
         if (delivered && channelTarget.channel === "whatsapp") {

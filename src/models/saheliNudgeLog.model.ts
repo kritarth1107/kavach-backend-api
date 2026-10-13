@@ -6,7 +6,12 @@ export type SaheliNudgeKind =
     | "completion_praise"
     | "appointment_prep"
     | "daily_schedule"
-    | "dose_due";
+    | "dose_due"
+    /** The second follow-up after a missed dose ("persistent" intensity, 55–95 min): its own slot, so it can send. */
+    | "missed_followup_2";
+
+/** What WhatsApp said about the message (its own receipts, trust plan B1.3): "delivered" means it reached the phone. */
+export type NudgeDeliveryStatus = "sent" | "delivered" | "read" | "failed";
 
 export interface ISaheliNudgeLog {
     nudgeId: string;
@@ -24,6 +29,17 @@ export interface ISaheliNudgeLog {
     /** No further attempts for this slot (e.g. no valid recipient / placeholder number). */
     terminal?: boolean;
     reason?: string;
+    /** The WhatsApp message id of the send (the delivery ledger's row). */
+    wamid?: string;
+    /**
+     * WhatsApp's own receipt: sent (Meta accepted it), delivered (on the phone), read, failed. `delivered` above stays
+     * "Meta accepted it" for the slot bookkeeping (it stops a resend); this is what the dashboard and reports show.
+     */
+    deliveryStatus?: NudgeDeliveryStatus;
+    deliveredAt?: Date;
+    readAt?: Date;
+    failedAt?: Date;
+    errorCode?: number;
     createdAt: Date;
 }
 
@@ -44,6 +60,12 @@ const saheliNudgeLogSchema = new Schema<ISaheliNudgeLogDocument>(
         lastAttemptAt: { type: Date },
         terminal: { type: Boolean, default: false },
         reason: { type: String },
+        wamid: { type: String },
+        deliveryStatus: { type: String, enum: ["sent", "delivered", "read", "failed"] },
+        deliveredAt: { type: Date },
+        readAt: { type: Date },
+        failedAt: { type: Date },
+        errorCode: { type: Number },
     },
     { timestamps: { createdAt: true, updatedAt: false } },
 );

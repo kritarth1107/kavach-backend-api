@@ -26,7 +26,9 @@ export async function sendWhatsAppCode(to: string, code: string): Promise<void> 
         console.info(`[WhatsApp OTP, local] code for ${to.slice(0, 5)}…: ${code}`);
         return;
     }
-    await sendMetaWhatsAppTemplate({ to, templateName: OTP_TEMPLATE, languageCode: "en", bodyParameters: [code], urlButtonParameter: code });
+    const { withDelivery } = await import("./deliveryLedger.service");
+    await withDelivery({ kind: "otp" }, () =>
+        sendMetaWhatsAppTemplate({ to, templateName: OTP_TEMPLATE, languageCode: "en", bodyParameters: [code], urlButtonParameter: code }));
 }
 
 /** Mobile sign-in: the limits above, then the code on WhatsApp. */
