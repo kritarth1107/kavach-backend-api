@@ -36,6 +36,7 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
         );
 
 const emails: Array<{ subject: string; text: string }> = [];
+let wamids = 0;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url instanceof Request ? url.url : url);
@@ -43,7 +44,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
         emails.push(JSON.parse(String(init?.body ?? "{}")));
         return new Response(JSON.stringify({ id: "e" }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
-    if (u.includes("graph.facebook.com")) return new Response(JSON.stringify({ messages: [{ id: `wamid.D${Date.now()}` }] }), { status: 200 });
+    if (u.includes("graph.facebook.com")) return new Response(JSON.stringify({ messages: [{ id: `wamid.D${++wamids}` }] }), { status: 200 });
     if (u.includes("/v2/events")) return new Response(JSON.stringify({ recorded: true }), { status: 200 });
     return realFetch(url as string, init);
 }) as typeof fetch;

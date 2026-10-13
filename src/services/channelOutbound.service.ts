@@ -369,7 +369,7 @@ async function openerHeldBack(phone: string, kind: string): Promise<string> {
     const key = phoneKey(phone);
     const win = await WhatsAppWindow.findOne({ phone: key }).lean<{ lastInboundAt?: Date }>().catch(() => null);
     const since = win?.lastInboundAt ? new Date(win.lastInboundAt) : new Date(0);
-    const opener = { phone: key, template: { $regex: "^kavach_saheli_(message|update)" }, status: { $ne: "failed" } };
+    const opener = { phone: key, template: { $regex: "^kavach_saheli_(message|update|care)" }, status: { $ne: "failed" } };
     if (await MessageDelivery.exists({ ...opener, sentAt: { $gt: since } })) return "the opener already went and they have not written since";
     if (kind === "nudge" || kind === "checkin") {
         const now = clockNow();

@@ -40,7 +40,7 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
     alert: ["kavach_alert"],
     order: ["kavach_order_update"],
     // the general opener; the account-update rewording where Meta filed the first MARKETING (2026-10-14: all 11 were)
-    message: ["kavach_saheli_message", "kavach_saheli_update"],
+    message: ["kavach_saheli_message", "kavach_saheli_update", "kavach_saheli_care"],
 };
 
 /** Params each template takes (Meta refuses a send with the wrong count). */

@@ -31,6 +31,7 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
         );
 
 const whatsapp: Array<{ to: string; body: Record<string, unknown> }> = [];
+let wamids = 0; // unique even after whatsapp.length is reset (the delivery ledger keeps one row per wamid)
 const emails: Array<Record<string, unknown>> = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
@@ -38,7 +39,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     if (u.includes("graph.facebook.com")) {
         whatsapp.push({ to: String(body.to ?? ""), body });
-        return new Response(JSON.stringify({ messages: [{ id: `wamid.T${whatsapp.length}` }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify({ messages: [{ id: `wamid.T${++wamids}` }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     if (u.includes("api.resend.com")) {
         emails.push(body);

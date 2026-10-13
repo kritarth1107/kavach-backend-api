@@ -31,12 +31,14 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
 
 /** Meta's Graph API, faked: every send is recorded and gets a wamid. */
 const sent: Array<{ url: string; body: Record<string, unknown> }> = [];
+let wamids = 0;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("graph.facebook.com")) {
         sent.push({ url: u, body: init?.body ? JSON.parse(String(init.body)) : {} });
-        return new Response(JSON.stringify({ messages: [{ id: `wamid.T${sent.length}` }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+        // every wamid unique (the delivery ledger keeps one row per wamid), even after sent.length is reset
+        return new Response(JSON.stringify({ messages: [{ id: `wamid.T${++wamids}` }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     return realFetch(url as string, init);
 }) as typeof fetch;
