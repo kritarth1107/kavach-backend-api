@@ -22,6 +22,10 @@ export const FLAG_DEFS = {
         type: "list", label: "Saheli paused families",
         help: "Saheli sends nothing on her own to these families (medicine reminders, nudges, check-ins, outreach, messages to other members). Replies to people who write, and caregiver alerts, still go.",
     },
+    "nudge.regular": {
+        type: "enum", values: ["off", "shadow", "on"], env: "NUDGE_REGULAR", label: "Regular nudges",
+        help: "Saheli's personal message after each hour of chat silence (Kavach NUdge's plan). shadow: planned and logged in the engine, nothing sent; on: sent; off: the old check-ins.",
+    },
     "connectors.mcpFirst": {
         type: "bool", env: "MCP_AGENT_CONNECTOR", envOn: "on", label: "Store connectors first",
         help: "Swiggy, Instamart and Zepto through their connectors first, the browser as fallback.",
@@ -75,6 +79,12 @@ export function flaggedEnv(env: NodeJS.ProcessEnv = process.env, flags = snapsho
     if (Array.isArray(flags["brain.liveFamilies"])) out.BRAIN_V2_LIVE_FAMILIES = (flags["brain.liveFamilies"] as string[]).join(",");
     if (typeof flags["connectors.mcpFirst"] === "boolean") out.MCP_AGENT_CONNECTOR = flags["connectors.mcpFirst"] ? "on" : "off";
     return out;
+}
+
+/** Regular nudges: off | shadow | on (admin flag, else NUDGE_REGULAR, else off). */
+export function regularNudgeMode(env: NodeJS.ProcessEnv = process.env, flags = snapshot): "off" | "shadow" | "on" {
+    const v = typeof flags["nudge.regular"] === "string" ? (flags["nudge.regular"] as string) : (env.NUDGE_REGULAR || "off").trim().toLowerCase();
+    return v === "shadow" || v === "on" ? v : "off";
 }
 
 export function isSaheliPaused(familyId: string, flags = snapshot): boolean {

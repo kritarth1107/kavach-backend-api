@@ -786,6 +786,9 @@ async function fireReminderMessage(input: {
         channel: target.channel,
         terminal: delivery.reason === "invalid_recipient",
         reason: delivery.delivered ? undefined : delivery.reason ?? "send_failed",
+        // The line that actually went out (composed fresh), not the stored text: Saheli's ledger and the engine's turn for
+        // this reminder show what the person read (Kavach NUdge's plan §4.1).
+        messagePreview: text,
     });
     void import("./activityLog.service").then(({ logActivity }) =>
         logActivity({
@@ -850,10 +853,29 @@ async function holdBack(rem: ISaheliReminder, dateKey: string, slot: string): Pr
     return true;
 }
 
+/** A reminder that is not about a medicine waits while the person is chatting (they wrote in the last few minutes), up to
+ *  this long after its time; then it goes (Kavach NUdge's plan D7: never in the middle of a conversation; medicines are
+ *  always on time). */
+export const CHAT_HOLD_MINUTES = 10;
+const CHATTING_MS = 3 * 60_000;
+
+/** Did this person write to Saheli in the last 3 minutes (their WhatsApp chat's last inbound message)? */
+export async function chattingNow(familyId: string, userId: string, now: Date = new Date()): Promise<boolean> {
+    const { familyMemberPhone } = await import("./careMemorySync.service");
+    const found = await familyMemberPhone(familyId, userId).catch(() => ({ reason: "lookup failed" }));
+    if ("reason" in found) return false;
+    const { default: WhatsAppWindow } = await import("../models/whatsappWindow.model");
+    const { phoneKey } = await import("./whatsappWindow.service");
+    const row = await WhatsAppWindow.findOne({ phone: phoneKey(found.phone) }).lean<{ lastInboundAt?: Date }>();
+    const last = row?.lastInboundAt ? new Date(row.lastInboundAt).getTime() : 0;
+    return last > 0 && now.getTime() - last >= 0 && now.getTime() - last < CHATTING_MS;
+}
+
 export async function runSaheliReminderTick(
     now = new Date(),
     fire: typeof fireReminderMessage = fireReminderMessage, // tests pass a fake sender
     alreadyDone: (r: ISaheliReminder, day: string, time: string) => Promise<boolean> = linkedDoseTaken,
+    chatting: (familyId: string, userId: string, now: Date) => Promise<boolean> = chattingNow,
 ): Promise<{ sent: number; scanned: number; finished: number; held: number }> {
     const dateKey = toDateKeyIST(now);
     const { minutesSinceMidnight } = getISTParts(now);
@@ -872,6 +894,11 @@ export async function runSaheliReminderTick(
             if (rem.aboutKey && (await alreadyDone(rem as ISaheliReminder, dateKey, t).catch(() => false))) {
                 if (await holdBack(rem as ISaheliReminder, dateKey, t)) held += 1;
                 continue;
+            }
+            const medicine = String(rem.aboutKey || "").startsWith("medicine:");
+            if (!medicine && minutesSinceMidnight < mins + CHAT_HOLD_MINUTES
+                && (await chatting(rem.familyId, rem.recipientUserId, now).catch(() => false))) {
+                continue; // they are mid-chat: the next tick tries again (it goes at the latest 10 minutes after its time)
             }
             const ok = await fire({
                 familyId: rem.familyId,

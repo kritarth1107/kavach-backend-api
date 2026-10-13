@@ -182,6 +182,24 @@ async function withDb(uri: string) {
         assert.deepEqual(fired, [], "more than 15 minutes late: not sent");
     });
 
+    await ok("a reminder waits while they are mid-chat, at most 10 minutes; a medicine reminder never waits", async () => {
+        const fired: string[] = [];
+        const fire = async (i: { reminder: { reminderId: string }; slotKey: string; dateKey: string }) => {
+            fired.push(`${i.reminder.reminderId === yoga ? "yoga" : "other"} ${i.slotKey}`);
+            return true;
+        };
+        const chatting = async () => true;
+        await R.runSaheliReminderTick(at(MON, "07:02"), fire as never, undefined, chatting);
+        assert.deepEqual(fired.filter((f) => f.startsWith("yoga")), [], "held while they are writing");
+        await R.runSaheliReminderTick(at(MON, "07:10"), fire as never, undefined, chatting);
+        assert.deepEqual(fired.filter((f) => f.startsWith("yoga")), ["yoga 07:00"], "10 minutes late it goes anyway");
+        fired.length = 0;
+        await SaheliReminder.updateOne({ reminderId: yoga }, { $set: { aboutKey: "medicine:metformin" } });
+        await R.runSaheliReminderTick(at(MON, "07:01"), fire as never, async () => false, chatting);
+        assert.deepEqual(fired.filter((f) => f.startsWith("yoga")), ["yoga 07:00"], "a medicine's reminder is on time, chat or not");
+        await SaheliReminder.updateOne({ reminderId: yoga }, { $unset: { aboutKey: 1 } });
+    });
+
     await ok("skip with no day skips the next time; undo brings it back", async () => {
         const s = await R.skipSaheliReminder({ familyId: "famR", recipientUserId: "cg1", actorUserId: "cg1", reminderId: yoga, now: at(MON, "08:00") });
         assert.equal(s.ok && s.skipped, `${WED}@07:00`);

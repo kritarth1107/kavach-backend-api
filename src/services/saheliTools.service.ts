@@ -99,6 +99,7 @@ export type SaheliToolName =
     | "finish_setup"
     | "send_template"
     | "whatsapp_window"
+    | "nudge_gate"
     | "alert_care_team";
 
 export async function executeSaheliTool(input: {
@@ -926,6 +927,12 @@ export async function executeSaheliTool(input: {
             if ("reason" in found) return { open: false, reason: found.reason };
             const { windowOpen } = await import("./whatsappWindow.service");
             return { open: await windowOpen(found.phone) };
+        }
+        case "nudge_gate": {
+            // Regular nudges: the engine keeps the clock; the backend gives the open chat, pause, flows in progress, the
+            // last message they sent and the last few that went out to them.
+            const { nudgeGate } = await import("./nudgeGate.service");
+            return nudgeGate(input.familyId, String(input.args.to ?? input.recipientUserId));
         }
         case "send_template": {
             // Only the notice (the engine keeps the message itself, e.g. the nightly brief): sent when their chat is closed.
