@@ -12,6 +12,10 @@ on:
       trigger:
         description: "hourly | manual | deploy"
         default: "manual"
+      force_test:
+        description: "manual only: add one labelled TEST problem, to prove the email reaches the team"
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       trigger:
@@ -45,9 +49,10 @@ jobs:
           ID_TOKEN: ${{ steps.auth.outputs.id_token }}
           TRIGGER: ${{ inputs.trigger || 'hourly' }}
           SERVICE_NAME: ${{ inputs.service }}
+          FORCE_TEST: ${{ inputs.force_test && 'true' || 'false' }}
         run: |
           set -uo pipefail
-          body=$(python3 -c 'import json, os; print(json.dumps({"trigger": os.environ["TRIGGER"], "service": os.environ.get("SERVICE_NAME", ""), "sha": os.environ["GITHUB_SHA"]}))')
+          body=$(python3 -c 'import json, os; print(json.dumps({"trigger": os.environ["TRIGGER"], "service": os.environ.get("SERVICE_NAME", ""), "sha": os.environ["GITHUB_SHA"], "forceTest": os.environ.get("FORCE_TEST") == "true"}))')
           code=$(curl -sS -o out.json -w '%{http_code}' --max-time 150 -X POST "$AUDIENCE/admin/jobs/live-check" \
             -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" -d "$body" || echo 000)
           echo "admin API answered $code"

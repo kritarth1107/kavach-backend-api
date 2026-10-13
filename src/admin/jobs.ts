@@ -18,8 +18,10 @@ export function buildJobsRouter(cfg: AdminConfig, deps: { verify?: typeof verify
             const trigger = body.trigger === "deploy" ? "deploy" : body.trigger === "manual" ? "manual" : "hourly";
             const service = typeof body.service === "string" ? /^[a-z][a-z-]{0,39}/.exec(body.service)?.[0] : undefined;
             const sha = typeof body.sha === "string" ? /^[0-9a-f]{7,40}/i.exec(body.sha)?.[0] : undefined;
+            // quality plan F8 "done when a forced failure emails": a manual run may add one labelled test problem
+            const forceTest = trigger === "manual" && (body as { forceTest?: unknown }).forceTest === true;
             const run = deps.run ?? (await import("./liveCheck")).runLiveCheck;
-            const row = await run({ trigger, service, sha });
+            const row = await run({ trigger, service, sha, forceTest });
             res.status(200).json({
                 ok: row.ok, trigger: row.trigger, hourKey: row.hourKey, problems: row.problems, emailed: row.emailed,
                 checks: row.checks.map(({ key, label, status, value }) => ({ key, label, status, value })),

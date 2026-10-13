@@ -117,6 +117,11 @@ const item = (key: string, status: LiveCheckItem["status"], value = "x"): LiveCh
     const sendFails = async () => { throw new Error("resend down"); };
     row = await runLiveCheck({ trigger: "deploy", service: "x", now: t0, collectors: thrown, store: d.store, send: sendFails });
     ok("an email that fails is recorded, the run still saved", !row.emailed && row.emailError === "resend down" && d.saved.at(-1) === row);
+    const f = harness();
+    row = await runLiveCheck({ trigger: "manual", now: t0, collectors: { delivery: async () => item("delivery", "ok") }, forceTest: true, store: f.store, send: f.send });
+    ok("a forced test failure (manual only) emails, labelled as a test", row.problems.join() === "forced_test" && f.sent.length === 1 && f.sent[0].subject.startsWith("TEST, ignore: "));
+    row = await runLiveCheck({ trigger: "hourly", now: t0, collectors: { delivery: async () => item("delivery", "ok") }, forceTest: true, store: f.store, send: f.send });
+    ok("an hourly run never takes a forced failure", row.ok && f.sent.length === 1);
     ok("email text lists every check", liveCheckEmail({ trigger: "hourly", at: new Date(t0), checks: [item("a", "problem"), item("b", "ok")], problems: ["a"] }).text.includes("✓ b: x"));
 
     // the job endpoint: only the deploy identity
@@ -132,7 +137,7 @@ const item = (key: string, status: LiveCheckItem["status"], value = "x"): LiveCh
             return c.webServiceAccount;
         },
         run: async (o) => {
-            lastTrigger = `${o.trigger}:${o.service ?? ""}:${o.sha ?? ""}`;
+            lastTrigger = `${o.trigger}:${o.service ?? ""}:${o.sha ?? ""}${o.forceTest ? ":forced" : ""}`;
             return { hourKey: "2026-10-14T02", trigger: o.trigger, at: new Date(), ms: 1, ok: true, checks: [item("a", "ok")], problems: [], emailed: false, emailedKeys: [] };
         },
     }));
@@ -144,6 +149,10 @@ const item = (key: string, status: LiveCheckItem["status"], value = "x"): LiveCh
     r = await post("Bearer deploy", { trigger: "deploy", service: "kawach-ai-engine", sha: "4407d7c; rm -rf" });
     const j = await r.json() as { ok: boolean; checks: unknown[] };
     ok("the deploy identity runs it; input is cleaned", r.status === 200 && j.ok && lastTrigger === "deploy:kawach-ai-engine:4407d7c" && j.checks.length === 1, lastTrigger);
+    r = await post("Bearer deploy", { trigger: "deploy", forceTest: true });
+    ok("only a manual run may force a test failure", r.status === 200 && lastTrigger === "deploy::");
+    r = await post("Bearer deploy", { trigger: "manual", forceTest: true });
+    ok("a manual run passes the forced test on", r.status === 200 && lastTrigger === "manual:::forced", lastTrigger);
     r = await post("Bearer deploy", { trigger: "anything" });
     ok("an unknown trigger is the hourly run", r.status === 200 && lastTrigger === "hourly::");
     server.close();

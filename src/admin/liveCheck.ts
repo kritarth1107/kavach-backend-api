@@ -305,7 +305,8 @@ async function cloudSql(): Promise<LiveCheckItem> {
  *  were lost to a 404 while the route was not deployed yet). The schedules' own targets are added from Cloud Scheduler. */
 export const ENGINE_ROUTES = [
     "/health", "/v2/turn", "/v2/events", "/v2/brain/compose-reminder", "/v2/voice/prepare", "/v2/calls/turn", "/v2/calls/summary",
-    "/v2/admin/health", "/v2/admin/latency", "/v2/admin/eval-scores", "/v2/admin/daily-score", "/v2/admin/live", "/v2/jobs/morning-report",
+    "/v2/admin/health", "/v2/admin/eval-scores", "/v2/admin/daily-score", "/v2/admin/live", "/v2/jobs/morning-report",
+    // "/v2/admin/latency" joins once engine 451c0de is live (the latency check shows "unknown" until then)
 ];
 
 export function judgeRoutes(paths: string[] | null, wanted: string[]): LiveCheckItem {
@@ -391,6 +392,8 @@ export type RunOpts = {
     sha?: string;
     now?: number;
     collectors?: Record<string, Collector>;
+    /** a manual run only: one labelled test problem, to prove the email reaches the team */
+    forceTest?: boolean;
     send?: (subject: string, text: string) => Promise<unknown>;
     /** tests: no database */
     store?: { recentEmails(since: Date): Promise<Array<{ emailedKeys: string[] }>>; existing(hourKey: string): Promise<ILiveCheck | null>; save(row: ILiveCheck): Promise<unknown> };
@@ -410,7 +413,11 @@ export async function runLiveCheck(opts: RunOpts): Promise<ILiveCheck> {
         const done = await store.existing(hourKey);
         if (done) return done; // a schedule that fired twice in the hour
     }
-    const collectors = opts.collectors ?? { ...COLLECTORS, ...(opts.trigger === "deploy" ? DEPLOY_COLLECTORS : {}) };
+    const collectors: Record<string, Collector> = { ...(opts.collectors ?? { ...COLLECTORS, ...(opts.trigger === "deploy" ? DEPLOY_COLLECTORS : {}) }) };
+    if (opts.forceTest && opts.trigger === "manual") {
+        collectors.forced_test = async () => ({ key: "forced_test", label: "TEST (ignore)", status: "problem",
+            value: "a forced failure from a manual run, to prove this email reaches the Kavach team; nothing is wrong" });
+    }
     const checks = await Promise.all(
         Object.entries(collectors).map(async ([key, fn]): Promise<LiveCheckItem> => {
             try {
@@ -469,5 +476,6 @@ export function liveCheckEmail(row: Pick<ILiveCheck, "trigger" | "service" | "sh
         "",
         "Admin console, System page: the last 48 checks. Hourly emails repeat a problem at most every 3 hours.",
     ].join("\n");
-    return { subject: `Live check: ${head}`.slice(0, 150), text };
+    const test = row.checks.some((c) => c.key === "forced_test");
+    return { subject: `${test ? "TEST, ignore: " : ""}Live check: ${head}`.slice(0, 150), text };
 }
