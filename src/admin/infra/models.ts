@@ -6,6 +6,7 @@
 import { engineOrNull } from "../engine";
 import { onGcp } from "./google";
 import { runServices } from "./gcp";
+import { fetchVoiceHealth, otherFromLive } from "./liveModels";
 import { lastDays, round2, totals, type Totals } from "./pricing";
 
 type Route = { provider: string; model: string; location: string; priceInr: [number, number] };
@@ -36,10 +37,11 @@ export const roleLabel = (r: string) => ROLE_LABEL[r] || r.replace(/_/g, " ");
 export async function buildModels(now = Date.now()): Promise<ModelsView> {
     const days = lastDays(30, now);
     const today = days[days.length - 1];
-    const [cfg, spend, run] = await Promise.all([
+    const [cfg, spend, run, voice] = await Promise.all([
         engineOrNull<EngineModels>("GET", "/models"),
         engineOrNull<EngineSpend>("GET", "/spend?days=40"),
         runServices().catch(() => null),
+        onGcp() ? Promise.resolve(null) : fetchVoiceHealth(),
     ]);
 
     const by = new Map<string, ModelRow>();
@@ -61,8 +63,19 @@ export async function buildModels(now = Date.now()): Promise<ModelsView> {
         });
     }
     const roleTotals = new Map<string, { calls: number; costInr: number }>();
+    const unmatched: Record<string, number> = {};
     for (const x of spend.data?.rows || []) {
         if (x.day < days[0]) continue;
+        // Spend for a model that is not in the live routes still counts, but is not listed as a model we run.
+        if (!by.has(x.model)) {
+            unmatched[x.day] = (unmatched[x.day] ?? 0) + x.costInr;
+            if (x.day === today) {
+                const t = roleTotals.get(x.role) ?? { calls: 0, costInr: 0 };
+                t.calls += x.calls; t.costInr += x.costInr;
+                roleTotals.set(x.role, t);
+            }
+            continue;
+        }
         const r = row(x.model);
         if (!r.roles.includes(x.role)) r.roles.push(x.role);
         r.daily[x.day] = (r.daily[x.day] ?? 0) + x.costInr;
@@ -82,6 +95,7 @@ export async function buildModels(now = Date.now()): Promise<ModelsView> {
         r.last30.costInr = round2(r.last30.costInr);
         for (const [d, v] of Object.entries(r.daily)) all[d] = (all[d] ?? 0) + v;
     }
+    for (const [d, v] of Object.entries(unmatched)) all[d] = (all[d] ?? 0) + v;
     const todayTotal = [...by.values()].reduce((t, r) => t + r.today.costInr, 0);
     for (const r of by.values()) r.share = todayTotal > 0 ? round2(r.today.costInr / todayTotal) : 0;
 
@@ -95,9 +109,7 @@ export async function buildModels(now = Date.now()): Promise<ModelsView> {
         if (vision) other.push({ model: vision, provider: "Vertex AI", use: "Photos and prescriptions sent on WhatsApp", billedUnder: "Google bill → Vertex AI (not in the engine ledger)" });
         if (embed) other.push({ model: embed, provider: "Vertex AI", use: "Memory search (embeddings)", billedUnder: "Google bill → Vertex AI" });
     } else {
-        if (embed) other.push({ model: embed, provider: /titan|bedrock|amazon/i.test(embed) ? "Amazon Bedrock" : "Embeddings", use: "Memory search (embeddings)", billedUnder: "AWS bill → Amazon Bedrock" });
-        other.push({ model: "Amazon Transcribe", provider: "AWS", use: "Voice notes to text", billedUnder: "AWS bill → Amazon Transcribe" });
-        other.push({ model: "scribe", provider: "ElevenLabs", use: "Voice notes to text, when Transcribe cannot take that language", billedUnder: "ElevenLabs" });
+        other.push(...otherFromLive(voice, embed || cfg.data?.embeddings || null));
     }
     const agent = env("kavach-backend", "BROWSER_AGENT_MODEL");
     other.push({ model: agent || "browser-use", provider: "Browser Use", use: "Ordering agent in a cloud browser", billedUnder: "Browser Use credits (Infrastructure → Services)" });

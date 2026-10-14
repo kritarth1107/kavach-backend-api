@@ -614,6 +614,28 @@ export function ttsOrder(locale?: string): Provider[] {
     return out.length ? [...new Set(out)] : PROVIDERS;
 }
 
+/** Model names the admin console may show. No keys. An explicit STT_ORDER is the list; Google voice off means ElevenLabs. */
+export function voicePublicConfig(env: NodeJS.ProcessEnv = process.env): {
+    llm: string | null; stt: Array<"chirp" | "scribe" | "gemini" | "transcribe">; sttModel: string | null; tts: string[]; ttsModel: string | null;
+} {
+    const stt = sttOrder(env);
+    const google = voiceGoogleEnabled(env);
+    let tts: string[];
+    if (!google) tts = ["eleven"];
+    else {
+        const raw = (env.TTS_ORDER || PROVIDERS.join(",")).split(",").map((x) => x.trim().toLowerCase());
+        const ok = raw.filter((x) => (PROVIDERS as string[]).includes(x));
+        tts = ok.length ? [...new Set(ok)] : [...PROVIDERS];
+    }
+    return {
+        llm: env.LLM_PROVIDER_BACKEND?.trim() || null,
+        stt,
+        sttModel: stt.includes("scribe") ? (env.ELEVENLABS_STT_MODEL?.trim() || "scribe_v2") : null,
+        tts,
+        ttsModel: tts.includes("eleven") ? (env.ELEVENLABS_MODEL_ID?.trim() || DEFAULT_ELEVENLABS_MODEL_ID) : null,
+    };
+}
+
 /** Saheli's Google voice (Chirp 3 HD name, same in every language) and pace. */
 export function googleVoiceFor(locale: string) {
     const voice = process.env.TTS_GOOGLE_VOICE?.trim() || "Kore";

@@ -15,6 +15,7 @@ import {
     ARTIFACT_USD_GB_MONTH, FIRESTORE, LB_RULE_USD_HOUR, PD_BALANCED_USD_GB_MONTH, PD_STANDARD_USD_GB_MONTH, SCHEDULER_USD_JOB_MONTH,
     SQL_SSD_USD_GB_MONTH, SQL_TIER_USD_HOUR, USD_INR, inr, lastDays, perDay, round2, runCostUsd, sumDaily, totals, type Totals,
 } from "./pricing";
+import { aiStack, bedrockPurpose, fetchVoiceHealth, showBedrockRow, type AiStack, type LiveEngineModels } from "./liveModels";
 import { browserUseAccount, elevenLabsUsage, whatsappBill } from "./vendors";
 
 export type Provider = "GCP" | "AWS" | "Cloudflare" | "Meta" | "Browser Use" | "ElevenLabs" | "Resend";
@@ -111,7 +112,7 @@ function ecsState(s: EcsService | undefined): Status {
 type Add = (s: Omit<InfraService, "totals">) => void;
 
 /** The live AWS stack. Cost Explorer totals attach to the matching row; app tasks themselves are not double-counted. */
-function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<string, Record<string, number>>; ledger: Record<string, number>; spend: { data: EngineSpend | null; error?: string } }) {
+function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<string, Record<string, number>>; ledger: Record<string, number>; spend: { data: EngineSpend | null; error?: string }; ai: AiStack }) {
     const byName = new Map((o.ecs || []).map((s) => [s.name, s]));
     const region = "ap-south-1";
     const cluster = `${AWS_CONSOLE}/ecs/v2/clusters/kavach/services`;
@@ -141,18 +142,46 @@ function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<strin
     };
     const bedrockBill = billFor(/bedrock/i);
     const hasBill = Object.keys(bedrockBill).length > 0;
-    add({
-        id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI",
-        purpose: "Saheli's models and memory search, Mumbai", usedBy: "AI engine",
-        status: o.spend?.data ? (o.spend.data.today >= o.spend.data.softCap ? "warn" : "ok") : "unknown",
-        facts: o.spend?.data
-            ? [{ label: "Today", value: `₹${round2(o.spend.data.today)} of ₹${o.spend.data.softCap} soft cap` }, { label: "Hard cap", value: `₹${o.spend.data.hardCap}/day` }, { label: "Region", value: "ap-south-1" }]
-            : [{ label: "Engine", value: o.spend?.error || "not reachable" }, { label: "Region", value: "ap-south-1" }],
-        source: hasBill ? "billed" : "metered",
-        note: hasBill ? "AWS bill. Per-model detail is on AI models." : "The engine's model ledger (the AWS bill arrives a day later)",
-        console: `${AWS_CONSOLE}/bedrock/home?region=${region}`,
-        daily: hasBill ? bedrockBill : o.ledger,
-    });
+    const caps = o.spend?.data
+        ? [{ label: "Today", value: `₹${round2(o.spend.data.today)} of ₹${o.spend.data.softCap} soft cap` }, { label: "Hard cap", value: `₹${o.spend.data.hardCap}/day` }]
+        : [{ label: "Engine", value: o.spend?.error || "not reachable" }];
+    if (o.ai.gemini) {
+        add({
+            id: "aws:gemini", name: "Gemini (Mumbai)", provider: "AWS", category: "AI",
+            purpose: o.ai.geminiModel ? `${o.ai.geminiModel} via the AWS→Google link` : "Gemini via the AWS→Google link",
+            usedBy: "AI engine",
+            status: o.spend?.data ? (o.spend.data.today >= o.spend.data.softCap ? "warn" : "ok") : "unknown",
+            facts: [
+                ...(o.ai.geminiModel ? [{ label: "Model", value: o.ai.geminiModel }] : []),
+                { label: "Region", value: o.ai.location === "asia-south1" ? "Mumbai (asia-south1)" : (o.ai.location || "Mumbai") },
+                ...caps,
+            ],
+            source: "metered",
+            note: "The engine's model ledger. Google is reached through the AWS link.",
+            daily: o.ledger,
+        });
+    } else if (!o.ai.bedrockRoutes && Object.keys(o.ledger).length) {
+        add({
+            id: "aws:ledger", name: "Model ledger", provider: "AWS", category: "AI",
+            purpose: "Engine spend; the live routes were not read", usedBy: "AI engine", status: "unknown",
+            facts: caps, source: "metered", daily: o.ledger,
+        });
+    }
+    if (showBedrockRow(o.ai, hasBill)) {
+        add({
+            id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI",
+            purpose: bedrockPurpose(o.ai), usedBy: "AI engine",
+            status: o.ai.bedrockRoutes || o.ai.embeddingsBedrock ? "ok" : "unknown",
+            facts: [
+                ...(o.ai.embedModel && o.ai.embeddingsBedrock ? [{ label: "Embeddings", value: o.ai.embedModel }] : []),
+                { label: "Region", value: "ap-south-1" },
+            ],
+            source: hasBill ? "billed" : "none",
+            note: o.ai.embeddingsBedrock && !o.ai.bedrockRoutes ? "Memory search only. Saheli's replies are not on Bedrock." : (hasBill ? "AWS bill." : undefined),
+            console: `${AWS_CONSOLE}/bedrock/home?region=${region}`,
+            daily: hasBill ? bedrockBill : {},
+        });
+    }
     const stores: Array<{ id: string; name: string; purpose: string; usedBy: string; re: RegExp; console: string }> = [
         { id: "aws:aurora", name: "Saheli memory database", purpose: "Aurora Postgres: memory, care record, model ledger", usedBy: "AI engine", re: /relational database|aurora/i, console: `${AWS_CONSOLE}/rds/home?region=${region}` },
         { id: "aws:docdb", name: "Main database", purpose: "DocumentDB: families, people, messages, reminders, orders", usedBy: "Backend, admin API", re: /documentdb/i, console: `${AWS_CONSOLE}/docdb/home?region=${region}` },
@@ -196,7 +225,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     // Off Google Cloud (the AWS copy) the Google collectors are skipped, not failed: one "not on GCP" note instead of errors.
     const gcpOn = onGcp();
     const gSettle: typeof settle = (name, fn, errs) => (gcpOn ? settle(name, fn, errs) : Promise.resolve(null));
-    const [run, jobs, scheds, sql, fsdbs, repos, compute, lb, bucketList, secrets, runSeconds, jobSeconds, traffic, fsReads, fsWrites, fsBytes, billTable, spend, wa, bu, el, aws, ecs, reminderAt] = await Promise.all([
+    const [run, jobs, scheds, sql, fsdbs, repos, compute, lb, bucketList, secrets, runSeconds, jobSeconds, traffic, fsReads, fsWrites, fsBytes, billTable, spend, wa, bu, el, aws, ecs, reminderAt, voice, engineModels] = await Promise.all([
         gSettle("Cloud Run", gcp.runServices, errors),
         gSettle("Cloud Run jobs", gcp.runJobs, errors),
         gSettle("Cloud Scheduler", gcp.schedules, errors),
@@ -221,6 +250,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         awsBill(35, now),
         gcpOn ? Promise.resolve(null) : ecsServices().catch(() => null),
         gcpOn ? Promise.resolve(null) : reminderTick(),
+        gcpOn ? Promise.resolve(null) : fetchVoiceHealth(),
+        engineOrNull<LiveEngineModels>("GET", "/models"),
     ]);
 
     // The Google bill, when the export is on: net cost (after credits) per row id per day, in INR.
@@ -331,7 +362,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         });
     }
 
-    // Model ledger. On Google this is Vertex; on AWS the same ledger is Amazon Bedrock (added with the AWS stack).
+    // Model ledger. On Google this is Vertex. On AWS it follows the engine's live routes (Gemini), not a fixed Bedrock row.
     const ledger: Record<string, number> = {};
     for (const r of spend.data?.rows || []) ledger[r.day] = (ledger[r.day] ?? 0) + r.costInr;
     if (gcpOn) add({
@@ -408,9 +439,13 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
 
     // ElevenLabs.
     add({
-        id: "elevenlabs", name: "ElevenLabs", provider: "ElevenLabs", category: "AI", purpose: "Saheli's voice replies and voice reminders", usedBy: "Backend",
+        id: "elevenlabs", name: "ElevenLabs", provider: "ElevenLabs", category: "AI", purpose: voice?.ttsModel ? `Saheli's spoken replies (${voice.ttsModel})${voice.stt.includes("scribe") ? ` and voice notes (${voice.sttModel || "scribe_v2"})` : ""}` : "Saheli's voice replies and voice reminders", usedBy: "Backend",
         status: el.connected ? (el.used != null && el.limit ? (el.used / el.limit > 0.9 ? "warn" : "ok") : "ok") : "unknown",
-        facts: el.connected ? [{ label: "Plan", value: el.tier || "—" }, { label: "Characters", value: `${(el.used ?? 0).toLocaleString("en-IN")} of ${(el.limit ?? 0).toLocaleString("en-IN")}` }, { label: "Resets", value: el.resetsAt?.slice(0, 10) || "—" }] : [{ label: "Usage", value: el.note || "not connected" }],
+        facts: [
+            ...(el.connected ? [{ label: "Plan", value: el.tier || "—" }, { label: "Characters", value: `${(el.used ?? 0).toLocaleString("en-IN")} of ${(el.limit ?? 0).toLocaleString("en-IN")}` }, { label: "Resets", value: el.resetsAt?.slice(0, 10) || "—" }] : [{ label: "Usage", value: el.note || "not connected" }]),
+            ...(voice?.ttsModel ? [{ label: "Voice model", value: voice.ttsModel }] : []),
+            ...(voice?.stt.includes("scribe") ? [{ label: "Speech-to-text", value: voice.sttModel || "scribe_v2" }] : []),
+        ],
         source: "none", note: "Monthly plan; usage shown when a read-only key is added", console: "https://elevenlabs.io/app/subscription", daily: {},
     });
 
@@ -418,10 +453,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     add({ id: "cloudflare", name: "Cloudflare", provider: "Cloudflare", category: "Edge & storage", purpose: "R2: nightly backups and cdn.kavach.care; Worker: uptime monitor", usedBy: "Backups, emails, uptime", status: "ok", facts: [{ label: "R2", value: "backups + public CDN" }, { label: "Worker", value: "uptime check every few minutes, KV state" }], source: "none", note: "Cloudflare billing not connected (within free limits so far)", console: "https://dash.cloudflare.com/", daily: {} });
 
     if (gcpOn) {
-        const awsSvc = Object.entries(aws.byService);
-        if (awsSvc.length) for (const [name, daily] of awsSvc) add({ id: `aws:${name}`, name, provider: "AWS", category: /bedrock/i.test(name) ? "AI" : "Other", purpose: /bedrock/i.test(name) ? "Amazon Bedrock" : "AWS service", usedBy: "—", status: "ok", facts: [], source: "billed", daily });
-        else add({ id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI", purpose: "Models on Amazon Bedrock (Mumbai)", usedBy: "AI engine", status: "planned", facts: [{ label: "Billing", value: aws.connected ? "connected" : "not connected" }], source: aws.connected ? "billed" : "none", daily: {} });
-    } else addAwsStack(add, { ecs, bill: aws.byService, ledger, spend });
+        for (const [name, daily] of Object.entries(aws.byService)) add({ id: `aws:${name}`, name, provider: "AWS", category: /bedrock/i.test(name) ? "AI" : "Other", purpose: /bedrock/i.test(name) ? bedrockPurpose(aiStack(engineModels.data)) : "AWS service", usedBy: "—", status: "ok", facts: [], source: "billed", daily });
+    } else addAwsStack(add, { ecs, bill: aws.byService, ledger, spend, ai: aiStack(engineModels.data) });
 
     /* ── roll-ups ── */
 

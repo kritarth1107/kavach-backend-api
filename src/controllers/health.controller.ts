@@ -31,6 +31,15 @@ export async function getEngineHealth(req: Request, res: Response): Promise<void
  * GET /api/health/reminders (public): 200 while the reminder tick runs, 503 when its last tick is older than 3 minutes
  * (trust plan B1.7). Times only, nothing about anyone. The Cloudflare uptime worker checks it every minute.
  */
+/**
+ * GET /api/health/models (public): which speech and voice models this process runs. Names only, no keys,
+ * so the admin console can show the live order instead of a hard-coded list.
+ */
+export async function getModelsHealth(_req: Request, res: Response): Promise<void> {
+    const { voicePublicConfig } = await import("../channels/voicePipeline");
+    res.json(voicePublicConfig());
+}
+
 export async function getRemindersHealth(_req: Request, res: Response): Promise<void> {
     try {
         const { reminderHeartbeat } = await import("../services/reminderHealth.service");
