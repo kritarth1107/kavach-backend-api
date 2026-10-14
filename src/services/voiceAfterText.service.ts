@@ -35,6 +35,14 @@ const DEFAULT_DEPS: VoiceAfterTextDeps = {
 /** The chat's position right after a text went out: give it to sendVoiceAfterText. */
 export const markAfterText = chatMark;
 
+/** A voice note of words someone chose ("send a voice note saying …"), after that text has already gone out. */
+export async function sendChosenVoiceNote(
+    input: { to: string; text: string; listenerUserId?: string },
+    deps?: VoiceAfterTextDeps,
+): Promise<VoiceAfterTextResult> {
+    return sendVoiceAfterText({ to: input.to, text: input.text, listenerUserId: input.listenerUserId, mark: chatMark(input.to) }, deps);
+}
+
 export async function sendVoiceAfterText(
     input: { to: string; text: string; listenerUserId?: string; mark: number },
     deps: VoiceAfterTextDeps = DEFAULT_DEPS,

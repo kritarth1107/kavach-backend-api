@@ -953,6 +953,7 @@ export async function executeSaheliTool(input: {
                 template: engineTemplate(input.args.template),
                 kind: input.args.kind,
                 ref: input.args.ref,
+                voice: input.args.voice === true,
             });
         }
         case "escalation_status": {

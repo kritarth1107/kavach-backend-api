@@ -248,15 +248,20 @@ export async function sendSaheliWhatsApp(input: {
     kind?: unknown;
     /** The engine's own id for it (a nudge row, a check-in turn), kept on the ledger row. */
     ref?: unknown;
+    /** Also speak this text as a WhatsApp voice note (ElevenLabs), after the text. */
+    voice?: boolean;
+    /** Tests inject the speaker; production uses sendChosenVoiceNote. */
+    voiceNote?: (input: { to: string; text: string; listenerUserId?: string }) => Promise<"sent" | "stale" | "none" | "failed">;
 }) {
     const text = input.text.trim();
-    if (!text) return { delivered: false, reason: "empty" };
+    const refused = (reason: string) => ({ delivered: false as const, reason, ...(input.voice ? { voice: "none" as const } : {}) });
+    if (!text) return refused("empty");
     if (engineDeliveryKind(input.kind) === "brief" && (await isCareRecipient(input.familyId, input.toUserId))) {
         // The nightly brief is about the person cared for and goes only to their caregivers, never to them.
-        return { delivered: false, reason: "a brief goes only to caregivers" };
+        return refused("a brief goes only to caregivers");
     }
     const found = await familyMemberPhone(input.familyId, input.toUserId);
-    if ("reason" in found) return { delivered: false, reason: found.reason };
+    if ("reason" in found) return refused(found.reason);
     const { phone } = found;
     const { deliverOutboundMessage } = await import("./channelOutbound.service");
     const { scrubStack } = await import("./stackScrub");
@@ -286,11 +291,19 @@ export async function sendSaheliWhatsApp(input: {
     // The wamid goes back to the engine (B1.1): it keeps it on its own row (a nudge, a check-in) and can ask how far the
     // message got with the delivery_status tool (sent, delivered, read, failed).
     const wamids = delivery.messageIds ?? [];
+    let voice: "sent" | "stale" | "none" | "failed" | undefined;
+    if (input.voice && delivery.delivered && delivery.via !== "template" && !delivery.waiting) {
+        const speak = input.voiceNote ?? (await import("./voiceAfterText.service")).sendChosenVoiceNote;
+        voice = await speak({ to: phone, text: scrubStack(text), listenerUserId: input.toUserId });
+    } else if (input.voice) {
+        voice = "none";
+    }
     return {
         delivered: Boolean(delivery.delivered),
         ...(wamids.length ? { wamid: wamids[0], wamids } : {}),
         ...(delivery.via ? { via: delivery.via } : {}),
         ...(delivery.waiting ? { waiting: true } : {}),
         ...(delivery.reason ? { reason: delivery.reason } : {}),
+        ...(voice ? { voice } : {}),
     };
 }
