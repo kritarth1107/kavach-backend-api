@@ -127,3 +127,12 @@ export function dialectBase(code?: string | null): string | null {
     if (d) return d.base;
     return languageInfo(code)?.code ?? null;
 }
+
+/** Whether a speech engine's language may be kept as the hint for the next voice note.
+ * A saved language is never replaced by a guess (hi-IN heard over a saved English). With nothing saved, the guess is kept
+ * so a Tamil speaker is not forced through Hindi next time. */
+export function heardLanguageSticks(savedCode: string | null | undefined, heardLanguage?: string | null): boolean {
+    if (!heardLanguage) return false;
+    if (!savedCode) return true;
+    return heardLanguage.split("-")[0].toLowerCase() === savedCode;
+}

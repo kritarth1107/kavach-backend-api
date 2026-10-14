@@ -437,7 +437,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             const saved = identity?.userId
                 ? await import("./voicePreference.service").then((V) => V.getSpeechProfile(identity!.userId)).catch(() => ({}))
                 : {};
-            const { voiceHint, dialectBase } = await import("./language.service");
+            const { voiceHint, dialectBase, heardLanguageSticks } = await import("./language.service");
             const languageHint = dialectBase(voiceHint(saved)) || (await voiceLanguageHint(phone).catch(() => null));
             let audioBuffer: Buffer | undefined;
             let mimeType: string | undefined;
@@ -461,7 +461,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 fallbackText: isVoicePlaceholder(text) ? undefined : text,
             });
             voiceTranscript = heard.text;
-            if (heard.text && heard.language) noteVoiceLanguage(phone, heard.language);
+            if (heard.text && heardLanguageSticks(dialectBase(voiceHint(saved)), heard.language)) noteVoiceLanguage(phone, heard.language);
             voiceMeta = { confidence: heard.confidence, language: heard.language, engine: heard.engine };
             if (voiceTranscript.trim() && !isVoicePlaceholder(voiceTranscript)) {
                 text = voiceTranscript.trim();

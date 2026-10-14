@@ -1,6 +1,6 @@
 /** Languages, dialects and scripts: what Saheli writes and speaks to each person. */
 import { buildCareNudgeText, doseTakenLine, nudgeLanguage } from "../src/services/saheliNudgeCopy.service";
-import { DIALECTS, LANGUAGES, dialectBase, normaliseSpeech, replyScript, speechLabel, voiceHint } from "../src/services/language.service";
+import { DIALECTS, LANGUAGES, dialectBase, heardLanguageSticks, normaliseSpeech, replyScript, speechLabel, voiceHint } from "../src/services/language.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -16,6 +16,7 @@ ok("script: own script unless Roman asked", replyScript({ language: "hi" }) === 
     && replyScript({ language: "hi", script: "roman" }) === "latin" && replyScript({ language: "pa" }) === "gurmukhi");
 ok("label", speechLabel({ language: "hi", dialect: "mwr" }) === "Marwari (मारवाड़ी)" && speechLabel({ language: "en" }) === "English");
 ok("voice hint: dialect first, its base for the voice", voiceHint({ language: "hi", dialect: "hne" }) === "hne" && dialectBase("hne") === "hi" && dialectBase("syl") === "bn");
+ok("a transcript guess does not replace a saved language", heardLanguageSticks("en", "hi-IN") === false && heardLanguageSticks("hi", "hi-IN") === true && heardLanguageSticks(null, "ta-IN") === true && heardLanguageSticks("en", "") === false);
 ok("every dialect has a known base", DIALECTS.every((d) => LANGUAGES.some((l) => l.code === d.base)));
 
 // Reminders
