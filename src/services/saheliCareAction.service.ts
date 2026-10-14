@@ -398,12 +398,25 @@ export async function logCheckIn(input: {
  */
 export async function closeRemindedDose(input: {
     familyId: string;
+    /** The person whose dose a typed "done" closes: the speaker (an elder, or a caregiver's own self-care dose). */
     recipientUserId: string;
     actorUserId: string;
     message: string;
+    /** A caregiver may tap Done on any dose of the family's; everyone else only on their own. */
+    mayMarkOthers?: boolean;
 }): Promise<string | null> {
     const scheduleFromButton = doneScheduleId(input.message);
     let scheduleId = scheduleFromButton;
+    let recipientUserId = input.recipientUserId;
+    if (scheduleFromButton) {
+        // The button names the schedule, so it decides whose dose this is (live 15 Oct: a self-care caregiver's Done went
+        // to a keyword route that read the care recipient's empty schedule and said "No care schedule items for today").
+        const schedule = await CareSchedule.findOne({ scheduleId: scheduleFromButton, familyId: input.familyId })
+            .lean<{ recipientUserId?: string }>();
+        if (!schedule?.recipientUserId) return "I could not find that reminder any more. Tell me the medicine name and I will mark it taken.";
+        if (schedule.recipientUserId !== input.recipientUserId && !input.mayMarkOthers) return null;
+        recipientUserId = schedule.recipientUserId;
+    }
     if (!scheduleId && isDoseDoneReply(input.message)) {
         const { default: Nudge } = await import("../models/saheliNudgeLog.model");
         const since = new Date(Date.now() - 3 * 60 * 60 * 1000);
@@ -422,14 +435,14 @@ export async function closeRemindedDose(input: {
     if (!scheduleId) return null;
     const marked = await markScheduleCompleted({
         familyId: input.familyId,
-        recipientUserId: input.recipientUserId,
+        recipientUserId,
         actorUserId: input.actorUserId,
         scheduleId,
         note: "They replied Done.",
         channel: ChannelType.WHATSAPP,
     });
     const title = typeof marked.title === "string" ? marked.title : "";
-    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.recipientUserId)).catch(() => null);
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.actorUserId)).catch(() => null);
     const { doseTakenLine, nudgeLanguage } = await import("./saheliNudgeCopy.service");
     if (!title) {
         return nudgeLanguage(speech) === "en"

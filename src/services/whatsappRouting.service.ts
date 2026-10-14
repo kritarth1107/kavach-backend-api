@@ -497,14 +497,17 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         }
     }
 
-    // A Done on the dose we just reminded is taken, before any model or keyword route.
-    if (identity.role === FamilyRole.CARE_RECIPIENT && text) {
+    // A Done on the dose we just reminded is taken, before any model or keyword route, for whoever got the reminder: an
+    // elder, or a caregiver's own self-care dose (live 15 Oct a caregiver's Done tap fell through to a keyword route).
+    if (text && identity.familyId && identity.userId) {
         const { closeRemindedDose } = await import("./saheliCareAction.service");
+        const caregiver = identity.role === FamilyRole.PRIMARY_CAREGIVER || identity.role === FamilyRole.CO_CAREGIVER;
         const closed = await closeRemindedDose({
             familyId: identity.familyId,
             recipientUserId: identity.userId,
             actorUserId: identity.userId,
             message: text,
+            mayMarkOthers: caregiver,
         }).catch(() => null);
         if (closed) return outbound(phone, closed);
     }

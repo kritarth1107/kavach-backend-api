@@ -619,6 +619,8 @@ export async function tryHandleCareScheduleQuery(input: {
     text: string;
 }): Promise<DashboardParityResult> {
     const text = input.text.trim();
+    // A reminder's Done button arrives as "I completed schedule <id>": that is a dose, never a question about the day.
+    if (/^I completed schedule [\w-]+$/i.test(text)) return { handled: false };
     const isSchedule =
         /\b(schedule|today'?s?\s+(meds?|medicines?|care)|next\s+(med|medicine|dose|reminder)|kya\s+lena|aaj\s+ki\s+dawai|medicine\s+list)\b/i.test(
             text,
