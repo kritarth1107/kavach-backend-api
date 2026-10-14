@@ -5,6 +5,7 @@
  *   GOOGLE_SERVICES=on|off               (default: off when the LLM backend is bedrock, else on)  Vertex, Speech, TTS,
  *                                         Cloud Monitoring, Cloud Run / Scheduler / Cloud SQL admin reads
  *   VOICE_GOOGLE=on|off                  (default: follows GOOGLE_SERVICES)  Chirp / Gemini STT, Google / Gemini TTS
+ *   VOICE_STT=chirp                      Chirp speech-to-text only. TTS and every other Google API stay off.
  *
  * With nothing set the behaviour is exactly the GCP production one.
  */
@@ -32,6 +33,14 @@ export function googleEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 /** Google speech engines (Chirp STT, Gemini audio STT, Google and Gemini TTS) may be called. */
 export function voiceGoogleEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     return flag(env.VOICE_GOOGLE) ?? googleEnabled(env);
+}
+
+/** Chirp speech-to-text may be called. VOICE_STT=chirp turns on only that, not Gemini or Google TTS. */
+export function chirpSttEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    const v = (env.VOICE_STT || "").trim().toLowerCase();
+    if (v === "chirp") return true;
+    if (v === "off" || v === "aws") return false;
+    return voiceGoogleEnabled(env);
 }
 
 /** The value admin pages and the live check show instead of a Google reading when Google is off. */

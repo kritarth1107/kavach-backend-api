@@ -605,7 +605,14 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             const mime = brainMime(media.mimeType, body.mediaType);
             if (!mime) brainMediaNote = `They sent a file of type ${media.mimeType || body.mediaType} that cannot be opened.`;
             else if (media.buffer.length > BRAIN_MEDIA_MAX_BYTES) brainMediaNote = `They sent a ${body.mediaType} too large to look at (${Math.round(media.buffer.length / 1e6)} MB).`;
-            else brainMedia = [{ mime, data: media.buffer.toString("base64") }];
+            else if (mime.startsWith("video/")) {
+                const { videoFrames } = await import("./videoFrames");
+                const frames = await videoFrames(media.buffer);
+                if (frames.length) {
+                    brainMedia = frames.map((b) => ({ mime: "image/jpeg", data: b.toString("base64") }));
+                    brainMediaNote = `They sent a video. These ${frames.length} photos are moments from it, in order. Say what is on screen.`;
+                } else brainMediaNote = "They sent a video that could not be opened. Ask what it shows; do not guess.";
+            } else brainMedia = [{ mime, data: media.buffer.toString("base64") }];
         }
         if (MEDIA_PLACEHOLDER.test(text)) text = caption;
     } else if (body.replyToId && !isVoiceMedia) {
@@ -617,7 +624,14 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             const { downloadMedia } = await import("../clients/metaWhatsApp.client");
             const media = await downloadMedia(q.mediaId).catch(() => null);
             const mime = media ? brainMime(media.mimeType, q.mediaType || "image") : null;
-            if (media && mime && media.buffer.length <= BRAIN_MEDIA_MAX_BYTES) {
+            if (media && mime?.startsWith("video/") && media.buffer.length <= BRAIN_MEDIA_MAX_BYTES) {
+                const { videoFrames } = await import("./videoFrames");
+                const frames = await videoFrames(media.buffer);
+                if (frames.length) {
+                    brainMedia = frames.map((b) => ({ mime: "image/jpeg", data: b.toString("base64") }));
+                    brainMediaNote = `They are replying to a video they sent earlier. These ${frames.length} photos are moments from it, in order.`;
+                } else brainMediaNote = "They are replying to a video that can no longer be opened; ask them to send it again.";
+            } else if (media && mime && media.buffer.length <= BRAIN_MEDIA_MAX_BYTES) {
                 brainMedia = [{ mime, data: media.buffer.toString("base64") }];
                 brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier; it is attached again. Look at it fresh.`;
             } else {

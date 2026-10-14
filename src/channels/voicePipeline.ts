@@ -8,13 +8,13 @@
  * Chosen after an A/B of 6 engines × 5 languages (agent workspace voice/ab): a Gemini audio judge rated Chirp 4/5 for
  * naturalness and emotion and ElevenLabs v4 / Gemini 2.5 Pro 5/5; ElevenLabs was ~2.5× faster than Gemini Pro TTS.
  * TTS_ORDER (eleven,gemini,google) and TTS_ORDER_BY_LANG ('{"bn":"eleven,google"}') change the order.
- * Google-free copy (VOICE_GOOGLE=off, or LLM_PROVIDER_BACKEND=bedrock): Amazon Transcribe first (Chirp's place),
- * ElevenLabs Scribe if Transcribe cannot take that language or audio, ElevenLabs TTS. Google auth is never asked for.
+ * AWS copy: VOICE_STT=chirp uses Google Chirp for speech-to-text and nothing else from Google.
+ * ElevenLabs Scribe is the backup. Spoken replies stay on ElevenLabs. Gemini STT and Google TTS stay off.
  */
 import { spawn } from "node:child_process";
-import { GoogleAuth } from "google-auth-library";
+import { AwsClient, GoogleAuth, type JWTInput } from "google-auth-library";
 import { personalRoute, preferPro } from "../clients/vertexGemini.client";
-import { voiceGoogleEnabled } from "../config/cloudProvider";
+import { chirpSttEnabled, voiceGoogleEnabled } from "../config/cloudProvider";
 import { dialectBase, speechLabel } from "../services/language.service";
 
 export type SttInput = {
@@ -85,11 +85,60 @@ function vertexLocation(): string {
     return personalRoute(preferPro(process.env.VERTEX_STT_MODEL)).location;
 }
 
-async function getAccessToken(): Promise<string | null> {
-    if (!voiceGoogleEnabled()) return null;
+function googleCredentials(): JWTInput | undefined {
+    const raw = process.env.GOOGLE_SA_JSON?.trim();
+    if (!raw) return undefined;
     try {
+        const parsed = JSON.parse(raw) as JWTInput;
+        return parsed && typeof parsed === "object" ? parsed : undefined;
+    } catch {
+        console.warn("GOOGLE_SA_JSON is not valid JSON");
+        return undefined;
+    }
+}
+
+async function ecsAwsCreds(): Promise<{ accessKeyId: string; secretAccessKey: string; token?: string } | null> {
+    const full = process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI?.trim();
+    const rel = process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI?.trim();
+    const url = full || (rel ? `http://169.254.170.2${rel}` : "");
+    if (!url) return null;
+    const headers: Record<string, string> = {};
+    const authz = process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN?.trim();
+    if (authz) headers.Authorization = authz;
+    const res = await fetch(url, { headers });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { AccessKeyId?: string; SecretAccessKey?: string; Token?: string };
+    if (!body.AccessKeyId || !body.SecretAccessKey) return null;
+    return { accessKeyId: body.AccessKeyId, secretAccessKey: body.SecretAccessKey, token: body.Token };
+}
+
+async function getAccessToken(): Promise<string | null> {
+    if (!chirpSttEnabled() && !voiceGoogleEnabled()) return null;
+    try {
+        const audience = process.env.GOOGLE_WIF_AUDIENCE?.trim();
+        if (audience) {
+            const sa = process.env.GOOGLE_CHIRP_SA?.trim() || "kavach-chirp@kavach-care.iam.gserviceaccount.com";
+            const client = new AwsClient({
+                audience,
+                subject_token_type: "urn:ietf:params:aws:token-type:aws4_request",
+                scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+                service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${sa}:generateAccessToken`,
+                aws_security_credentials_supplier: {
+                    getAwsRegion: async () => process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "ap-south-1",
+                    getAwsSecurityCredentials: async () => {
+                        const creds = await ecsAwsCreds();
+                        if (!creds) throw new Error("ECS task credentials are not available");
+                        return creds;
+                    },
+                },
+            });
+            const token = await client.getAccessToken();
+            return token.token || null;
+        }
+        const credentials = googleCredentials();
         const auth = new GoogleAuth({
             scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+            ...(credentials ? { credentials } : {}),
         });
         const client = await auth.getClient();
         const token = await client.getAccessToken();
@@ -286,11 +335,16 @@ async function transcribeSpeechToText(input: {
     return { text, engine: "transcribe", language };
 }
 
-/** Order the speech engines are tried in (STT_ORDER=chirp,scribe,gemini). Without Google voice: Transcribe, then Scribe. */
+/** Order the speech engines are tried in. Chirp-only (VOICE_STT=chirp) is Chirp then Scribe. Full Google voice keeps the old list. Otherwise Transcribe, then Scribe. */
 export function sttOrder(env: NodeJS.ProcessEnv = process.env): Array<"chirp" | "scribe" | "gemini" | "transcribe"> {
     const valid = new Set(["chirp", "scribe", "gemini", "transcribe"]);
     const order = (env.STT_ORDER || "chirp,scribe,gemini").split(",").map((s) => s.trim().toLowerCase()).filter((s) => valid.has(s));
     const all = (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini" | "transcribe">;
+    if (chirpSttEnabled(env) && !voiceGoogleEnabled(env)) {
+        const out = all.filter((e) => e === "chirp" || e === "scribe");
+        if (!out.includes("chirp")) out.unshift("chirp");
+        return out;
+    }
     if (voiceGoogleEnabled(env)) return all.filter((e) => e !== "transcribe");
     const aws = all.filter((e) => e === "transcribe" || e === "scribe");
     if (!aws.includes("transcribe")) aws.unshift("transcribe");
@@ -302,6 +356,7 @@ async function geminiAudioSpeechToText(input: {
     base64: string;
     mimeType: string;
 }): Promise<SttResult | null> {
+    if (!voiceGoogleEnabled()) return null;
     const token = await getAccessToken();
     if (!token) return null;
 
@@ -372,7 +427,8 @@ export async function speechToTextDetailed(input: SttInput): Promise<SttResult> 
 
     let unclear = false;
     const google = voiceGoogleEnabled();
-    for (const engine of (input.engines ?? sttOrder()).filter((e) => google || e === "scribe" || e === "transcribe")) {
+    const chirpOk = chirpSttEnabled();
+    for (const engine of (input.engines ?? sttOrder()).filter((e) => (e === "chirp" && chirpOk) || (e === "gemini" && google) || e === "scribe" || e === "transcribe")) {
         try {
             const got =
                 engine === "chirp"

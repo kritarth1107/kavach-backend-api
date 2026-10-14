@@ -47,6 +47,7 @@ ok("punjabi uses Google's Gurmukhi code", languageCodeFor("pa-IN") === "pa-Guru-
 ok("unknown hint ignored", languageCodeFor("klingon") === undefined);
 ok("default engine order", JSON.stringify(sttOrder({})) === JSON.stringify(["chirp", "scribe", "gemini"]));
 ok("engine order from env, bad names dropped", JSON.stringify(sttOrder({ STT_ORDER: "scribe, foo, gemini" })) === JSON.stringify(["scribe", "gemini"]));
+ok("chirp only, scribe backup", JSON.stringify(sttOrder({ VOICE_STT: "chirp", VOICE_GOOGLE: "off", LLM_PROVIDER_BACKEND: "bedrock", STT_ORDER: "chirp,scribe" })) === JSON.stringify(["chirp", "scribe"]));
 
 // ElevenLabs transcript: audio tags dropped, confidence from word probabilities, language normalised
 const sc = parseScribe({ text: "(background noise) Maine dawai le li", language_code: "hin",
