@@ -21,6 +21,10 @@ export type TemplatePurpose =
     | "alert_noreply"
     | "alert_health"
     | "alert_approval"
+    | "alert_emergency"
+    | "alert_report"
+    | "alert_order"
+    | "alert_update"
     | "alert"
     | "order"
     /** The general opener (B3.3): for everything without its own template; {{1}} = the reader's name, button "open:waiting". */
@@ -31,10 +35,18 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
     reminder: ["kavach_care_reminder"],
     summary: ["kavach_daily_summary"],
     // a caregiver alert as a fixed sentence per kind, {{1}} = the person (kavach_alert_<kind>_<lang>)
-    alert_dose: ["kavach_alert_dose"],
-    alert_noreply: ["kavach_alert_noreply", "kavach_alert_wellbeing"],
-    alert_health: ["kavach_alert_health", "kavach_alert_unwell"],
+    // the third wordings (care-record updates, 15 Oct) cover the languages where Meta filed the first two MARKETING
+    alert_dose: ["kavach_alert_dose", "kavach_alert_medicine"],
+    alert_noreply: ["kavach_alert_noreply", "kavach_alert_wellbeing", "kavach_alert_checkin"],
+    alert_health: ["kavach_alert_health", "kavach_alert_unwell", "kavach_alert_symptom"],
     alert_approval: ["kavach_alert_approval"],
+    // 15 Oct (founder: emergencies and every important alert must reach a closed chat): an emergency says "call them
+    // now"; until it is approved in a language the health alert goes. A lab report, an order placed for them and an
+    // entry flagged for them each have their own; the flagged-entry wording is the fallback for both.
+    alert_emergency: ["kavach_alert_emergency", "kavach_alert_health", "kavach_alert_unwell", "kavach_alert_symptom"],
+    alert_report: ["kavach_alert_report", "kavach_alert_update"],
+    alert_order: ["kavach_alert_order", "kavach_alert_update"],
+    alert_update: ["kavach_alert_update"],
     // free-text alert and order update ({{2}} = a line of the message): Meta filed both MARKETING (2026-10-12), so none
     // is approved and these go as before; kept for the engine's hints
     alert: ["kavach_alert"],
@@ -45,21 +57,33 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
 
 /** Params each template takes (Meta refuses a send with the wrong count). */
 export const TEMPLATE_PARAMS: Record<TemplatePurpose, number> = {
-    reminder: 2, summary: 1, alert_dose: 1, alert_noreply: 1, alert_health: 1, alert_approval: 1, alert: 2, order: 2, message: 1,
+    reminder: 2, summary: 1, alert_dose: 1, alert_noreply: 1, alert_health: 1, alert_approval: 1, alert_emergency: 1,
+    alert_report: 1, alert_order: 1, alert_update: 1, alert: 2, order: 2, message: 1,
 };
 
-/** The fixed alert template for a caregiver alert's kind (backend notifyCaregivers kinds); none for the rest. */
+/** The fixed alert template for every caregiver alert that may go on WhatsApp (backend notifyCaregivers kinds), so none
+ * waits behind the general opener (15 Oct). An alert without a kind (an urgent one from Saheli) is a flagged entry. */
 export function alertTemplateFor(kind?: string): TemplatePurpose | null {
     switch (kind) {
-        case "health_red_flag":
         case "emergency":
         case "crisis":
+            return "alert_emergency";
+        case "health_red_flag":
         case "symptom":
             return "alert_health";
         case "nudge_silence":
             return "alert_noreply";
         case "missed_tasks":
             return "alert_dose";
+        case "lab_alert":
+            return "alert_report";
+        case "order_placed":
+            return "alert_order";
+        case "elder_share":
+        case "unusual_activity":
+        case undefined:
+        case "":
+            return "alert_update";
         default:
             return null;
     }

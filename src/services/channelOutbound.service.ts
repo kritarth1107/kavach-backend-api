@@ -370,6 +370,12 @@ async function openerHeldBack(phone: string, kind: string): Promise<string> {
     const win = await WhatsAppWindow.findOne({ phone: key }).lean<{ lastInboundAt?: Date }>().catch(() => null);
     const since = win?.lastInboundAt ? new Date(win.lastInboundAt) : new Date(0);
     const opener = { phone: key, template: { $regex: "^kavach_saheli_(message|update|care)" }, status: { $ne: "failed" } };
+    if (kind === "alert") {
+        // A caregiver alert never waits unseen behind an earlier opener (founder 15 Oct: "nothing should feel missed");
+        // it only waits if an opener went in the last 30 minutes, which their tap or reply opens anyway.
+        const recent = new Date(clockNow().getTime() - 30 * 60_000);
+        return (await MessageDelivery.exists({ ...opener, sentAt: { $gt: recent > since ? recent : since } })) ? "an opener went in the last 30 minutes" : "";
+    }
     if (await MessageDelivery.exists({ ...opener, sentAt: { $gt: since } })) return "the opener already went and they have not written since";
     if (kind === "nudge" || kind === "checkin") {
         const now = clockNow();

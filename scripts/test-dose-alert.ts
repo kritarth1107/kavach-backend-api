@@ -32,6 +32,8 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
         );
 
 const emails: Array<{ subject: string; text: string; to: string[] }> = [];
+// Resend is faked below, so the email path may run here (real email otherwise goes only from production)
+process.env.EMAIL_SEND = "on";
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url instanceof Request ? url.url : url);

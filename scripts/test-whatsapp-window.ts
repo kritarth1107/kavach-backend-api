@@ -65,13 +65,30 @@ async function pure() {
         assert.deepEqual(await T.pickTemplate("alert_noreply", "en"), { name: "kavach_alert_wellbeing_en", language: "en" });
         assert.deepEqual(await T.pickTemplate("alert_noreply", "hi"), { name: "kavach_alert_noreply_hi", language: "hi" });
     });
-    await ok("each caregiver alert kind has its fixed template; the others have none", () => {
+    await ok("every caregiver alert kind that may go on WhatsApp has its own template (15 Oct)", () => {
         assert.equal(T.alertTemplateFor("health_red_flag"), "alert_health");
-        assert.equal(T.alertTemplateFor("emergency"), "alert_health");
+        assert.equal(T.alertTemplateFor("symptom"), "alert_health");
+        assert.equal(T.alertTemplateFor("emergency"), "alert_emergency");
+        assert.equal(T.alertTemplateFor("crisis"), "alert_emergency");
         assert.equal(T.alertTemplateFor("nudge_silence"), "alert_noreply");
         assert.equal(T.alertTemplateFor("missed_tasks"), "alert_dose");
-        assert.equal(T.alertTemplateFor("lab_alert"), null);
-        assert.equal(T.alertTemplateFor(undefined), null);
+        assert.equal(T.alertTemplateFor("lab_alert"), "alert_report");
+        assert.equal(T.alertTemplateFor("order_placed"), "alert_order");
+        assert.equal(T.alertTemplateFor("elder_share"), "alert_update");
+        assert.equal(T.alertTemplateFor("unusual_activity"), "alert_update");
+        assert.equal(T.alertTemplateFor(undefined), "alert_update", "an urgent alert without a kind");
+        assert.equal(T.alertTemplateFor("care_note"), null, "a kind that never goes on WhatsApp");
+        for (const p of ["alert_emergency", "alert_report", "alert_order", "alert_update"] as const) assert.equal(T.TEMPLATE_PARAMS[p], 1);
+    });
+    await ok("an emergency uses its own template, else the health one; the care-record wordings cover MARKETING languages", async () => {
+        T.setTemplateCatalogForTest(["kavach_alert_health_en|en", "kavach_alert_symptom_ta|ta", "kavach_alert_emergency_hi|hi", "kavach_alert_update_en|en", "kavach_alert_medicine_pa|pa"]);
+        assert.deepEqual(await T.pickTemplate("alert_emergency", "hi"), { name: "kavach_alert_emergency_hi", language: "hi" });
+        assert.deepEqual(await T.pickTemplate("alert_emergency", "ta"), { name: "kavach_alert_symptom_ta", language: "ta" }, "Tamil before Hindi");
+        assert.deepEqual(await T.pickTemplate("alert_emergency", "en"), { name: "kavach_alert_health_en", language: "en" });
+        assert.deepEqual(await T.pickTemplate("alert_health", "ta"), { name: "kavach_alert_symptom_ta", language: "ta" });
+        assert.deepEqual(await T.pickTemplate("alert_dose", "pa"), { name: "kavach_alert_medicine_pa", language: "pa" });
+        assert.deepEqual(await T.pickTemplate("alert_report", "en"), { name: "kavach_alert_update_en", language: "en" }, "report not approved yet: the flagged-entry wording");
+        assert.deepEqual(await T.pickTemplate("alert_order", "gu"), { name: "kavach_alert_update_en", language: "en" });
     });
     await ok("template params are one short line; the alert line is the first sentence; times read 8:30 PM", () => {
         assert.equal(T.templateParam("a\nb\t c    d"), "a b c d");
@@ -214,6 +231,30 @@ async function withDb(uri: string) {
         const d4 = await deliverOutboundMessage({ ...ob, content: "Bahut accha!", delivery: { kind: "message" } });
         assert.equal(d4.delivered, true);
         assert.equal(sent[0]!.body.type, "text");
+    });
+    await ok("a caregiver alert is never held behind an old opener: a new one goes after 30 minutes (15 Oct)", async () => {
+        T.setTemplateCatalogForTest(["kavach_saheli_update_en|en"]);
+        const { default: MessageDelivery } = await import("../src/models/messageDelivery.model");
+        const PHONE = "+919000000206";
+        await W.noteInbound(PHONE, new Date(Date.now() - 40 * 3_600_000));
+        await MessageDelivery.create({ phone: W.phoneKey(PHONE), familyId: "fam-w", kind: "checkin", template: "kavach_saheli_update_en",
+            status: "delivered", sentAt: new Date(Date.now() - 2 * 3_600_000), attempt: 1 });
+        const ob = { familyId: "fam-w", recipientUserId: "elder-o", channel: "whatsapp" as const, channelIdentifier: PHONE };
+        sent.length = 0;
+        // a nudge is still held (the opener went and they have not written)
+        const nudge = await deliverOutboundMessage({ ...ob, purpose: "proactive" as const, content: "Paani piya?", delivery: { kind: "nudge" } });
+        assert.equal(nudge.delivered, false);
+        assert.equal(sent.length, 0);
+        // an alert without its own template opens the chat again
+        const alert = await deliverOutboundMessage({ ...ob, toUserId: "elder-o", purpose: "alert", content: "Urgent: please call Asha" });
+        assert.equal(alert.delivered, true);
+        assert.equal(alert.via, "template");
+        assert.equal((sent[0]!.body.template as { name: string }).name, "kavach_saheli_update_en");
+        // a second alert within 30 minutes waits behind that opener
+        sent.length = 0;
+        const again = await deliverOutboundMessage({ ...ob, toUserId: "elder-o", purpose: "alert", content: "Another note" });
+        assert.equal(again.delivered, false);
+        assert.equal(sent.length, 0);
     });
     await ok("more than 8 waiting: all of them, as one summary, newest first", async () => {
         const MANY = "+919000000204";

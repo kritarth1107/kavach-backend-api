@@ -33,6 +33,8 @@ const ok = (name: string, fn: () => void | Promise<void>) =>
 const whatsapp: Array<{ to: string; body: Record<string, unknown> }> = [];
 let wamids = 0; // unique even after whatsapp.length is reset (the delivery ledger keeps one row per wamid)
 const emails: Array<Record<string, unknown>> = [];
+// Resend's API is faked below, so the email path may run here (real email otherwise goes only from production)
+process.env.EMAIL_SEND = "on";
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url instanceof Request ? url.url : url);
