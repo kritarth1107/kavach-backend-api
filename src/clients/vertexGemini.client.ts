@@ -5,6 +5,8 @@
  */
 import { execFile } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
+import { llmBackend } from "../config/cloudProvider";
+import { bedrockGenerateText } from "./bedrock.client";
 
 let auth: GoogleAuth | null = null;
 
@@ -125,7 +127,14 @@ export async function vertexGenerateText(input: {
     /** Internal: retry depth. */
     attempt?: number;
 }): Promise<string | null> {
-    if (process.env.NODE_ENV === "test" || process.env.VERTEX_DISABLED === "1") return null;
+    if (process.env.NODE_ENV === "test") return null;
+    // The AWS copy (LLM_PROVIDER_BACKEND=bedrock): the same call on Bedrock in Mumbai; Google is never asked.
+    if (llmBackend() === "bedrock") {
+        const out = await bedrockGenerateText(input);
+        if (out.error) lastVertexError = `bedrock ${out.model} ${out.error}`.slice(0, 220);
+        return out.text;
+    }
+    if (process.env.VERTEX_DISABLED === "1") return null;
     if (indiaOnly()) {
         if (input.model !== indiaModel() || input.location !== indiaRegion()) {
             return vertexGenerateText({ ...input, model: indiaModel(), location: indiaRegion() });

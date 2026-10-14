@@ -4,7 +4,9 @@
  * Never diagnoses — extract printed facts / visible meal description only.
  */
 import { GoogleAuth } from "google-auth-library";
+import { bedrockGenerateText } from "../clients/bedrock.client";
 import { personalRoute, preferPro } from "../clients/vertexGemini.client";
+import { llmBackend } from "../config/cloudProvider";
 
 export type VisionMediaKind = "food" | "prescription" | "other";
 
@@ -120,17 +122,20 @@ Respond with a single JSON object (no markdown) using exactly these keys:
 
 If unreadable, kind="other", short summary saying it was hard to read, and a gentle elderReplyHint asking them to type what it is.`;
 
-export async function analyzeCareMedia(input: {
-    buffer: Buffer;
-    mimeType: string;
-    caption?: string;
-}): Promise<VisionMediaResult | null> {
-    if (!input.buffer?.length) return null;
-    const mime = (input.mimeType || "image/jpeg").split(";")[0].trim() || "image/jpeg";
-    if (!mime.startsWith("image/") && mime !== "application/pdf") {
-        return null;
-    }
+/** The AWS copy (LLM_PROVIDER_BACKEND=bedrock): the photo goes to the Bedrock vision model in Mumbai. */
+async function readWithBedrock(prompt: string, mime: string, buffer: Buffer): Promise<string | null> {
+    const out = await bedrockGenerateText({
+        prompt,
+        inlineData: { mimeType: mime, data: buffer.toString("base64") },
+        temperature: 0.2,
+        maxOutputTokens: 1024,
+        timeoutMs: 60_000,
+    });
+    if (!out.text) console.warn(`Bedrock vision failed: ${out.error ?? "no answer"}`);
+    return out.text;
+}
 
+async function readWithGemini(prompt: string, mime: string, buffer: Buffer): Promise<string | null> {
     const token = await getAccessToken();
     if (!token) return null;
 
@@ -142,10 +147,6 @@ export async function analyzeCareMedia(input: {
             ? "https://aiplatform.googleapis.com"
             : `https://${location}-aiplatform.googleapis.com`;
     const url = `${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:generateContent`;
-
-    const captionLine = input.caption?.trim()
-        ? `\nElder caption: ${input.caption.trim().slice(0, 300)}`
-        : "";
 
     const res = await fetch(url, {
         method: "POST",
@@ -159,11 +160,11 @@ export async function analyzeCareMedia(input: {
                 {
                     role: "user",
                     parts: [
-                        { text: `${VISION_PROMPT}${captionLine}` },
+                        { text: prompt },
                         {
                             inlineData: {
                                 mimeType: mime,
-                                data: input.buffer.toString("base64"),
+                                data: buffer.toString("base64"),
                             },
                         },
                     ],
@@ -185,7 +186,26 @@ export async function analyzeCareMedia(input: {
     const json = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
-    const rawText = json.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim();
+    return json.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("").trim() || null;
+}
+
+export async function analyzeCareMedia(input: {
+    buffer: Buffer;
+    mimeType: string;
+    caption?: string;
+}): Promise<VisionMediaResult | null> {
+    if (!input.buffer?.length) return null;
+    const mime = (input.mimeType || "image/jpeg").split(";")[0].trim() || "image/jpeg";
+    if (!mime.startsWith("image/") && mime !== "application/pdf") {
+        return null;
+    }
+
+    const captionLine = input.caption?.trim()
+        ? `\nElder caption: ${input.caption.trim().slice(0, 300)}`
+        : "";
+    const rawText = llmBackend() === "bedrock"
+        ? await readWithBedrock(`${VISION_PROMPT}${captionLine}`, mime, input.buffer)
+        : await readWithGemini(`${VISION_PROMPT}${captionLine}`, mime, input.buffer);
     if (!rawText) return null;
 
     const parsed = parseJsonObject(rawText);

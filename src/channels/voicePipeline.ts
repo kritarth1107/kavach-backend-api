@@ -8,10 +8,13 @@
  * Chosen after an A/B of 6 engines × 5 languages (agent workspace voice/ab): a Gemini audio judge rated Chirp 4/5 for
  * naturalness and emotion and ElevenLabs v4 / Gemini 2.5 Pro 5/5; ElevenLabs was ~2.5× faster than Gemini Pro TTS.
  * TTS_ORDER (eleven,gemini,google) and TTS_ORDER_BY_LANG ('{"bn":"eleven,google"}') change the order.
+ * Google-free copy (VOICE_GOOGLE=off, or LLM_PROVIDER_BACKEND=bedrock): ElevenLabs only (Scribe STT, ElevenLabs TTS);
+ * the Google entries of STT_ORDER / TTS_ORDER are skipped and Google auth is never asked for.
  */
 import { spawn } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 import { personalRoute, preferPro } from "../clients/vertexGemini.client";
+import { voiceGoogleEnabled } from "../config/cloudProvider";
 import { dialectBase, speechLabel } from "../services/language.service";
 
 export type SttInput = {
@@ -83,6 +86,7 @@ function vertexLocation(): string {
 }
 
 async function getAccessToken(): Promise<string | null> {
+    if (!voiceGoogleEnabled()) return null;
     try {
         const auth = new GoogleAuth({
             scopes: ["https://www.googleapis.com/auth/cloud-platform"],
@@ -230,11 +234,12 @@ async function scribeSpeechToText(input: { base64: string; mimeType: string; lan
     return parseScribe((await res.json()) as Parameters<typeof parseScribe>[0]);
 }
 
-/** Order the speech engines are tried in (STT_ORDER=chirp,scribe,gemini). */
+/** Order the speech engines are tried in (STT_ORDER=chirp,scribe,gemini). Without Google voice only Scribe. */
 export function sttOrder(env: NodeJS.ProcessEnv = process.env): Array<"chirp" | "scribe" | "gemini"> {
     const valid = new Set(["chirp", "scribe", "gemini"]);
     const order = (env.STT_ORDER || "chirp,scribe,gemini").split(",").map((s) => s.trim().toLowerCase()).filter((s) => valid.has(s));
-    return (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini">;
+    const all = (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini">;
+    return voiceGoogleEnabled(env) ? all : ["scribe"];
 }
 
 async function geminiAudioSpeechToText(input: {
@@ -310,7 +315,8 @@ export async function speechToTextDetailed(input: SttInput): Promise<SttResult> 
     }
 
     let unclear = false;
-    for (const engine of input.engines ?? sttOrder()) {
+    const google = voiceGoogleEnabled();
+    for (const engine of (input.engines ?? sttOrder()).filter((e) => google || e === "scribe")) {
         try {
             const got =
                 engine === "chirp"
@@ -480,8 +486,12 @@ function looksHinglish(text: string): boolean {
 type Provider = "eleven" | "gemini" | "google";
 const PROVIDERS: Provider[] = ["eleven", "gemini", "google"];
 
-/** Which engines speak, in order: TTS_ORDER_BY_LANG for this locale's language, else TTS_ORDER, else eleven,gemini,google. */
+/**
+ * Which engines speak, in order: TTS_ORDER_BY_LANG for this locale's language, else TTS_ORDER, else eleven,gemini,google.
+ * Without Google voice only ElevenLabs.
+ */
 export function ttsOrder(locale?: string): Provider[] {
+    if (!voiceGoogleEnabled()) return ["eleven"];
     const byLang = jsonEnv("TTS_ORDER_BY_LANG");
     const lang = (locale || "").split("-")[0];
     const raw = (byLang[lang] || process.env.TTS_ORDER || PROVIDERS.join(",")).split(",").map((x) => x.trim().toLowerCase());
@@ -524,7 +534,7 @@ export function withinBytes(text: string, max: number): string {
 }
 
 async function googleTts(spoken: string, locale: string): Promise<Spoken | null> {
-    if (!GOOGLE_TTS_LOCALES.has(locale)) return null;
+    if (!voiceGoogleEnabled() || !GOOGLE_TTS_LOCALES.has(locale)) return null;
     const token = await getAccessToken();
     if (!token) return null;
     const v = googleVoiceFor(locale);
@@ -722,7 +732,7 @@ export function geminiVoice() {
 }
 
 async function geminiTts(spoken: string, locale: string, mood: Mood, language: string, sing?: { prompt: string; timeoutMs: number }): Promise<Spoken | null> {
-    if (!GEMINI_TTS_LOCALES.has(locale)) return null;
+    if (!voiceGoogleEnabled() || !GEMINI_TTS_LOCALES.has(locale)) return null;
     const token = await getAccessToken();
     if (!token) return null;
     const v = geminiVoice();

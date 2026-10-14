@@ -15,7 +15,8 @@
  */
 import mongoose, { Schema } from "mongoose";
 import { engine } from "./engine";
-import { gapi, gapiAll } from "./infra/google";
+import { NOT_ON_GCP } from "../config/cloudProvider";
+import { gapi, gapiAll, onGcp } from "./infra/google";
 import { PROJECT, REGION, runServices, schedules as schedulerJobs } from "./infra/gcp";
 
 export type CheckStatus = "ok" | "warn" | "problem" | "unknown";
@@ -202,7 +203,7 @@ const backendUrl = () => (process.env.BACKEND_URL || "").replace(/\/$/, "");
 const appUrl = () => (process.env.LIVE_FRONTEND_URL || "https://app.kavach.care").replace(/\/$/, "");
 
 async function services(now: number, trigger: Trigger): Promise<LiveCheckItem> {
-    const run = await runServices().catch(() => null);
+    const run = onGcp() ? await runServices().catch(() => null) : null;
     // the hourly run gives a service deployed a moment ago time to start; after a deploy it must already answer
     const recent = new Set(trigger === "deploy" ? [] : (run || []).filter((s) => s.updatedAt && now - new Date(s.updatedAt).getTime() < LIMITS.deployGraceMs).map((s) => s.name));
     const adminWeb = (run || []).find((s) => s.name === "kavach-admin")?.uri;
@@ -225,7 +226,7 @@ async function services(now: number, trigger: Trigger): Promise<LiveCheckItem> {
     // still not ready after the grace is down (any run, a deploy's check included: another service may be mid-deploy)
     const notReady = (run || []).filter((s) => !s.ready && !(s.updatedAt && now - new Date(s.updatedAt).getTime() < LIMITS.rolloutGraceMs)).map((s) => s.name);
     const item = judgeServices(probes, notReady);
-    if (!run) item.detail = { ...item.detail, cloudRun: "not readable" };
+    if (!run) item.detail = { ...item.detail, cloudRun: onGcp() ? "not readable" : NOT_ON_GCP };
     return item;
 }
 
@@ -340,11 +341,13 @@ async function engineRoutes(): Promise<LiveCheckItem> {
     const base = (process.env.ENGINE_URL || "").replace(/\/$/, "");
     let paths: string[] | null = null;
     try {
-        const { GoogleAuth } = await import("google-auth-library");
-        const client = await new GoogleAuth().getIdTokenClient(base);
-        const headers = await client.getRequestHeaders(base);
         const h: Record<string, string> = {};
-        (headers as unknown as Headers).forEach((v, k) => (h[k] = v));
+        if (onGcp()) {
+            const { GoogleAuth } = await import("google-auth-library");
+            const client = await new GoogleAuth().getIdTokenClient(base);
+            const headers = await client.getRequestHeaders(base);
+            (headers as unknown as Headers).forEach((v, k) => (h[k] = v));
+        }
         const res = await fetch(`${base}/openapi.json`, { headers: h, signal: AbortSignal.timeout(15_000) });
         if (res.ok) paths = Object.keys(((await res.json()) as { paths?: Record<string, unknown> }).paths || {});
     } catch {
@@ -352,7 +355,7 @@ async function engineRoutes(): Promise<LiveCheckItem> {
     }
     const host = base.replace(/^https?:\/\//, "");
     type J = { name: string; httpTarget?: { uri?: string } };
-    const jobs = await gapiAll<J>(`https://cloudscheduler.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/jobs`, "jobs").catch(() => [] as J[]);
+    const jobs = onGcp() ? await gapiAll<J>(`https://cloudscheduler.googleapis.com/v1/projects/${PROJECT}/locations/${REGION}/jobs`, "jobs").catch(() => [] as J[]) : [];
     const scheduled = jobs.map((j) => j.httpTarget?.uri || "").filter((u) => u.includes(host)).map((u) => new URL(u).pathname);
     return judgeRoutes(paths, [...ENGINE_ROUTES, ...scheduled]);
 }
@@ -399,8 +402,14 @@ const LABELS: Record<string, string> = {
     backup: "Nightly backup", cloudsql: "Cloud SQL (engine database)", refusals: "Forged and unsigned calls are refused", engine_routes: "Engine routes others call",
 };
 
+/** A check that reads Google Cloud (Monitoring, Cloud SQL admin): off Google Cloud it says so instead of failing. */
+export function gcpOnly(key: string, fn: Collector): Collector {
+    return (now, trigger) => (onGcp() ? fn(now, trigger) : Promise.resolve({ key, label: LABELS[key] || key, status: "ok", value: NOT_ON_GCP }));
+}
+
 export const COLLECTORS: Record<string, Collector> = {
-    services, reminders, delivery, errors, latency: () => latency(), gemini429, escalations: () => escalations(), backup, cloudsql: () => cloudSql(),
+    services, reminders, delivery, errors: gcpOnly("errors", errors), latency: () => latency(), gemini429: gcpOnly("gemini429", gemini429),
+    escalations: () => escalations(), backup, cloudsql: gcpOnly("cloudsql", () => cloudSql()),
 };
 export const DEPLOY_COLLECTORS: Record<string, Collector> = { refusals: () => refusals(), engine_routes: () => engineRoutes() };
 export const DEPLOY_CRITICAL = new Set(["services", "reminders", "refusals", "engine_routes"]);

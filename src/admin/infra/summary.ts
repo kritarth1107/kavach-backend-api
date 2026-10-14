@@ -10,7 +10,8 @@ import mongoose, { Schema } from "mongoose";
 import { engineOrNull } from "../engine";
 import { awsBill } from "./aws";
 import * as gcp from "./gcp";
-import { settle } from "./google";
+import { NOT_ON_GCP } from "../../config/cloudProvider";
+import { onGcp, settle } from "./google";
 import {
     ARTIFACT_USD_GB_MONTH, FIRESTORE, LB_RULE_USD_HOUR, PD_BALANCED_USD_GB_MONTH, PD_STANDARD_USD_GB_MONTH, SCHEDULER_USD_JOB_MONTH,
     SQL_SSD_USD_GB_MONTH, SQL_TIER_USD_HOUR, USD_INR, inr, lastDays, perDay, round2, runCostUsd, sumDaily, totals, type Totals,
@@ -86,24 +87,27 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     const today = days[days.length - 1];
     const keep = (d: Record<string, number>) => Object.fromEntries(Object.entries(d).filter(([k]) => k >= days[0] && k <= today));
 
+    // Off Google Cloud (the AWS copy) the Google collectors are skipped, not failed: one "not on GCP" note instead of errors.
+    const gcpOn = onGcp();
+    const gSettle: typeof settle = (name, fn, errs) => (gcpOn ? settle(name, fn, errs) : Promise.resolve(null));
     const [run, jobs, scheds, sql, fsdbs, repos, compute, lb, bucketList, secrets, runSeconds, jobSeconds, traffic, fsReads, fsWrites, fsBytes, billTable, spend, wa, bu, el, aws] = await Promise.all([
-        settle("Cloud Run", gcp.runServices, errors),
-        settle("Cloud Run jobs", gcp.runJobs, errors),
-        settle("Cloud Scheduler", gcp.schedules, errors),
-        settle("Cloud SQL", gcp.sqlInstances, errors),
-        settle("Firestore", gcp.firestoreDbs, errors),
-        settle("Artifact Registry", gcp.artifactRepos, errors),
-        settle("Compute Engine", gcp.computeVms, errors),
-        settle("Load balancer", gcp.loadBalancers, errors),
-        settle("Cloud Storage", gcp.buckets, errors),
-        settle("Secret Manager", gcp.secretCount, errors),
-        settle("Cloud Run usage", () => gcp.dailyByLabel("run.googleapis.com/container/billable_instance_time", "cloud_run_revision", "resource.label.service_name", DAYS, now), errors),
-        settle("Cloud Run job usage", () => gcp.dailyByLabel("run.googleapis.com/container/billable_instance_time", "cloud_run_job", "resource.label.job_name", DAYS, now), errors),
-        settle("Cloud Run traffic", () => gcp.runTraffic(now), errors),
-        settle("Firestore reads", () => gcp.dailyByLabel("firestore.googleapis.com/api/billable_read_units", "firestore.googleapis.com/Database", "resource.label.database_id", DAYS, now), errors),
-        settle("Firestore writes", () => gcp.dailyByLabel("firestore.googleapis.com/api/billable_write_units", "firestore.googleapis.com/Database", "resource.label.database_id", DAYS, now), errors),
-        settle("Firestore storage", () => gcp.latestGauge("firestore.googleapis.com/storage/data_and_index_storage_bytes", "firestore.googleapis.com/Database", "resource.label.database_id", now), errors),
-        gcp.billingTable(),
+        gSettle("Cloud Run", gcp.runServices, errors),
+        gSettle("Cloud Run jobs", gcp.runJobs, errors),
+        gSettle("Cloud Scheduler", gcp.schedules, errors),
+        gSettle("Cloud SQL", gcp.sqlInstances, errors),
+        gSettle("Firestore", gcp.firestoreDbs, errors),
+        gSettle("Artifact Registry", gcp.artifactRepos, errors),
+        gSettle("Compute Engine", gcp.computeVms, errors),
+        gSettle("Load balancer", gcp.loadBalancers, errors),
+        gSettle("Cloud Storage", gcp.buckets, errors),
+        gSettle("Secret Manager", gcp.secretCount, errors),
+        gSettle("Cloud Run usage", () => gcp.dailyByLabel("run.googleapis.com/container/billable_instance_time", "cloud_run_revision", "resource.label.service_name", DAYS, now), errors),
+        gSettle("Cloud Run job usage", () => gcp.dailyByLabel("run.googleapis.com/container/billable_instance_time", "cloud_run_job", "resource.label.job_name", DAYS, now), errors),
+        gSettle("Cloud Run traffic", () => gcp.runTraffic(now), errors),
+        gSettle("Firestore reads", () => gcp.dailyByLabel("firestore.googleapis.com/api/billable_read_units", "firestore.googleapis.com/Database", "resource.label.database_id", DAYS, now), errors),
+        gSettle("Firestore writes", () => gcp.dailyByLabel("firestore.googleapis.com/api/billable_write_units", "firestore.googleapis.com/Database", "resource.label.database_id", DAYS, now), errors),
+        gSettle("Firestore storage", () => gcp.latestGauge("firestore.googleapis.com/storage/data_and_index_storage_bytes", "firestore.googleapis.com/Database", "resource.label.database_id", now), errors),
+        gcpOn ? gcp.billingTable() : Promise.resolve(null),
         engineOrNull<EngineSpend>("GET", "/spend?days=35"),
         whatsappBill(35, now),
         browserUseAccount(),
@@ -370,7 +374,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         const perDayInr = rows.reduce((t, x) => t + (x.totals.avg7 ?? 0), 0);
         alerts.push({ level: "info", text: `${rows.map((x) => x.name).join(" and ")} keep an instance running all day: ≈₹${Math.round(perDayInr)}/day, ${Math.round((perDayInr / google) * 100)}% of Google spend.`, action: "Check their size (vCPU, memory) against real load; smaller instances cut this directly." });
     }
-    if (!bill) alerts.push({ level: "info", text: "Google costs are estimates: connect the billing export for exact numbers (steps below)." });
+    if (!gcpOn) alerts.push({ level: "info", text: `Google Cloud: ${NOT_ON_GCP}. Cloud Run, Firestore, Cloud SQL and the Google bill are not read here.` });
+    else if (!bill) alerts.push({ level: "info", text: "Google costs are estimates: connect the billing export for exact numbers (steps below)." });
 
     const balances: Snapshot["balances"] = [];
     if (bu.connected && bu.balanceUsd != null) balances.push({ name: "Browser Use credit", provider: "Browser Use", value: `$${round2(bu.balanceUsd)}`, low: bu.balanceUsd < 5 });

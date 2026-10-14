@@ -1,4 +1,5 @@
 import { GoogleAuth } from "google-auth-library";
+import { googleEnabled } from "../config/cloudProvider";
 import config from "../config/app.config";
 import { AppError } from "../middleware/error.middleware";
 import { aiConversationId } from "../utils/uuid.util";
@@ -68,7 +69,7 @@ function aiEngineAudience(): string {
 async function aiRequestHeaders(): Promise<Record<string, string>> {
     const headers = aiHeaders();
     const audience = aiEngineAudience();
-    if (!audience.includes(".run.app")) return headers;
+    if (!audience.includes(".run.app") || !googleEnabled()) return headers;
     try {
         const auth = new GoogleAuth();
         const client = await auth.getIdTokenClient(audience);

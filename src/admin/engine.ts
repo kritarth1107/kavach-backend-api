@@ -3,6 +3,7 @@
  * (ENGINE_ADMIN_SECRET), only for the engine's /v2/admin routes. It never uses the public backend's engine secret.
  */
 import { GoogleAuth, type IdTokenClient } from "google-auth-library";
+import { googleEnabled } from "../config/cloudProvider";
 import { AdminError } from "./auth";
 
 let client: Promise<IdTokenClient> | null = null;
@@ -16,7 +17,7 @@ export function engineConfigured(): boolean {
 }
 
 async function authHeaders(): Promise<Record<string, string>> {
-    if (!base().includes(".run.app")) return {};
+    if (!base().includes(".run.app") || !googleEnabled()) return {};
     client ??= new GoogleAuth().getIdTokenClient(base());
     const headers = await (await client).getRequestHeaders(base());
     const out: Record<string, string> = {};

@@ -3,8 +3,9 @@
  * On Cloud Run the identity comes from the metadata server; locally from application-default credentials.
  */
 import { GoogleAuth } from "google-auth-library";
+import { googleEnabled, NOT_ON_GCP } from "../../config/cloudProvider";
 
-const auth = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+let auth: GoogleAuth | null = null;
 
 export class CloudError extends Error {
     constructor(public status: number, message: string) {
@@ -12,7 +13,14 @@ export class CloudError extends Error {
     }
 }
 
+/** Off on a copy outside Google Cloud (GOOGLE_SERVICES=off or LLM_PROVIDER_BACKEND=bedrock): callers show "not on GCP". */
+export function onGcp(): boolean {
+    return googleEnabled();
+}
+
 export async function gapi<T>(url: string, opts: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
+    if (!onGcp()) throw new CloudError(0, NOT_ON_GCP);
+    auth ??= new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
     const client = await auth.getClient();
     const token = (await client.getAccessToken()).token;
     if (!token) throw new CloudError(401, "no Google credentials");

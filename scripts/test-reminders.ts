@@ -247,6 +247,8 @@ async function withDb(uri: string) {
         const dentist = await R.createSaheliReminder({ familyId: "famR", recipientUserId: "cg1", actorUserId: "cg1", text: "Dentist",
                                                        schedule: { times: ["11:00"], repeat: "once", date: WED }, now: at(MON, "18:00") });
         assert.equal(dentist.ok, true);
+        // made "on Monday": with the real clock it was made today, after Wednesday 11:00 once that day came (14 Oct 2026)
+        if (dentist.ok) await SaheliReminder.collection.updateOne({ reminderId: dentist.reminder.reminderId }, { $set: { createdAt: at(MON, "18:00") } });
         const wed = await R.remindersForDay({ familyId: "famR", recipientUserId: "cg1", actorUserId: "cg1", day: WED, now: at(MON, "18:00") });
         const d = dentist.ok ? dentist.reminder.reminderId : "";
         assert.deepEqual(wed.occurrences.filter((o) => o.reminderId === d).map((o) => [o.time, o.status]), [["11:00", "scheduled"]],
