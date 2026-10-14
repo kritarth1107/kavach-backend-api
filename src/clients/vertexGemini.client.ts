@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
 import { llmBackend } from "../config/cloudProvider";
 import { bedrockGenerateText } from "./bedrock.client";
+import { wifAccessToken, wifAudience } from "./googleWif";
 
 let auth: GoogleAuth | null = null;
 
@@ -22,6 +23,12 @@ function gcloudAccessToken(): Promise<string | null> {
 }
 
 async function accessToken(): Promise<string | null> {
+    // AWS: the task role through workload identity federation (no Google key); GCP: the default chain below.
+    if (wifAudience()) {
+        const token = await wifAccessToken("vertex");
+        if (!token) lastVertexError = "auth federated token unavailable";
+        return token;
+    }
     try {
         auth ??= new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
         const client = await auth.getClient();

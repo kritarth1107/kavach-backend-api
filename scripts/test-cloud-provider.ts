@@ -139,7 +139,9 @@ async function main() {
     ok("default STT order unchanged", sttOrder().join(",") === "chirp,scribe,gemini");
     ok("default TTS order unchanged", ttsOrder("hi-IN").join(",") === "eleven,gemini,google");
     env({ LLM_PROVIDER_BACKEND: "bedrock", NODE_ENV: "development" });
-    ok("bedrock: STT is Transcribe then Scribe", sttOrder({ ...process.env, STT_ORDER: "chirp,gemini,scribe" }).join(",") === "transcribe,scribe");
+    // an explicit STT_ORDER runs as written, minus the Google engines that are off; nothing is put in front (14 Oct)
+    ok("bedrock: an explicit order keeps only the engines that are on", sttOrder({ ...process.env, STT_ORDER: "chirp,gemini,scribe" }).join(",") === "scribe");
+    ok("bedrock: no order set is Transcribe then Scribe", sttOrder({ ...process.env, STT_ORDER: "" }).join(",") === "transcribe,scribe");
     ok("bedrock: TTS is ElevenLabs only", ttsOrder("hi-IN").join(",") === "eleven");
     env({ VOICE_GOOGLE: "off" });
     ok("VOICE_GOOGLE=off: Transcribe, Scribe, and ElevenLabs", sttOrder({ VOICE_GOOGLE: "off" }).join(",") === "transcribe,scribe" && ttsOrder("ta-IN").join(",") === "eleven");

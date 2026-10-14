@@ -9,6 +9,7 @@ import { singableLyrics, singPrompt, singToVoiceNote } from "../src/channels/voi
 import { spawnSync } from "node:child_process";
 import { frameRate, videoFrames } from "../src/services/videoFrames";
 import { keytermsFrom, MAX_KEYTERMS } from "../src/services/sttKeyterms.service";
+import { wifAudience, wifServiceAccount } from "../src/clients/googleWif";
 import { scribeLanguageCode, speechToTextDetailed } from "../src/channels/voicePipeline";
 import { withVoiceReply } from "../src/services/whatsappRouting.service";
 import { sendVoiceAfterText } from "../src/services/voiceAfterText.service";
@@ -200,6 +201,14 @@ async function replyOrderChecks() {
 ok("scribe detects the language by default", scribeLanguageCode("bengali", {}) === undefined && scribeLanguageCode("tamil", {}) === undefined);
 ok("SCRIBE_LANGUAGE=hint passes the saved language, never for Hinglish",
     scribeLanguageCode("bengali", { SCRIBE_LANGUAGE: "hint" }) === "bn" && scribeLanguageCode("hinglish", { SCRIBE_LANGUAGE: "hint" }) === undefined);
+ok("STT_ORDER=scribe is Scribe only: nothing put in front (founder 14 Oct)",
+    JSON.stringify(sttOrder({ VOICE_STT: "chirp", VOICE_GOOGLE: "off", GOOGLE_SERVICES: "off", STT_ORDER: "scribe" })) === JSON.stringify(["scribe"])
+    && JSON.stringify(sttOrder({ VOICE_STT: "off", VOICE_GOOGLE: "off", LLM_PROVIDER_BACKEND: "bedrock", STT_ORDER: "scribe" })) === JSON.stringify(["scribe"]));
+ok("an engine that is off is dropped from an explicit order",
+    JSON.stringify(sttOrder({ VOICE_STT: "off", VOICE_GOOGLE: "off", GOOGLE_SERVICES: "off", STT_ORDER: "chirp,scribe" })) === JSON.stringify(["scribe"]));
+ok("federation: off without an audience; one account per use",
+    wifAudience({}) === null && wifServiceAccount("vertex", {}).startsWith("kavach-brain@") && wifServiceAccount("chirp", {}).startsWith("kavach-chirp@")
+    && wifServiceAccount("vertex", { GOOGLE_VERTEX_SA: "x@y" }) === "x@y");
 ok("scribe first, chirp as backup", JSON.stringify(sttOrder({ VOICE_STT: "chirp", VOICE_GOOGLE: "off", LLM_PROVIDER_BACKEND: "bedrock", STT_ORDER: "scribe,chirp" })) === JSON.stringify(["scribe", "chirp"]));
 ok("key terms: medicines first, cleaned, no repeats",
     JSON.stringify(keytermsFrom(["Thyronorm 50", " thyronorm 50 ", "Metformin", null], ["Asha", "Asha Rao", "", "x"])) === JSON.stringify(["Thyronorm 50", "Metformin", "Asha", "Asha Rao"]));

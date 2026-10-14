@@ -4,6 +4,7 @@
  * Never diagnoses — extract printed facts / visible meal description only.
  */
 import { GoogleAuth } from "google-auth-library";
+import { wifAccessToken, wifAudience } from "../clients/googleWif";
 import { bedrockGenerateText } from "../clients/bedrock.client";
 import { personalRoute, preferPro } from "../clients/vertexGemini.client";
 import { llmBackend } from "../config/cloudProvider";
@@ -45,6 +46,7 @@ function visionLocation(): string {
 }
 
 async function getAccessToken(): Promise<string | null> {
+    if (wifAudience()) return wifAccessToken("vertex");
     try {
         const auth = new GoogleAuth({
             scopes: ["https://www.googleapis.com/auth/cloud-platform"],

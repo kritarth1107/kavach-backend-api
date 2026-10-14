@@ -12,7 +12,8 @@
  * ElevenLabs Scribe is the backup. Spoken replies stay on ElevenLabs. Gemini STT and Google TTS stay off.
  */
 import { spawn } from "node:child_process";
-import { AwsClient, GoogleAuth, type JWTInput } from "google-auth-library";
+import { GoogleAuth, type JWTInput } from "google-auth-library";
+import { wifAccessToken, wifAudience } from "../clients/googleWif";
 import { personalRoute, preferPro } from "../clients/vertexGemini.client";
 import { chirpSttEnabled, voiceGoogleEnabled } from "../config/cloudProvider";
 import { dialectBase, speechLabel } from "../services/language.service";
@@ -106,44 +107,10 @@ function googleCredentials(): JWTInput | undefined {
     }
 }
 
-async function ecsAwsCreds(): Promise<{ accessKeyId: string; secretAccessKey: string; token?: string } | null> {
-    const full = process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI?.trim();
-    const rel = process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI?.trim();
-    const url = full || (rel ? `http://169.254.170.2${rel}` : "");
-    if (!url) return null;
-    const headers: Record<string, string> = {};
-    const authz = process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN?.trim();
-    if (authz) headers.Authorization = authz;
-    const res = await fetch(url, { headers });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { AccessKeyId?: string; SecretAccessKey?: string; Token?: string };
-    if (!body.AccessKeyId || !body.SecretAccessKey) return null;
-    return { accessKeyId: body.AccessKeyId, secretAccessKey: body.SecretAccessKey, token: body.Token };
-}
-
 async function getAccessToken(): Promise<string | null> {
     if (!chirpSttEnabled() && !voiceGoogleEnabled()) return null;
     try {
-        const audience = process.env.GOOGLE_WIF_AUDIENCE?.trim();
-        if (audience) {
-            const sa = process.env.GOOGLE_CHIRP_SA?.trim() || "kavach-chirp@kavach-care.iam.gserviceaccount.com";
-            const client = new AwsClient({
-                audience,
-                subject_token_type: "urn:ietf:params:aws:token-type:aws4_request",
-                scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-                service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${sa}:generateAccessToken`,
-                aws_security_credentials_supplier: {
-                    getAwsRegion: async () => process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "ap-south-1",
-                    getAwsSecurityCredentials: async () => {
-                        const creds = await ecsAwsCreds();
-                        if (!creds) throw new Error("ECS task credentials are not available");
-                        return creds;
-                    },
-                },
-            });
-            const token = await client.getAccessToken();
-            return token.token || null;
-        }
+        if (wifAudience()) return await wifAccessToken("chirp");
         const credentials = googleCredentials();
         const auth = new GoogleAuth({
             scopes: ["https://www.googleapis.com/auth/cloud-platform"],
@@ -369,6 +336,11 @@ export function sttOrder(env: NodeJS.ProcessEnv = process.env): Array<"chirp" | 
     const valid = new Set(["chirp", "scribe", "gemini", "transcribe"]);
     const order = (env.STT_ORDER || "chirp,scribe,gemini").split(",").map((s) => s.trim().toLowerCase()).filter((s) => valid.has(s));
     const all = (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini" | "transcribe">;
+    // An explicit STT_ORDER is exactly what runs (founder 14 Oct: "scribe for voice"), minus engines that are switched off;
+    // nothing is put in front of it.
+    if (env.STT_ORDER?.trim() && order.length) {
+        return all.filter((e) => (e === "chirp" ? chirpSttEnabled(env) : e === "gemini" ? voiceGoogleEnabled(env) : true));
+    }
     if (chirpSttEnabled(env) && !voiceGoogleEnabled(env)) {
         const out = all.filter((e) => e === "chirp" || e === "scribe");
         if (!out.includes("chirp")) out.unshift("chirp");
