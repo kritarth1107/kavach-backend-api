@@ -9,7 +9,7 @@ import express from "express";
 import { AdminError, type AdminConfig } from "../src/admin/auth";
 import { buildJobsRouter } from "../src/admin/jobs";
 import {
-    hourKeyOf, judge429, judgeBackup, judgeDelivery, judgeErrors, judgeEscalations, judgeLatency, judgeRefusals, judgeReminders, judgeRoutes,
+    hourKeyOf, judge429, judgeTestProject, judgeBackup, judgeDelivery, judgeErrors, judgeEscalations, judgeLatency, judgeRefusals, judgeReminders, judgeRoutes,
     judgeServices, judgeSql, liveCheckEmail, runLiveCheck, type ILiveCheck, type LiveCheckItem,
 } from "../src/admin/liveCheck";
 
@@ -67,6 +67,10 @@ ok("routes: a missing route others call is a problem, named", (() => {
 ok("routes: an unreadable route list is a problem", judgeRoutes(null, ["/health"]).status === "problem");
 ok("refusals: a forged webhook that gets 200 is a problem", judgeRefusals([{ name: "webhook without a signature", status: 200, want: [401, 403] }]).status === "problem"
     && judgeRefusals([{ name: "webhook without a signature", status: 401, want: [401, 403] }]).status === "ok");
+ok("test project: answering is ok, a 403 policy refusal is unknown (never an alarm), no probe is no line", (() => {
+    const yes = judgeTestProject({ code: 200 }), no = judgeTestProject({ code: 403, reason: "Request rejected in accordance with our terms of use" });
+    return yes?.status === "ok" && no?.status === "unknown" && no.value.startsWith("refused by Google's usage policy") && judgeTestProject(null) === null;
+})());
 ok("the hour is the IST hour", hourKeyOf(new Date("2026-10-13T19:45:00Z")) === "2026-10-14T01");
 
 // one run
@@ -127,12 +131,17 @@ const item = (key: string, status: LiveCheckItem["status"], value = "x"): LiveCh
     ok("a forced test failure (manual only) emails, labelled as a test", row.problems.join() === "forced_test" && f.sent.length === 1 && f.sent[0].subject.startsWith("TEST, ignore: "));
     row = await runLiveCheck({ trigger: "hourly", now: t0, collectors: { delivery: async () => item("delivery", "ok") }, forceTest: true, store: f.store, send: f.send });
     ok("an hourly run never takes a forced failure", row.ok && f.sent.length === 1);
+    const tp = harness();
+    row = await runLiveCheck({ trigger: "hourly", now: t0, collectors: { delivery: async () => item("delivery", "ok") },
+        extra: [{ key: "test_project", label: "Test project", status: "problem", value: "x" }], store: tp.store, send: tp.send });
+    ok("a caller's extra check is shown but can never alarm", row.ok && tp.sent.length === 0 && row.checks.some((c) => c.key === "test_project" && c.status === "unknown"));
     ok("email text lists every check", liveCheckEmail({ trigger: "hourly", at: new Date(t0), checks: [item("a", "problem"), item("b", "ok")], problems: ["a"] }).text.includes("✓ b: x"));
 
     // the job endpoint: only the deploy identity
     process.env.ADMIN_JOB_SA = "github-deploy@kavach-care.iam.gserviceaccount.com";
     const cfg = { audience: "https://admin-api.test", webServiceAccount: "kavach-admin-web@kavach-care.iam.gserviceaccount.com", insecureLocal: false } as AdminConfig;
     let lastTrigger = "";
+    let extras: unknown = null;
     const app = express();
     app.use(express.json());
     app.use("/admin/jobs", buildJobsRouter(cfg, {
@@ -142,6 +151,7 @@ const item = (key: string, status: LiveCheckItem["status"], value = "x"): LiveCh
             return c.webServiceAccount;
         },
         run: async (o) => {
+            extras = o.extra ?? null;
             lastTrigger = `${o.trigger}:${o.service ?? ""}:${o.sha ?? ""}${o.forceTest ? ":forced" : ""}`;
             return { hourKey: "2026-10-14T02", trigger: o.trigger, at: new Date(), ms: 1, ok: true, checks: [item("a", "ok")], problems: [], emailed: false, emailedKeys: [] };
         },
@@ -158,6 +168,10 @@ const item = (key: string, status: LiveCheckItem["status"], value = "x"): LiveCh
     ok("only a manual run may force a test failure", r.status === 200 && lastTrigger === "deploy::");
     r = await post("Bearer deploy", { trigger: "manual", forceTest: true });
     ok("a manual run passes the forced test on", r.status === 200 && lastTrigger === "manual:::forced", lastTrigger);
+    r = await post("Bearer deploy", { trigger: "hourly", probes: { testProject: { code: 403, reason: "Request rejected <b>" } } });
+    ok("the hourly run passes the test-project probe on as a check", r.status === 200 && JSON.stringify(extras).includes("refused by Google") && !JSON.stringify(extras).includes("<b>"), extras);
+    r = await post("Bearer deploy", { trigger: "deploy", probes: { testProject: { code: 403 } } });
+    ok("a deploy run never takes a probe", r.status === 200 && extras === null);
     r = await post("Bearer deploy", { trigger: "anything" });
     ok("an unknown trigger is the hourly run", r.status === 200 && lastTrigger === "hourly::");
     server.close();

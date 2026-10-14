@@ -44,15 +44,36 @@ jobs:
           token_format: id_token
           id_token_audience: ${{ env.AUDIENCE }}
           id_token_include_email: true
+      # One tiny call to the test project's Gemini, hourly and manual runs only (never per deploy): Google has refused every
+      # call there since 14 Oct 01:43 IST (403, usage policy). At most one call an hour, never retried; the admin API shows it
+      # as "unknown" while refused and never emails about it.
+      - uses: google-github-actions/setup-gcloud@v2
+        if: ${{ (inputs.trigger || 'hourly') != 'deploy' }}
+      - name: Test project probe (one call)
+        id: probe
+        if: ${{ (inputs.trigger || 'hourly') != 'deploy' }}
+        run: |
+          set -uo pipefail
+          TOKEN=$(gcloud auth print-access-token 2>/dev/null) || TOKEN=""
+          code=$(curl -s -o probe.json -w '%{http_code}' --max-time 30 -X POST \
+            "https://asia-south1-aiplatform.googleapis.com/v1/projects/sunny-ship-508214-q1/locations/asia-south1/publishers/google/models/gemini-3.5-flash:generateContent" \
+            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+            -d '{"contents":[{"role":"user","parts":[{"text":"Reply with the word ok."}]}],"generationConfig":{"maxOutputTokens":16}}' || echo 0)
+          reason=$(python3 -c 'import json; print((json.load(open("probe.json")).get("error") or {}).get("message", "")[:120])' 2>/dev/null || true)
+          echo "test project answered $code ${reason}"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
       - name: Run the live check
         env:
+          PROBE_CODE: ${{ steps.probe.outputs.code }}
+          PROBE_REASON: ${{ steps.probe.outputs.reason }}
           ID_TOKEN: ${{ steps.auth.outputs.id_token }}
           TRIGGER: ${{ inputs.trigger || 'hourly' }}
           SERVICE_NAME: ${{ inputs.service }}
           FORCE_TEST: ${{ inputs.force_test && 'true' || 'false' }}
         run: |
           set -uo pipefail
-          body=$(python3 -c 'import json, os; print(json.dumps({"trigger": os.environ["TRIGGER"], "service": os.environ.get("SERVICE_NAME", ""), "sha": os.environ["GITHUB_SHA"], "forceTest": os.environ.get("FORCE_TEST") == "true"}))')
+          body=$(python3 -c 'import json, os; print(json.dumps({"trigger": os.environ["TRIGGER"], "service": os.environ.get("SERVICE_NAME", ""), "sha": os.environ["GITHUB_SHA"], "forceTest": os.environ.get("FORCE_TEST") == "true", **({"probes": {"testProject": {"code": int(os.environ["PROBE_CODE"]), "reason": os.environ.get("PROBE_REASON", "")}}} if os.environ.get("PROBE_CODE", "").isdigit() else {})}))')
           code=$(curl -sS -o out.json -w '%{http_code}' --max-time 150 -X POST "$AUDIENCE/admin/jobs/live-check" \
             -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" -d "$body" || echo 000)
           echo "admin API answered $code"

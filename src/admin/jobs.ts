@@ -20,8 +20,14 @@ export function buildJobsRouter(cfg: AdminConfig, deps: { verify?: typeof verify
             const sha = typeof body.sha === "string" ? /^[0-9a-f]{7,40}/i.exec(body.sha)?.[0] : undefined;
             // quality plan F8 "done when a forced failure emails": a manual run may add one labelled test problem
             const forceTest = trigger === "manual" && (body as { forceTest?: unknown }).forceTest === true;
-            const run = deps.run ?? (await import("./liveCheck")).runLiveCheck;
-            const row = await run({ trigger, service, sha, forceTest });
+            // the workflow's one tiny call to the test project's Gemini (hourly and manual runs only)
+            const tp = (body as { probes?: { testProject?: { code?: unknown; reason?: unknown } } }).probes?.testProject;
+            const L = await import("./liveCheck");
+            const testProject = trigger !== "deploy" && tp
+                ? L.judgeTestProject({ code: typeof tp.code === "number" ? tp.code : null, reason: typeof tp.reason === "string" ? tp.reason.replace(/[^\w .,:'()-]/g, "").slice(0, 120) : undefined })
+                : null;
+            const run = deps.run ?? L.runLiveCheck;
+            const row = await run({ trigger, service, sha, forceTest, ...(testProject ? { extra: [testProject] } : {}) });
             res.status(200).json({
                 ok: row.ok, trigger: row.trigger, hourKey: row.hourKey, problems: row.problems, emailed: row.emailed,
                 checks: row.checks.map(({ key, label, status, value }) => ({ key, label, status, value })),

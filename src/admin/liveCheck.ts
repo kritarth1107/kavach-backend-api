@@ -155,6 +155,18 @@ export function judgeSql(i: { state?: string; backups?: boolean; pitr?: boolean 
     return { ...base, status, value, detail: i };
 }
 
+/** The test project's Gemini (sunny-ship: nightly, replay cases, paid evals), probed by the hourly workflow with one tiny call.
+ *  14 Oct 01:43 IST Google started refusing every call there under its usage policy. It never emails (it is not
+ *  production); "unknown" while refused, "ok" again the first hour it answers. */
+export function judgeTestProject(p: { code: number | null; reason?: string } | null): LiveCheckItem | null {
+    if (!p) return null;
+    const base = { key: "test_project", label: "Test project Gemini (sunny-ship)" };
+    if (p.code === 200) return { ...base, status: "ok", value: "answers", detail: p };
+    if (p.code === 403) return { ...base, status: "unknown", value: `refused by Google's usage policy (403)${p.reason ? `: ${p.reason}` : ""}`, detail: p };
+    if (p.code === 429) return { ...base, status: "warn", value: "busy (429)", detail: p };
+    return { ...base, status: "unknown", value: `no answer (${p.code ?? "no response"})`, detail: p };
+}
+
 export type Probe = { name: string; ok: boolean; status?: number; ms: number; error?: string; deploying?: boolean };
 
 export function judgeServices(probes: Probe[], notReady: string[]): LiveCheckItem {
@@ -401,6 +413,8 @@ export type RunOpts = {
     collectors?: Record<string, Collector>;
     /** a manual run only: one labelled test problem, to prove the email reaches the team */
     forceTest?: boolean;
+    /** checks measured by the caller (the workflow's test-project probe); shown, never emailed */
+    extra?: LiveCheckItem[];
     send?: (subject: string, text: string) => Promise<unknown>;
     /** tests: no database */
     store?: { recentEmails(since: Date): Promise<Array<{ emailedKeys: string[] }>>; existing(hourKey: string): Promise<ILiveCheck | null>; save(row: ILiveCheck): Promise<unknown> };
@@ -434,6 +448,7 @@ export async function runLiveCheck(opts: RunOpts): Promise<ILiveCheck> {
             }
         }),
     );
+    for (const x of opts.extra ?? []) checks.push(x.status === "problem" ? { ...x, status: "unknown" } : x);
     const order: CheckStatus[] = ["problem", "unknown", "warn", "ok"];
     checks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
     // After a deploy only what a deploy can break fails it (and emails); the state of production (reply time, 429s, the
