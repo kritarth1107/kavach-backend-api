@@ -450,11 +450,14 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                     `WhatsApp voice media downloaded (${media.buffer.length} bytes, ${media.mimeType}) in ${Date.now() - sttStarted}ms`,
                 );
             }
+            const { familyKeyterms } = await import("./sttKeyterms.service");
+            const keyterms = await familyKeyterms(identity?.familyId).catch(() => []);
             const heard = await speechToTextDetailed({
                 audioBuffer,
                 audioBase64: audioBuffer ? undefined : body.audioBase64,
                 mimeType,
                 languageHint,
+                keyterms,
                 fallbackText: isVoicePlaceholder(text) ? undefined : text,
             });
             voiceTranscript = heard.text;

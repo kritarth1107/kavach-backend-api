@@ -8,6 +8,8 @@ import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
 import { singableLyrics, singPrompt, singToVoiceNote } from "../src/channels/voicePipeline";
 import { spawnSync } from "node:child_process";
 import { frameRate, videoFrames } from "../src/services/videoFrames";
+import { keytermsFrom, MAX_KEYTERMS } from "../src/services/sttKeyterms.service";
+import { scribeLanguageCode, speechToTextDetailed } from "../src/channels/voicePipeline";
 import { withVoiceReply } from "../src/services/whatsappRouting.service";
 import { sendVoiceAfterText } from "../src/services/voiceAfterText.service";
 import { chatMark, noteChatSend, sentSince } from "../src/clients/metaWhatsApp.client";
@@ -193,7 +195,43 @@ async function replyOrderChecks() {
     ok("another chat's sends don't count", (() => { const m = chatMark(to); noteChatSend("+919000000999"); return !sentSince(to, m); })());
 }
 
-void songChecks().then(audioChecks).then(replyOrderChecks).then(() => {
+
+// Scribe v2 (STT bake-off 14 Oct 2026): it detects the language itself and listens for the family's own words
+ok("scribe detects the language by default", scribeLanguageCode("bengali", {}) === undefined && scribeLanguageCode("tamil", {}) === undefined);
+ok("SCRIBE_LANGUAGE=hint passes the saved language, never for Hinglish",
+    scribeLanguageCode("bengali", { SCRIBE_LANGUAGE: "hint" }) === "bn" && scribeLanguageCode("hinglish", { SCRIBE_LANGUAGE: "hint" }) === undefined);
+ok("scribe first, chirp as backup", JSON.stringify(sttOrder({ VOICE_STT: "chirp", VOICE_GOOGLE: "off", LLM_PROVIDER_BACKEND: "bedrock", STT_ORDER: "scribe,chirp" })) === JSON.stringify(["scribe", "chirp"]));
+ok("key terms: medicines first, cleaned, no repeats",
+    JSON.stringify(keytermsFrom(["Thyronorm 50", " thyronorm 50 ", "Metformin", null], ["Asha", "Asha Rao", "", "x"])) === JSON.stringify(["Thyronorm 50", "Metformin", "Asha", "Asha Rao"]));
+ok("key terms capped", keytermsFrom(Array.from({ length: 90 }, (_, i) => `Med ${i}`), []).length === MAX_KEYTERMS);
+
+async function scribeChecks() {
+    const realFetch = globalThis.fetch;
+    const savedKey = process.env.ELEVENLABS_API_KEY;
+    const savedModel = process.env.ELEVENLABS_STT_MODEL;
+    process.env.ELEVENLABS_API_KEY = "test-key";
+    delete process.env.ELEVENLABS_STT_MODEL;
+    let form: FormData | null = null;
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        form = init?.body as FormData;
+        return new Response(JSON.stringify({ text: "माँ ने Thyronorm ले ली", language_code: "hin", language_probability: 0.97, words: [] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+        const heard = await speechToTextDetailed({ audioBase64: Buffer.from("OggS fake").toString("base64"), mimeType: "audio/ogg",
+            languageHint: "hindi", keyterms: ["Thyronorm", "Metformin"], engines: ["scribe"] });
+        const f = form as FormData | null;
+        ok("scribe v2 gets the family's key terms and no forced language",
+            heard.text.includes("Thyronorm") && f?.get("model_id") === "scribe_v2" && JSON.stringify(f?.getAll("keyterms")) === JSON.stringify(["Thyronorm", "Metformin"]) && !f?.has("language_code"),
+            { model: f?.get("model_id"), keyterms: f?.getAll("keyterms"), lang: f?.get("language_code") });
+    } finally {
+        globalThis.fetch = realFetch;
+        if (savedKey === undefined) delete process.env.ELEVENLABS_API_KEY;
+        else process.env.ELEVENLABS_API_KEY = savedKey;
+        if (savedModel !== undefined) process.env.ELEVENLABS_STT_MODEL = savedModel;
+    }
+}
+
+void songChecks().then(audioChecks).then(replyOrderChecks).then(scribeChecks).then(() => {
     if (fail) {
         console.error(`${fail} failed`);
         process.exit(1);

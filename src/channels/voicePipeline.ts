@@ -27,6 +27,8 @@ export type SttInput = {
     fallbackText?: string;
     /** Only these engines, in this order (tests and the voice test set); default sttOrder(). */
     engines?: Array<"chirp" | "scribe" | "gemini" | "transcribe">;
+    /** The family's own words (medicine and people names) the engine should listen for (Scribe v2 key terms). */
+    keyterms?: string[];
 };
 
 /** Every language Saheli speaks, as BCP-47 codes the speech engines understand. */
@@ -252,7 +254,7 @@ async function chirp3SpeechToText(input: {
 }
 
 function elevenLabsSttModel(): string {
-    return process.env.ELEVENLABS_STT_MODEL?.trim() || "scribe_v1";
+    return process.env.ELEVENLABS_STT_MODEL?.trim() || "scribe_v2";
 }
 
 /** Parse an ElevenLabs speech-to-text answer (exported for tests). */
@@ -279,15 +281,26 @@ export function parseScribe(json: {
 }
 
 /** ElevenLabs speech-to-text: works when Google is unavailable, and detects the language itself. */
-async function scribeSpeechToText(input: { base64: string; mimeType: string; languageHint?: string | null }): Promise<SttResult | null> {
+/** Scribe's language: by default it detects it (bake-off 14 Oct 2026: a forced language lost meaning on mixed speech and a
+ * wrong saved language). SCRIBE_LANGUAGE=hint passes their saved language as before (never for Hinglish). */
+export function scribeLanguageCode(hint: string | null | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
+    if ((env.SCRIBE_LANGUAGE || "").trim().toLowerCase() !== "hint") return undefined;
+    const code = languageCodeFor(hint);
+    if (!code || String(hint).toLowerCase() === "hinglish") return undefined;
+    return code.split("-")[0];
+}
+
+async function scribeSpeechToText(input: { base64: string; mimeType: string; languageHint?: string | null; keyterms?: string[] }): Promise<SttResult | null> {
     const apiKey = elevenLabsApiKey();
     if (!apiKey) return null;
+    const model = elevenLabsSttModel();
     const form = new FormData();
-    form.append("model_id", elevenLabsSttModel());
+    form.append("model_id", model);
     form.append("tag_audio_events", "false");
-    const code = languageCodeFor(input.languageHint);
-    // Hinglish is mixed: let the engine detect rather than force Hindi
-    if (code && String(input.languageHint).toLowerCase() !== "hinglish") form.append("language_code", code.split("-")[0]);
+    const code = scribeLanguageCode(input.languageHint);
+    if (code) form.append("language_code", code);
+    // Key terms exist from Scribe v2 on; v1 would refuse the call.
+    if (model !== "scribe_v1") for (const term of input.keyterms ?? []) form.append("keyterms", term);
     const ext = input.mimeType.includes("mpeg") ? "mp3" : input.mimeType.includes("wav") ? "wav" : "ogg";
     form.append("file", new Blob([Buffer.from(input.base64, "base64")], { type: input.mimeType }), `voice.${ext}`);
     const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
@@ -452,7 +465,7 @@ export async function speechToTextDetailed(input: SttInput): Promise<SttResult> 
                     : engine === "transcribe"
                       ? await transcribeSpeechToText({ ...audio, languageCode: input.languageCode, languageHint: input.languageHint })
                     : engine === "scribe"
-                      ? await scribeSpeechToText({ ...audio, languageHint: input.languageHint })
+                      ? await scribeSpeechToText({ ...audio, languageHint: input.languageHint, keyterms: input.keyterms })
                       : await geminiAudioSpeechToText(audio);
             if (got?.text) {
                 console.log(`STT: ${got.engine} ok, chars=${got.text.length} confidence=${got.confidence ?? "n/a"} lang=${got.language ?? "?"}`);
