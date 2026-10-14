@@ -47,7 +47,9 @@ async function pure() {
     console.log("pure");
     const T = await import("../src/services/whatsappTemplates.service");
     await ok("a template is looked up in the reader's language, then Hindi, then English (Odia reads Hindi)", () => {
-        assert.deepEqual(T.languageChain("ta"), ["ta", "hi", "en"]);
+        assert.deepEqual(T.languageChain("ta"), ["ta", "en", "hi"], "a Tamil reader gets English before Hindi");
+        assert.deepEqual(T.languageChain("ur"), ["ur", "en", "hi"]);
+        assert.deepEqual(T.languageChain("bn"), ["bn", "hi", "en"]);
         assert.deepEqual(T.languageChain("en"), ["en", "hi"]);
         assert.deepEqual(T.languageChain("or"), ["hi", "en"]);
         assert.deepEqual(T.languageChain(undefined), ["en", "hi"]);
@@ -83,7 +85,7 @@ async function pure() {
     await ok("an emergency uses its own template, else the health one; the care-record wordings cover MARKETING languages", async () => {
         T.setTemplateCatalogForTest(["kavach_alert_health_en|en", "kavach_alert_symptom_ta|ta", "kavach_alert_emergency_hi|hi", "kavach_alert_update_en|en", "kavach_alert_medicine_pa|pa"]);
         assert.deepEqual(await T.pickTemplate("alert_emergency", "hi"), { name: "kavach_alert_emergency_hi", language: "hi" });
-        assert.deepEqual(await T.pickTemplate("alert_emergency", "ta"), { name: "kavach_alert_symptom_ta", language: "ta" }, "Tamil before Hindi");
+        assert.deepEqual(await T.pickTemplate("alert_emergency", "ta"), { name: "kavach_alert_symptom_ta", language: "ta" }, "Tamil first");
         assert.deepEqual(await T.pickTemplate("alert_emergency", "en"), { name: "kavach_alert_health_en", language: "en" });
         assert.deepEqual(await T.pickTemplate("alert_health", "ta"), { name: "kavach_alert_symptom_ta", language: "ta" });
         assert.deepEqual(await T.pickTemplate("alert_dose", "pa"), { name: "kavach_alert_medicine_pa", language: "pa" });

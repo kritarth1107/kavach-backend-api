@@ -37,16 +37,16 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
     // a caregiver alert as a fixed sentence per kind, {{1}} = the person (kavach_alert_<kind>_<lang>)
     // the third wordings (care-record updates, 15 Oct) cover the languages where Meta filed the first two MARKETING
     alert_dose: ["kavach_alert_dose", "kavach_alert_medicine"],
-    alert_noreply: ["kavach_alert_noreply", "kavach_alert_wellbeing", "kavach_alert_checkin"],
+    alert_noreply: ["kavach_alert_noreply", "kavach_alert_wellbeing", "kavach_alert_checkin", "kavach_alert_reply"],
     alert_health: ["kavach_alert_health", "kavach_alert_unwell", "kavach_alert_symptom"],
     alert_approval: ["kavach_alert_approval"],
     // 15 Oct (founder: emergencies and every important alert must reach a closed chat): an emergency says "call them
     // now"; until it is approved in a language the health alert goes. A lab report, an order placed for them and an
     // entry flagged for them each have their own; the flagged-entry wording is the fallback for both.
-    alert_emergency: ["kavach_alert_emergency", "kavach_alert_health", "kavach_alert_unwell", "kavach_alert_symptom"],
-    alert_report: ["kavach_alert_report", "kavach_alert_update"],
-    alert_order: ["kavach_alert_order", "kavach_alert_update"],
-    alert_update: ["kavach_alert_update"],
+    alert_emergency: ["kavach_alert_emergency", "kavach_alert_urgent", "kavach_alert_health", "kavach_alert_unwell", "kavach_alert_symptom"],
+    alert_report: ["kavach_alert_report", "kavach_alert_update", "kavach_alert_note"],
+    alert_order: ["kavach_alert_order", "kavach_alert_update", "kavach_alert_note"],
+    alert_update: ["kavach_alert_update", "kavach_alert_note"],
     // free-text alert and order update ({{2}} = a line of the message): Meta filed both MARKETING (2026-10-12), so none
     // is approved and these go as before; kept for the engine's hints
     alert: ["kavach_alert"],
@@ -136,9 +136,14 @@ export function setTemplateCatalogForTest(ok: string[] | null): void {
     catalog = ok ? { at: Date.now(), ok: new Set(ok) } : null;
 }
 
+/** Readers for whom English is the better second language than Hindi (south Indian scripts; Urdu readers may not read
+ * Devanagari): a Tamil caregiver whose own template is not approved gets English, not Hindi (15 Oct). */
+const ENGLISH_BEFORE_HINDI = new Set(["ta", "te", "kn", "ml", "ur"]);
+
 export function languageChain(lang?: string | null): string[] {
     const l = NEAREST[String(lang || "")] ?? (String(lang || "").toLowerCase() || "en");
-    return [...new Set(l === "en" ? ["en", "hi"] : [l, "hi", "en"])];
+    if (l === "en") return ["en", "hi"];
+    return [...new Set(ENGLISH_BEFORE_HINDI.has(l) ? [l, "en", "hi"] : [l, "hi", "en"])];
 }
 
 /** The template to send for this purpose to someone who reads `lang`, or null when none is approved yet. */
