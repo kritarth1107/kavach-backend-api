@@ -87,7 +87,14 @@ jobs:
                   | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
               > /tmp/td.json
             rev=$(aws ecs register-task-definition --cli-input-json file:///tmp/td.json --query taskDefinition.revision --output text)
-            aws ecs update-service --cluster kavach --service "$service" --task-definition "$family:$rev" >/dev/null
+            # Backend keeps one healthy task up (minimum 100, maximum 200). The image swap
+            # copies the live task definition, so Chirp env vars stay. admin-api is unchanged.
+            if [ "$service" = "backend" ]; then
+              aws ecs update-service --cluster kavach --service "$service" --task-definition "$family:$rev" \
+                --deployment-configuration "maximumPercent=200,minimumHealthyPercent=100,deploymentCircuitBreaker={enable=true,rollback=true,resetOnHealthyTask=true,thresholdConfiguration={type=BOUNDED_PERCENT,value=50}}" >/dev/null
+            else
+              aws ecs update-service --cluster kavach --service "$service" --task-definition "$family:$rev" >/dev/null
+            fi
             aws ecs wait services-stable --cluster kavach --service "$service"
           }
           roll kavach-backend backend "$IMAGE" kavach-backend
