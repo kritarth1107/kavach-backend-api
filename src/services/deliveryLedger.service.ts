@@ -77,6 +77,8 @@ export async function recordSent(input: { wamid?: string; phone: string; templat
             ...ctxFields(ctx),
         };
         await MessageDelivery.create(row);
+        const { note } = await import("../obs/emf");
+        note("Kavach/Delivery", "whatsapp", { sent: 1 });
         if (input.wamid && early.has(input.wamid)) {
             const pending = early.get(input.wamid)!.receipts;
             early.delete(input.wamid);
@@ -102,6 +104,8 @@ export async function recordNotSent(input: { phone: string; reason: string; erro
             ...(input.template ? { viaTemplate: true, template: input.template } : {}),
             ...ctxFields(ctx),
         });
+        const { note } = await import("../obs/emf");
+        note("Kavach/Delivery", "whatsapp", { failed: 1 });
     } catch (err) {
         console.warn("[ledger] could not record a failed send:", err instanceof Error ? err.message : err);
     }

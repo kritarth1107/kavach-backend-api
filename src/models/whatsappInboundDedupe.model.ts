@@ -16,6 +16,11 @@ export interface IWhatsappInboundDedupe {
     /** Media it carried (Meta media id + type): a later reply quoting this message brings the media back to Saheli. */
     mediaId?: string;
     mediaType?: string;
+    /** Enough to finish the reply if the task dies after the claim. Absent on rows from before this. */
+    payload?: Record<string, unknown>;
+    answeredAt?: Date;
+    leasedUntil?: Date;
+    attempts?: number;
     createdAt: Date;
 }
 
@@ -26,6 +31,10 @@ const schema = new Schema<IWhatsappInboundDedupe>(
         phone: { type: String },
         mediaId: { type: String },
         mediaType: { type: String },
+        payload: { type: Schema.Types.Mixed },
+        answeredAt: { type: Date },
+        leasedUntil: { type: Date },
+        attempts: { type: Number },
         createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 8 },
     },
     { versionKey: false, collection: "whatsapp_inbound_dedupe" },

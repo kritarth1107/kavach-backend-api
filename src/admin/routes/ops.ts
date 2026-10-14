@@ -86,7 +86,7 @@ export function opsRoutes(): RouteDef[] {
         {
             method: "get", path: "/system", perm: "system.read", action: "system.read",
             handler: async () => {
-                const [hb, engineHealth, backendHealth] = await Promise.all([
+                const [hb, engineHealth, backendHealth, slo] = await Promise.all([
                     SchedulerHeartbeat.find({}).lean<Array<{ _id?: unknown; lastTickAt: Date; gaps: Array<{ from: Date; to: Date }> }>>(),
                     engineOrNull<{ status: string; llm?: string; embeddings?: string; lastDream?: string | null; families?: number; backup?: { day: string; ok: boolean; finishedAt: string | null; bytes?: number; families?: number } | null }>("GET", "/health"),
                     (async () => {
@@ -99,6 +99,7 @@ export function opsRoutes(): RouteDef[] {
                             return { ok: false, status: 0, body: {} };
                         }
                     })(),
+                    import("../infra/aws").then(({ slo }) => slo()).catch(() => null),
                 ]);
                 return {
                     data: {
@@ -107,6 +108,7 @@ export function opsRoutes(): RouteDef[] {
                         reminderTick: hb.map((h) => ({ name: String(h._id ?? "reminders"), lastTickAt: iso(h.lastTickAt), healthy: Date.now() - new Date(h.lastTickAt).getTime() < 3 * 60_000, gaps: (h.gaps || []).slice(-10).map((g) => ({ from: iso(g.from), to: iso(g.to) })) })),
                         flagsLoadedAt: flagsLoadedAt() ? new Date(flagsLoadedAt()).toISOString() : null,
                         adminApi: { revision: process.env.K_REVISION || "local", startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString() },
+                        slo,
                     },
                 };
             },

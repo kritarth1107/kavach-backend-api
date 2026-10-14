@@ -526,7 +526,7 @@ export async function postWhatsAppMetaWebhook(req: Request, res: Response) {
     const { claimWhatsAppInboundMessage } = await import("../services/whatsappInboundDedupe.service");
     const fresh: typeof messages = [];
     for (const inbound of messages) {
-        if (await claimWhatsAppInboundMessage(inbound.messageId, inbound.from, { mediaId: inbound.mediaId, mediaType: inbound.mediaType })) {
+        if (await claimWhatsAppInboundMessage(inbound.messageId, inbound.from, { mediaId: inbound.mediaId, mediaType: inbound.mediaType }, inbound as unknown as Record<string, unknown>)) {
             fresh.push(inbound);
             // Their message opens WhatsApp's 24-hour window: Saheli may write freely until it shuts.
             await import("../services/whatsappWindow.service")
@@ -703,6 +703,11 @@ async function processOneMetaInbound(
             stopTypingRefresh?.();
         }
 
+        if (inbound.messageId) {
+            const dedupe = await import("../services/whatsappInboundDedupe.service");
+            if (replySent) await dedupe.markInboundAnswered(inbound.messageId);
+            else dedupe.releaseInbound(inbound.messageId);
+        }
         recordWhatsAppWebhookEvent({
             body: rawBody,
             messagesParsed: parsedCount,
@@ -716,6 +721,15 @@ async function processOneMetaInbound(
             typingShown,
         });
     }
+}
+
+/** Finish messages whose worker died after the claim. Never a second reply: a live lease or an answered row is left alone. */
+export async function resumeUnansweredInbounds(): Promise<number> {
+    const { takeExpiredInbounds } = await import("../services/whatsappInboundDedupe.service");
+    const rows = await takeExpiredInbounds();
+    if (!rows.length) return 0;
+    await processMetaInboundMessages(null, rows.length, rows as import("../clients/metaWhatsApp.client").MetaInboundMessage[]);
+    return rows.length;
 }
 
 export async function postPhoneMockWebhook(req: Request, res: Response) {

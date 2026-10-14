@@ -16,6 +16,7 @@ import { GoogleAuth, type JWTInput } from "google-auth-library";
 import { wifAccessToken, wifAudience } from "../clients/googleWif";
 import { personalRoute, preferPro } from "../clients/vertexGemini.client";
 import { chirpSttEnabled, voiceGoogleEnabled } from "../config/cloudProvider";
+import { noteCall } from "../obs/emf";
 import { dialectBase, speechLabel } from "../services/language.service";
 
 export type SttInput = {
@@ -270,7 +271,16 @@ async function scribeSpeechToText(input: { base64: string; mimeType: string; lan
     if (model !== "scribe_v1") for (const term of input.keyterms ?? []) form.append("keyterms", term);
     const ext = input.mimeType.includes("mpeg") ? "mp3" : input.mimeType.includes("wav") ? "wav" : "ogg";
     form.append("file", new Blob([Buffer.from(input.base64, "base64")], { type: input.mimeType }), `voice.${ext}`);
-    const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
+    const started = Date.now();
+    let res: Response;
+    try {
+        res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": apiKey }, body: form });
+    } catch (err) {
+        noteCall("Kavach/Scribe", "stt", started, null, true);
+        console.warn("ElevenLabs STT failed:", err instanceof Error ? err.message : err);
+        return null;
+    }
+    noteCall("Kavach/Scribe", "stt", started, res.status, !res.ok);
     if (!res.ok) {
         const body = await res.text().catch(() => "");
         console.warn(`ElevenLabs STT failed (${res.status}): ${body.slice(0, 240)}`);
@@ -723,6 +733,7 @@ async function elevenTts(spoken: string, locale: string, mood: Mood = "neutral",
             body: JSON.stringify({ text: tagged.replace(/₹\s*(\d[\d,]*)/g, "$1 rupaye").slice(0, 2500), model_id: modelId, language_code: languageCode, voice_settings: voiceSettings }),
             signal: AbortSignal.timeout(30_000),
         });
+        noteCall("Kavach/ElevenLabs", "tts", started, res.status, !res.ok);
         if (!res.ok) {
             const body = await res.text().catch(() => "");
             lastTts = { at: new Date().toISOString(), provider: "eleven", voiceId, modelId, locale, ok: false, status: res.status };
@@ -735,6 +746,7 @@ async function elevenTts(spoken: string, locale: string, mood: Mood = "neutral",
         console.log(`TTS: ElevenLabs ok voice=${voiceId} model=${modelId} bytes=${note.buffer.length} voiceNote=${note.voice} ms=${Date.now() - started}`);
         return { text: spoken, audioBuffer: note.buffer, audioBase64: note.buffer.toString("base64"), mimeType: note.mimeType, voiceNote: note.voice };
     } catch (err) {
+        noteCall("Kavach/ElevenLabs", "tts", started, null, true);
         console.warn("ElevenLabs TTS error:", err instanceof Error ? err.message : err);
         return null;
     }

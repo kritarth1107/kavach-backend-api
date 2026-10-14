@@ -102,6 +102,12 @@ app.listen(PORT, () => {
   startCareNudgeScheduler();
   // Held WhatsApp turns (the brain could not answer) are retried every 30 s; the daily "0 old-store writes" check.
   startBrainRetryScheduler();
+  // A task killed after claiming a WhatsApp message leaves the claim. Pick it up once the lease expires.
+  setInterval(() => {
+    void import("./controllers/careRecord.controller")
+      .then(({ resumeUnansweredInbounds }) => resumeUnansweredInbounds())
+      .catch((err) => console.warn("[inbound-resume]", err instanceof Error ? err.message : err));
+  }, 60_000);
   // In-chat Ola rides: driver search / assignment watch (durable — resumes after a restart).
   void import("./services/rideBooking/ola/olaInChat.service").then(({ startOlaWatcher }) => startOlaWatcher());
   // Legacy per-person delivery addresses → family address book (idempotent, once per row).

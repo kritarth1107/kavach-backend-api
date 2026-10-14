@@ -77,6 +77,67 @@ export async function ecsServices(): Promise<EcsService[] | null> {
     }));
 }
 
+export type Slo = {
+    uptime: boolean | null;
+    replyP50Ms: number | null;
+    replyP90Ms: number | null;
+    deliveryRate: number | null;
+    alertsOnTime: boolean | null;
+};
+
+function lastValue(values?: number[]): number | null {
+    if (!values?.length) return null;
+    const n = values[values.length - 1];
+    return Number.isFinite(n) ? n : null;
+}
+
+/** Last hour from CloudWatch: ALB uptime, Gemini reply time, WhatsApp delivery, reminder ticks. Null off Fargate. */
+export async function slo(now = Date.now()): Promise<Slo | null> {
+    const creds = await taskCreds();
+    if (!creds) return null;
+    const end = Math.floor(now / 1000);
+    const stat = (id: string, namespace: string, metric: string, period: number, s: string) => ({
+        Id: id, ReturnData: true,
+        MetricStat: { Metric: { Namespace: namespace, MetricName: metric }, Period: period, Stat: s },
+    });
+    const body = JSON.stringify({
+        StartTime: end - 3600, EndTime: end,
+        MetricDataQueries: [
+            stat("p50", "Kavach/Gemini", "LatencyMs", 3600, "p50"),
+            stat("p90", "Kavach/Gemini", "LatencyMs", 3600, "p90"),
+            stat("sent", "Kavach/Delivery", "Sent", 3600, "Sum"),
+            stat("failed", "Kavach/Delivery", "Failed", 3600, "Sum"),
+            stat("ticks", "Kavach/Live", "reminder-ticks", 900, "Sum"),
+            { Id: "healthy", Expression: "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HealthyHostCount\"', 'Average', 300)", ReturnData: true },
+        ],
+    });
+    const host = "monitoring.ap-south-1.amazonaws.com";
+    const amzDate = new Date(now).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const headers: Record<string, string> = { "content-type": "application/x-amz-json-1.0", "x-amz-target": "GraniteServiceVersion20100801.GetMetricData" };
+    if (creds.token) headers["x-amz-security-token"] = creds.token;
+    try {
+        const auth = sigv4({ method: "POST", host, path: "/", headers, body, region: "ap-south-1", service: "monitoring", accessKey: creds.accessKey, secretKey: creds.secretKey, amzDate });
+        const res = await fetch(`https://${host}/`, { method: "POST", headers: { ...headers, "x-amz-date": amzDate, Authorization: auth }, body, signal: AbortSignal.timeout(8_000) });
+        if (!res.ok) return null;
+        const data = (await res.json()) as { MetricDataResults?: Array<{ Id?: string; Values?: number[] }> };
+        const byId = new Map((data.MetricDataResults || []).map((r) => [r.Id || "", r.Values || []]));
+        const sent = (byId.get("sent") || []).reduce((a, b) => a + b, 0);
+        const failed = (byId.get("failed") || []).reduce((a, b) => a + b, 0);
+        const healthy = [...byId.entries()].filter(([id]) => id === "healthy" || id.startsWith("healthy "));
+        const up = healthy.some(([, values]) => (lastValue(values) ?? 0) > 0);
+        const ticks = lastValue(byId.get("ticks") || []);
+        return {
+            uptime: healthy.length ? up : null,
+            replyP50Ms: lastValue(byId.get("p50")),
+            replyP90Ms: lastValue(byId.get("p90")),
+            deliveryRate: sent + failed > 0 ? sent / (sent + failed) : null,
+            alertsOnTime: ticks == null ? null : ticks >= 3,
+        };
+    } catch {
+        return null;
+    }
+}
+
 /** Timed work on the AWS copy. The backend tick also sends the daily snapshot after 21:00 IST. */
 export const AWS_SCHEDULES: Array<{ name: string; schedule: string; owner: "backend" | "cron" }> = [
     { name: "Care reminders", schedule: "* * * * *", owner: "backend" },
