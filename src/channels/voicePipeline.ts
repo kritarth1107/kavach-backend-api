@@ -56,6 +56,13 @@ export function sttLanguageCodes(hint?: string | null, explicit?: string): strin
     return [...new Set([first, "hi-IN", "en-IN"].filter((c): c is string => !!c))].slice(0, 3);
 }
 
+/** The language lists Chirp is asked with, largest first; each later one is tried only when Chirp refuses the one before. */
+export function chirpLanguageSets(hint?: string | null, explicit?: string): string[][] {
+    const all = sttLanguageCodes(hint, explicit);
+    const sets = [all, [...new Set([all[0], "en-IN"])], [all[0]]];
+    return sets.filter((s, i) => sets.findIndex((t) => t.join() === s.join()) === i);
+}
+
 function elevenLabsApiKey(): string {
     return (
         process.env.ELEVENLABS_API_KEY?.trim() ||
@@ -193,29 +200,38 @@ async function chirp3SpeechToText(input: {
     const location = speechLocation();
     const url = `https://${location}-speech.googleapis.com/v2/projects/${project}/locations/${location}/recognizers/_:recognize`;
 
-    const languageCodes = sttLanguageCodes(input.languageHint, input.languageCode);
-
-    const res = await fetch(url, {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-            "x-goog-user-project": project,
-        },
-        body: JSON.stringify({
-            config: {
-                autoDecodingConfig: {},
-                languageCodes,
-                model: "chirp_3",
-                features: { enableAutomaticPunctuation: true },
+    const recognize = (languageCodes: string[]) =>
+        fetch(url, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "x-goog-user-project": project,
             },
-            content: input.base64,
-        }),
-    });
+            body: JSON.stringify({
+                config: {
+                    autoDecodingConfig: {},
+                    languageCodes,
+                    model: "chirp_3",
+                    features: { enableAutomaticPunctuation: true },
+                },
+                content: input.base64,
+            }),
+        });
 
-    if (!res.ok) {
+    // Chirp 3 refuses some language sets (bn-IN with hi-IN and en-IN is a 400), so a refused set is retried smaller:
+    // their own language with English, then their language alone.
+    let res: Response | null = null;
+    for (const codes of chirpLanguageSets(input.languageHint, input.languageCode)) {
+        res = await recognize(codes);
+        if (res.status !== 400) break;
         const body = await res.text().catch(() => "");
-        console.warn(`Chirp3 STT failed (${res.status}): ${body.slice(0, 240)}`);
+        console.warn(`Chirp3 STT refused ${codes.join(",")} (400): ${body.slice(0, 160)}`);
+    }
+
+    if (!res || !res.ok) {
+        const body = res && res.status !== 400 ? await res.text().catch(() => "") : "";
+        console.warn(`Chirp3 STT failed (${res?.status ?? "no call"}): ${body.slice(0, 240)}`);
         return null;
     }
 

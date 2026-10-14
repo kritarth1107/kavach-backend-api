@@ -6,8 +6,24 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 
-/** Up to four JPEG stills from a video, in order, so a model that only sees photos can watch it. */
-export async function videoFrames(video: Buffer, max = 4): Promise<Buffer[]> {
+/** Frames per second that spread `max` stills over the whole video (one a second when the length is unknown). */
+export function frameRate(seconds: number | null, max: number): string {
+    if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return "1";
+    return `${max}/${Math.max(seconds, 1).toFixed(2)}`;
+}
+
+async function duration(src: string): Promise<number | null> {
+    try {
+        const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", src], { timeout: 10000 });
+        const s = parseFloat(String(stdout).trim());
+        return Number.isFinite(s) ? s : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Up to `max` JPEG stills spread across the whole video, in order, so a model that only sees photos can watch it. */
+export async function videoFrames(video: Buffer, max = 6): Promise<Buffer[]> {
     if (!video.length) return [];
     const dir = await mkdtemp(join(tmpdir(), "kvvid-"));
     try {
@@ -15,7 +31,7 @@ export async function videoFrames(video: Buffer, max = 4): Promise<Buffer[]> {
         await writeFile(src, video);
         await run("ffmpeg", [
             "-y", "-i", src,
-            "-vf", "fps=1,scale=768:-2",
+            "-vf", `fps=${frameRate(await duration(src), max)},scale=768:-2`,
             "-frames:v", String(max),
             "-q:v", "5",
             join(dir, "f%02d.jpg"),

@@ -1,5 +1,5 @@
 /** Voice: what gets spoken is clean (no emoji, links, markdown); the transcript keeps how sure the engine was. */
-import { languageCodeFor, parseScribe, speakable, sttLanguageCodes, sttOrder } from "../src/channels/voicePipeline";
+import { chirpLanguageSets, languageCodeFor, parseScribe, speakable, sttLanguageCodes, sttOrder } from "../src/channels/voicePipeline";
 import { shouldVoiceReply } from "../src/services/whatsappRouting.service";
 import { VOICE_NOT_CAUGHT_REPLY } from "../src/services/saheliElderFacts.service";
 import { isVoiceMode, wantsVoice } from "../src/services/voicePreference.service";
@@ -7,6 +7,7 @@ import { baseLanguageOf, convertToOpus, getTtsVoiceConfig, googleVoiceFor, isOgg
 import { voiceAudioPayload } from "../src/clients/metaWhatsApp.client";
 import { singableLyrics, singPrompt, singToVoiceNote } from "../src/channels/voicePipeline";
 import { spawnSync } from "node:child_process";
+import { frameRate, videoFrames } from "../src/services/videoFrames";
 import { withVoiceReply } from "../src/services/whatsappRouting.service";
 import { sendVoiceAfterText } from "../src/services/voiceAfterText.service";
 import { chatMark, noteChatSend, sentSince } from "../src/clients/metaWhatsApp.client";
@@ -43,6 +44,9 @@ ok("bengali via iso3 'ben'", languageCodeFor("ben") === "bn-IN");
 ok("hinglish → Hindi + English", JSON.stringify(sttLanguageCodes("hinglish")) === JSON.stringify(["hi-IN", "en-IN"]), sttLanguageCodes("hinglish"));
 ok("no hint → Hindi and Indian English", JSON.stringify(sttLanguageCodes(null)) === JSON.stringify(["hi-IN", "en-IN"]));
 ok("at most 3 codes", sttLanguageCodes("marathi").length <= 3 && sttLanguageCodes("marathi")[0] === "mr-IN");
+ok("chirp: bengali retried as Bengali + English, then Bengali alone (Chirp 3 refuses bn+hi+en)",
+    JSON.stringify(chirpLanguageSets("bengali")) === JSON.stringify([["bn-IN", "hi-IN", "en-IN"], ["bn-IN", "en-IN"], ["bn-IN"]]), chirpLanguageSets("bengali"));
+ok("chirp: hinglish needs no smaller retry list", JSON.stringify(chirpLanguageSets("hinglish")) === JSON.stringify([["hi-IN", "en-IN"], ["hi-IN"]]), chirpLanguageSets("hinglish"));
 ok("punjabi uses Google's Gurmukhi code", languageCodeFor("pa-IN") === "pa-Guru-IN");
 ok("unknown hint ignored", languageCodeFor("klingon") === undefined);
 ok("default engine order", JSON.stringify(sttOrder({})) === JSON.stringify(["chirp", "scribe", "gemini"]));
@@ -133,10 +137,18 @@ async function audioChecks() {
         ok("mp3 → OGG/Opus voice note (real ffmpeg)", isOggOpus(opus) && opus.length > 1000, opus.length);
         const note = await toVoiceNote(mp3, "audio/mpeg");
         ok("toVoiceNote converts", note.voice && note.mimeType === "audio/ogg");
+        // a 30 s video gives 6 stills spread over all of it, not just its first seconds
+        const mp4 = spawnSync(ff, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=30:size=320x240:rate=10",
+            "-pix_fmt", "yuv420p", "-movflags", "frag_keyframe+empty_moov", "-f", "mp4", "pipe:1"]).stdout;
+        const frames = await videoFrames(mp4);
+        ok("video → 6 stills across the whole clip (real ffmpeg)", frames.length === 6 && frames.every((f) => f[0] === 0xff && f[1] === 0xd8), frames.length);
     } else {
         console.log("· ffmpeg not installed here: real conversion checked in the Docker image");
     }
 }
+
+ok("video stills spread over its length", frameRate(30, 6) === "6/30.00" && frameRate(0.4, 6) === "6/1.00");
+ok("video of unknown length: one still a second", frameRate(null, 6) === "1" && frameRate(Number.NaN, 6) === "1");
 
 // songs: lyrics are sung line by line as written (no spoken-script rewrite), and the prompt asks for a real tune
 const bhajan = "🎶 *पायो जी म्हणे राम रतन धन पायो।*\n\nवस्तु अमोलक दी म्हारे सतगुरु, किरपा कर अपणायो॥ 🙏";
