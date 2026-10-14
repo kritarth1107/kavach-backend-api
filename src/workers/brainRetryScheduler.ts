@@ -1,7 +1,8 @@
 /**
  * Every 30 s: held WhatsApp turns are tried again (services/brainHold.service.ts: the brain could not answer when they
  * came). Once a day after 07:00 IST: the "0 writes to the old memory stores" check (services/legacyWriteCheck.service.ts).
- * The backend runs as one instance, so one timer is enough; each row is claimed before it is tried.
+ * Two tasks may overlap during a roll. Only the task holding the scheduler lease runs this tick;
+ * each row is still claimed before it is tried.
  */
 import { runBrainRetryTick } from "../services/brainHold.service";
 
@@ -11,6 +12,8 @@ let running = false;
 
 async function tick() {
     if (running) return;
+    const { holdsSchedulerLease, SCHEDULER_LEASE } = await import("./schedulerLease");
+    if (!(await holdsSchedulerLease(SCHEDULER_LEASE))) return;
     running = true;
     try {
         const out = await runBrainRetryTick();

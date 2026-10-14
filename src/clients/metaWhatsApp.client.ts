@@ -919,6 +919,21 @@ async function getPhoneRegistrationStatus(): Promise<{ onWaba: boolean; status?:
     return { onWaba, status };
 }
 
+/** True when Graph is already pointed at this URL with the messages field. A second task must not POST again. */
+export function webhookAlreadyMatches(
+    webhookUrl: string,
+    apps: MetaWabaSubscription[],
+    subs: MetaAppWebhookSubscription[],
+    appId: string,
+): boolean {
+    const ours = apps.find((a) => a.id === appId);
+    if (!ours?.id || ours.overrideCallbackUri !== webhookUrl) return false;
+    const wa = subs.find((s) => s.object === "whatsapp_business_account");
+    if (!wa || wa.callbackUrl !== webhookUrl || wa.active === false) return false;
+    if (wa.fields && wa.fields.length > 0 && !wa.fields.includes("messages")) return false;
+    return true;
+}
+
 /** Full Meta WhatsApp webhook fix: WABA subscribe + callback override + app messages subscription. */
 export async function setupMetaWhatsAppWebhooks(): Promise<MetaWhatsAppSetupReport> {
     const meta = config.whatsapp.meta;
@@ -934,6 +949,35 @@ export async function setupMetaWhatsAppWebhooks(): Promise<MetaWhatsAppSetupRepo
         steps: [],
         summary: "",
     };
+
+    try {
+        const apps = await listWabaSubscribedApps();
+        const subs = await listAppWebhookSubscriptions();
+        report.subscribedApps = apps;
+        report.appSubscriptions = subs;
+        if (webhookAlreadyMatches(webhookUrl, apps, subs, meta.appId)) {
+            report.wabaSubscribed = true;
+            report.wabaOverrideSet = true;
+            report.appWebhookConfigured = true;
+            report.overrideCallbackUri = webhookUrl;
+            report.steps.push({ step: "already_configured", ok: true });
+            report.summary = "WhatsApp webhooks already pointed here.";
+            return report;
+        }
+    } catch (err) {
+        report.steps.push({
+            step: "already_configured",
+            ok: false,
+            detail: err instanceof Error ? err.message : String(err),
+        });
+    }
+
+    const { holdsSchedulerLease } = await import("../workers/schedulerLease");
+    if (!(await holdsSchedulerLease("meta-webhook-setup", 60_000))) {
+        report.steps.push({ step: "webhook_setup_lease", ok: true, detail: "another task is writing the webhook" });
+        report.summary = "Webhook setup left to the other task.";
+        return report;
+    }
 
     try {
         await subscribeWabaToApp();

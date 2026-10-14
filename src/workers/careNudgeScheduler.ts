@@ -14,6 +14,8 @@ async function runTick() {
         if (Date.now() - runningSince < STUCK_MS) return;
         console.error(`Care nudge tick stuck for ${Math.round((Date.now() - runningSince) / 60_000)} min: starting a new one`);
     }
+    const { holdsSchedulerLease, SCHEDULER_LEASE } = await import("./schedulerLease");
+    if (!(await holdsSchedulerLease(SCHEDULER_LEASE))) return;
     running = true;
     runningSince = Date.now();
     try {
@@ -64,7 +66,13 @@ export function startCareNudgeScheduler() {
     timer = setInterval(() => void runTick(), TICK_MS);
     // If the tick stops (stuck, or crashing before its heartbeat), the team hears (B1.7); the uptime worker watches
     // /api/health/reminders from outside Google too.
-    watchdog = setInterval(() => void checkReminderHeartbeat().catch(() => undefined), TICK_MS);
+    watchdog = setInterval(() => {
+        void (async () => {
+            const { holdsSchedulerLease, SCHEDULER_LEASE } = await import("./schedulerLease");
+            if (!(await holdsSchedulerLease(SCHEDULER_LEASE))) return;
+            await checkReminderHeartbeat();
+        })().catch(() => undefined);
+    }, TICK_MS);
 }
 
 /** The reminder tick's heartbeat is older than 3 minutes: email the team (at most every 30 min). */

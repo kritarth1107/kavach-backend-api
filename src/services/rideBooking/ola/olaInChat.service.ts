@@ -775,6 +775,8 @@ async function onAssigned(doc: IOlaRide, driver: OlaDriverInfo): Promise<void> {
 
 /** Every 20 s: watch live rides (also right after a restart) and close idle parked pages. */
 export async function runOlaWatchTick(): Promise<void> {
+    const { holdsSchedulerLease, SCHEDULER_LEASE } = await import("../../../workers/schedulerLease");
+    if (!(await holdsSchedulerLease(SCHEDULER_LEASE))) return;
     const live = (await OlaRide.find({ status: { $in: ["searching", "assigned", "cancelling"] } }, { rideId: 1, phone: 1 }).lean().catch(() => [])) as Array<{ rideId: string; phone: string }>;
     await Promise.all(live.map((r) => tickRide(r.rideId)));
     const livePhones = new Set(live.map((r) => r.phone));
