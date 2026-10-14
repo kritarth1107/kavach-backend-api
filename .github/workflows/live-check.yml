@@ -1,19 +1,19 @@
 name: Live check (hourly, and after each deploy)
 
-# Quality plan F8 (hourly) and F7 (after each backend deploy; the engine's deploy calls the same job itself).
-# The admin API runs the checks with its own read-only identity and emails the Kavach team only when something is wrong
-# (hourly: once per check per 3 h). This workflow only asks it to run, as the deploy identity (ADMIN_JOB_SA), and shows
-# the result. Hourly: red only when the check itself could not run. After a deploy: red on any problem.
+# Quality plan F8 (hourly) and F7 (after a backend deploy). Production is AWS.
+# This checks https://api.brainbehindkavach.me and the ECS services. It does not call Cloud Run
+# and it does not send traffic to the test project. Hourly: red only when the check itself
+# could not run. After a deploy: red on any problem. The Cloudflare uptime worker emails.
 on:
   schedule:
-    - cron: "17 * * * *"   # every hour at :47 IST (off the top of the hour, when GitHub's schedules queue)
+    - cron: "17 * * * *" # every hour at :47 IST
   workflow_dispatch:
     inputs:
       trigger:
         description: "hourly | manual | deploy"
         default: "manual"
       force_test:
-        description: "manual only: add one labelled TEST problem, to prove the email reaches the team"
+        description: "unused; kept so older dispatches still start"
         type: boolean
         default: false
   workflow_call:
@@ -26,7 +26,8 @@ on:
         default: ""
 
 env:
-  AUDIENCE: https://kavach-admin-api-303943038694.asia-south1.run.app
+  AWS_REGION: ap-south-1
+  API: https://api.brainbehindkavach.me
 
 jobs:
   check:
@@ -36,65 +37,83 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - id: auth
-        uses: google-github-actions/auth@v2
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ env.AUDIENCE }}
-          id_token_include_email: true
-      # One tiny call to the test project's Gemini, hourly and manual runs only (never per deploy): Google has refused every
-      # call there since 14 Oct 01:43 IST (403, usage policy). At most one call an hour, never retried; the admin API shows it
-      # as "unknown" while refused and never emails about it.
-      - uses: google-github-actions/setup-gcloud@v2
-        if: ${{ (inputs.trigger || 'hourly') != 'deploy' }}
-      - name: Test project probe (one call)
-        id: probe
-        if: ${{ (inputs.trigger || 'hourly') != 'deploy' }}
-        run: |
-          set -uo pipefail
-          TOKEN=$(gcloud auth print-access-token 2>/dev/null) || TOKEN=""
-          code=$(curl -s -o probe.json -w '%{http_code}' --max-time 30 -X POST \
-            "https://asia-south1-aiplatform.googleapis.com/v1/projects/sunny-ship-508214-q1/locations/asia-south1/publishers/google/models/gemini-3.5-flash:generateContent" \
-            -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-            -d '{"contents":[{"role":"user","parts":[{"text":"Reply with the word ok."}]}],"generationConfig":{"maxOutputTokens":16}}' || echo 0)
-          reason=$(python3 -c 'import json; print((json.load(open("probe.json")).get("error") or {}).get("message", "")[:120])' 2>/dev/null || true)
-          echo "test project answered $code ${reason}"
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
-      - name: Run the live check
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kavach-backend-api
+          aws-region: ap-south-1
+      - name: API and ECS
         env:
-          PROBE_CODE: ${{ steps.probe.outputs.code }}
-          PROBE_REASON: ${{ steps.probe.outputs.reason }}
-          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
           TRIGGER: ${{ inputs.trigger || 'hourly' }}
           SERVICE_NAME: ${{ inputs.service }}
-          FORCE_TEST: ${{ inputs.force_test && 'true' || 'false' }}
         run: |
           set -uo pipefail
-          body=$(python3 -c 'import json, os; print(json.dumps({"trigger": os.environ["TRIGGER"], "service": os.environ.get("SERVICE_NAME", ""), "sha": os.environ["GITHUB_SHA"], "forceTest": os.environ.get("FORCE_TEST") == "true", **({"probes": {"testProject": {"code": int(os.environ["PROBE_CODE"]), "reason": os.environ.get("PROBE_REASON", "")}}} if os.environ.get("PROBE_CODE", "").isdigit() else {})}))')
-          code=$(curl -sS -o out.json -w '%{http_code}' --max-time 150 -X POST "$AUDIENCE/admin/jobs/live-check" \
-            -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" -d "$body" || echo 000)
-          echo "admin API answered $code"
-          if [ "$code" = "404" ] && [ "$TRIGGER" = "deploy" ]; then
-            echo "::warning::the admin API has no live check yet (it deploys from the backend repo); skipped"
-            exit 0
+          fail=0
+          problem() { echo "::error::$1"; echo "$1"; fail=1; }
+          ok() { echo "$1"; }
+
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$API/api/health" || echo 000)
+          if [ "$code" = 200 ] && python3 -c 'import json,sys; d=json.load(open("/tmp/health.json")); sys.exit(0 if d.get("status")=="ok" else 1)'; then
+            ok "backend health ok"
+          else
+            problem "api.brainbehindkavach.me health HTTP $code"
           fi
-          [ "$code" = "200" ] || { echo "::error::the live check could not run ($code): $(head -c 300 out.json)"; exit 1; }
-          python3 - <<'PY'
-          import json, os
-          r = json.load(open("out.json"))
-          mark = {"ok": "✅", "warn": "⚠️", "unknown": "❔", "problem": "❌"}
-          lines = [f"### Live check ({r['trigger']}): {'all ok' if r['ok'] else 'problems: ' + ', '.join(r['problems'])}", "",
-                   "| | Check | Value |", "| --- | --- | --- |"]
-          lines += [f"| {mark.get(c['status'], c['status'])} | {c['label']} | {c['value'].replace('|', '/')} |" for c in r["checks"]]
-          lines += ["", f"Emailed the team: {'yes' if r['emailed'] else 'no'}"]
-          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write("\n".join(lines) + "\n")
-          print("\n".join(lines))
-          for c in r["checks"]:
-              if c["status"] == "problem":
-                  print(f"::error::{c['label']}: {c['value']}")
-          if not r["ok"] and os.environ["TRIGGER"] == "deploy":
-              raise SystemExit(1)
-          PY
+
+          code=$(curl -sS -o /tmp/rem.json -w '%{http_code}' --max-time 20 "$API/api/health/reminders" || echo 000)
+          age=$(python3 -c 'import json; print(json.load(open("/tmp/rem.json")).get("ageSeconds",""))' 2>/dev/null || true)
+          if [ "$code" = 200 ] && [ -n "${age}" ] && [ "$age" -lt 180 ] 2>/dev/null; then
+            ok "reminder tick ${age}s"
+          else
+            problem "reminder tick HTTP $code age ${age:-unknown}"
+          fi
+
+          wcode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$API/api/webhooks/whatsapp/meta" -H 'content-type: application/json' -d '{}' || echo 000)
+          case "$wcode" in
+            401|403) ok "unsigned webhook $wcode" ;;
+            *) problem "unsigned webhook $wcode (want 401 or 403)" ;;
+          esac
+
+          dcode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://app.kavach.care/auth/login || echo 000)
+          case "$dcode" in
+            2*|3*) ok "dashboard $dcode" ;;
+            *) problem "dashboard HTTP $dcode" ;;
+          esac
+          acode=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://admin.brainbehindkavach.me/login || echo 000)
+          case "$acode" in
+            2*|3*) ok "admin $acode" ;;
+            *) problem "admin HTTP $acode" ;;
+          esac
+
+          if ! aws ecs describe-services --cluster kavach --services backend engine admin admin-api dashboard cron --output json > /tmp/ecs.json; then
+            problem "could not read ECS services"
+          else
+            python3 - << 'PY'
+            import json
+            rows = json.load(open("/tmp/ecs.json")).get("services") or []
+            bad = []
+            names = {s.get("serviceName") for s in rows}
+            for want in ("backend", "engine", "admin", "admin-api", "dashboard", "cron"):
+                if want not in names:
+                    bad.append(want + " missing")
+            for s in rows:
+                if s.get("status") != "ACTIVE" or (s.get("runningCount") or 0) < 1 or s.get("runningCount") != s.get("desiredCount"):
+                    bad.append(f"{s.get('serviceName')} desired {s.get('desiredCount')} running {s.get('runningCount')} {s.get('status')}")
+                else:
+                    print(f"ecs {s.get('serviceName')} {s.get('runningCount')}/{s.get('desiredCount')}")
+            open("/tmp/ecs.bad", "w").write("\n".join(bad))
+            PY
+            if [ $? -ne 0 ]; then
+              problem "could not parse ECS output"
+            elif [ -s /tmp/ecs.bad ]; then
+              problem "ECS: $(paste -sd ';' /tmp/ecs.bad)"
+            fi
+          fi
+
+          {
+            echo "### Live check ($TRIGGER${SERVICE_NAME:+ $SERVICE_NAME})"
+            echo
+            echo "API $API. Problems: $fail"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$fail" = 1 ] && [ "$TRIGGER" = "deploy" ]; then
+            exit 1
+          fi
+          exit 0
