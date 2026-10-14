@@ -19,6 +19,16 @@ export function brainV2Mode(familyId: string, env: NodeJS.ProcessEnv = flaggedEn
 
 type Identity = { familyId: string; userId: string; role: FamilyRole | string };
 
+/** WhatsApp bubbles for one brain turn: the answer first, then anything else (a change, a waiting brief). An older
+ *  engine that only returns `reply` still sends that one message. */
+export function replyMessages(out: { reply?: string; messages?: unknown } | null | undefined): string[] {
+    const raw = out && Array.isArray(out.messages) ? out.messages : [];
+    const list = raw.map((s) => String(s ?? "").trim()).filter((s) => s && s !== "none");
+    if (list.length) return list;
+    const reply = String(out?.reply ?? "").trim();
+    return reply && reply !== "none" ? [reply] : [];
+}
+
 export function brainRole(role: string): string {
     if (role === FamilyRole.CARE_RECIPIENT) return "elder";
     if (role === FamilyRole.PRIMARY_CAREGIVER) return "primary caregiver";

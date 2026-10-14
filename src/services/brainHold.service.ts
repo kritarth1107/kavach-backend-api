@@ -123,9 +123,9 @@ function istTime(d: Date | string | undefined): string {
 
 export type RetryDeps = {
     /** Run the brain for a held turn (brainV2.runBrainV2); null or a throw is a failure. */
-    brain: (row: IBrainRetryTurn) => Promise<{ reply: string; buttons?: Array<{ id: string; title: string }>; location_request?: boolean } | null>;
-    /** Send a reply on WhatsApp. */
-    send: (row: IBrainRetryTurn, text: string, extra?: { buttons?: Array<{ id: string; title: string }>; location_request?: boolean }) => Promise<void>;
+    brain: (row: IBrainRetryTurn) => Promise<{ reply: string; messages?: string[]; buttons?: Array<{ id: string; title: string }>; location_request?: boolean } | null>;
+    /** Send a reply on WhatsApp. `messages` are separate bubbles, the answer first. */
+    send: (row: IBrainRetryTurn, text: string, extra?: { buttons?: Array<{ id: string; title: string }>; location_request?: boolean; messages?: string[] }) => Promise<void>;
     alert: (key: string, subject: string, text: string) => Promise<unknown>;
     lines: (row: IBrainRetryTurn) => Promise<Lines>;
 };
@@ -143,11 +143,13 @@ async function defaultBrain(row: IBrainRetryTurn) {
     });
 }
 
-async function defaultSend(row: IBrainRetryTurn, text: string, extra: { buttons?: Array<{ id: string; title: string }>; location_request?: boolean } = {}) {
+async function defaultSend(row: IBrainRetryTurn, text: string, extra: { buttons?: Array<{ id: string; title: string }>; location_request?: boolean; messages?: string[] } = {}) {
     const R = await import("./whatsappRouting.service");
-    let out = R.buildWhatsAppOutbound(row.phone, text, extra.location_request
-        ? { kind: "location_request" }
-        : extra.buttons?.length ? { kind: "saheli_buttons", buttons: extra.buttons } : {});
+    const context = extra.location_request
+        ? { kind: "location_request" as const }
+        : extra.buttons?.length ? { kind: "saheli_buttons" as const, buttons: extra.buttons } : {};
+    const bubbles = (extra.messages ?? []).map((s) => s.trim()).filter((s) => s && s !== "none");
+    let out = bubbles.length > 1 ? R.messagesOutbound(row.phone, bubbles, context) : R.buildWhatsAppOutbound(row.phone, text, context);
     const { getVoiceMode, wantsVoice } = await import("./voicePreference.service");
     if (wantsVoice(await getVoiceMode(row.userId, row.familyId), Boolean(row.wasVoice))) out = R.withVoiceReply(out, row.userId);
     const meta = await import("../clients/metaWhatsApp.client");
@@ -184,8 +186,9 @@ export async function runBrainRetryTick(now = new Date(), deps: RetryDeps = DEFA
         } catch (err) {
             error = err instanceof Error ? err.message.slice(0, 200) : "failed";
         }
-        if (answer?.reply?.trim() && answer.reply.trim() !== "none") {
-            await deps.send(row, answer.reply, { buttons: answer.buttons, location_request: answer.location_request }).catch((err) =>
+        const bubbles = (await import("./brainV2.service")).replyMessages(answer);
+        if (bubbles.length) {
+            await deps.send(row, bubbles[0]!, { buttons: answer?.buttons, location_request: answer?.location_request, messages: bubbles }).catch((err) =>
                 console.error(`[brain-hold] answer send failed: ${err instanceof Error ? err.message : err}`));
             await BrainRetryTurn.updateOne({ messageRef: row.messageRef }, { $set: { status: "answered", answeredAt: now, lockedUntil: null } });
             console.log(`[brain-hold] held turn answered after ${row.attempts} tries family=${row.familyId}`);

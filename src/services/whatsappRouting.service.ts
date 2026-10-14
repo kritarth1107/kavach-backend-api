@@ -63,6 +63,15 @@ export function buildWhatsAppOutbound(phone: string, text: string, context: What
     return outbound(phone, text, context);
 }
 
+/** One brain turn that covers separate things: the answer first, then each other item, each its own WhatsApp message.
+ *  Buttons or a location request stay on the first. */
+export function messagesOutbound(phone: string, messages: string[], context: WhatsAppReplyContext = {}): OutboundMessage {
+    const first = outbound(phone, messages[0] || "", context);
+    if (messages.length <= 1) return first;
+    const rest = messages.slice(1).flatMap((t) => outbound(phone, t).whatsappPayloads ?? []);
+    return { ...first, whatsappPayloads: [...(first.whatsappPayloads ?? []), ...rest] };
+}
+
 function outbound(phone: string, text: string, context: WhatsAppReplyContext = {}): OutboundMessage {
     // WhatsApp bold is *one* star; model markdown (**Rohan**, "## ") would show raw.
     text = String(text ?? "").replace(/\*\*([^*\n]+?)\*\*/g, "*$1*").replace(/^#{1,6}\s+/gm, "");
@@ -1364,11 +1373,14 @@ async function answerWithBrain(a: {
         failure = err instanceof Error ? err.message : String(err);
         return null;
     });
-    if (v2?.reply?.trim() && v2.reply.trim() !== "none") {
-        if (v2.location_request) return outbound(a.phone, v2.reply, { kind: "location_request" }); // "Send location" button
-        return v2.buttons?.length
-            ? outbound(a.phone, v2.reply, { kind: "saheli_buttons", buttons: v2.buttons })
-            : outbound(a.phone, v2.reply);
+    const messages = V2.replyMessages(v2);
+    if (messages.length) {
+        const context = v2?.location_request
+            ? { kind: "location_request" as const }
+            : v2?.buttons?.length
+              ? { kind: "saheli_buttons" as const, buttons: v2.buttons }
+              : {};
+        return messagesOutbound(a.phone, messages, context);
     }
     if (v2?.duplicate) return { ...outbound(a.phone, ""), content: "" }; // a webhook retry of a message being answered
     if (v2 && a.button) return outbound(a.phone, "🙏");

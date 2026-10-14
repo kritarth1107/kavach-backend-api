@@ -1,5 +1,5 @@
 /** Brain v2 rollout switch: off by default, shadow for everyone, live only for named families. */
-import { brainPerson, brainV2Mode, brainRole } from "../src/services/brainV2.service";
+import { brainPerson, brainV2Mode, brainRole, replyMessages } from "../src/services/brainV2.service";
 import { legacyBlockReply, v1MustNotOrder } from "../src/services/legacyGuard.service";
 
 let fail = 0;
@@ -39,6 +39,11 @@ ok("a Done tap and a records button still work", ["done:sched-1", "rec:keep:doc1
     .every((id) => v1MustNotOrder({ live: true, routed: false, interactiveId: id }) === null));
 ok("a family not on v2 keeps the old flow", v1MustNotOrder({ live: false, routed: true, intent: "order_new", interactiveId: "confirm_order" }) === null);
 ok("the refusal speaks their language", legacyBlockReply("send_again", "hi").includes("मिनट") && legacyBlockReply("send_again", "en").includes("minute"));
+
+const bubbles = replyMessages({ reply: "Four.", messages: ["Four.", "Saved.", "No reply to the later check-in."] });
+ok("separate topics stay separate messages, answer first", bubbles.length === 3 && bubbles[0] === "Four." && bubbles[2].includes("check-in"), bubbles);
+ok("an older engine with only a reply still sends that one message", replyMessages({ reply: "Hello." }).join() === "Hello.");
+ok("an empty turn sends nothing", replyMessages({ reply: "none", messages: [] }).length === 0);
 
 if (fail) {
     console.error(`${fail} failed`);
