@@ -59,7 +59,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
         return json({ id: "e" });
     }
     if (u.includes("/emergency")) return json({ contacts });
-    if (u.includes("/v2/brain/compose-reminder")) return json({ text: null });
+    if (u.includes("/v2/brain/compose-reminder")) return json({ text: `Time for ${body.purpose || "this"}` });
     if (u.includes("/v2/")) return json({ recorded: true });
     return realFetch(url as string, init);
 }) as typeof fetch;

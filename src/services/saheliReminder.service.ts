@@ -713,23 +713,28 @@ export function sameReminderLine(a: string, b: string): boolean {
 
 /**
  * What may go out. A fresh line, with any "Reminder:" label taken off. A habit whose writer echoed the stored text,
- * repeated a recent line, or returned nothing is skipped (null). A medicine still uses its stored text, so a dose is
- * not lost when the writer is down.
+ * repeated a recent line, or returned nothing is skipped (null): that is "nothing new", not an outage.
+ * When the writer is down (error or timeout), a habit uses its stored line if that line has not gone out in the last
+ * 3 days, and is skipped otherwise. A medicine always keeps its stored text, so a dose is not lost.
  */
 export function outboundReminderLine(
     fresh: string | null | undefined,
     reminder: { text: string; aboutKey?: string | null },
     recent: string[] = [],
+    writerDown = false,
 ): string | null {
     const medicine = String(reminder.aboutKey ?? "").startsWith("medicine:");
     const line = (fresh ?? "").trim().replace(/^reminder:\s*/i, "").trim();
     const echoed = !line || sameReminderLine(line, reminder.text) || recent.some((r) => sameReminderLine(line, r));
     if (!echoed) return line;
-    return medicine ? `Reminder: ${reminder.text}` : null;
+    if (medicine) return `Reminder: ${reminder.text}`;
+    if (!writerDown) return null;
+    const stored = reminder.text.trim();
+    return stored && !recent.some((r) => sameReminderLine(r, stored)) ? stored : null;
 }
 
-/** A fresh line from the engine for this send, or null (a habit is then skipped; a medicine uses its stored text). */
-export async function composeReminderLine(familyId: string, recipientUserId: string, reminder: Pick<ISaheliReminder, "reminderId" | "text" | "aboutKey">, slotKey: string): Promise<string | null> {
+/** The writer's line, or `{ down: true }` when the engine errored or timed out (then the stored line may go). */
+export async function composeReminderLine(familyId: string, recipientUserId: string, reminder: Pick<ISaheliReminder, "reminderId" | "text" | "aboutKey">, slotKey: string): Promise<{ text: string | null; down: boolean }> {
     try {
         const { aiEngineJson } = await import("../clients/aiEngine.client");
         const recent = await recentReminderLines(reminder.reminderId);
@@ -743,10 +748,10 @@ export async function composeReminderLine(familyId: string, recipientUserId: str
             kind: medicine ? "medicine" : "reminder",
             item: medicine ? reminder.text : undefined,
         }, 20_000);
-        return out?.text?.trim() || null;
+        return { text: out?.text?.trim() || null, down: false };
     } catch (err) {
-        console.warn(`[reminder] compose failed; a habit is skipped, a medicine uses its stored text: ${err instanceof Error ? err.message : err}`);
-        return null;
+        console.warn(`[reminder] writer down, stored line if it has not gone out lately: ${err instanceof Error ? err.message : err}`);
+        return { text: null, down: true };
     }
 }
 
@@ -800,14 +805,16 @@ async function fireReminderMessage(input: {
         return false;
     }
 
-    // Written at the moment it goes out. A habit with no fresh line is skipped: the stored "Reminder: …" text is what
-    // went out word for word every hour (founder 2026-10-14). A medicine still uses its stored text.
+    // A fresh line, or the stored one when the writer is down and that line has not gone out in 3 days. "Nothing new"
+    // from a live writer skips a habit (founder 2026-10-14: the same "Reminder:" sentence every hour).
     const recent = await recentReminderLines(input.reminder.reminderId);
-    const fresh = await composeReminderLine(input.familyId, input.recipientUserId, input.reminder, input.slotKey);
-    const text = outboundReminderLine(fresh, input.reminder, recent);
+    const composed = await composeReminderLine(input.familyId, input.recipientUserId, input.reminder, input.slotKey);
+    const text = outboundReminderLine(composed.text, input.reminder, recent, composed.down);
     if (!text) {
-        await finalizeNudgeAttempt(attemptId, { delivered: false, channel: target.channel, terminal: true, reason: "no_fresh_line", messagePreview: "" });
-        await noteDueHeld(slot, "no fresh line");
+        const why = composed.down ? "writer down" : "no fresh line";
+        if (composed.down) console.warn(`[reminder] writer down and the stored line already went lately; skipping ${input.reminder.reminderId}`);
+        await finalizeNudgeAttempt(attemptId, { delivered: false, channel: target.channel, terminal: true, reason: composed.down ? "writer_down" : "no_fresh_line", messagePreview: "" });
+        await noteDueHeld(slot, why);
         return false;
     }
     await SaheliNudgeLog.updateOne({ nudgeId: attemptId }, { $set: { messagePreview: text.slice(0, 200) } }).catch(() => undefined);

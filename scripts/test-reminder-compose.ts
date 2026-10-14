@@ -62,7 +62,7 @@ async function withDb(uri: string) {
 
     await ok("each send gets a fresh line from the engine, with what it is for and when", async () => {
         const line = await composeReminderLine("famC", "selfC", { reminderId: "rem1", text: "Deep breath, skip the cigarette", aboutKey: null }, "18:00");
-        assert.equal(line, "fresh line 1");
+        assert.deepEqual(line, { text: "fresh line 1", down: false });
         assert.equal(calls[0].purpose, "Deep breath, skip the cigarette");
         assert.equal(calls[0].at, "18:00");
         assert.equal(calls[0].kind, "reminder");
@@ -75,9 +75,9 @@ async function withDb(uri: string) {
         assert.equal(calls[1].item, "Magnesium glycinate 1 tablet");
     });
 
-    await ok("the engine down: null, so a habit is skipped and a medicine keeps its stored text", async () => {
+    await ok("the engine down is a writer outage, not an empty line", async () => {
         engineUp = false;
-        assert.equal(await composeReminderLine("famC", "selfC", { reminderId: "rem1", text: "Deep breath", aboutKey: null }, "18:00"), null);
+        assert.deepEqual(await composeReminderLine("famC", "selfC", { reminderId: "rem1", text: "Deep breath", aboutKey: null }, "18:00"), { text: null, down: true });
         engineUp = true;
     });
     await mongoose.disconnect();
@@ -92,6 +92,9 @@ async function withDb(uri: string) {
         assert.equal(outboundReminderLine("Still skipping this hour?", { text: stored, aboutKey: null }, ["Still skipping this hour?"]), null);
         assert.equal(outboundReminderLine("Reminder: Still off them this hour?", { text: stored, aboutKey: null }), "Still off them this hour?");
         assert.equal(outboundReminderLine(null, { text: "Ecosprin 75", aboutKey: "medicine:eco" }), "Reminder: Ecosprin 75");
+        assert.equal(outboundReminderLine(null, { text: stored, aboutKey: null }, [], true), stored);
+        assert.equal(outboundReminderLine(null, { text: stored, aboutKey: null }, [stored], true), null);
+        assert.equal(outboundReminderLine(null, { text: "Ecosprin 75", aboutKey: "medicine:eco" }, [], true), "Reminder: Ecosprin 75");
     });
     const uri = testDbUri("remcompose");
     if (uri) await withDb(uri);
