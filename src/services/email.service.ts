@@ -3,9 +3,28 @@ import config from "../config/app.config";
 import { AppError } from "../middleware/error.middleware";
 
 let client: Resend | null = null;
+
+/** Real email goes out only from production (NODE_ENV=production, as on ECS), or with EMAIL_SEND=on. A test or script run
+ * on a laptop with a live key in .env used to email the founder test alerts ("[Kavach ops] s", fam-w, 15 Oct 00:03). */
+export function realEmailAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.EMAIL_SEND || "").trim().toLowerCase() === "on") return true;
+  if ((env.EMAIL_SEND || "").trim().toLowerCase() === "off") return false;
+  return (env.NODE_ENV || "").trim().toLowerCase() === "production";
+}
+
+const held = {
+  emails: {
+    send: async (msg: Record<string, unknown>) => {
+      console.log(`[email] not sent outside production: ${String(msg.subject ?? "").slice(0, 80)}`);
+      return { data: null, error: null };
+    },
+  },
+} as unknown as Resend;
+
 /** Created on first send, so importing this module (tests, scripts) needs no key. */
 function resend(): Resend {
-  return (client ??= new Resend(config.email.resendApiKey));
+  if (client) return client;
+  return realEmailAllowed() ? (client = new Resend(config.email.resendApiKey)) : held;
 }
 
 /** Tests: send through a fake (it gets what Resend would; return { error } to simulate a failure). null restores Resend. */
