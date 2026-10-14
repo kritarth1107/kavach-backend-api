@@ -1,6 +1,7 @@
 /**
  * A reminder's words are written when it goes out, from the engine, with the lines already sent for it (founder
- * 2026-10-13: the cigarette reminder repeated the same text every time). The stored text goes out if the engine fails.
+ * 2026-10-13: the cigarette reminder repeated the same text every time). A habit with nothing fresh is skipped.
+ * A medicine reminder still uses its stored text when the engine is down.
  * Usage: TEST_MONGODB_URI=mongodb://127.0.0.1:27999/remcompose NODE_ENV=test npx tsx scripts/test-reminder-compose.ts
  */
 import assert from "node:assert/strict";
@@ -43,10 +44,13 @@ async function withDb(uri: string) {
     const { composeReminderLine, recentReminderLines } = await import("../src/services/saheliReminder.service");
     const base = { familyId: "famC", recipientUserId: "selfC", nudgeKind: "pre_reminder", channel: "whatsapp", attempts: 1, terminal: true };
     const sent = ["Reminder: Deep breath, skip the cigarette", "Lambi saans lo, cigarette ko aaj bhi na bolo", "Shaam ki jeet: ek aur cigarette-free ghanta"];
+    const now = Date.now();
     for (const [i, t] of sent.entries()) {
         await SaheliNudgeLog.create({ ...base, scheduleId: `reminder:rem1:18:00`, dateKey: `2026-10-1${i}`, nudgeId: `n${i}`, delivered: true,
-                                      messagePreview: t, lastAttemptAt: new Date(Date.UTC(2026, 9, 10 + i, 12, 30)) });
+                                      messagePreview: t, lastAttemptAt: new Date(now - (sent.length - i) * 3_600_000) });
     }
+    await SaheliNudgeLog.create({ ...base, scheduleId: `reminder:rem1:18:00`, dateKey: "2026-10-01", nudgeId: "nold", delivered: true,
+                                  messagePreview: "weeks ago", lastAttemptAt: new Date(now - 10 * 24 * 3_600_000) });
     await SaheliNudgeLog.create({ ...base, scheduleId: `reminder:rem1:18:00`, dateKey: "2026-10-09", nudgeId: "nx", delivered: false,
                                   messagePreview: "never delivered", lastAttemptAt: new Date(Date.UTC(2026, 9, 9)) });
     await SaheliNudgeLog.create({ ...base, scheduleId: `reminder:rem2:09:00`, dateKey: "2026-10-12", nudgeId: "ny", delivered: true,
@@ -71,7 +75,7 @@ async function withDb(uri: string) {
         assert.equal(calls[1].item, "Magnesium glycinate 1 tablet");
     });
 
-    await ok("the engine down: null, so the stored text goes out (a reminder is never lost)", async () => {
+    await ok("the engine down: null, so a habit is skipped and a medicine keeps its stored text", async () => {
         engineUp = false;
         assert.equal(await composeReminderLine("famC", "selfC", { reminderId: "rem1", text: "Deep breath", aboutKey: null }, "18:00"), null);
         engineUp = true;
@@ -80,6 +84,15 @@ async function withDb(uri: string) {
 }
 
 (async () => {
+    const { outboundReminderLine } = await import("../src/services/saheliReminder.service");
+    const stored = "Every hour is a new victory. Skip this cigarette and keep your streak going!";
+    await ok("a habit is skipped when the writer has nothing new; a medicine still sends", async () => {
+        assert.equal(outboundReminderLine(null, { text: stored, aboutKey: null }), null);
+        assert.equal(outboundReminderLine(`Reminder: ${stored}`, { text: stored, aboutKey: null }), null);
+        assert.equal(outboundReminderLine("Still skipping this hour?", { text: stored, aboutKey: null }, ["Still skipping this hour?"]), null);
+        assert.equal(outboundReminderLine("Reminder: Still off them this hour?", { text: stored, aboutKey: null }), "Still off them this hour?");
+        assert.equal(outboundReminderLine(null, { text: "Ecosprin 75", aboutKey: "medicine:eco" }), "Reminder: Ecosprin 75");
+    });
     const uri = testDbUri("remcompose");
     if (uri) await withDb(uri);
     else console.log("(DB checks skipped: set TEST_MONGODB_URI)");

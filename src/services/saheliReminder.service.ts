@@ -686,16 +686,49 @@ export async function tryCompleteRemindersFromMessage(input: {
 }
 
 /** The last lines sent for this reminder, newest first ("Reminder: " labels of older sends dropped). */
-export async function recentReminderLines(reminderId: string, limit = 8): Promise<string[]> {
-    const rows = await SaheliNudgeLog.find({ scheduleId: { $regex: `^reminder:${reminderId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:` }, delivered: true })
+export async function recentReminderLines(reminderId: string, limit = 24): Promise<string[]> {
+    const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const rows = await SaheliNudgeLog.find({
+        scheduleId: { $regex: `^reminder:${reminderId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:` },
+        delivered: true,
+        lastAttemptAt: { $gte: since },
+    })
         .sort({ lastAttemptAt: -1 })
         .limit(limit)
         .select("messagePreview")
         .lean<Array<{ messagePreview?: string }>>();
-    return rows.map((r) => String(r.messagePreview ?? "").replace(/^Reminder:\s*/, "").trim()).filter(Boolean);
+    return rows.map((r) => String(r.messagePreview ?? "").replace(/^Reminder:\s*/i, "").trim()).filter(Boolean);
 }
 
-/** A fresh line from the engine for this send, or null (then the stored text goes out). */
+function plainLine(s: string): string {
+    return s.toLowerCase().replace(/^reminder:\s*/i, "").replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+}
+
+/** The same line, ignoring the old "Reminder:" label and punctuation. */
+export function sameReminderLine(a: string, b: string): boolean {
+    const x = plainLine(a);
+    const y = plainLine(b);
+    return Boolean(x) && x === y;
+}
+
+/**
+ * What may go out. A fresh line, with any "Reminder:" label taken off. A habit whose writer echoed the stored text,
+ * repeated a recent line, or returned nothing is skipped (null). A medicine still uses its stored text, so a dose is
+ * not lost when the writer is down.
+ */
+export function outboundReminderLine(
+    fresh: string | null | undefined,
+    reminder: { text: string; aboutKey?: string | null },
+    recent: string[] = [],
+): string | null {
+    const medicine = String(reminder.aboutKey ?? "").startsWith("medicine:");
+    const line = (fresh ?? "").trim().replace(/^reminder:\s*/i, "").trim();
+    const echoed = !line || sameReminderLine(line, reminder.text) || recent.some((r) => sameReminderLine(line, r));
+    if (!echoed) return line;
+    return medicine ? `Reminder: ${reminder.text}` : null;
+}
+
+/** A fresh line from the engine for this send, or null (a habit is then skipped; a medicine uses its stored text). */
 export async function composeReminderLine(familyId: string, recipientUserId: string, reminder: Pick<ISaheliReminder, "reminderId" | "text" | "aboutKey">, slotKey: string): Promise<string | null> {
     try {
         const { aiEngineJson } = await import("../clients/aiEngine.client");
@@ -712,7 +745,7 @@ export async function composeReminderLine(familyId: string, recipientUserId: str
         }, 20_000);
         return out?.text?.trim() || null;
     } catch (err) {
-        console.warn(`[reminder] compose failed, sending the stored text: ${err instanceof Error ? err.message : err}`);
+        console.warn(`[reminder] compose failed; a habit is skipped, a medicine uses its stored text: ${err instanceof Error ? err.message : err}`);
         return null;
     }
 }
@@ -734,7 +767,6 @@ async function fireReminderMessage(input: {
         return false;
     }
 
-    let text = `Reminder: ${input.reminder.text}`;
     const attemptId = await claimNudgeAttempt(
         {
             familyId: input.familyId,
@@ -743,7 +775,7 @@ async function fireReminderMessage(input: {
             dateKey: input.dateKey,
             nudgeKind: "pre_reminder",
         },
-        text,
+        input.reminder.text,
     );
     if (!attemptId) {
         return false;
@@ -768,13 +800,17 @@ async function fireReminderMessage(input: {
         return false;
     }
 
-    // Written at the moment it goes out, never the same line again (founder 2026-10-13: the cigarette reminder repeated
-    // the same text). The stored text goes out if the engine has nothing.
+    // Written at the moment it goes out. A habit with no fresh line is skipped: the stored "Reminder: …" text is what
+    // went out word for word every hour (founder 2026-10-14). A medicine still uses its stored text.
+    const recent = await recentReminderLines(input.reminder.reminderId);
     const fresh = await composeReminderLine(input.familyId, input.recipientUserId, input.reminder, input.slotKey);
-    if (fresh) {
-        text = fresh;
-        await SaheliNudgeLog.updateOne({ nudgeId: attemptId }, { $set: { messagePreview: fresh.slice(0, 200) } }).catch(() => undefined);
+    const text = outboundReminderLine(fresh, input.reminder, recent);
+    if (!text) {
+        await finalizeNudgeAttempt(attemptId, { delivered: false, channel: target.channel, terminal: true, reason: "no_fresh_line", messagePreview: "" });
+        await noteDueHeld(slot, "no fresh line");
+        return false;
     }
+    await SaheliNudgeLog.updateOne({ nudgeId: attemptId }, { $set: { messagePreview: text.slice(0, 200) } }).catch(() => undefined);
 
     // Their WhatsApp chat closed (no message from them in 24 hours): the reminder still reaches them, as the template.
     const { clockTime } = await import("./whatsappTemplates.service");
