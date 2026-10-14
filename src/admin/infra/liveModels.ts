@@ -1,7 +1,7 @@
 /**
  * What the AI models and Services pages may say. Built from the engine's live routes and the backend's live
  * voice settings (GET /api/health/models). Nothing here is a default brand name: a speech engine or a Bedrock
- * row appears only when that config says it runs, or when the AWS bill has a Bedrock charge.
+ * row appears only when that config says it runs. A past bill does not keep a model we no longer use.
  */
 export type OtherModel = { model: string; provider: string; use: string; billedUnder: string };
 
@@ -24,10 +24,26 @@ export type AiStack = {
     gemini: boolean;
     bedrockRoutes: boolean;
     embeddingsBedrock: boolean;
+    embedProvider: string;
     embedModel: string | null;
+    embedRegion: string | null;
     geminiModel: string | null;
     location: string | null;
 };
+
+/** The engine's embeddings label is `provider:model` or `provider:model@region` (EMBED_PROVIDER / EMBED_MODEL). */
+export function parseEmbeddings(embeddings: string | null | undefined): { provider: string; model: string | null; region: string | null } {
+    const emb = (embeddings || "").trim();
+    if (!emb || emb === "none") return { provider: "", model: null, region: null };
+    const m = emb.match(/^(bedrock|vertex|azure|xai|openai):([^@]+)(?:@(.+))?$/i);
+    if (!m) return { provider: /titan/i.test(emb) ? "bedrock" : "", model: emb, region: null };
+    return { provider: m[1].toLowerCase(), model: m[2].trim() || null, region: (m[3] || "").trim() || null };
+}
+
+function embedWhere(region: string | null): string {
+    if (!region || region === "asia-south1") return "Mumbai";
+    return region;
+}
 
 const STT_ROW: Record<string, (v: VoicePublic) => OtherModel> = {
     scribe: (v) => ({ model: v.sttModel || "scribe_v2", provider: "ElevenLabs", use: "Voice notes to text", billedUnder: "ElevenLabs" }),
@@ -51,16 +67,16 @@ export function otherFromLive(voice: VoicePublic | null, embeddings: string | nu
             other.push({ model: "Chirp", provider: "Google", use: "Saheli's spoken replies", billedUnder: "Google bill → text-to-speech" });
         }
     }
-    const emb = (embeddings || "").trim();
-    if (emb && emb !== "none") {
-        const bedrock = /^bedrock:/i.test(emb) || /titan/i.test(emb);
-        const model = emb.replace(/^(bedrock|vertex|azure|xai|openai):/i, "").replace(/@.*$/, "") || emb;
-        other.push({
-            model,
-            provider: bedrock ? "Amazon Bedrock" : "Embeddings",
-            use: "Memory search (embeddings)",
-            billedUnder: bedrock ? "AWS bill → Amazon Bedrock" : "The embedding provider's bill",
-        });
+    const emb = parseEmbeddings(embeddings);
+    if (emb.model) {
+        const where = embedWhere(emb.region);
+        if (emb.provider === "bedrock") {
+            other.push({ model: emb.model, provider: "Amazon Bedrock", use: "Memory search (embeddings)", billedUnder: "AWS bill → Amazon Bedrock" });
+        } else if (emb.provider === "vertex") {
+            other.push({ model: emb.model, provider: "Google", use: "Memory search (embeddings)", billedUnder: `Google bill → Vertex AI (${where})` });
+        } else {
+            other.push({ model: emb.model, provider: emb.provider || "Embeddings", use: "Memory search (embeddings)", billedUnder: "The embedding provider's bill" });
+        }
     }
     return other;
 }
@@ -69,20 +85,22 @@ export function otherFromLive(voice: VoicePublic | null, embeddings: string | nu
 export function aiStack(models: LiveEngineModels | null): AiStack {
     const routes = Object.values(models?.roles || {}).flatMap((r) => r.routes || []);
     const gemini = routes.find((r) => r.provider === "gemini");
-    const emb = (models?.embeddings || "").trim();
+    const emb = parseEmbeddings(models?.embeddings);
     return {
         gemini: !!gemini || /gemini/i.test(models?.llm || ""),
         bedrockRoutes: routes.some((r) => r.provider === "bedrock"),
-        embeddingsBedrock: /^bedrock:/i.test(emb) || /titan/i.test(emb),
-        embedModel: emb && emb !== "none" ? emb.replace(/^(bedrock|vertex|azure|xai|openai):/i, "").replace(/@.*$/, "") : null,
+        embeddingsBedrock: emb.provider === "bedrock",
+        embedProvider: emb.provider,
+        embedModel: emb.model,
+        embedRegion: emb.region,
         geminiModel: gemini?.model || null,
         location: gemini?.location && gemini.location !== "global" ? gemini.location : null,
     };
 }
 
-/** A Bedrock row only when a route uses it, embeddings use it, or the bill has a Bedrock charge. */
-export function showBedrockRow(ai: AiStack, hasBill: boolean): boolean {
-    return ai.bedrockRoutes || ai.embeddingsBedrock || hasBill;
+/** A Bedrock row only when a live route or the live embeddings use it. A past bill is not a model we run. */
+export function showBedrockRow(ai: AiStack, _hasBill = false): boolean {
+    return ai.bedrockRoutes || ai.embeddingsBedrock;
 }
 
 export function bedrockPurpose(ai: AiStack): string {

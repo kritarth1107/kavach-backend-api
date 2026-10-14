@@ -19,10 +19,14 @@ assert.deepEqual(live.tts, ["eleven"]);
 assert.equal(live.ttsModel, "eleven_v4");
 assert.equal(live.llm, "vertex");
 
-const rows = otherFromLive(live, "bedrock:amazon.titan-embed-text-v2:0@ap-south-1");
+const rows = otherFromLive(live, "vertex:text-multilingual-embedding-002@asia-south1");
 const names = rows.map((r) => r.model);
-assert.deepEqual(names, ["scribe_v2", "eleven_v4", "amazon.titan-embed-text-v2:0"]);
-assert.equal(rows.some((r) => /transcribe|chirp|gpt-oss|kimi/i.test(r.model)), false);
+assert.deepEqual(names, ["scribe_v2", "eleven_v4", "text-multilingual-embedding-002"]);
+assert.equal(rows.find((r) => r.use.startsWith("Memory search"))?.provider, "Google");
+assert.equal(rows.some((r) => /transcribe|chirp|gpt-oss|kimi|titan|bedrock/i.test(`${r.model} ${r.provider}`)), false);
+
+const titan = otherFromLive(live, "bedrock:amazon.titan-embed-text-v2:0@ap-south-1");
+assert.equal(titan.find((r) => r.use.startsWith("Memory search"))?.provider, "Amazon Bedrock");
 
 const withTranscribe = voicePublicConfig({ STT_ORDER: "transcribe,scribe", GOOGLE_SERVICES: "off" } as NodeJS.ProcessEnv);
 assert.deepEqual(withTranscribe.stt, ["transcribe", "scribe"]);
@@ -30,7 +34,7 @@ assert.equal(otherFromLive(withTranscribe, null).some((r) => r.model === "Amazon
 
 const gemini = {
     llm: "router:gemini:gemini-3.5-flash@asia-south1",
-    embeddings: "bedrock:amazon.titan-embed-text-v2:0@ap-south-1",
+    embeddings: "vertex:text-multilingual-embedding-002@asia-south1",
     roles: { brain: { routes: [{ provider: "gemini", model: "gemini-3.5-flash", location: "asia-south1" }] } },
 };
 const stack = aiStack(gemini);
@@ -38,15 +42,20 @@ assert.equal(stack.gemini, true);
 assert.equal(stack.geminiModel, "gemini-3.5-flash");
 assert.equal(stack.location, "asia-south1");
 assert.equal(stack.bedrockRoutes, false);
-assert.equal(stack.embeddingsBedrock, true);
-assert.equal(showBedrockRow(stack, false), true);
-assert.match(bedrockPurpose(stack), /Memory search \(amazon\.titan-embed-text-v2:0\)/);
-assert.equal(/Saheli's models/.test(bedrockPurpose(stack)), false);
+assert.equal(stack.embeddingsBedrock, false);
+assert.equal(stack.embedProvider, "vertex");
+assert.equal(stack.embedModel, "text-multilingual-embedding-002");
+assert.equal(showBedrockRow(stack, true), false);
 
-const onlyGemini = aiStack({ llm: "router", embeddings: "vertex:text-embedding", roles: { brain: { routes: [{ provider: "gemini", model: "gemini-3.5-flash", location: "asia-south1" }] } } });
+const titanStack = aiStack({ embeddings: "bedrock:amazon.titan-embed-text-v2:0@ap-south-1", roles: {} });
+assert.equal(titanStack.embeddingsBedrock, true);
+assert.equal(showBedrockRow(titanStack, false), true);
+assert.match(bedrockPurpose(titanStack), /Memory search \(amazon\.titan-embed-text-v2:0\)/);
+assert.equal(/Saheli's models/.test(bedrockPurpose(titanStack)), false);
+
+const onlyGemini = aiStack({ llm: "router", embeddings: "vertex:text-multilingual-embedding-002@asia-south1", roles: { brain: { routes: [{ provider: "gemini", model: "gemini-3.5-flash", location: "asia-south1" }] } } });
 assert.equal(showBedrockRow(onlyGemini, false), false);
-assert.equal(showBedrockRow(onlyGemini, true), true);
-assert.equal(bedrockPurpose(onlyGemini), "Amazon Bedrock charges on the AWS bill");
+assert.equal(showBedrockRow(onlyGemini, true), false);
 
 const bedrockRoute = aiStack({ roles: { brain: { routes: [{ provider: "bedrock", model: "example", location: "ap-south-1" }] } } });
 assert.equal(bedrockRoute.bedrockRoutes, true);

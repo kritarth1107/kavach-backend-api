@@ -153,6 +153,7 @@ function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<strin
             status: o.spend?.data ? (o.spend.data.today >= o.spend.data.softCap ? "warn" : "ok") : "unknown",
             facts: [
                 ...(o.ai.geminiModel ? [{ label: "Model", value: o.ai.geminiModel }] : []),
+                ...(o.ai.embedProvider === "vertex" && o.ai.embedModel ? [{ label: "Memory search", value: o.ai.embedModel }] : []),
                 { label: "Region", value: o.ai.location === "asia-south1" ? "Mumbai (asia-south1)" : (o.ai.location || "Mumbai") },
                 ...caps,
             ],
@@ -167,19 +168,34 @@ function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<strin
             facts: caps, source: "metered", daily: o.ledger,
         });
     }
-    if (showBedrockRow(o.ai, hasBill)) {
+    if (o.ai.embedProvider === "vertex" && o.ai.embedModel) {
+        const where = !o.ai.embedRegion || o.ai.embedRegion === "asia-south1" ? "Mumbai" : o.ai.embedRegion;
+        add({
+            id: "aws:embeddings", name: "Memory search", provider: "AWS", category: "AI",
+            purpose: `${o.ai.embedModel} on Google, ${where}`, usedBy: "AI engine", status: "ok",
+            facts: [{ label: "Model", value: o.ai.embedModel }, { label: "Region", value: where }],
+            source: "none", note: "Embeddings. Google is reached through the AWS link.", daily: {},
+        });
+    }
+    if (showBedrockRow(o.ai)) {
         add({
             id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI",
             purpose: bedrockPurpose(o.ai), usedBy: "AI engine",
-            status: o.ai.bedrockRoutes || o.ai.embeddingsBedrock ? "ok" : "unknown",
+            status: "ok",
             facts: [
                 ...(o.ai.embedModel && o.ai.embeddingsBedrock ? [{ label: "Embeddings", value: o.ai.embedModel }] : []),
                 { label: "Region", value: "ap-south-1" },
             ],
             source: hasBill ? "billed" : "none",
-            note: o.ai.embeddingsBedrock && !o.ai.bedrockRoutes ? "Memory search only. Saheli's replies are not on Bedrock." : (hasBill ? "AWS bill." : undefined),
+            note: o.ai.embeddingsBedrock && !o.ai.bedrockRoutes ? "Memory search only. Saheli's replies are not on Bedrock." : undefined,
             console: `${AWS_CONSOLE}/bedrock/home?region=${region}`,
             daily: hasBill ? bedrockBill : {},
+        });
+    } else if (hasBill) {
+        add({
+            id: "aws:earlier-models", name: "Earlier model charges", provider: "AWS", category: "AI",
+            purpose: "Charges for models nothing uses now", usedBy: "—", status: "unknown",
+            facts: [], source: "billed", daily: bedrockBill,
         });
     }
     const stores: Array<{ id: string; name: string; purpose: string; usedBy: string; re: RegExp; console: string }> = [

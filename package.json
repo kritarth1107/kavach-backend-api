@@ -41,7 +41,7 @@
     "test:person-orders": "tsx scripts/test-person-orders.ts",
     "test:coverage": "c8 npm run -s test:ci",
     "test:emergency-card": "tsx scripts/test-emergency-card.ts",
-    "test:ci": "tsc --noEmit -p . && npm run test:emergency-card && npm run test:email-gate && npm run test:meta-signature && npm run test:admin && npm run test:live-check && npm run test:cloud-provider && npm run test:quality && npm run test:login-gate && npm run test:self-care && npm run test:care-sync && npm run test:brain-v2 && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records && npm run test:facts && npm run test:agent-loop && npm run test:buttons && npm run test:voice && npm run test:language && npm run test:onboarding && npm run test:uptime && npm run test:catchup && npm run test:health-records && npm run test:dose-marks && npm run test:calls && npm run test:place-tools && npm run test:scheduler-lease && npm run test:reminders && npm run test:signup && npm run test:invites && npm run test:window && npm run test:care-team && npm run test:reminder-compose && npm run test:chat-readings && npm run test:nudge-gate && npm run test:world-api && npm run test:person-orders && npm run test:delivery-ledger && npm run test:dose-alert && npm run test:due-list && npm run test:delivery-report && npm run test:escalation-e2e && npm run test:brief-recipient && npm run test:nutrition && npm run test:one-memory && npm run test:no-legacy-memory && npm run test:voice-note",
+    "test:ci": "tsc --noEmit -p . && npm run test:emergency-card && npm run test:email-gate && npm run test:meta-signature && npm run test:admin && npm run test:live-check && npm run test:cloud-provider && npm run test:quality && npm run test:login-gate && npm run test:self-care && npm run test:care-sync && npm run test:brain-v2 && npm run test:stack && npm run test:rides && npm run test:ola && npm run test:delegate && npm run test:order-bugs && npm run test:records && npm run test:facts && npm run test:agent-loop && npm run test:buttons && npm run test:voice && npm run test:language && npm run test:onboarding && npm run test:uptime && npm run test:catchup && npm run test:health-records && npm run test:dose-marks && npm run test:calls && npm run test:place-tools && npm run test:scheduler-lease && npm run test:reminders && npm run test:signup && npm run test:invites && npm run test:window && npm run test:care-team && npm run test:reminder-compose && npm run test:chat-readings && npm run test:nudge-gate && npm run test:world-api && npm run test:person-orders && npm run test:delivery-ledger && npm run test:dose-alert && npm run test:due-list && npm run test:delivery-report && npm run test:escalation-e2e && npm run test:brief-recipient && npm run test:nutrition && npm run test:one-memory && npm run test:no-legacy-memory && npm run test:voice-note && npm run test:live-models",
     "test:buttons": "tsx scripts/test-saheli-buttons.ts",
     "test:voice": "tsx scripts/test-voice.ts",
     "test:voice-note": "tsx scripts/test-voice-note.ts",
@@ -72,7 +72,8 @@
     "test:delivery-report": "tsx scripts/test-daily-delivery-report.ts",
     "test:escalation-e2e": "tsx scripts/test-escalation-e2e.ts",
     "test:live-check": "LIVE_CHECK_RETRY_MS=0 tsx scripts/test-live-check.ts",
-    "test:cloud-provider": "tsx scripts/test-cloud-provider.ts"
+    "test:cloud-provider": "tsx scripts/test-cloud-provider.ts",
+    "test:live-models": "tsx scripts/test-admin-live-models.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1151.0",

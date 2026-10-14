@@ -102,7 +102,8 @@ export async function buildModels(now = Date.now()): Promise<ModelsView> {
     // Models used outside the engine (read from service settings; model names only).
     const env = (svc: string, k: string) => run?.find((s) => s.name === svc)?.env[k];
     const other: OtherModel[] = [];
-    const embed = env("kawach-ai-engine", "VERTEX_EMBEDDING_MODEL") || cfg.data?.embeddings;
+    // On AWS the live engine label (EMBED_PROVIDER:EMBED_MODEL) wins. The frozen Cloud Run env is only the GCP path.
+    const embed = onGcp() ? (env("kawach-ai-engine", "VERTEX_EMBEDDING_MODEL") || cfg.data?.embeddings) : (cfg.data?.embeddings || null);
     if (onGcp()) {
         const stt = env("kavach-backend", "VERTEX_STT_MODEL"), vision = env("kavach-backend", "VERTEX_VISION_MODEL");
         if (stt) other.push({ model: stt, provider: "Vertex AI", use: "Voice notes to text", billedUnder: "Google bill → Vertex AI (not in the engine ledger)" });
