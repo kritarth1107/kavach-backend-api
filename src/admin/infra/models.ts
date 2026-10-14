@@ -4,6 +4,7 @@
  * used outside the engine are listed with where their cost shows up.
  */
 import { engineOrNull } from "../engine";
+import { onGcp } from "./google";
 import { runServices } from "./gcp";
 import { lastDays, round2, totals, type Totals } from "./pricing";
 
@@ -28,6 +29,7 @@ export type ModelsView = {
 const ROLE_LABEL: Record<string, string> = {
     brain: "Saheli's replies", brain_hard: "Hard moments", worker: "Background work", extract: "Facts from chats", classify: "Sorting messages",
     judge: "Quality checks", judge_fast: "Quick checks", learn: "Weekly learning", vision: "Photos & prescriptions", caregiver: "Caregiver chat",
+    speech: "Spoken replies", nutrition: "Meals",
 };
 export const roleLabel = (r: string) => ROLE_LABEL[r] || r.replace(/_/g, " ");
 
@@ -86,11 +88,17 @@ export async function buildModels(now = Date.now()): Promise<ModelsView> {
     // Models used outside the engine (read from service settings; model names only).
     const env = (svc: string, k: string) => run?.find((s) => s.name === svc)?.env[k];
     const other: OtherModel[] = [];
-    const stt = env("kavach-backend", "VERTEX_STT_MODEL"), vision = env("kavach-backend", "VERTEX_VISION_MODEL");
-    if (stt) other.push({ model: stt, provider: "Vertex AI", use: "Voice notes to text", billedUnder: "Google bill → Vertex AI (not in the engine ledger)" });
-    if (vision) other.push({ model: vision, provider: "Vertex AI", use: "Photos and prescriptions sent on WhatsApp", billedUnder: "Google bill → Vertex AI (not in the engine ledger)" });
     const embed = env("kawach-ai-engine", "VERTEX_EMBEDDING_MODEL") || cfg.data?.embeddings;
-    if (embed) other.push({ model: embed, provider: "Vertex AI", use: "Memory search (embeddings)", billedUnder: "Google bill → Vertex AI" });
+    if (onGcp()) {
+        const stt = env("kavach-backend", "VERTEX_STT_MODEL"), vision = env("kavach-backend", "VERTEX_VISION_MODEL");
+        if (stt) other.push({ model: stt, provider: "Vertex AI", use: "Voice notes to text", billedUnder: "Google bill → Vertex AI (not in the engine ledger)" });
+        if (vision) other.push({ model: vision, provider: "Vertex AI", use: "Photos and prescriptions sent on WhatsApp", billedUnder: "Google bill → Vertex AI (not in the engine ledger)" });
+        if (embed) other.push({ model: embed, provider: "Vertex AI", use: "Memory search (embeddings)", billedUnder: "Google bill → Vertex AI" });
+    } else {
+        if (embed) other.push({ model: embed, provider: /titan|bedrock|amazon/i.test(embed) ? "Amazon Bedrock" : "Embeddings", use: "Memory search (embeddings)", billedUnder: "AWS bill → Amazon Bedrock" });
+        other.push({ model: "Amazon Transcribe", provider: "AWS", use: "Voice notes to text", billedUnder: "AWS bill → Amazon Transcribe" });
+        other.push({ model: "scribe", provider: "ElevenLabs", use: "Voice notes to text, when Transcribe cannot take that language", billedUnder: "ElevenLabs" });
+    }
     const agent = env("kavach-backend", "BROWSER_AGENT_MODEL");
     other.push({ model: agent || "browser-use", provider: "Browser Use", use: "Ordering agent in a cloud browser", billedUnder: "Browser Use credits (Infrastructure → Services)" });
     other.push({ model: "ElevenLabs voice", provider: "ElevenLabs", use: "Saheli's voice replies and voice reminders", billedUnder: "ElevenLabs monthly plan" });

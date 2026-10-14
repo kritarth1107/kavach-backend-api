@@ -1,0 +1,99 @@
+name: Deploy backend to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-aws
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR: 743887469650.dkr.ecr.ap-south-1.amazonaws.com/kavach-backend
+  FAMILY: kavach-backend
+  SERVICE: backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1})'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Tests
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+          TEST_MONGODB_URI: mongodb://127.0.0.1:27017/ci
+          NODE_ENV: test
+        run: |
+          npm ci --no-audit --no-fund
+          npm run test:coverage
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kavach-backend-api
+          aws-region: ap-south-1
+      - name: Build and push
+        env:
+          IMAGE: ${{ env.ECR }}:${{ github.sha }}
+          ADMIN_API: 743887469650.dkr.ecr.ap-south-1.amazonaws.com/kavach-admin-api:${{ github.sha }}
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
+          docker build \
+            --build-arg GIT_COMMIT_SHA="${{ github.sha }}" \
+            --build-arg GIT_BRANCH="${{ github.ref_name }}" \
+            --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg IMAGE_TAG="${{ github.sha }}" \
+            -t app:build .
+          curl -fsS -o /tmp/rds-ca.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+          user=$(docker inspect -f '{{.Config.User}}' app:build)
+          user=${user:-root}
+          mkdir -p /tmp/ca-wrap
+          cp /tmp/rds-ca.pem /tmp/ca-wrap/rds-ca.pem
+          printf 'FROM app:build\nUSER root\nCOPY --chmod=644 rds-ca.pem /etc/ssl/certs/rds-global-bundle.pem\nUSER %s\n' "$user" > /tmp/ca-wrap/Dockerfile
+          docker build -t "$IMAGE" -t "$ADMIN_API" /tmp/ca-wrap
+          docker push "$IMAGE"
+          docker push "$ADMIN_API"
+      - name: Roll the live services (image only)
+        env:
+          IMAGE: ${{ env.ECR }}:${{ github.sha }}
+          ADMIN_API: 743887469650.dkr.ecr.ap-south-1.amazonaws.com/kavach-admin-api:${{ github.sha }}
+        run: |
+          roll() {
+            family="$1"; service="$2"; image="$3"; repo="$4"
+            aws ecs describe-task-definition --task-definition "$family" --query taskDefinition \
+              | jq --arg IMG "$image" --arg NAME "$repo" '
+                  .containerDefinitions |= map(if ((.image | split("/") | last | split(":")[0]) == $NAME) then .image = $IMG else . end)
+                  | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+              > /tmp/td.json
+            rev=$(aws ecs register-task-definition --cli-input-json file:///tmp/td.json --query taskDefinition.revision --output text)
+            aws ecs update-service --cluster kavach --service "$service" --task-definition "$family:$rev" >/dev/null
+            aws ecs wait services-stable --cluster kavach --service "$service"
+          }
+          roll kavach-backend backend "$IMAGE" kavach-backend
+          roll kavach-admin-api admin-api "$ADMIN_API" kavach-admin-api
+      - name: Smoke test
+        run: |
+          BODY="$(curl -fsS https://api.brainbehindkavach.me/api/health)"
+          echo "$BODY" | grep -q '"status":"ok"'
+          echo "$BODY"

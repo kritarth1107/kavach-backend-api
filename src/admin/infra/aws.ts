@@ -31,6 +31,67 @@ export function awsConfigured(): boolean {
     return !!process.env.AWS_BILLING_ACCESS_KEY_ID && !!process.env.AWS_BILLING_SECRET_ACCESS_KEY;
 }
 
+type Creds = { accessKey: string; secretKey: string; token?: string };
+
+/** The ECS task role. Absent when this process is not on Fargate. */
+async function taskCreds(): Promise<Creds | null> {
+    const rel = process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
+    if (!rel) return null;
+    const res = await fetch(`http://169.254.170.2${rel}`, { signal: AbortSignal.timeout(2_000) });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { AccessKeyId?: string; SecretAccessKey?: string; Token?: string };
+    if (!j.AccessKeyId || !j.SecretAccessKey) return null;
+    return { accessKey: j.AccessKeyId, secretKey: j.SecretAccessKey, token: j.Token };
+}
+
+async function ecsJson<T>(target: string, body: unknown, creds: Creds): Promise<T> {
+    const host = "ecs.ap-south-1.amazonaws.com";
+    const payload = JSON.stringify(body);
+    const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const headers: Record<string, string> = { "content-type": "application/x-amz-json-1.1", "x-amz-target": target };
+    if (creds.token) headers["x-amz-security-token"] = creds.token;
+    const auth = sigv4({ method: "POST", host, path: "/", headers, body: payload, region: "ap-south-1", service: "ecs", accessKey: creds.accessKey, secretKey: creds.secretKey, amzDate });
+    const res = await fetch(`https://${host}/`, { method: "POST", headers: { ...headers, "x-amz-date": amzDate, Authorization: auth }, body: payload, signal: AbortSignal.timeout(8_000) });
+    if (!res.ok) throw new Error(`ECS ${res.status}`);
+    return (await res.json()) as T;
+}
+
+export type EcsService = { name: string; desired: number; running: number; pending: number; rollout: string | null; taskDef: string };
+
+/** Live services in cluster kavach. Null when this process cannot read ECS. */
+export async function ecsServices(): Promise<EcsService[] | null> {
+    const creds = await taskCreds();
+    if (!creds) return null;
+    const listed = await ecsJson<{ serviceArns?: string[] }>("AmazonEC2ContainerServiceV20141113.ListServices", { cluster: "kavach" }, creds);
+    const arns = listed.serviceArns || [];
+    if (!arns.length) return [];
+    const described = await ecsJson<{ services?: Array<{ serviceName?: string; desiredCount?: number; runningCount?: number; pendingCount?: number; taskDefinition?: string; deployments?: Array<{ status?: string; rolloutState?: string }> }> }>(
+        "AmazonEC2ContainerServiceV20141113.DescribeServices", { cluster: "kavach", services: arns }, creds);
+    return (described.services || []).map((s) => ({
+        name: s.serviceName || "",
+        desired: s.desiredCount ?? 0,
+        running: s.runningCount ?? 0,
+        pending: s.pendingCount ?? 0,
+        rollout: s.deployments?.find((d) => d.status === "PRIMARY")?.rolloutState || null,
+        taskDef: (s.taskDefinition || "").split("/").pop() || "",
+    }));
+}
+
+/** Timed work on the AWS copy. The backend tick also sends the daily snapshot after 21:00 IST. */
+export const AWS_SCHEDULES: Array<{ name: string; schedule: string; owner: "backend" | "cron" }> = [
+    { name: "Care reminders", schedule: "* * * * *", owner: "backend" },
+    { name: "Task runner", schedule: "* * * * *", owner: "cron" },
+    { name: "Saheli wake", schedule: "*/5 * * * *", owner: "cron" },
+    { name: "Browser sweep", schedule: "*/10 * * * *", owner: "cron" },
+    { name: "Fact extract", schedule: "*/30 * * * *", owner: "cron" },
+    { name: "Saheli's night", schedule: "0 2 * * *", owner: "cron" },
+    { name: "Memory consolidate", schedule: "15 2 * * *", owner: "cron" },
+    { name: "Elder reflection", schedule: "30 2 * * *", owner: "cron" },
+    { name: "Morning report", schedule: "0 8 * * *", owner: "cron" },
+    { name: "Daily jobs", schedule: "0 10 * * *", owner: "cron" },
+    { name: "Weekly learning", schedule: "0 8 * * 0", owner: "cron" },
+];
+
 /** Cost per AWS service per day (UTC days from Cost Explorer, close enough to IST for a daily view). */
 export async function awsBill(days: number, now = Date.now()): Promise<AwsBill> {
     if (!awsConfigured()) return { connected: false, daily: {}, byService: {}, credits: {}, note: "No AWS billing key yet" };

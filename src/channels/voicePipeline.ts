@@ -8,8 +8,8 @@
  * Chosen after an A/B of 6 engines × 5 languages (agent workspace voice/ab): a Gemini audio judge rated Chirp 4/5 for
  * naturalness and emotion and ElevenLabs v4 / Gemini 2.5 Pro 5/5; ElevenLabs was ~2.5× faster than Gemini Pro TTS.
  * TTS_ORDER (eleven,gemini,google) and TTS_ORDER_BY_LANG ('{"bn":"eleven,google"}') change the order.
- * Google-free copy (VOICE_GOOGLE=off, or LLM_PROVIDER_BACKEND=bedrock): ElevenLabs only (Scribe STT, ElevenLabs TTS);
- * the Google entries of STT_ORDER / TTS_ORDER are skipped and Google auth is never asked for.
+ * Google-free copy (VOICE_GOOGLE=off, or LLM_PROVIDER_BACKEND=bedrock): Amazon Transcribe first (Chirp's place),
+ * ElevenLabs Scribe if Transcribe cannot take that language or audio, ElevenLabs TTS. Google auth is never asked for.
  */
 import { spawn } from "node:child_process";
 import { GoogleAuth } from "google-auth-library";
@@ -26,7 +26,7 @@ export type SttInput = {
     languageHint?: string | null;
     fallbackText?: string;
     /** Only these engines, in this order (tests and the voice test set); default sttOrder(). */
-    engines?: Array<"chirp" | "scribe" | "gemini">;
+    engines?: Array<"chirp" | "scribe" | "gemini" | "transcribe">;
 };
 
 /** Every language Saheli speaks, as BCP-47 codes the speech engines understand. */
@@ -121,7 +121,7 @@ function audioPayload(input: SttInput): { base64: string; mimeType: string } | n
 
 export type SttResult = {
     text: string;
-    engine: "chirp_3" | "scribe" | "gemini" | "fallback" | "none";
+    engine: "chirp_3" | "transcribe" | "scribe" | "gemini" | "fallback" | "none";
     /** 0..1 when the engine reports it (Chirp); undefined when it does not. */
     confidence?: number;
     /** BCP-47 code the engine heard, e.g. "hi-IN". */
@@ -234,12 +234,68 @@ async function scribeSpeechToText(input: { base64: string; mimeType: string; lan
     return parseScribe((await res.json()) as Parameters<typeof parseScribe>[0]);
 }
 
-/** Order the speech engines are tried in (STT_ORDER=chirp,scribe,gemini). Without Google voice only Scribe. */
-export function sttOrder(env: NodeJS.ProcessEnv = process.env): Array<"chirp" | "scribe" | "gemini"> {
-    const valid = new Set(["chirp", "scribe", "gemini"]);
+/** Languages Amazon Transcribe streams in Mumbai. Others (Odia, Assamese, Urdu) stay on ElevenLabs Scribe. */
+const TRANSCRIBE_LANG = new Set(["en-IN", "hi-IN", "bn-IN", "gu-IN", "kn-IN", "ml-IN", "mr-IN", "pa-IN", "ta-IN", "te-IN"]);
+
+function transcribeLanguage(hint?: string | null, explicit?: string): string | null {
+    for (const code of sttLanguageCodes(hint, explicit)) {
+        const mapped = code === "pa-Guru-IN" ? "pa-IN" : code;
+        if (TRANSCRIBE_LANG.has(mapped)) return mapped;
+    }
+    return null;
+}
+
+/**
+ * Chirp's replacement on AWS: a short voice note streamed to Amazon Transcribe.
+ * Ogg Opus only (WhatsApp voice notes). Anything else returns null so Scribe can take it.
+ */
+async function transcribeSpeechToText(input: {
+    base64: string;
+    mimeType: string;
+    languageCode?: string;
+    languageHint?: string | null;
+}): Promise<SttResult | null> {
+    const mime = input.mimeType.toLowerCase();
+    if (!mime.includes("ogg") && !mime.includes("opus")) return null;
+    const language = transcribeLanguage(input.languageHint, input.languageCode);
+    if (!language) return null;
+    const audio = Buffer.from(input.base64, "base64");
+    if (audio.length < 8) return null;
+    const { TranscribeStreamingClient, StartStreamTranscriptionCommand } = await import("@aws-sdk/client-transcribe-streaming");
+    const client = new TranscribeStreamingClient({ region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "ap-south-1" });
+    async function* chunks() {
+        const size = 16 * 1024;
+        for (let i = 0; i < audio.length; i += size) yield { AudioEvent: { AudioChunk: audio.subarray(i, i + size) } };
+    }
+    const out = await client.send(new StartStreamTranscriptionCommand({
+        LanguageCode: language as "hi-IN",
+        MediaEncoding: "ogg-opus",
+        MediaSampleRateHertz: 16000,
+        AudioStream: chunks(),
+    }));
+    const parts: string[] = [];
+    for await (const event of out.TranscriptResultStream ?? []) {
+        for (const result of event.TranscriptEvent?.Transcript?.Results ?? []) {
+            if (result.IsPartial) continue;
+            const line = result.Alternatives?.[0]?.Transcript?.trim();
+            if (line) parts.push(line);
+        }
+    }
+    const text = parts.join(" ").trim();
+    if (!text) return null;
+    return { text, engine: "transcribe", language };
+}
+
+/** Order the speech engines are tried in (STT_ORDER=chirp,scribe,gemini). Without Google voice: Transcribe, then Scribe. */
+export function sttOrder(env: NodeJS.ProcessEnv = process.env): Array<"chirp" | "scribe" | "gemini" | "transcribe"> {
+    const valid = new Set(["chirp", "scribe", "gemini", "transcribe"]);
     const order = (env.STT_ORDER || "chirp,scribe,gemini").split(",").map((s) => s.trim().toLowerCase()).filter((s) => valid.has(s));
-    const all = (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini">;
-    return voiceGoogleEnabled(env) ? all : ["scribe"];
+    const all = (order.length ? [...new Set(order)] : ["chirp", "scribe", "gemini"]) as Array<"chirp" | "scribe" | "gemini" | "transcribe">;
+    if (voiceGoogleEnabled(env)) return all.filter((e) => e !== "transcribe");
+    const aws = all.filter((e) => e === "transcribe" || e === "scribe");
+    if (!aws.includes("transcribe")) aws.unshift("transcribe");
+    if (!aws.includes("scribe")) aws.push("scribe");
+    return aws;
 }
 
 async function geminiAudioSpeechToText(input: {
@@ -316,11 +372,13 @@ export async function speechToTextDetailed(input: SttInput): Promise<SttResult> 
 
     let unclear = false;
     const google = voiceGoogleEnabled();
-    for (const engine of (input.engines ?? sttOrder()).filter((e) => google || e === "scribe")) {
+    for (const engine of (input.engines ?? sttOrder()).filter((e) => google || e === "scribe" || e === "transcribe")) {
         try {
             const got =
                 engine === "chirp"
                     ? await chirp3SpeechToText({ base64: audio.base64, languageCode: input.languageCode, languageHint: input.languageHint })
+                    : engine === "transcribe"
+                      ? await transcribeSpeechToText({ ...audio, languageCode: input.languageCode, languageHint: input.languageHint })
                     : engine === "scribe"
                       ? await scribeSpeechToText({ ...audio, languageHint: input.languageHint })
                       : await geminiAudioSpeechToText(audio);

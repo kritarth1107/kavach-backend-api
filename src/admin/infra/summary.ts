@@ -8,9 +8,8 @@
  */
 import mongoose, { Schema } from "mongoose";
 import { engineOrNull } from "../engine";
-import { awsBill } from "./aws";
+import { AWS_SCHEDULES, awsBill, ecsServices, type EcsService } from "./aws";
 import * as gcp from "./gcp";
-import { NOT_ON_GCP } from "../../config/cloudProvider";
 import { onGcp, settle } from "./google";
 import {
     ARTIFACT_USD_GB_MONTH, FIRESTORE, LB_RULE_USD_HOUR, PD_BALANCED_USD_GB_MONTH, PD_STANDARD_USD_GB_MONTH, SCHEDULER_USD_JOB_MONTH,
@@ -77,9 +76,116 @@ async function balanceSpend(provider: string, balanceUsd: number | null, days: s
     return out;
 }
 
-/* ── build ────────────────────────────────────────────────────────────────── */
-
 type EngineSpend = { today: number; softCap: number; hardCap: number; rows: Array<{ day: string; role: string; model: string; calls: number; tokensIn: number; tokensOut: number; costInr: number }> };
+
+const AWS_CONSOLE = "https://ap-south-1.console.aws.amazon.com";
+const AWS_APPS: Record<string, { name: string; purpose: string; usedBy: string; host: string }> = {
+    backend: { name: "Family backend API", purpose: "WhatsApp, reminders, orders, dashboard API", usedBy: "Families, Saheli", host: "api.brainbehindkavach.me" },
+    engine: { name: "Saheli AI engine", purpose: "Saheli's brain, memory and task agents", usedBy: "Backend", host: "private, inside the network" },
+    dashboard: { name: "Family dashboard", purpose: "app.kavach.care for caregivers", usedBy: "Caregivers", host: "app.kavach.care" },
+    admin: { name: "Admin console", purpose: "This console", usedBy: "Kavach team", host: "admin.brainbehindkavach.me" },
+    "admin-api": { name: "Admin API", purpose: "The console's locked API", usedBy: "Admin console", host: "private, inside the network" },
+    cron: { name: "Scheduler", purpose: "Wakes the engine and backend on a timetable", usedBy: "Engine, backend", host: "private, inside the network" },
+};
+
+async function reminderTick(): Promise<string | null> {
+    const base = (process.env.BACKEND_URL || "").replace(/\/$/, "");
+    if (!base) return null;
+    try {
+        const res = await fetch(`${base}/api/health/reminders`, { signal: AbortSignal.timeout(4_000) });
+        if (!res.ok) return null;
+        const body = (await res.json()) as { lastTickAt?: string };
+        return body.lastTickAt || null;
+    } catch {
+        return null;
+    }
+}
+
+function ecsState(s: EcsService | undefined): Status {
+    if (!s) return "unknown";
+    if (s.desired > 0 && s.running >= s.desired && s.rollout !== "FAILED") return "ok";
+    if (s.running === 0) return "down";
+    return "warn";
+}
+
+type Add = (s: Omit<InfraService, "totals">) => void;
+
+/** The live AWS stack. Cost Explorer totals attach to the matching row; app tasks themselves are not double-counted. */
+function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<string, Record<string, number>>; ledger: Record<string, number>; spend: { data: EngineSpend | null; error?: string } }) {
+    const byName = new Map((o.ecs || []).map((s) => [s.name, s]));
+    const region = "ap-south-1";
+    const cluster = `${AWS_CONSOLE}/ecs/v2/clusters/kavach/services`;
+    for (const [key, info] of Object.entries(AWS_APPS)) {
+        const s = byName.get(key);
+        add({
+            id: `ecs:${key}`, name: info.name, provider: "AWS", category: "Compute", purpose: info.purpose, usedBy: info.usedBy,
+            status: o.ecs ? ecsState(s) : "unknown",
+            facts: [
+                { label: "Host", value: info.host },
+                { label: "Tasks", value: s ? `${s.running} running of ${s.desired}` : "not read" },
+                ...(s?.taskDef ? [{ label: "Task", value: s.taskDef }] : []),
+                ...(s?.rollout ? [{ label: "Rollout", value: s.rollout.toLowerCase() }] : []),
+            ],
+            source: "none", console: `${cluster}/${key}?region=${region}`, daily: {},
+        });
+    }
+    const taken = new Set<string>();
+    const billFor = (re: RegExp) => {
+        const daily: Record<string, number> = {};
+        for (const [name, days] of Object.entries(o.bill)) {
+            if (!re.test(name) || taken.has(name)) continue;
+            taken.add(name);
+            for (const [d, v] of Object.entries(days)) daily[d] = (daily[d] ?? 0) + v;
+        }
+        return daily;
+    };
+    const bedrockBill = billFor(/bedrock/i);
+    const hasBill = Object.keys(bedrockBill).length > 0;
+    add({
+        id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI",
+        purpose: "Saheli's models and memory search, Mumbai", usedBy: "AI engine",
+        status: o.spend?.data ? (o.spend.data.today >= o.spend.data.softCap ? "warn" : "ok") : "unknown",
+        facts: o.spend?.data
+            ? [{ label: "Today", value: `₹${round2(o.spend.data.today)} of ₹${o.spend.data.softCap} soft cap` }, { label: "Hard cap", value: `₹${o.spend.data.hardCap}/day` }, { label: "Region", value: "ap-south-1" }]
+            : [{ label: "Engine", value: o.spend?.error || "not reachable" }, { label: "Region", value: "ap-south-1" }],
+        source: hasBill ? "billed" : "metered",
+        note: hasBill ? "AWS bill. Per-model detail is on AI models." : "The engine's model ledger (the AWS bill arrives a day later)",
+        console: `${AWS_CONSOLE}/bedrock/home?region=${region}`,
+        daily: hasBill ? bedrockBill : o.ledger,
+    });
+    const stores: Array<{ id: string; name: string; purpose: string; usedBy: string; re: RegExp; console: string }> = [
+        { id: "aws:aurora", name: "Saheli memory database", purpose: "Aurora Postgres: memory, care record, model ledger", usedBy: "AI engine", re: /relational database|aurora/i, console: `${AWS_CONSOLE}/rds/home?region=${region}` },
+        { id: "aws:docdb", name: "Main database", purpose: "DocumentDB: families, people, messages, reminders, orders", usedBy: "Backend, admin API", re: /documentdb/i, console: `${AWS_CONSOLE}/docdb/home?region=${region}` },
+        { id: "aws:alb", name: "Load balancer", purpose: "HTTPS for app.kavach.care, the API and admin", usedBy: "Caregivers, WhatsApp, Kavach team", re: /elastic load balancing/i, console: `${AWS_CONSOLE}/ec2/home?region=${region}#LoadBalancers:` },
+        { id: "aws:fargate", name: "App compute", purpose: "Fargate capacity for the six services above", usedBy: "All Kavach services", re: /elastic container service|fargate/i, console: `${AWS_CONSOLE}/ecs/v2/clusters/kavach?region=${region}` },
+        { id: "aws:ecr", name: "Container images", purpose: "Docker images for every deploy", usedBy: "Deploys", re: /container registry|ecr/i, console: `${AWS_CONSOLE}/ecr/repositories?region=${region}` },
+        { id: "aws:secrets", name: "Secrets Manager", purpose: "API keys and passwords for every service", usedBy: "All services", re: /secrets manager/i, console: `${AWS_CONSOLE}/secretsmanager/listsecrets?region=${region}` },
+        { id: "aws:logs", name: "Logging & monitoring", purpose: "CloudWatch logs, metrics and alarms", usedBy: "All services", re: /cloudwatch/i, console: `${AWS_CONSOLE}/cloudwatch/home?region=${region}` },
+    ];
+    for (const s of stores) {
+        const daily = billFor(s.re);
+        add({ id: s.id, name: s.name, provider: "AWS", category: s.id === "aws:bedrock" ? "AI" : /aurora|docdb/.test(s.id) ? "Database" : /alb/.test(s.id) ? "Network" : /ecr|secrets/.test(s.id) ? "Storage" : "Operations", purpose: s.purpose, usedBy: s.usedBy, status: "ok", facts: [{ label: "Region", value: region }], source: Object.keys(daily).length ? "billed" : "none", console: s.console, daily });
+    }
+    for (const [name, daily] of Object.entries(o.bill)) {
+        if (taken.has(name)) continue;
+        add({ id: `aws:${name}`, name, provider: "AWS", category: "Other", purpose: "Other AWS charge", usedBy: "—", status: "ok", facts: [], source: "billed", daily });
+    }
+}
+
+function awsScheduleRows(ecs: EcsService[] | null, reminderAt: string | null): gcp.Schedule[] {
+    const byName = new Map((ecs || []).map((s) => [s.name, s]));
+    const on = (owner: "backend" | "cron") => {
+        const s = byName.get(owner);
+        if (!ecs) return "unknown";
+        return s && s.running > 0 ? "enabled" : "paused";
+    };
+    return AWS_SCHEDULES.map((j) => ({
+        name: j.name, schedule: j.schedule, timeZone: "Asia/Kolkata", state: on(j.owner),
+        lastAttemptAt: j.name === "Care reminders" ? reminderAt : null, failed: false,
+    }));
+}
+
+/* ── build ────────────────────────────────────────────────────────────────── */
 
 export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     const errors: string[] = [];
@@ -90,7 +196,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     // Off Google Cloud (the AWS copy) the Google collectors are skipped, not failed: one "not on GCP" note instead of errors.
     const gcpOn = onGcp();
     const gSettle: typeof settle = (name, fn, errs) => (gcpOn ? settle(name, fn, errs) : Promise.resolve(null));
-    const [run, jobs, scheds, sql, fsdbs, repos, compute, lb, bucketList, secrets, runSeconds, jobSeconds, traffic, fsReads, fsWrites, fsBytes, billTable, spend, wa, bu, el, aws] = await Promise.all([
+    const [run, jobs, scheds, sql, fsdbs, repos, compute, lb, bucketList, secrets, runSeconds, jobSeconds, traffic, fsReads, fsWrites, fsBytes, billTable, spend, wa, bu, el, aws, ecs, reminderAt] = await Promise.all([
         gSettle("Cloud Run", gcp.runServices, errors),
         gSettle("Cloud Run jobs", gcp.runJobs, errors),
         gSettle("Cloud Scheduler", gcp.schedules, errors),
@@ -113,6 +219,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         browserUseAccount(),
         elevenLabsUsage(),
         awsBill(35, now),
+        gcpOn ? Promise.resolve(null) : ecsServices().catch(() => null),
+        gcpOn ? Promise.resolve(null) : reminderTick(),
     ]);
 
     // The Google bill, when the export is on: net cost (after credits) per row id per day, in INR.
@@ -223,10 +331,10 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         });
     }
 
-    // Vertex AI (Gemini): the engine's own ledger until the bill is connected.
+    // Model ledger. On Google this is Vertex; on AWS the same ledger is Amazon Bedrock (added with the AWS stack).
     const ledger: Record<string, number> = {};
     for (const r of spend.data?.rows || []) ledger[r.day] = (ledger[r.day] ?? 0) + r.costInr;
-    add({
+    if (gcpOn) add({
         id: "vertex", name: "Vertex AI (Gemini)", provider: "GCP", category: "AI", purpose: "Saheli's models, embeddings, voice-note and photo reading", usedBy: "AI engine, backend",
         status: spend.data ? (spend.data.today >= spend.data.softCap ? "warn" : "ok") : "unknown",
         facts: spend.data ? [{ label: "Today", value: `₹${round2(spend.data.today)} of ₹${spend.data.softCap} soft cap` }, { label: "Hard cap", value: `₹${spend.data.hardCap}/day` }] : [{ label: "Engine", value: spend.error || "not reachable" }],
@@ -273,7 +381,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     // Smaller Google services: shown with what we know; cost only from the bill.
     if (secrets != null) add({ id: "secrets", name: "Secret Manager", provider: "GCP", category: "Security", purpose: "API keys and passwords for every service", usedBy: "All services", status: "ok", facts: [{ label: "Secrets", value: String(secrets) }], source: billed("secrets") ? "billed" : "estimate", console: CONSOLE("security/secret-manager"), daily: billed("secrets") || fixedDaily(Math.max(0, secrets - 6) * 0.06) });
     for (const b of bucketList || []) add({ id: `storage:${b.name}`, name: "Cloud Storage", provider: "GCP", category: "Storage", purpose: "Memory exports", usedBy: "AI engine", status: "ok", facts: [{ label: "Bucket", value: `${b.name} · ${b.location} · ${b.storageClass}` }], source: billed("storage") ? "billed" : "none", console: CONSOLE("storage/browser"), daily: billed("storage") || {} });
-    add({ id: "observability", name: "Logging & monitoring", provider: "GCP", category: "Operations", purpose: "Logs, metrics, traces of every service", usedBy: "All services", status: "ok", facts: [], source: billed("observability") ? "billed" : "none", note: billed("observability") ? undefined : "50 GiB of logs a month are free", console: CONSOLE("logs/query"), daily: billed("observability") || {} });
+    if (gcpOn) add({ id: "observability", name: "Logging & monitoring", provider: "GCP", category: "Operations", purpose: "Logs, metrics, traces of every service", usedBy: "All services", status: "ok", facts: [], source: billed("observability") ? "billed" : "none", note: billed("observability") ? undefined : "50 GiB of logs a month are free", console: CONSOLE("logs/query"), daily: billed("observability") || {} });
     if (bill?.speech) add({ id: "speech", name: "Speech-to-Text", provider: "GCP", category: "AI", purpose: "Voice notes to text (fallback)", usedBy: "Backend", status: "ok", facts: [], source: "billed", daily: billed("speech") || {} });
     if (bill?.bigquery) add({ id: "bigquery", name: "BigQuery", provider: "GCP", category: "Data", purpose: "The billing export behind these numbers", usedBy: "Admin API", status: "ok", facts: [], source: "billed", daily: billed("bigquery") || {} });
     if (bill?.other) add({ id: "other-gcp", name: "Other Google services", provider: "GCP", category: "Other", purpose: "Anything else on the Google bill", usedBy: "—", status: "ok", facts: [], source: "billed", daily: billed("other") || {} });
@@ -309,10 +417,11 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     add({ id: "resend", name: "Resend", provider: "Resend", category: "Email", purpose: "Uptime alerts, admin sign-in codes, caregiver emails", usedBy: "Backend, admin API, uptime monitor", status: "ok", facts: [{ label: "Domain", value: "emails.kavach.care" }, { label: "Key", value: "send-only (usage not readable)" }], source: "none", console: "https://resend.com/emails", daily: {} });
     add({ id: "cloudflare", name: "Cloudflare", provider: "Cloudflare", category: "Edge & storage", purpose: "R2: nightly backups and cdn.kavach.care; Worker: uptime monitor", usedBy: "Backups, emails, uptime", status: "ok", facts: [{ label: "R2", value: "backups + public CDN" }, { label: "Worker", value: "uptime check every few minutes, KV state" }], source: "none", note: "Cloudflare billing not connected (within free limits so far)", console: "https://dash.cloudflare.com/", daily: {} });
 
-    // AWS: standby AI (Bedrock, Mumbai), not in use yet.
-    const awsSvc = Object.entries(aws.byService);
-    if (awsSvc.length) for (const [name, daily] of awsSvc) add({ id: `aws:${name}`, name, provider: "AWS", category: /bedrock/i.test(name) ? "AI" : "Other", purpose: /bedrock/i.test(name) ? "Backup AI models" : "AWS service", usedBy: "—", status: "ok", facts: [], source: "billed", daily });
-    else add({ id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI", purpose: "Backup AI if Gemini is down (ap-south-1, Mumbai)", usedBy: "Planned", status: "planned", facts: [{ label: "Credits", value: "$100 (Oct 2026)" }, { label: "Billing", value: aws.connected ? "connected" : "not connected" }], source: aws.connected ? "billed" : "none", daily: {} });
+    if (gcpOn) {
+        const awsSvc = Object.entries(aws.byService);
+        if (awsSvc.length) for (const [name, daily] of awsSvc) add({ id: `aws:${name}`, name, provider: "AWS", category: /bedrock/i.test(name) ? "AI" : "Other", purpose: /bedrock/i.test(name) ? "Amazon Bedrock" : "AWS service", usedBy: "—", status: "ok", facts: [], source: "billed", daily });
+        else add({ id: "aws:bedrock", name: "Amazon Bedrock", provider: "AWS", category: "AI", purpose: "Models on Amazon Bedrock (Mumbai)", usedBy: "AI engine", status: "planned", facts: [{ label: "Billing", value: aws.connected ? "connected" : "not connected" }], source: aws.connected ? "billed" : "none", daily: {} });
+    } else addAwsStack(add, { ecs, bill: aws.byService, ledger, spend });
 
     /* ── roll-ups ── */
 
@@ -324,23 +433,22 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     });
 
     const connections: Connection[] = [
-        {
-            id: "gcp-billing", name: "Google Cloud bill (BigQuery export)", provider: "GCP", connected: !!bill,
+        ...(gcpOn ? [{
+            id: "gcp-billing", name: "Google Cloud bill (BigQuery export)", provider: "GCP" as const, connected: !!bill,
             detail: bill ? `Exact Google costs from ${billTable}` : "Google costs are estimates until the billing export is on",
             howTo: bill ? undefined : [
                 "Google Cloud console → Billing → Billing export → BigQuery export.",
                 `Standard usage cost → Edit settings → project ${gcp.PROJECT}, dataset ${gcp.BILLING_DATASET} (already created) → Save.`,
                 "Numbers switch to the real bill within a few hours.",
             ],
-        },
+        }] : []),
         { id: "meta", name: "WhatsApp bill (Meta)", provider: "Meta", connected: wa.connected, detail: wa.connected ? `Meta pricing analytics, ${wa.currency}` : wa.note || "not connected" },
         { id: "browser-use", name: "Browser Use balance", provider: "Browser Use", connected: bu.connected, detail: bu.connected ? "Balance read every refresh; daily spend = balance drop" : bu.note || "not connected" },
         {
             id: "aws", name: "AWS bill (Cost Explorer)", provider: "AWS", connected: aws.connected, detail: aws.connected ? "Daily AWS cost per service" : aws.note || "not connected",
             howTo: aws.connected ? undefined : [
                 "AWS console → IAM → create user kavach-billing-reader with only ce:GetCostAndUsage (and enable Cost Explorer once).",
-                "Create an access key; store it in Google Secret Manager as aws-billing-access-key-id and aws-billing-secret-access-key.",
-                "Add both to the admin API deploy (deploy-admin-api.yml, --set-secrets) and redeploy.",
+                "Create an access key and set AWS_BILLING_ACCESS_KEY_ID and AWS_BILLING_SECRET_ACCESS_KEY on the admin API.",
             ],
         },
         {
@@ -374,17 +482,16 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         const perDayInr = rows.reduce((t, x) => t + (x.totals.avg7 ?? 0), 0);
         alerts.push({ level: "info", text: `${rows.map((x) => x.name).join(" and ")} keep an instance running all day: ≈₹${Math.round(perDayInr)}/day, ${Math.round((perDayInr / google) * 100)}% of Google spend.`, action: "Check their size (vCPU, memory) against real load; smaller instances cut this directly." });
     }
-    if (!gcpOn) alerts.push({ level: "info", text: `Google Cloud: ${NOT_ON_GCP}. Cloud Run, Firestore, Cloud SQL and the Google bill are not read here.` });
-    else if (!bill) alerts.push({ level: "info", text: "Google costs are estimates: connect the billing export for exact numbers (steps below)." });
+    if (gcpOn && !bill) alerts.push({ level: "info", text: "Google costs are estimates: connect the billing export for exact numbers (steps below)." });
 
     const balances: Snapshot["balances"] = [];
     if (bu.connected && bu.balanceUsd != null) balances.push({ name: "Browser Use credit", provider: "Browser Use", value: `$${round2(bu.balanceUsd)}`, low: bu.balanceUsd < 5 });
-    balances.push({ name: "AWS credits", provider: "AWS", value: "$100", low: false });
+    if (gcpOn) balances.push({ name: "AWS credits", provider: "AWS", value: "$100", low: false });
 
     return {
         at: new Date(now).toISOString(), usdInr: USD_INR, days, totals: totals(all, now),
         daily: days.map((d) => ({ day: d, inr: round2(all[d] ?? 0) })), providers, services,
-        schedules: scheds || [], jobs: jobs || [], connections, alerts, balances, errors,
+        schedules: gcpOn ? (scheds || []) : awsScheduleRows(ecs, reminderAt), jobs: gcpOn ? (jobs || []) : [], connections, alerts, balances, errors,
     };
 }
 

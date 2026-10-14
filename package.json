@@ -73,6 +73,7 @@
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1151.0",
     "@aws-sdk/client-s3": "^3.1118.0",
+    "@aws-sdk/client-transcribe-streaming": "^3.1151.0",
     "@browserbasehq/stagehand": "3.7.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "bcryptjs": "^2.4.3",

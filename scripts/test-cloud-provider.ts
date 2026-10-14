@@ -139,10 +139,10 @@ async function main() {
     ok("default STT order unchanged", sttOrder().join(",") === "chirp,scribe,gemini");
     ok("default TTS order unchanged", ttsOrder("hi-IN").join(",") === "eleven,gemini,google");
     env({ LLM_PROVIDER_BACKEND: "bedrock", NODE_ENV: "development" });
-    ok("bedrock: STT is Scribe only", sttOrder({ ...process.env, STT_ORDER: "chirp,gemini,scribe" }).join(",") === "scribe");
+    ok("bedrock: STT is Transcribe then Scribe", sttOrder({ ...process.env, STT_ORDER: "chirp,gemini,scribe" }).join(",") === "transcribe,scribe");
     ok("bedrock: TTS is ElevenLabs only", ttsOrder("hi-IN").join(",") === "eleven");
     env({ VOICE_GOOGLE: "off" });
-    ok("VOICE_GOOGLE=off: Scribe and ElevenLabs only", sttOrder({ VOICE_GOOGLE: "off" }).join(",") === "scribe" && ttsOrder("ta-IN").join(",") === "eleven");
+    ok("VOICE_GOOGLE=off: Transcribe, Scribe, and ElevenLabs", sttOrder({ VOICE_GOOGLE: "off" }).join(",") === "transcribe,scribe" && ttsOrder("ta-IN").join(",") === "eleven");
     env({ LLM_PROVIDER_BACKEND: "bedrock", NODE_ENV: "development", ELEVENLABS_API_KEY: "test-key", TTS_PREPARE: "off" });
     fetched.length = 0;
     const heard = await speechToTextDetailed({ audioBuffer: Buffer.from("OggS fake"), mimeType: "audio/ogg", engines: ["chirp", "gemini", "scribe"] });

@@ -2,7 +2,8 @@
 name = "kavach-uptime"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
-workers_dev = false   # runs on its cron only; no public URL (status: npx wrangler kv key get last --binding STATE --remote)
+workers_dev = false   # cron only; no public URL
+preview_urls = false
 
 [triggers]
 crons = ["* * * * *", "30 3 * * 1"]   # every minute (reminders; the rest on the 5-minute marks); Monday 09:00 IST weekly check-in
@@ -11,8 +12,10 @@ crons = ["* * * * *", "30 3 * * 1"]   # every minute (reminders; the rest on the
 ALERT_TO = "kritarth@kavach.care"
 ALERT_FROM = "Kavach monitor <alerts@emails.kavach.care>"
 DASHBOARD_URL = "https://app.kavach.care"
-BACKEND_URL = "https://kavach-backend-303943038694.asia-south1.run.app"
-ENGINE_URL = "https://kawach-ai-engine-303943038694.asia-south1.run.app"
+# Live path is AWS (14 Oct 2026). The engine has no public address; with HEALTH_SECRET the
+# worker asks it through the backend. ENGINE_URL is only the fallback if that secret is missing.
+BACKEND_URL = "https://api.brainbehindkavach.me"
+ENGINE_URL = "https://api.brainbehindkavach.me"
 
 # created on first deploy with: npx wrangler kv namespace create STATE  (then paste the id here)
 [[kv_namespaces]]
