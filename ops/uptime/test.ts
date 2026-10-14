@@ -16,15 +16,19 @@ const t = (min: number) => new Date(Date.UTC(2026, 9, 5, 0, min)).toISOString();
 let s: State = { services: {} };
 let r = decide(s, [P("backend", false)], t(0));
 ok("one failure: no alert", r.alerts.length === 0 && r.next.services.backend.fails === 1);
-r = decide(r.next, [P("backend", false)], t(5));
-ok("two failures: down alert", r.alerts.length === 1 && r.alerts[0].kind === "down" && r.alerts[0].since === t(0));
+r = decide(r.next, [P("backend", false)], t(1));
+ok("two failures inside 5 min: deploying, not down", r.alerts.length === 1 && r.alerts[0].kind === "deploying" && r.alerts[0].since === t(0));
+r = decide(r.next, [P("backend", false)], t(2));
+ok("still deploying: no repeat", r.alerts.length === 0);
+r = decide(r.next, [P("backend", false)], t(6));
+ok("over 5 min: down alert", r.alerts.length === 1 && r.alerts[0].kind === "down" && r.alerts[0].since === t(0));
 const downState = JSON.stringify(r.next);
 r = decide(r.next, [P("backend", false)], t(10));
 ok("still down soon after: no repeat", r.alerts.length === 0);
 ok("still down: state unchanged, so nothing is written", JSON.stringify(r.next) === downState);
-r = decide(r.next, [P("backend", false)], t(5 + 6 * 60));
+r = decide(r.next, [P("backend", false)], t(6 + 6 * 60));
 ok("6 h later: no reminder yet", r.alerts.length === 0);
-r = decide(r.next, [P("backend", false)], t(5 + 24 * 60));
+r = decide(r.next, [P("backend", false)], t(6 + 24 * 60));
 ok("a day later: one reminder", r.alerts.length === 1 && r.alerts[0].kind === "still_down");
 r = decide(r.next, [P("backend", true)], t(25 * 60));
 ok("recovered: up alert with duration", r.alerts.length === 1 && r.alerts[0].kind === "up" && r.alerts[0].detail.includes("25 h"), r.alerts);
@@ -43,7 +47,7 @@ ok("durations read well", duration(t(0), t(45)) === "45 min" && duration(t(0), t
 const mail = formatAlerts([{ kind: "down", name: "engine", label: "Saheli's brain", detail: "answered 404", since: t(0) }],
     [P("dashboard", true), { ...P("engine", false), label: "Saheli's brain" }], t(5));
 ok("down subject names the service", mail.subject.includes("down") && mail.subject.includes("Saheli's brain"));
-ok("body lists every check and next step", mail.text.includes("All checks now") && mail.text.includes("verify.sh"));
+ok("body lists every check and the AWS next step", mail.text.includes("All checks now") && mail.text.includes("CloudWatch") && !mail.text.includes("Cloud Run") && !mail.text.includes("verify.sh"));
 const upMail = formatAlerts([{ kind: "up", name: "engine", label: "Saheli's brain", detail: "Back up after 2 h 0 min." }], [P("engine", true)], t(5));
 ok("recovery subject", upMail.subject.includes("recovered"));
 ok("reminder wording says once a day", alertEmail([{ kind: "down", name: "engine", label: "Saheli's brain", since: t(0), detail: "" }], [P("engine", false)], t(5)).html.includes("once a day"));
@@ -64,6 +68,9 @@ ok("html: logo, two-tone heading, saffron pill", html.html.includes(LOGO_URL) &&
     && html.html.includes("#d3541e"));
 ok("html: page text escaped", html.html.includes("x &lt;b&gt;y&lt;/b&gt;") && !html.html.includes("<b>y</b>"));
 ok("html subject short", html.subject === "Kavach is down: Saheli's brain", html.subject);
+ok("down email points at AWS, not Cloud Run", html.html.includes("Open ECS") && html.html.includes("admin.brainbehindkavach.me/system") && html.html.includes("/kavach/backend") && !html.html.includes("Cloud Run") && !html.html.includes("Google Cloud"));
+const deployingHtml = alertEmail([{ kind: "deploying", name: "reminders", label: "Reminders (the backend's 1-minute reminder tick)", since: t(0), detail: "" }], [P("reminders", false)], t(2));
+ok("a short failure is deploying", deployingHtml.subject === "Kavach is deploying: Reminders" && deployingHtml.html.includes(">deploying<") && deployingHtml.html.includes("Deploying") && deployingHtml.html.includes("over 5 min") && !deployingHtml.html.includes("Cloud Run"));
 ok("recovered once when together", recoveredLine([{ kind: "up", name: "a", label: "A", detail: "Back up after 2 h 0 min." },
     { kind: "up", name: "b", label: "B", detail: "Back up after 2 h 0 min." }]) === "Back up after 2 h 0 min");
 ok("recovered per part when different", recoveredLine([{ kind: "up", name: "a", label: "A (x)", detail: "Back up after 5 min." },
@@ -90,7 +97,7 @@ ok("the 5-minute mark checks everything", targetsFor(env, t(5)).map((x) => x.nam
     ok("a reminders-only round keeps the others' state", kept.next.services.backend.fails === 1 && kept.next.services.reminders.fails === 0, kept.next);
     let rs = decide({ services: {} }, [P("reminders", false)], t(1));
     rs = decide(rs.next, [P("reminders", false)], t(2));
-    ok("reminders stale two minutes running: one down alert", rs.alerts.length === 1 && rs.alerts[0].name === "reminders" && rs.alerts[0].kind === "down");
+    ok("reminders stale two minutes: deploying, not down", rs.alerts.length === 1 && rs.alerts[0].name === "reminders" && rs.alerts[0].kind === "deploying");
 }
 const sent: Array<{ url: string; body?: string }> = [];
 let mode: "up" | "down" = "down";
@@ -107,9 +114,9 @@ const fakeFetch = (async (url: string | URL | Request, init?: RequestInit) => {
 
 void (async () => {
     const p = await probe(targets(env)[2], fakeFetch);
-    ok("suspension spotted in the answer", !p.ok && p.error === "Google project suspended", p);
-    const gone = await probe(targets(env)[2], (async () => new Response("<html><title>404 Page not found</title></html>", { status: 404 })) as typeof fetch);
-    ok("Google's empty 404 explained", !gone.ok && !!gone.error?.includes("Cloud Run has no service"), gone);
+    ok("a 404 is a failed check and does not blame Cloud Run", !p.ok && !String(p.error || "").includes("Cloud Run") && !String(p.error || "").includes("Google"), p);
+    const gone = await probe(targets(env)[2], (async () => new Response("no healthy tasks", { status: 503 })) as typeof fetch);
+    ok("503 names ECS, not Cloud Run", !gone.ok && !!gone.error?.includes("no healthy ECS task") && !gone.error?.includes("Cloud Run"), gone);
     const degraded = await probe(targets(env)[1], (async () => new Response('{"status":"degraded"}', { status: 200 })) as typeof fetch);
     ok("backend up but database down = fail", !degraded.ok);
     const timeout = await probe({ name: "x", label: "x", url: "https://x" }, (async () => { throw new Error("The operation timed out"); }) as typeof fetch);
@@ -117,7 +124,7 @@ void (async () => {
 
     await runChecks(env, t(0), fakeFetch);
     ok("first failure: no email", !sent.some((x) => x.url.startsWith("https://api.resend.com")));
-    await runChecks(env, t(5), fakeFetch);
+    await runChecks(env, t(6), fakeFetch);
     const email = sent.find((x) => x.url.startsWith("https://api.resend.com"));
     const body = JSON.parse(email?.body || "{}");
     ok("second failure: one email to both people", !!email && body.to.length === 2 && body.subject.includes("down"), body);

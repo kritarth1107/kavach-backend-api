@@ -11,6 +11,8 @@
 
 export const FAILS_TO_ALERT = 2;
 export const REMIND_EVERY_H = 24;
+/** A short failure is a deploy, not an outage. Down only after this long. */
+export const DEPLOY_GRACE_MS = 5 * 60_000;
 
 export type Target = { name: string; label: string; url: string; expect?: (status: number, body: string) => boolean };
 
@@ -22,11 +24,12 @@ export type ServiceState = {
     since?: string; // when the current trouble started
     countFrom?: string; // set when a new week starts mid-outage: downtime before it belongs to last week
     lastAlertAt?: string;
+    deploying?: boolean; // a short failure already emailed as a deploy, not as down
     downMs: number; // time spent failing this week, closed periods only
 };
 export type State = { services: Record<string, ServiceState>; weekStart?: string };
 
-export type Alert = { kind: "down" | "still_down" | "up"; name: string; label: string; since?: string; detail: string };
+export type Alert = { kind: "down" | "still_down" | "up" | "deploying"; name: string; label: string; since?: string; detail: string };
 
 const hours = (a: string, b: string) => (new Date(b).getTime() - new Date(a).getTime()) / 3_600_000;
 const ms = (a: string, b: string) => Math.max(0, new Date(b).getTime() - new Date(a).getTime());
@@ -37,6 +40,7 @@ export function clean(s: Partial<ServiceState> & Record<string, unknown>): Servi
     if (s.since) out.since = s.since;
     if (s.countFrom) out.countFrom = s.countFrom;
     if (s.lastAlertAt) out.lastAlertAt = s.lastAlertAt;
+    if (s.deploying) out.deploying = true;
     return out;
 }
 
@@ -76,22 +80,30 @@ export function decide(prev: State, probes: Probe[], now: string): { next: State
             if (s.down) {
                 alerts.push({ kind: "up", name: p.name, label: p.label, since: s.since,
                               detail: `Back up after ${s.since ? duration(s.since, now) : "a while"}.` });
+            } else if (s.deploying) {
+                alerts.push({ kind: "up", name: p.name, label: p.label, since: s.since,
+                              detail: `Deploy finished after ${s.since ? duration(s.since, now) : "a while"}.` });
             }
             services[p.name] = { fails: 0, down: false, downMs: downtimeMs(s, now) };
             continue;
         }
         s.fails = Math.min(s.fails + 1, FAILS_TO_ALERT);
-        if (!s.down && s.fails >= FAILS_TO_ALERT) {
+        if (!s.since) s.since = now;
+        const pastGrace = ms(s.since, now) > DEPLOY_GRACE_MS;
+        if (!s.down && pastGrace && s.fails >= FAILS_TO_ALERT) {
             s.down = true;
-            s.since = s.since ?? now;
+            delete s.deploying;
             s.lastAlertAt = now;
             alerts.push({ kind: "down", name: p.name, label: p.label, since: s.since, detail: describeProbe(p) });
+        } else if (!s.down && !s.deploying && s.fails >= FAILS_TO_ALERT) {
+            s.deploying = true;
+            alerts.push({ kind: "deploying", name: p.name, label: p.label, since: s.since,
+                          detail: `A deploy may be in progress (${duration(s.since, now)}). Called down only if it lasts over 5 min: ${describeProbe(p)}` });
         } else if (s.down && s.lastAlertAt && hours(s.lastAlertAt, now) >= REMIND_EVERY_H) {
             s.lastAlertAt = now;
             alerts.push({ kind: "still_down", name: p.name, label: p.label, since: s.since,
                           detail: `Still down after ${s.since ? duration(s.since, now) : "a while"}: ${describeProbe(p)}` });
         }
-        if (!s.since) s.since = now; // when the trouble started, even before it counts as down
         services[p.name] = s;
     }
     // services not checked this round (the every-5-minute ones on a reminders-only minute) keep their state
@@ -101,23 +113,28 @@ export function decide(prev: State, probes: Probe[], now: string): { next: State
 
 /** Email subject and body for a batch of alerts (one email per round, never one per service). */
 export function formatAlerts(alerts: Alert[], probes: Probe[], now: string): { subject: string; text: string } {
-    const down = alerts.filter((a) => a.kind !== "up");
+    const down = alerts.filter((a) => a.kind === "down" || a.kind === "still_down");
+    const deploying = alerts.filter((a) => a.kind === "deploying");
     const up = alerts.filter((a) => a.kind === "up");
     const subject = down.length
         ? `🔴 Kavach down: ${down.map((a) => a.label).join(", ")}`
-        : `🟢 Kavach recovered: ${up.map((a) => a.label).join(", ")}`;
+        : deploying.length
+          ? `Kavach is deploying: ${deploying.map((a) => a.label).join(", ")}`
+          : `🟢 Kavach recovered: ${up.map((a) => a.label).join(", ")}`;
     const lines = [
-        ...alerts.map((a) => `${a.kind === "up" ? "RECOVERED" : a.kind === "down" ? "DOWN" : "STILL DOWN"} — ${a.label}: ${a.detail}`),
+        ...alerts.map((a) => `${a.kind === "up" ? "RECOVERED" : a.kind === "down" ? "DOWN" : a.kind === "deploying" ? "DEPLOYING" : "STILL DOWN"} — ${a.label}: ${a.detail}`),
         "",
         "All checks now:",
         ...probes.map((p) => `  ${p.ok ? "ok  " : "FAIL"}  ${p.label}: ${describeProbe(p)}`),
         "",
         down.length
-            ? "What it can mean: a bad deploy, Google Cloud suspending or blocking the project, the database down, or Cloud Run out of " +
-              "quota. Families may not be getting reminders or replies. Run golive/verify.sh, or check the Cloud Run logs."
-            : "Families get replies and reminders again. Reminders missed while it was down are sent late or noted for caregivers.",
+            ? "What it can mean: a bad ECS deploy, the service not becoming healthy, the database down, or the load balancer returning errors. " +
+              "Families may not be getting reminders or replies. Open the ECS service (cluster kavach), CloudWatch logs /kavach/backend, or the admin System page."
+            : deploying.length
+              ? "An ECS deploy can fail a check for a few minutes. This is not down unless it lasts over 5 min. Logs: CloudWatch /kavach/backend. Admin: System health."
+              : "Families get replies and reminders again. Reminders missed while it was down are sent late or noted for caregivers.",
         "",
-        `Checked ${now} by the Kavach monitor on Cloudflare (outside Google).`,
+        `Checked ${now} by the Kavach monitor on Cloudflare (outside AWS).`,
     ];
     return { subject, text: lines.join("\n") };
 }

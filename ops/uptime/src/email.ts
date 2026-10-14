@@ -6,6 +6,9 @@
 import { clean, describeProbe, downtimeMs, duration, formatMs, uptimePct, type Alert, type Probe, type State } from "./check";
 
 export const LOGO_URL = "https://cdn.kavach.care/brand/kavach-careos-logo.png";
+const ECS_URL = "https://ap-south-1.console.aws.amazon.com/ecs/v2/clusters/kavach/services?region=ap-south-1";
+const LOGS_URL = "https://ap-south-1.console.aws.amazon.com/cloudwatch/home?region=ap-south-1#logsV2:log-groups/log-group/$252Fkavach$252Fbackend";
+const SYSTEM_URL = "https://admin.brainbehindkavach.me/system";
 const C = {
     page: "#f3f4f5", frame: "#ffffff", card: "#f3f4f5", line: "#e4e6e9", ink: "#142a22", ink2: "#66706b", ink3: "#a3aaa6",
     accent: "#d3541e", accentSoft: "#fbe4d6", accentInk: "#9c3a10", forest: "#143429", okSoft: "#e3efe9", okInk: "#1f5a43",
@@ -69,8 +72,9 @@ ${inner}
 function serviceRows(probes: Probe[], alerts: Alert[]): string {
     return probes.map((p) => {
         const a = alerts.find((x) => x.name === p.name);
-        const tone = p.ok ? "ok" : "down";
-        const label = p.ok ? (a?.kind === "up" ? "Back up" : "Working") : a?.kind === "still_down" ? "Still down" : "Down";
+        const deploying = a?.kind === "deploying";
+        const tone = p.ok ? "ok" : deploying ? "light" : "down";
+        const label = p.ok ? (a?.kind === "up" ? "Back up" : "Working") : deploying ? "Deploying" : a?.kind === "still_down" ? "Still down" : "Down";
         const detail = p.ok ? `Answering · ${p.ms} ms` : describeProbe(p).replace(/^./, (c) => c.toUpperCase());
         return `<tr><td style="padding:0 0 8px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.card};border-radius:16px;">
 <tr><td style="padding:14px 16px;font:500 14px/20px ${FONT};color:${C.ink};">${esc(p.label)}
@@ -89,35 +93,51 @@ export function recoveredLine(up: Alert[]): string {
 
 /** Down / still down / recovered: one email per round, every service listed. */
 export function alertEmail(alerts: Alert[], probes: Probe[], now: string): { subject: string; html: string } {
-    const down = alerts.filter((a) => a.kind !== "up");
+    const down = alerts.filter((a) => a.kind === "down" || a.kind === "still_down");
+    const deploying = alerts.filter((a) => a.kind === "deploying");
     const up = alerts.filter((a) => a.kind === "up");
     const isDown = down.length > 0;
-    const since = down.map((a) => a.since).filter(Boolean).sort()[0] as string | undefined;
+    const isDeploying = !isDown && deploying.length > 0;
+    const since = (isDown ? down : deploying).map((a) => a.since).filter(Boolean).sort()[0] as string | undefined;
     const subject = isDown
         ? `Kavach is down: ${down.map((a) => a.label.split(" (")[0]).join(", ")}`
-        : `Kavach is back up: ${up.map((a) => a.label.split(" (")[0]).join(", ")}`;
+        : isDeploying
+          ? `Kavach is deploying: ${deploying.map((a) => a.label.split(" (")[0]).join(", ")}`
+          : `Kavach is back up: ${up.map((a) => a.label.split(" (")[0]).join(", ")}`;
     const banner = isDown
         ? `<td style="background:${C.accentSoft};border-radius:18px;padding:16px 18px;font:500 14px/21px ${FONT};color:${C.accentInk};">
 ${esc(down.length === probes.length ? `Nothing is answering` : `${down.length} of ${probes.length} ${down.length === 1 ? "part is" : "parts are"} not answering`)}${since ? esc(` since ${ist(since)} (${duration(since, now)})`) : ""}.
 <div style="font:400 12.5px/19px ${FONT};margin-top:4px;">Families may not be getting Saheli's replies or medicine reminders right now.</div></td>`
-        : `<td style="background:${C.forest};border-radius:18px;padding:16px 18px;font:500 14px/21px ${FONT};color:#ffffff;">
+        : isDeploying
+          ? `<td style="background:${C.card};border-radius:18px;padding:16px 18px;font:500 14px/21px ${FONT};color:${C.ink};">
+${esc(`A deploy looks in progress`)}${since ? esc(` since ${ist(since)} (${duration(since, now)})`) : ""}.
+<div style="font:400 12.5px/19px ${FONT};color:${C.ink2};margin-top:4px;">This is not down unless it lasts over 5 min.</div></td>`
+          : `<td style="background:${C.forest};border-radius:18px;padding:16px 18px;font:500 14px/21px ${FONT};color:#ffffff;">
 ${esc(recoveredLine(up))}.
 <div style="font:400 12.5px/19px ${FONT};color:#b9cfc5;margin-top:4px;">Reminders missed while it was down are sent late, or noted for caregivers on the dashboard.</div></td>`;
+    const awsButtons = `${button("Open ECS", ECS_URL)}${button("Open logs", LOGS_URL, false)}${button("Open System health", SYSTEM_URL, false)}`;
     const meaning = isDown
         ? `<tr><td style="padding:10px 28px 4px 28px;">${marker("What it can mean")}
-<div style="font:400 13px/21px ${FONT};color:${C.ink2};margin-top:8px;">A bad deploy, Google Cloud suspending or blocking the project, the database being down, or Cloud Run out of quota.
-Run <span style="font-family:monospace;color:${C.ink};">golive/verify.sh</span>, or open the Cloud Run logs.</div></td></tr>
-<tr><td style="padding:14px 28px 10px 28px;">${button("Open Cloud Run", "https://console.cloud.google.com/run?project=kavach-care")}${button("Open the dashboard", "https://app.kavach.care", false)}</td></tr>`
-        : `<tr><td style="padding:14px 28px 10px 28px;">${button("Open the dashboard", "https://app.kavach.care")}</td></tr>`;
-    const inner = `<tr><td style="padding:18px 28px 4px 28px;">${heading("Kavach is", isDown ? "down" : "back up")}
+<div style="font:400 13px/21px ${FONT};color:${C.ink2};margin-top:8px;">A bad deploy, the ECS service not becoming healthy, the database being down, or the load balancer returning errors.
+Logs are in CloudWatch <span style="font-family:monospace;color:${C.ink};">/kavach/backend</span>.</div></td></tr>
+<tr><td style="padding:14px 28px 10px 28px;">${awsButtons}${button("Open the dashboard", "https://app.kavach.care", false)}</td></tr>`
+        : isDeploying
+          ? `<tr><td style="padding:10px 28px 4px 28px;">${marker("What it can mean")}
+<div style="font:400 13px/21px ${FONT};color:${C.ink2};margin-top:8px;">An ECS roll on cluster kavach can fail a check for a few minutes while the new task starts. If it is still failing after 5 minutes, this becomes a down alert.
+Logs are in CloudWatch <span style="font-family:monospace;color:${C.ink};">/kavach/backend</span>.</div></td></tr>
+<tr><td style="padding:14px 28px 10px 28px;">${awsButtons}</td></tr>`
+          : `<tr><td style="padding:14px 28px 10px 28px;">${button("Open the dashboard", "https://app.kavach.care")}</td></tr>`;
+    const inner = `<tr><td style="padding:18px 28px 4px 28px;">${heading("Kavach is", isDown ? "down" : isDeploying ? "deploying" : "back up")}
 <div style="font:400 12px/18px ${FONT};color:${C.ink3};margin-top:6px;">${esc(ist(now, true))}</div></td></tr>
 <tr><td style="padding:14px 28px 6px 28px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${banner}</tr></table></td></tr>
 <tr><td style="padding:16px 28px 6px 28px;">${marker("Every check now", `every 5 min`)}</td></tr>
 <tr><td style="padding:4px 28px 0 28px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${serviceRows(probes, alerts)}</table></td></tr>
 ${meaning}`;
     const footer = isDown
-        ? "Checked by the Kavach monitor on Cloudflare, outside Google, so it still reaches you when Google is down. You'll get a reminder once a day while it stays down, and an email when it recovers."
-        : "Checked by the Kavach monitor on Cloudflare, outside Google.";
+        ? "Checked by the Kavach monitor on Cloudflare, outside AWS, so it still reaches you when AWS is down. You'll get a reminder once a day while it stays down, and an email when it recovers."
+        : isDeploying
+          ? "Checked by the Kavach monitor on Cloudflare, outside AWS. You'll get a down email only if this lasts over 5 min, and an email when the check passes again."
+          : "Checked by the Kavach monitor on Cloudflare, outside AWS.";
     return { subject, html: shell(isDown ? `${down.length} part(s) of Kavach are not answering.` : "Everything is answering again.", inner, esc(footer)) };
 }
 

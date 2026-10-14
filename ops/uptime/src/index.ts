@@ -1,5 +1,5 @@
 /**
- * Kavach uptime alarm: a Cloudflare Worker (outside Google, so a Google suspension can't silence it).
+ * Kavach uptime alarm: a Cloudflare Worker (outside AWS, so an AWS outage can't silence it).
  * Every minute it checks that reminders are running (the backend's /api/health/reminders: 503 when the reminder tick has
  * not run for 3 minutes; trust plan B1.7); every 5 minutes it also checks the dashboard, the backend (and its database)
  * and Saheli's engine. Two failures in a row email the founder
@@ -77,13 +77,11 @@ export async function probe(t: Target, fetchFn: typeof fetch = fetch, timeoutMs 
         const res = await fetchFn(t.url, { headers: { "user-agent": "kavach-uptime/1" }, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
         const body = (await res.text()).slice(0, 4000);
         const ok = t.expect ? t.expect(res.status, body) : res.status >= 200 && res.status < 400;
-        const hint = /CONSUMER_SUSPENDED|has been suspended/i.test(body)
-            ? "Google project suspended"
-            : res.status === 404 && /<title>404 Page not found<\/title>/i.test(body)
-              ? "Cloud Run has no service here: project suspended or service deleted"
-              : res.status >= 520 && res.status <= 530
-                ? "Cloudflare can't reach the server behind it"
-                : undefined;
+        const hint = res.status === 503
+            ? "no healthy ECS task (a deploy, or the service is down)"
+            : res.status >= 520 && res.status <= 530
+              ? "Cloudflare can't reach the server behind it"
+              : undefined;
         return { name: t.name, label: t.label, ok, status: res.status, ms: Date.now() - started, error: ok ? undefined : hint };
     } catch (err) {
         return { name: t.name, label: t.label, ok: false, ms: Date.now() - started, error: err instanceof Error ? err.message.slice(0, 120) : "failed" };
