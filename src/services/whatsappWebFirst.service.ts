@@ -14,7 +14,7 @@
  * (On 12-13 Oct 2026 a hi from a new number made an account and Saheli ran a setup chat on WhatsApp; that is retired.)
  */
 import Family from "../models/family.model";
-import { PhoneVerification } from "../models/onboarding.model";
+import { OnboardingDraft, PhoneVerification } from "../models/onboarding.model";
 import User from "../models/users.model";
 import { FamilyMemberStatus, FamilyRole } from "../types/family.types";
 import type { DenyReason } from "./invite.service";
@@ -38,9 +38,25 @@ async function links() {
     return { signIn: `${base}/auth/login`, onboarding: `${base}/onboarding` };
 }
 
-/** The one line an account that hasn't finished the web setup gets on WhatsApp. */
-export async function finishOnWebLine(): Promise<string> {
-    return `Namaste 🙏 Finish setting up at ${(await links()).onboarding}, then say hi here.`;
+/**
+ * The one line an account that hasn't finished the web setup gets on WhatsApp. Someone whose answers are already in (a
+ * draft with the people they care for, or their own setup, saved) hears that only the last step is left, so a "Done"
+ * typed here is not met with the same line again and again (live 15 Oct 2026: a caregiver answered every question,
+ * never reached Finish, and got this line five times).
+ */
+export async function finishOnWebLine(userId?: string): Promise<string> {
+    const { onboarding } = await links();
+    if (userId) {
+        const draft = await OnboardingDraft.findOne({ userId, completedAt: null })
+            .select("answers")
+            .lean<{ answers?: { persons?: unknown[]; careFor?: string; you?: { name?: string } } }>()
+            .catch(() => null);
+        const a = draft?.answers;
+        if (a && (Array.isArray(a.persons) && a.persons.length > 0 || a.careFor === "self")) {
+            return `Namaste 🙏 Your answers are all saved, you're one step away. Open ${onboarding}, check the summary and tap Finish, then say hi here.`;
+        }
+    }
+    return `Namaste 🙏 Finish setting up at ${onboarding}, then say hi here.`;
 }
 
 /** completeOnboarding runs only in these states; any other (done, or no status on older accounts) is "already set up". */
@@ -88,7 +104,7 @@ export async function answerUnknownNumber(phone: string, opts: { profileName?: s
     // their account exists (made on the web) but has no family to answer from yet: the web setup gives it one. An
     // account a family invitation made (never set up by them) just gets the usual line.
     const owner = await findPhoneOwner(cc, number);
-    if (owner) return unfinished(owner) ? { kind: "setup", reply: await finishOnWebLine() } : null;
+    if (owner) return unfinished(owner) ? { kind: "setup", reply: await finishOnWebLine((owner as { userId?: string }).userId) } : null;
     if (await findPhoneHolder(cc, number)) return null;
 
     // a number proven in a web setup that isn't finished yet: their own (finish it there), or someone they are adding
@@ -97,7 +113,7 @@ export async function answerUnknownNumber(phone: string, opts: { profileName?: s
         .lean<{ userId: string; target: string }>();
     if (proven && unfinished(await User.findOne({ userId: proven.userId }).select("onboarding").lean<{ onboarding?: { status?: string } }>())) {
         return proven.target === "self"
-            ? { kind: "setup", reply: await finishOnWebLine() }
+            ? { kind: "setup", reply: await finishOnWebLine(proven.userId) }
             : { kind: "family_setup", reply: "Namaste 🙏 Your family is still setting me up on Kavach. I'll be right here as soon as they finish." };
     }
 

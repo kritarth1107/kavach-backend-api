@@ -366,7 +366,7 @@ export async function handleWhatsAppInbound(body: WhatsAppInboundBody): Promise<
             console.warn("[web-first] setup check failed:", err instanceof Error ? err.message : err);
             return false;
         });
-        if (unfinished) return outbound(dPhone, await W.finishOnWebLine());
+        if (unfinished) return outbound(dPhone, await W.finishOnWebLine(dWho.userId));
     }
     let out = await handleWhatsAppInboundCore(body);
     // Voice notes follow the person's choice: by default a voice note gets a voice note back (with the text first),

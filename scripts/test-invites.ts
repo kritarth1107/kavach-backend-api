@@ -550,6 +550,14 @@ async function withDb(uri: string) {
         const skipped = await whatsapp("+919000000301", "hello");
         assert.equal(skipped.content, finish);
         assert.equal(skipped.brain, false);
+        // every answer saved but Finish never tapped (live 15 Oct 2026): they hear that only the last step is left
+        const { OnboardingDraft } = await import("../src/models/onboarding.model");
+        await OnboardingDraft.create({ userId: kiranId, familyId: "draft-fam", step: "p_whatsapp:0",
+            answers: { careFor: "mother", you: { name: "Kiran" }, persons: [{ relation: "Mother", name: "Asha" }] } });
+        const almost = await whatsapp("+919000000301", "Done");
+        assert.match(almost.content, /one step away.*https:\/\/app\.example\.com\/onboarding.*Finish/);
+        assert.equal(almost.brain, false);
+        await OnboardingDraft.deleteMany({ userId: kiranId });
         assert.equal(await familyCount(), families, "no family was made");
         // the web onboarding's own WhatsApp check ("KAVACH 123456" sent from their phone) still goes through
         const v = await startVerification(kiranId, { target: "self", phone: "+919000000301", method: "message" });
