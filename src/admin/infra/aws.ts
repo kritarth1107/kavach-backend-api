@@ -85,6 +85,7 @@ export type Slo = {
     replyP90Ms: number | null;
     replyHours: ReplyHour[];
     digest: string | null;
+    singaporeCalls: number | null;
     deliveryRate: number | null;
     alertsOnTime: boolean | null;
 };
@@ -96,6 +97,7 @@ export type DayDigest = {
     replyP50Ms: number | null;
     replyP90Ms: number | null;
     turns: number;
+    singapore: number;
 };
 
 function lastValue(values?: number[]): number | null {
@@ -122,7 +124,28 @@ const seconds = (n: number | string): number => {
 
 export function digestLine(d: DayDigest): string {
     const s = (n: number | null) => (n == null ? "no samples" : n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n)} ms`);
-    return `Gemini last 24 hours (a small blip stays on this line, it is not mailed): ${d.calls} calls, ${d.throttles} throttles, worst brain hour p90 ${s(d.brainP90Ms)}. Reply time last hour: median ${s(d.replyP50Ms)}, p90 ${s(d.replyP90Ms)} over ${d.turns} turns.`;
+    return `Gemini last 24 hours (a small blip stays on this line, it is not mailed): ${d.calls} calls, ${d.throttles} throttles, worst brain hour p90 ${s(d.brainP90Ms)}. Reply time last hour: median ${s(d.replyP50Ms)}, p90 ${s(d.replyP90Ms)} over ${d.turns} turns. ${d.singapore} calls went to Singapore today.`;
+}
+
+/** IST midnight as a UTC epoch ms. CloudWatch hours sit on UTC, so a count from here misses at most the first half hour. */
+function istMidnight(now: number): number {
+    const shift = 330 * 60_000;
+    const ist = new Date(now + shift);
+    return Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()) - shift;
+}
+
+function sumSince(rows: Map<string, MetricRow>, prefix: string, fromMs: number): number {
+    const labeled = [...rows.entries()].filter(([id]) => id.startsWith(`${prefix} `));
+    const use = labeled.length ? labeled : [...rows.entries()].filter(([id]) => id === prefix);
+    let n = 0;
+    for (const [, row] of use) {
+        const times = row.Timestamps || [];
+        const vals = row.Values || [];
+        for (let i = 0; i < times.length && i < vals.length; i++) {
+            if (seconds(times[i]) >= fromMs && Number.isFinite(vals[i])) n += vals[i];
+        }
+    }
+    return Math.round(n);
 }
 
 type MetricRow = { Id?: string; Values?: number[]; Timestamps?: Array<number | string> };
@@ -150,6 +173,7 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
             stat("gThrottles", "Kavach/Gemini", "Throttles", 3600, "Sum"),
             stat("gBrain", "Kavach/Gemini", "LatencyMs", 3600, "p90", "brain"),
             stat("gHard", "Kavach/Gemini", "LatencyMs", 3600, "p90", "brain_hard"),
+            { Id: "sgp", Expression: "SEARCH('{Kavach/Gemini,Role,Region} MetricName=\"Calls\" Region=\"asia-southeast1\"', 'Sum', 3600)", ReturnData: true },
             { Id: "healthy", Expression: "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HealthyHostCount\"', 'Average', 300)", ReturnData: true },
         ],
     });
@@ -188,6 +212,7 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
         const replyHours = [...byAt.entries()].sort((a, b) => a[0] - b[0]).map(([, hour]) => hour);
         const latest = [...replyHours].reverse().find((hour) => hour.turns > 0) ?? replyHours[replyHours.length - 1];
         const brainP90 = worst([...(values("gBrain") || []), ...(values("gHard") || [])]);
+        const singaporeCalls = sumSince(rows, "sgp", istMidnight(now));
         const digest = digestLine({
             calls: sumValues(values("gCalls")),
             throttles: sumValues(values("gThrottles")),
@@ -195,6 +220,7 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
             replyP50Ms: latest?.p50Ms ?? null,
             replyP90Ms: latest?.p90Ms ?? null,
             turns: latest?.turns ?? 0,
+            singapore: singaporeCalls,
         });
         return {
             uptime: healthy.length ? up : null,
@@ -202,6 +228,7 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
             replyP90Ms: latest?.p90Ms ?? null,
             replyHours,
             digest,
+            singaporeCalls,
             deliveryRate: sent + failed > 0 ? sent / (sent + failed) : null,
             alertsOnTime: ticks == null ? null : ticks >= 3,
         };
