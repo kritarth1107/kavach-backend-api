@@ -67,6 +67,15 @@ async function pure() {
         assert.deepEqual(await T.pickTemplate("alert_noreply", "en"), { name: "kavach_alert_wellbeing_en", language: "en" });
         assert.deepEqual(await T.pickTemplate("alert_noreply", "hi"), { name: "kavach_alert_noreply_hi", language: "hi" });
     });
+    await ok("a re-filed update copy is used in the reader's language on the next catalog (15 Oct)", async () => {
+        // Hindi was MARKETING, so a Hindi reader got the English Utility copy.
+        T.setTemplateCatalogForTest(["kavach_saheli_update_en|en", "kavach_saheli_update_mr|mr"]);
+        assert.deepEqual(await T.pickTemplate("update", "hi"), { name: "kavach_saheli_update_en", language: "en" });
+        // Meta re-filed the Hindi copy as APPROVED UTILITY. The next catalog read picks it, not English.
+        T.setTemplateCatalogForTest(["kavach_saheli_update_hi|hi", "kavach_saheli_update_en|en", "kavach_saheli_update_mr|mr"]);
+        assert.deepEqual(await T.pickTemplate("update", "hi"), { name: "kavach_saheli_update_hi", language: "hi" });
+        assert.deepEqual(await T.pickTemplate("update", "bn"), { name: "kavach_saheli_update_hi", language: "hi" });
+    });
     await ok("every caregiver alert kind that may go on WhatsApp has its own template (15 Oct)", () => {
         assert.equal(T.alertTemplateFor("health_red_flag"), "alert_health");
         assert.equal(T.alertTemplateFor("symptom"), "alert_health");

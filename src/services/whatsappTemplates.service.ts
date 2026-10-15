@@ -118,7 +118,8 @@ async function fetchCatalog(): Promise<Set<string>> {
     return ok;
 }
 
-/** Approved Utility templates ("name|lang"), cached for 30 minutes; the last good list is kept when Meta is down. */
+/** Approved Utility templates ("name|lang"), cached for 30 minutes in this process only (a deploy starts empty).
+ * A copy Meta re-files as UTILITY is picked on the next read, at most 30 minutes later. The last good list is kept when Meta is down. */
 export async function approvedTemplates(force = false): Promise<Set<string>> {
     if (!force && catalog && Date.now() - catalog.at < CATALOG_MS) return catalog.ok;
     loading ??= fetchCatalog()
