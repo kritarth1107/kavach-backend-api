@@ -625,6 +625,15 @@ async function processOneMetaInbound(
         });
         if (given.length && String(inbound.interactiveId ?? "") === "open:waiting") {
             // the opener's "Show message": what waited was the answer; no turn needed
+            const session = await import("../models/whatsappSession.model").then((m) => m.default);
+            const { normalizeChannelIdentifier } = await import("../services/identityResolver.service");
+            const { ChannelType } = await import("../types/careRecord.types");
+            const row = await session.findOne({ phone: normalizeChannelIdentifier(ChannelType.WHATSAPP, inbound.from) })
+                .lean<{ familyId?: string; userId?: string }>().catch(() => null);
+            if (row?.familyId && row.userId) {
+                const { pullNudgeDue } = await import("../services/nudgeDue.service");
+                await pullNudgeDue(row.familyId, row.userId);
+            }
             recordWhatsAppWebhookEvent({ body: rawBody, messagesParsed: parsedCount, processed: 1, replySent: true, replyPreview: `[${given.length} waiting message(s)]`, replyTo: inbound.from });
             return;
         }

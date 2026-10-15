@@ -509,7 +509,11 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             message: text,
             mayMarkOthers: caregiver,
         }).catch(() => null);
-        if (closed) return outbound(phone, closed);
+        if (closed) {
+            const { pullNudgeDue } = await import("./nudgeDue.service");
+            await pullNudgeDue(identity.familyId, identity.userId);
+            return outbound(phone, closed);
+        }
     }
 
     // Phrase routes stay the decider for real numbers. The agent loop runs only for
