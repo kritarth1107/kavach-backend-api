@@ -207,6 +207,25 @@ export async function getScheduleDayStatuses(
     };
 }
 
+/** Remove a day's mark from these rows (the person or a managing caregiver only). Returns how many marks were removed. */
+export async function clearScheduleItemCompletions(
+    familyId: string,
+    recipientUserId: string,
+    scheduleIds: string[],
+    actorUserId: string,
+    dateKey: string,
+): Promise<number> {
+    const family = await getFamilyAndRecipient(familyId, recipientUserId, actorUserId);
+    assertFamilyAccess(family, actorUserId);
+    const role = family.getMemberRole(actorUserId);
+    if (actorUserId !== recipientUserId && !(role && MANAGER_ROLES.has(role))) {
+        throw new AppError("You do not have permission to update care tasks", 403);
+    }
+    if (!parseDateKeyIST(dateKey)) throw new AppError("Invalid date", 400);
+    const res = await CareScheduleCompletion.deleteMany({ familyId, recipientUserId, dateKey, scheduleId: { $in: scheduleIds } });
+    return res.deletedCount ?? 0;
+}
+
 export async function markScheduleItemCompletion(
     familyId: string,
     recipientUserId: string,

@@ -167,6 +167,62 @@ export async function markScheduleMissed(input: {
     };
 }
 
+/**
+ * Unmark a dose for a day: the person says it has not been taken (a mark made by mistake or on the wrong day). Clears the
+ * mark on the matching row and on any row of the same medicine that moved away that day, so the dashboard, the reminder
+ * and Saheli all read "not taken" again. Only the person themselves or a caregiver who manages the family may unmark.
+ */
+export async function clearScheduleCompletion(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    scheduleId?: string;
+    titleHint?: string;
+    timeHint?: string;
+    dateKey?: string;
+}): Promise<Record<string, unknown>> {
+    const dateKey = input.dateKey ?? toDateKeyIST();
+    const day = await getScheduleDayStatuses(input.familyId, input.recipientUserId, input.actorUserId, dateKey);
+    const match = input.scheduleId
+        ? day.items.find((i) => i.scheduleId === input.scheduleId)
+        : input.titleHint
+          ? pickScheduleItem(day.items, input.titleHint, input.timeHint, () => true)
+          : undefined;
+    if (!match) return { error: "Could not find a matching schedule item to unmark." };
+    const row = await CareSchedule.findOne({ scheduleId: match.scheduleId, familyId: input.familyId, recipientUserId: input.recipientUserId }).lean();
+    if (!row) return { error: "Schedule item not found." };
+    // rows of the same medicine that are no longer on this day's list (a time that moved) lose their mark too
+    const moved = row.sourceKey
+        ? (await CareSchedule.find({ familyId: input.familyId, recipientUserId: input.recipientUserId, sourceKey: row.sourceKey }).lean())
+            .map((r) => r.scheduleId)
+            .filter((id) => id !== match.scheduleId && !day.items.some((i) => i.scheduleId === id))
+        : [];
+    const { clearScheduleItemCompletions } = await import("./careScheduleCompletion.service");
+    let cleared: number;
+    try {
+        cleared = await clearScheduleItemCompletions(input.familyId, input.recipientUserId, [match.scheduleId, ...moved], input.actorUserId, dateKey);
+    } catch (err) {
+        return { error: err instanceof Error ? err.message : "Could not unmark." };
+    }
+    const res = { deletedCount: cleared };
+    if (res.deletedCount) {
+        await appendCareRecordEvent({
+            familyId: input.familyId,
+            subjectUserId: input.recipientUserId,
+            actorUserId: input.actorUserId,
+            type: CareRecordEventType.CHECK_IN,
+            source: CareRecordSource.SAHELI,
+            channel: ChannelType.WHATSAPP,
+            title: row.title,
+            detail: `Unmarked ${row.title} for ${dateKey}: not taken yet.`,
+            status: "pending",
+            payload: { scheduleId: match.scheduleId, dateKey, action: "schedule_unmarked" },
+            skipSignalCheck: true,
+        });
+    }
+    return { cleared: res.deletedCount ?? 0, scheduleId: match.scheduleId, title: row.title, dateKey };
+}
+
 export async function logVitals(input: {
     familyId: string;
     recipientUserId: string;

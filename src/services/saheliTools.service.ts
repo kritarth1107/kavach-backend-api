@@ -48,6 +48,7 @@ export type SaheliToolName =
     | "get_upcoming_appointments"
     | "mark_schedule_completed"
     | "mark_schedule_missed"
+    | "clear_schedule_completion"
     | "log_vitals"
     | "log_dose"
     | "log_check_in"
@@ -1185,6 +1186,18 @@ export async function executeSaheliTool(input: {
                 dateKey: input.args.dateKey ? String(input.args.dateKey) : undefined,
                 note: input.args.note ? String(input.args.note) : undefined,
                 fromBrain: true,
+            });
+        }
+        case "clear_schedule_completion": {
+            const { clearScheduleCompletion } = await import("./saheliCareAction.service");
+            return clearScheduleCompletion({
+                familyId: input.familyId,
+                recipientUserId: input.recipientUserId,
+                actorUserId: input.actorUserId,
+                scheduleId: input.args.scheduleId ? String(input.args.scheduleId) : undefined,
+                titleHint: input.args.title ? String(input.args.title) : undefined,
+                timeHint: input.args.time ? String(input.args.time) : undefined,
+                dateKey: input.args.dateKey ? String(input.args.dateKey) : undefined,
             });
         }
         case "log_vitals": {

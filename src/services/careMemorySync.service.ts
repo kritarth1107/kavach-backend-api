@@ -53,6 +53,8 @@ export async function syncMedicineSchedule(input: {
     const days = Array.isArray(input.daysOfWeek) ? input.daysOfWeek.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : [];
     const kept: string[] = [];
     const disabled: string[] = [];
+    const movedFrom: string[] = []; // scheduleIds switched off by this change (a dose time that moved)
+    const created: { scheduleId: string; time: string }[] = [];
     const { parseTimeToMinutes } = await import("./careScheduleCompletion.service");
     const asHHMM = (t: string) => {
         const m = parseTimeToMinutes(t);
@@ -76,11 +78,14 @@ export async function syncMedicineSchedule(input: {
             if (input.traceId) row.lastTraceId = input.traceId;
             await row.save();
             disabled.push(row.time);
+            movedFrom.push(row.scheduleId);
         }
     }
     for (const time of times.filter((t) => !kept.includes(t))) {
+        const scheduleId = randomUUID();
+        created.push({ scheduleId, time });
         await CareSchedule.create({
-            scheduleId: randomUUID(),
+            scheduleId,
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
             type: CareScheduleType.MEDICINE,
@@ -97,7 +102,41 @@ export async function syncMedicineSchedule(input: {
         });
         kept.push(time);
     }
+    await carryTodaysMarks(input, movedFrom, created);
     return { active: kept.sort(), disabled };
+}
+
+/**
+ * A dose time that moved today keeps today's mark (live 15 Oct 2026: a 2 am dose was marked taken, the time moved to
+ * 11:30 pm, the new row read "upcoming", Saheli said it was not marked while the dashboard showed it taken, and tonight's
+ * reminder would have asked for a second dose). Old and new rows pair up in time order; a new row that already has a
+ * mark keeps it.
+ */
+async function carryTodaysMarks(
+    input: { familyId: string; recipientUserId: string; actorUserId: string },
+    movedFrom: string[],
+    created: { scheduleId: string; time: string }[],
+): Promise<void> {
+    if (!movedFrom.length || !created.length) return;
+    const { default: CareScheduleCompletion } = await import("../models/careScheduleCompletion.model");
+    const { toDateKeyIST } = await import("../utils/istTime.util");
+    const dateKey = toDateKeyIST();
+    const marks = await CareScheduleCompletion.find({
+        familyId: input.familyId, recipientUserId: input.recipientUserId, dateKey, scheduleId: { $in: movedFrom },
+    }).lean();
+    if (!marks.length) return;
+    const oldRows = await CareSchedule.find({ scheduleId: { $in: marks.map((m) => m.scheduleId) } }).lean();
+    const byTime = (a: { time: string }, b: { time: string }) => a.time.localeCompare(b.time);
+    const olds = oldRows.sort(byTime).map((r) => marks.find((m) => m.scheduleId === r.scheduleId)!).filter(Boolean);
+    const news = [...created].sort(byTime);
+    for (let i = 0; i < Math.min(olds.length, news.length); i++) {
+        const m = olds[i];
+        await CareScheduleCompletion.updateOne(
+            { familyId: input.familyId, recipientUserId: input.recipientUserId, scheduleId: news[i].scheduleId, dateKey },
+            { $setOnInsert: { completionId: randomUUID(), status: m.status, markedBy: m.markedBy, note: m.note || "moved with the dose time" } },
+            { upsert: true },
+        );
+    }
 }
 
 /** What the reminder scheduler actually did on a day: sent, failed, or never tried. */
