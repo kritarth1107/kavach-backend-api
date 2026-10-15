@@ -359,13 +359,11 @@ async function deliverOutsideWindow(
     await L.recordNotSent({ phone, reason: `outside_window: waiting for their next message (${skipped})` });
     if (kind === "alert") {
         // a caregiver alert that could not reach them now: the team hears (B3.2 → B1.5)
-        const { alertOps } = await import("./opsAlert.service");
+        const { noteTeamDigest } = await import("./opsAlert.service");
         const text = `A caregiver alert for family ${payload.familyId.slice(0, 8)} could not be sent now: their WhatsApp chat is closed and ${skipped}. ` +
             "It waits and goes on their next message. If it is urgent, call them.";
-        const out = await alertOps(`alert-window:${payload.familyId}`, "A caregiver alert is waiting (WhatsApp chat closed)", text, { everyMs: 30 * 60_000 });
-        const { default: OpsAlertLog } = await import("../models/opsAlertLog.model");
-        await OpsAlertLog.create({ kind: "template", subject: "A caregiver alert is waiting (WhatsApp chat closed)", text,
-            items: [{ family: payload.familyId.slice(0, 8), reason: skipped }], emailed: out.sent, at: new Date() }).catch(() => undefined);
+        await noteTeamDigest("template", "A caregiver alert is waiting (WhatsApp chat closed)", text,
+            [{ family: payload.familyId.slice(0, 8), reason: skipped }]);
     }
     return { channel: "dashboard", channelIdentifier: "dashboard", delivered: false, reason: "outside_window", waiting: true };
 }

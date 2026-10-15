@@ -41,6 +41,8 @@ async function runTick() {
         // due-vs-sent report (B1.6)
         const R = await import("../services/deliveryReport.service");
         await R.runDoseAlertCheck().catch((e) => console.warn("dose alert check failed:", e instanceof Error ? e.message : e));
+        const { flushTeamDigests } = await import("../services/opsAlert.service");
+        await flushTeamDigests().catch((e) => console.warn("team digest flush failed:", e instanceof Error ? e.message : e));
         const { markMissed } = await import("../services/dueList.service");
         await markMissed().catch((e) => console.warn("due list missed-marking failed:", e instanceof Error ? e.message : e));
         await R.runDailyDeliveryReport().catch((e) => console.warn("daily delivery report failed:", e instanceof Error ? e.message : e));

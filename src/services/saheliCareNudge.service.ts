@@ -13,6 +13,7 @@ import { checkCaregiverAlertsForMissedTasks } from "./saheliCaregiverAlert.servi
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
 import { doseSlotKey, noteDueFailed, noteDueHeld, noteDueMissed, noteDueSent } from "./dueList.service";
 import { clockNow } from "../utils/clock.util";
+import { runPool } from "../utils/pool";
 import { formatScheduleSection } from "./saheliContext.service";
 import { medicineDueWindow } from "./saheliFactGuard.service";
 
@@ -466,11 +467,11 @@ export async function runCareNudgeTick(now = clockNow()): Promise<{ sent: number
     const dateKey = toDateKeyIST(now);
     const nowMinutes = getISTParts(now).minutesSinceMidnight;
 
-    for (const companion of companions) {
+    await runPool(companions.map((companion) => async () => {
         if (isWithinQuietHours(companion, now)) {
             const { holdRecentDoses } = await import("./dueList.service");
             await holdRecentDoses(companion.familyId, companion.recipientUserId, "quiet hours", now);
-            continue;
+            return;
         }
 
         scanned += 1;
@@ -483,15 +484,16 @@ export async function runCareNudgeTick(now = clockNow()): Promise<{ sent: number
                 err instanceof Error ? err.message : err,
             );
         }
-    }
+    }), 20);
 
     // Self care: caregivers who keep their own schedule get the same dose reminders, gently, with no family alerts.
     try {
-        for (const target of await listSelfCareTargets()) {
+        const selfTargets = await listSelfCareTargets();
+        await runPool(selfTargets.map((target) => async () => {
             if (isQuietHourIST(nowMinutes)) {
                 const { holdRecentDoses } = await import("./dueList.service");
                 await holdRecentDoses(target.familyId, target.recipientUserId, "quiet hours (22:00-07:00)", now);
-                continue;
+                return;
             }
             scanned += 1;
             try {
@@ -499,7 +501,7 @@ export async function runCareNudgeTick(now = clockNow()): Promise<{ sent: number
             } catch (err) {
                 console.warn(`Self-care nudge skipped for ${target.recipientUserId}:`, err instanceof Error ? err.message : err);
             }
-        }
+        }), 20);
     } catch (err) {
         console.warn("Self-care nudge scan failed:", err instanceof Error ? err.message : err);
     }

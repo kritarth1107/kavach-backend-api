@@ -2,7 +2,8 @@
  * The Kavach team hears about reminders (trust plan B1.5, B1.6; founder 2026-10-13: "send a daily report of what was due
  * versus sent; alert the Kavach team if any dose reminder didn't send"):
  *   - the dose alert, every tick: a dose not sent within 5 minutes of its time, a failed one, or one with no "delivered"
- *     receipt 30 minutes after it went. One email per tick for all of them, each slot once; held slots never alert.
+ *     receipt 30 minutes after it went. One email for the tick, then further ticks wait 15 minutes and go as one note.
+ *     Each slot alerts once; held slots never alert.
  *   - the daily report at 23:30 IST: due, sent, delivered, read, held and failed by reason, missed, the on-time rate,
  *     per family and in total, and every dose that did not reach the phone; by email and on the admin "Delivery" page.
  * Families are named by short id and people by first name only.
@@ -85,12 +86,35 @@ export async function runDoseAlertCheck(now = clockNow()): Promise<{ alerted: nu
         "",
         "Each dose is alerted once. The family's caregivers are not told by this email; check the admin console's Delivery page, and call the family if a critical medicine is involved.",
     ].join("\n");
+    const emailed = await sendDoseDigest(now, subject, text, items);
+    console.warn(`[dose-alert] ${due.length} slot(s) alerted to the team (emailed=${emailed})`);
+    return { alerted: due.length, emailed };
+}
+
+/** Dose failures wait 15 minutes and go out as one note, so a morning of thousands is not thousands of emails. */
+const DOSE_DIGEST_MS = 15 * 60_000;
+
+async function sendDoseDigest(now: Date, subject: string, text: string, items: Array<Record<string, unknown>>): Promise<boolean> {
+    const last = await OpsAlertLog.findOne({ kind: "dose", emailed: true }).sort({ at: -1 }).lean<{ at: Date }>();
+    const age = last ? now.getTime() - new Date(last.at).getTime() : Number.POSITIVE_INFINITY;
+    if (age >= 0 && age < DOSE_DIGEST_MS) {
+        await OpsAlertLog.create({ kind: "dose", subject, text, items, emailed: false, at: now })
+            .catch((err) => console.warn("[dose-alert] admin row failed:", err instanceof Error ? err.message : err));
+        return false;
+    }
+    const held = await OpsAlertLog.find({ kind: "dose", emailed: false }).sort({ at: 1 }).lean<Array<{ _id: unknown; text?: string; items?: unknown[] }>>();
+    const combined = held.length
+        ? [`Dose reminders that did not reach the phone since the last note (${held.reduce((n, h) => n + (h.items?.length ?? 0), 0) + items.length}).`, "", ...held.map((h) => h.text || ""), text].join("\n")
+        : text;
+    const combinedSubject = held.length ? `${held.reduce((n, h) => n + (h.items?.length ?? 0), 0) + items.length} dose reminders did not reach the phone` : subject;
     const { alertOps } = await import("./opsAlert.service");
-    const out = await alertOps(`dose:${now.getTime()}`, subject, text, { everyMs: 0, now: now.getTime() });
-    await OpsAlertLog.create({ kind: "dose", subject, text, items, emailed: out.sent, ...(out.error ? { error: out.error } : {}), at: now })
+    const out = await alertOps(`dose-digest:${now.getTime()}`, combinedSubject, combined, { everyMs: 0, now: now.getTime() });
+    await OpsAlertLog.create({ kind: "dose", subject: combinedSubject, text: combined, items, emailed: out.sent, ...(out.error ? { error: out.error } : {}), at: now })
         .catch((err) => console.warn("[dose-alert] admin row failed:", err instanceof Error ? err.message : err));
-    console.warn(`[dose-alert] ${due.length} slot(s) alerted to the team (emailed=${out.sent})`);
-    return { alerted: due.length, emailed: out.sent };
+    if (out.sent && held.length) {
+        await OpsAlertLog.updateMany({ _id: { $in: held.map((h) => h._id) } }, { $set: { emailed: true } }).catch(() => undefined);
+    }
+    return out.sent;
 }
 
 // ── the daily report ──────────────────────────────────────────────────────────────────────────────────────────────

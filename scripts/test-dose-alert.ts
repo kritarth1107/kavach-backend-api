@@ -135,6 +135,16 @@ async function withDb(uri: string) {
         assert.match(emails[0]!.text, /failed: send_failed/);
         assert.match(emails[0]!.text, /not delivered it to the phone after 30 minutes/);
     });
+    await ok("a second dose problem inside 15 minutes is kept for the next note, not a second email", async () => {
+        emails.length = 0;
+        await make("dose:a3b:2026-10-14", { time: "08:40" });
+        const out = await runDoseAlertCheck(min(45));
+        assert.equal(out.alerted, 1);
+        assert.equal(out.emailed, false);
+        assert.equal(emails.length, 0);
+        const row = await OpsAlertLog.findOne({ kind: "dose", emailed: false }).lean();
+        assert.ok(row);
+    });
     await ok("a failed WhatsApp receipt on a sent dose → the slot fails → an email at once", async () => {
         emails.length = 0;
         await make("dose:a6:2026-10-14", { state: "sent", sentAt: min(0), wamid: "wamid.R6" });

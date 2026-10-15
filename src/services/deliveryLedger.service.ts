@@ -244,14 +244,11 @@ async function applyReceipt(r: Receipt): Promise<"updated" | "same" | "unknown">
 
 /** A caregiver alert's template that WhatsApp could not deliver: the team hears (B3.5). */
 async function alertFailedTemplate(row: IMessageDelivery): Promise<void> {
-    const { alertOps } = await import("./opsAlert.service");
+    const { noteTeamDigest } = await import("./opsAlert.service");
     const text = `WhatsApp could not deliver the ${row.template ?? "alert"} template (an alert to a caregiver) for family ${String(row.familyId ?? "-").slice(0, 8)}: ` +
         `${row.errorCode ?? ""} ${row.errorTitle ?? ""}`.trim() + ". The alert itself waits for their next message. Check the template's status at Meta.";
-    const out = await alertOps(`template-failed:${row.template ?? "alert"}`, "A caregiver alert template was not delivered", text, { everyMs: 30 * 60_000 });
-    const { default: OpsAlertLog } = await import("../models/opsAlertLog.model");
-    await OpsAlertLog.create({ kind: "template", subject: "A caregiver alert template was not delivered", text,
-        items: [{ family: String(row.familyId ?? "-").slice(0, 8), template: row.template, error: `${row.errorCode ?? ""} ${row.errorTitle ?? ""}`.trim() }],
-        emailed: out.sent, at: new Date() }).catch(() => undefined);
+    await noteTeamDigest("template", "A caregiver alert template was not delivered", text,
+        [{ family: String(row.familyId ?? "-").slice(0, 8), template: row.template, error: `${row.errorCode ?? ""} ${row.errorTitle ?? ""}`.trim() }]);
 }
 
 /**

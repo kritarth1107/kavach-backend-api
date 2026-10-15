@@ -16,6 +16,7 @@ import { CareScheduleType } from "../types/careSchedule.types";
 import { AppError } from "../middleware/error.middleware";
 import { FamilyRole } from "../types/family.types";
 import { getISTParts, toDateKeyIST } from "../utils/istTime.util";
+import { runPool } from "../utils/pool";
 import { getCompanionProfile, isWithinQuietHours } from "./saheliCompanion.service";
 import { deliverOutboundMessage, resolveRecipientChannel } from "./channelOutbound.service";
 import { parseTimeToMinutes } from "./careScheduleCompletion.service";
@@ -1038,40 +1039,45 @@ export async function runSaheliReminderTick(
 ): Promise<{ sent: number; scanned: number; finished: number; held: number }> {
     const dateKey = toDateKeyIST(now);
     const { minutesSinceMidnight } = getISTParts(now);
-    const active = await SaheliReminder.find({ status: "active" }).limit(2000).lean();
+    const active = await SaheliReminder.find({ status: "active" }).limit(20_000).lean();
     let sent = 0;
-    let scanned = 0;
+    let scanned = active.length;
     let finished = 0;
     let held = 0;
-
+    const due: Array<{ rem: (typeof active)[number]; t: string }> = [];
+    const doneIds: string[] = [];
     for (const rem of active) {
-        scanned += 1;
         for (const t of slotsOn(rem, dateKey)) {
             const mins = minutesOf(t);
             if (mins == null || minutesSinceMidnight < mins || minutesSinceMidnight > mins + REMINDER_LATE_MINUTES) continue;
             if (isSkipped(rem, dateKey, t)) continue;
-            if (rem.aboutKey && (await alreadyDone(rem as ISaheliReminder, dateKey, t).catch(() => false))) {
-                if (await holdBack(rem as ISaheliReminder, dateKey, t)) held += 1;
-                continue;
-            }
-            const medicine = String(rem.aboutKey || "").startsWith("medicine:");
-            if (!medicine && minutesSinceMidnight < mins + CHAT_HOLD_MINUTES
-                && (await chatting(rem.familyId, rem.recipientUserId, now).catch(() => false))) {
-                continue; // they are mid-chat: the next tick tries again (it goes at the latest 10 minutes after its time)
-            }
-            const ok = await fire({
-                familyId: rem.familyId,
-                recipientUserId: rem.recipientUserId,
-                reminder: rem as ISaheliReminder,
-                slotKey: t,
-                dateKey,
-            });
-            if (ok) sent += 1;
+            due.push({ rem, t });
         }
-        if (nextOccurrence(rem, dateKey, Math.max(0, minutesSinceMidnight - REMINDER_LATE_MINUTES)) === null) {
-            const res = await SaheliReminder.updateOne({ reminderId: rem.reminderId, status: "active" }, { $set: { status: "completed" } });
-            finished += res.modifiedCount ? 1 : 0;
+        if (nextOccurrence(rem, dateKey, Math.max(0, minutesSinceMidnight - REMINDER_LATE_MINUTES)) === null) doneIds.push(rem.reminderId);
+    }
+    // Slot claims keep a reminder to one send. About 20 at a time, so 3,000 at 08:00 finish inside a couple of minutes.
+    await runPool(due.map(({ rem, t }) => async () => {
+        if (rem.aboutKey && (await alreadyDone(rem as ISaheliReminder, dateKey, t).catch(() => false))) {
+            if (await holdBack(rem as ISaheliReminder, dateKey, t)) held += 1;
+            return;
         }
+        const medicine = String(rem.aboutKey || "").startsWith("medicine:");
+        if (!medicine && minutesSinceMidnight < (minutesOf(t) ?? 0) + CHAT_HOLD_MINUTES
+            && (await chatting(rem.familyId, rem.recipientUserId, now).catch(() => false))) {
+            return;
+        }
+        const ok = await fire({
+            familyId: rem.familyId,
+            recipientUserId: rem.recipientUserId,
+            reminder: rem as ISaheliReminder,
+            slotKey: t,
+            dateKey,
+        });
+        if (ok) sent += 1;
+    }), 20);
+    if (doneIds.length) {
+        const res = await SaheliReminder.updateMany({ reminderId: { $in: doneIds }, status: "active" }, { $set: { status: "completed" } });
+        finished = res.modifiedCount;
     }
     // medicine reminders Kavach missed while it was down (only the real sender: tests of the tick pass their own)
     if (fire === fireReminderMessage) {
