@@ -223,8 +223,14 @@ export async function runDailyDeliveryReport(now = clockNow()): Promise<IDeliver
         return null;
     }
     const { subject, text } = reportText(report);
+    let body = text;
+    try {
+        const { slo } = await import("../admin/infra/aws");
+        const line = (await slo(now.getTime()))?.digest;
+        if (line) body = `${text}\n${line}`;
+    } catch { /* the reminder report still goes out when CloudWatch does not answer */ }
     const { alertOps } = await import("./opsAlert.service");
-    const out = await alertOps(`report:${dateKey}`, subject, text, { everyMs: 0, now: now.getTime() });
+    const out = await alertOps(`report:${dateKey}`, subject, body, { everyMs: 0, now: now.getTime() });
     await DeliveryReport.updateOne({ dateKey }, { $set: out.sent ? { emailedAt: now } : { emailError: out.error || "not sent" } });
     console.log(`[delivery-report] ${dateKey}: due ${report.totals.due}, sent ${report.totals.sent}, delivered ${report.totals.delivered} (emailed=${out.sent})`);
     return { ...report, ...(out.sent ? { emailedAt: now } : {}) };

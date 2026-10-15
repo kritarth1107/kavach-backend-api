@@ -123,12 +123,17 @@ export async function runBrainV2(input: {
               }
             : {}),
     });
+    const ms = Date.now() - started;
+    if (input.mode === "live") {
+        const { note } = await import("../obs/emf");
+        note("Kavach/Reply", "turn", { calls: 1, latencyMs: ms });
+    }
     console.log(
         `[brain-v2] ${JSON.stringify({
             mode: input.mode,
             family: input.identity.familyId,
             speaker: brainRole(String(input.identity.role)),
-            ms: Date.now() - started,
+            ms,
             model: out.model,
             text: input.text.slice(0, 300),
             reply: out.reply.slice(0, 500),

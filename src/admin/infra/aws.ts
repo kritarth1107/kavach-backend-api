@@ -77,12 +77,25 @@ export async function ecsServices(): Promise<EcsService[] | null> {
     }));
 }
 
+export type ReplyHour = { at: string; p50Ms: number | null; p90Ms: number | null; turns: number };
+
 export type Slo = {
     uptime: boolean | null;
     replyP50Ms: number | null;
     replyP90Ms: number | null;
+    replyHours: ReplyHour[];
+    digest: string | null;
     deliveryRate: number | null;
     alertsOnTime: boolean | null;
+};
+
+export type DayDigest = {
+    calls: number;
+    throttles: number;
+    brainP90Ms: number | null;
+    replyP50Ms: number | null;
+    replyP90Ms: number | null;
+    turns: number;
 };
 
 function lastValue(values?: number[]): number | null {
@@ -91,23 +104,52 @@ function lastValue(values?: number[]): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
-/** Last hour from CloudWatch: ALB uptime, Gemini reply time, WhatsApp delivery, reminder ticks. Null off Fargate. */
+function sumValues(values?: number[]): number {
+    return (values || []).reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0);
+}
+
+/** Worst of the returned p90 points. Two buckets can appear when the window does not sit on a period boundary. */
+function worst(values?: number[]): number | null {
+    const nums = (values || []).filter((n) => Number.isFinite(n));
+    return nums.length ? Math.max(...nums) : null;
+}
+
+const seconds = (n: number | string): number => {
+    if (typeof n === "number") return n < 1e12 ? n * 1000 : n;
+    const parsed = Date.parse(n);
+    return Number.isFinite(parsed) ? parsed : 0;
+};
+
+export function digestLine(d: DayDigest): string {
+    const s = (n: number | null) => (n == null ? "no samples" : n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${Math.round(n)} ms`);
+    return `Gemini last 24 hours (a small blip stays on this line, it is not mailed): ${d.calls} calls, ${d.throttles} throttles, worst brain hour p90 ${s(d.brainP90Ms)}. Reply time last hour: median ${s(d.replyP50Ms)}, p90 ${s(d.replyP90Ms)} over ${d.turns} turns.`;
+}
+
+type MetricRow = { Id?: string; Values?: number[]; Timestamps?: Array<number | string> };
+
+function stat(id: string, namespace: string, metric: string, period: number, s: string, role?: string) {
+    const dimensions = role ? { Dimensions: [{ Name: "Role", Value: role }] } : {};
+    return { Id: id, ReturnData: true, MetricStat: { Metric: { Namespace: namespace, MetricName: metric, ...dimensions }, Period: period, Stat: s } };
+}
+
+/** Last day from CloudWatch. Reply time is the backend's message-in to reply-out. Null off Fargate or when CloudWatch does not answer. */
 export async function slo(now = Date.now()): Promise<Slo | null> {
     const creds = await taskCreds();
     if (!creds) return null;
     const end = Math.floor(now / 1000);
-    const stat = (id: string, namespace: string, metric: string, period: number, s: string) => ({
-        Id: id, ReturnData: true,
-        MetricStat: { Metric: { Namespace: namespace, MetricName: metric }, Period: period, Stat: s },
-    });
     const body = JSON.stringify({
-        StartTime: end - 3600, EndTime: end,
+        StartTime: end - 86_400, EndTime: end,
         MetricDataQueries: [
-            stat("p50", "Kavach/Gemini", "LatencyMs", 3600, "p50"),
-            stat("p90", "Kavach/Gemini", "LatencyMs", 3600, "p90"),
+            stat("p50", "Kavach/Reply", "LatencyMs", 3600, "p50", "turn"),
+            stat("p90", "Kavach/Reply", "LatencyMs", 3600, "p90", "turn"),
+            stat("turns", "Kavach/Reply", "Calls", 3600, "Sum", "turn"),
             stat("sent", "Kavach/Delivery", "Sent", 3600, "Sum"),
             stat("failed", "Kavach/Delivery", "Failed", 3600, "Sum"),
             stat("ticks", "Kavach/Live", "reminder-ticks", 900, "Sum"),
+            stat("gCalls", "Kavach/Gemini", "Calls", 3600, "Sum"),
+            stat("gThrottles", "Kavach/Gemini", "Throttles", 3600, "Sum"),
+            stat("gBrain", "Kavach/Gemini", "LatencyMs", 3600, "p90", "brain"),
+            stat("gHard", "Kavach/Gemini", "LatencyMs", 3600, "p90", "brain_hard"),
             { Id: "healthy", Expression: "SEARCH('{AWS/ApplicationELB,LoadBalancer} MetricName=\"HealthyHostCount\"', 'Average', 300)", ReturnData: true },
         ],
     });
@@ -119,17 +161,47 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
         const auth = sigv4({ method: "POST", host, path: "/", headers, body, region: "ap-south-1", service: "monitoring", accessKey: creds.accessKey, secretKey: creds.secretKey, amzDate });
         const res = await fetch(`https://${host}/`, { method: "POST", headers: { ...headers, "x-amz-date": amzDate, Authorization: auth }, body, signal: AbortSignal.timeout(8_000) });
         if (!res.ok) return null;
-        const data = (await res.json()) as { MetricDataResults?: Array<{ Id?: string; Values?: number[] }> };
-        const byId = new Map((data.MetricDataResults || []).map((r) => [r.Id || "", r.Values || []]));
-        const sent = (byId.get("sent") || []).reduce((a, b) => a + b, 0);
-        const failed = (byId.get("failed") || []).reduce((a, b) => a + b, 0);
-        const healthy = [...byId.entries()].filter(([id]) => id === "healthy" || id.startsWith("healthy "));
-        const up = healthy.some(([, values]) => (lastValue(values) ?? 0) > 0);
-        const ticks = lastValue(byId.get("ticks") || []);
+        const data = (await res.json()) as { MetricDataResults?: MetricRow[] };
+        const rows = new Map((data.MetricDataResults || []).map((r) => [r.Id || "", r]));
+        const values = (id: string) => rows.get(id)?.Values;
+        const sent = lastValue(values("sent")) ?? 0;
+        const failed = lastValue(values("failed")) ?? 0;
+        const healthy = [...rows.entries()].filter(([id]) => id === "healthy" || id.startsWith("healthy"));
+        const up = healthy.some(([, row]) => (lastValue(row.Values) ?? 0) > 0);
+        const ticks = lastValue(values("ticks"));
+        const byAt = new Map<number, ReplyHour>();
+        const take = (id: string, put: (hour: ReplyHour, n: number) => void) => {
+            const row = rows.get(id);
+            const times = row?.Timestamps || [];
+            const nums = row?.Values || [];
+            for (let i = 0; i < times.length && i < nums.length; i++) {
+                const at = seconds(times[i]);
+                if (!at || !Number.isFinite(nums[i])) continue;
+                const hour = byAt.get(at) || { at: new Date(at).toISOString(), p50Ms: null, p90Ms: null, turns: 0 };
+                put(hour, nums[i]);
+                byAt.set(at, hour);
+            }
+        };
+        take("p50", (hour, n) => { hour.p50Ms = n; });
+        take("p90", (hour, n) => { hour.p90Ms = n; });
+        take("turns", (hour, n) => { hour.turns = n; });
+        const replyHours = [...byAt.entries()].sort((a, b) => a[0] - b[0]).map(([, hour]) => hour);
+        const latest = [...replyHours].reverse().find((hour) => hour.turns > 0) ?? replyHours[replyHours.length - 1];
+        const brainP90 = worst([...(values("gBrain") || []), ...(values("gHard") || [])]);
+        const digest = digestLine({
+            calls: sumValues(values("gCalls")),
+            throttles: sumValues(values("gThrottles")),
+            brainP90Ms: brainP90,
+            replyP50Ms: latest?.p50Ms ?? null,
+            replyP90Ms: latest?.p90Ms ?? null,
+            turns: latest?.turns ?? 0,
+        });
         return {
             uptime: healthy.length ? up : null,
-            replyP50Ms: lastValue(byId.get("p50")),
-            replyP90Ms: lastValue(byId.get("p90")),
+            replyP50Ms: latest?.p50Ms ?? null,
+            replyP90Ms: latest?.p90Ms ?? null,
+            replyHours,
+            digest,
             deliveryRate: sent + failed > 0 ? sent / (sent + failed) : null,
             alertsOnTime: ticks == null ? null : ticks >= 3,
         };
