@@ -337,7 +337,10 @@ export async function createInvitedUser(
     const { name: parsedName } = namePrefix?.trim()
         ? { name: memberName.trim() }
         : splitNamePrefix(memberName);
-    const [firstName, ...rest] = parsedName.split(/\s+/).filter(Boolean);
+    const [first0, ...rest0] = parsedName.split(/\s+/).filter(Boolean);
+    // the account's name fields hold 50 characters each: a longer name is kept short rather than failing the add
+    const firstName = first0?.slice(0, 50);
+    const rest = [rest0.join(" ").slice(0, 50).trim()].filter(Boolean);
 
     let user = userByEmail ?? userByPhone ?? null;
 

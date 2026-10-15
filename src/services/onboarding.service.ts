@@ -355,6 +355,42 @@ export async function followupQuestions(userId: string, answers: unknown): Promi
 
 /* ── set everything up ────────────────────────────────────────────────────── */
 
+/**
+ * The name box sometimes holds a sentence (live 15 Oct 2026: "Her name is Vasundara Devi BN I call her ma and her alt
+ * name is sudha"), and setting up failed on it ("Couldn't add …", the account's name fields are 50 characters). When the
+ * answer is more than a name, the model reads it: the name itself, what the family calls them, and other names. A plain
+ * name (up to four words) is used as it is; without the model, the first words are kept so setup never fails on it.
+ */
+export async function readPersonName(raw: string): Promise<{ name: string; callThem?: string; otherNames: string[]; said?: string }> {
+    const text = raw.trim();
+    const words = text.split(/\s+/).filter(Boolean);
+    if (words.length <= 4 && text.length <= 40) return { name: text, otherNames: [] };
+    const out = await vertexGenerateText({
+        model: vertexFlashModel(),
+        system: "A caregiver typed this into the 'their name' box while setting up care for a family member in India. Read it and return the person's own name only (as written, in title case), what the caregiver calls them if they said so, and any other names they go by. Never invent a name that is not in the text.",
+        prompt: `Typed: ${JSON.stringify(text.slice(0, 300))}\nReturn JSON {"name":"…","call_them":"…","other_names":["…"]}`,
+        json: true,
+        responseSchema: { type: "OBJECT", properties: { name: { type: "STRING" }, call_them: { type: "STRING" }, other_names: { type: "ARRAY", items: { type: "STRING" } } }, required: ["name"] },
+        temperature: 0,
+        maxOutputTokens: 800,
+        timeoutMs: 20_000,
+        thinkingLevel: "low",
+    }).catch(() => null);
+    const got = parseJsonLoose<{ name?: string; call_them?: string; other_names?: string[] }>(out);
+    const name = String(got?.name ?? "").trim();
+    // the model's name must come from what they typed, and be a name, not a sentence
+    const fromText = name && name.split(/\s+/).every((w) => text.toLowerCase().includes(w.toLowerCase())) && name.length <= 40;
+    if (fromText) {
+        return {
+            name,
+            callThem: got?.call_them?.trim().slice(0, 40) || undefined,
+            otherNames: (got?.other_names || []).map((x) => String(x).trim().slice(0, 40)).filter((x) => x && x.toLowerCase() !== name.toLowerCase()).slice(0, 4),
+            said: text.slice(0, 300),
+        };
+    }
+    return { name: words.slice(0, 3).join(" ").slice(0, 40), otherNames: [], said: text.slice(0, 300) };
+}
+
 const LEGACY_LANG: Record<string, "english" | "hindi" | "tamil" | "kannada"> = { en: "english", hi: "hindi", ta: "tamil", kn: "kannada" };
 const FOOD_WORDS: Record<string, string> = { before_food: "before food", after_food: "after food", with_food: "with food", empty_stomach: "on an empty stomach", any: "" };
 /** What each diet type means, for the care record (a `diet` fact; nutrition plan §N2, §N13). Descriptions only, no advice. */
@@ -566,7 +602,12 @@ async function setUp(userId: string, familyId: string, user: InstanceType<typeof
     const actor = { id: userId, name: answers.you.name };
 
     const result: SetupResult = { persons: [], caregiver: { name: answers.you.name, phoneVerified } };
-    for (const [i, raw] of answers.persons.entries()) {
+    for (const [i, raw0] of answers.persons.entries()) {
+        const read = await readPersonName(raw0.name);
+        const raw = read.name === raw0.name ? raw0 : { ...raw0, name: read.name, callThem: raw0.callThem || read.callThem };
+        if (read.said && read.otherNames.length) {
+            answers.anythingElse = [answers.anythingElse, `${read.name} is also called ${read.otherNames.join(", ")}.`].filter(Boolean).join("\n");
+        }
         const p = self ? { ...raw, phone: raw.phone || answers.you.phone } : raw;
         const target = self ? "self" : `person:${i}`;
         const verifiedHere = isVerified(target, p.phone);

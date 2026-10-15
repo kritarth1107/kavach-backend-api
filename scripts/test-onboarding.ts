@@ -1,7 +1,7 @@
 /** Onboarding: prescription timings, answers → care record entries and notes, verification replies, limits. */
 import { sanitizeUnderstood, toHHMM, toPhone } from "../src/services/onboardingChat.service";
 import { phoneVariants } from "../src/services/phoneOwner.service";
-import { AnswersSchema, DIET_SENTENCE, VERIFY_RE, allow, factsFor, noteFor, quietHours, scheduleFromText, splitPhone, verifiedThanks, type Answers } from "../src/services/onboarding.service";
+import { AnswersSchema, DIET_SENTENCE, VERIFY_RE, allow, factsFor, noteFor, quietHours, readPersonName, scheduleFromText, splitPhone, verifiedThanks, type Answers } from "../src/services/onboarding.service";
 
 let fail = 0;
 const ok = (name: string, cond: boolean, got?: unknown) => {
@@ -118,8 +118,16 @@ ok("phone variants (+91 also bare 10 digits; other codes never bare)", phoneVari
 // Model-call limits
 ok("limit per caregiver per hour", [1, 2, 3].every(() => allow("u1", "rx", 3, 1000)) && !allow("u1", "rx", 3, 1000) && allow("u2", "rx", 3, 1000) && allow("u1", "rx", 3, 1000 + 3_600_001));
 
-if (fail) {
-    console.error(`${fail} failed`);
-    process.exit(1);
-}
-console.log("all passed");
+// The name box holding a sentence (live 15 Oct 2026: setup failed with "Couldn't add Her name is …")
+void (async () => {
+    const plain = await readPersonName("Kamla Devi Sharma");
+    ok("a plain name is used as it is, with no model call", plain.name === "Kamla Devi Sharma" && !plain.said);
+    // no model here (no Google project in tests): a sentence still gives a short name, so setup cannot fail on it
+    const sentence = await readPersonName("Her name is Vasundara Devi BN I call her ma and her alt name is sudha");
+    ok("a sentence never reaches the account as a 60-character name", sentence.name.length <= 40 && !!sentence.said, sentence);
+    if (fail) {
+        console.error(`${fail} failed`);
+        process.exit(1);
+    }
+    console.log("all passed");
+})();
