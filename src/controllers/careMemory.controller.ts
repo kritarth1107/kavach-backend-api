@@ -44,6 +44,12 @@ export async function getOverview(req: Request, res: Response) {
     res.json({ success: true, data: await aiEngineJson("GET", `${base}/overview${qs({ day })}`, undefined, 45_000) });
 }
 
+export async function getConversations(req: Request, res: Response) {
+    const { base } = await caregiverScope(req);
+    const day = typeof req.query.day === "string" && DAY_RE.test(req.query.day) ? req.query.day : undefined;
+    res.json({ success: true, data: await aiEngineJson("GET", `${base}/conversations${qs({ day })}`, undefined, 45_000) });
+}
+
 export async function getFactHistory(req: Request, res: Response) {
     const { base } = await caregiverScope(req);
     const key = typeof req.query.key === "string" ? req.query.key.slice(0, 200) : "";
