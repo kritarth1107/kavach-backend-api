@@ -312,7 +312,16 @@ async function deliverOutsideWindow(
     let quickReplyPayloads = t?.quickReplyPayloads;
     let waiting = t ? (t.keepWaiting ?? t.purpose !== "reminder") : true;
     let skipped = "";
-    if (!chosen) {
+    // A daily nudge asks only for kavach_saheli_update. It does not fall through to another template, and only one a day.
+    const pinned = t?.purpose === "update";
+    if (chosen && pinned && (kind === "nudge" || kind === "checkin")) {
+        const why = await openerHeldBack(phone, kind);
+        if (why) {
+            chosen = null;
+            skipped = why;
+        }
+    }
+    if (!chosen && !pinned) {
         const why = await openerHeldBack(phone, kind);
         if (why) skipped = why;
         else {
@@ -327,6 +336,7 @@ async function deliverOutsideWindow(
     const queue = () =>
         keepWaiting({ phone, familyId: payload.familyId, toUserId: reader, purpose: purpose ?? (kind === "alert" ? "alert" : "message"), text: payload.content })
             .catch((err) => console.warn("Keeping a message for a closed WhatsApp chat failed:", err instanceof Error ? err.message : err));
+    if ((purpose === "update" || purpose === "message") && !quickReplyPayloads?.length) quickReplyPayloads = ["open:waiting"];
     if (chosen && purpose) {
         const sent = params.length || T.TEMPLATE_PARAMS[purpose] ? Array.from({ length: T.TEMPLATE_PARAMS[purpose] }, (_, i) => T.templateParam(params[i] ?? "")) : [];
         try {
@@ -376,7 +386,11 @@ async function openerHeldBack(phone: string, kind: string): Promise<string> {
         const recent = new Date(clockNow().getTime() - 30 * 60_000);
         return (await MessageDelivery.exists({ ...opener, sentAt: { $gt: recent > since ? recent : since } })) ? "an opener went in the last 30 minutes" : "";
     }
-    if (await MessageDelivery.exists({ ...opener, sentAt: { $gt: since } })) return "the opener already went and they have not written since";
+    // A nudge or check-in keeps going each morning until they reply (founder 2026-10-15). Anything else still waits
+    // for a reply before a second opener.
+    if (kind !== "nudge" && kind !== "checkin" && (await MessageDelivery.exists({ ...opener, sentAt: { $gt: since } }))) {
+        return "the opener already went and they have not written since";
+    }
     if (kind === "nudge" || kind === "checkin") {
         const now = clockNow();
         const dayStart = new Date(`${new Date(now.getTime() + 330 * 60_000).toISOString().slice(0, 10)}T00:00:00+05:30`);

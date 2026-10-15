@@ -28,7 +28,9 @@ export type TemplatePurpose =
     | "alert"
     | "order"
     /** The general opener (B3.3): for everything without its own template; {{1}} = the reader's name, button "open:waiting". */
-    | "message";
+    | "message"
+    /** A closed chat's daily nudge (founder 2026-10-15): only kavach_saheli_update, {{1}} = the reader's name. */
+    | "update";
 
 /** Template names per purpose, in order: a reworded alternate is tried where Meta did not file the first as UTILITY. */
 export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
@@ -53,12 +55,15 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
     order: ["kavach_order_update"],
     // the general opener; the account-update rewording where Meta filed the first MARKETING (2026-10-14: all 11 were)
     message: ["kavach_saheli_message", "kavach_saheli_update", "kavach_saheli_care"],
+    // the daily nudge when the chat is closed: this name only. bn/ta/gu/pa/ml are MARKETING, so the language chain
+    // (the reader, then Hindi, then English) picks an APPROVED UTILITY copy.
+    update: ["kavach_saheli_update"],
 };
 
 /** Params each template takes (Meta refuses a send with the wrong count). */
 export const TEMPLATE_PARAMS: Record<TemplatePurpose, number> = {
     reminder: 2, summary: 1, alert_dose: 1, alert_noreply: 1, alert_health: 1, alert_approval: 1, alert_emergency: 1,
-    alert_report: 1, alert_order: 1, alert_update: 1, alert: 2, order: 2, message: 1,
+    alert_report: 1, alert_order: 1, alert_update: 1, alert: 2, order: 2, message: 1, update: 1,
 };
 
 /** The fixed alert template for every caregiver alert that may go on WhatsApp (backend notifyCaregivers kinds), so none
