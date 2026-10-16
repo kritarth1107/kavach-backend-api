@@ -153,6 +153,26 @@ export function doseTakenLine(title: string, speech?: SpeechProfile | null, pref
     return (TAKEN[nudgeLanguage(speech, preferredLanguage)] ?? TAKEN.en)(title);
 }
 
+/** One short line after a reminder button. No question: the next line, if any, is a separate message. */
+const NOTED: Record<string, string> = {
+    en: "✓ Noted.",
+    roman_hi: "✓ Likh liya.",
+    hi: "✓ दर्ज कर लिया।",
+    mr: "✓ नोंद केली.",
+    bn: "✓ লিখে রাখলাম।",
+    ta: "✓ குறித்துக்கொண்டேன்.",
+    te: "✓ నోట్ చేసుకున్నాను.",
+    kn: "✓ ಬರೆದುಕೊಂಡೆ.",
+    ml: "✓ കുറിച്ചുവെച്ചു.",
+    gu: "✓ નોંધી લીધું.",
+    pa: "✓ ਲਿਖ ਲਿਆ।",
+    or: "✓ ଲେଖି ରଖିଲି।",
+};
+
+export function recordedLine(speech?: SpeechProfile | null, preferredLanguage?: string): string {
+    return NOTED[nudgeLanguage(speech, preferredLanguage)] ?? NOTED.en;
+}
+
 export function buildCareNudgeText(input: {
     nudgeKind: SaheliNudgeKind;
     title: string;

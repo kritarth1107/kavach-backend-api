@@ -34,7 +34,8 @@ export type TemplatePurpose =
 
 /** Template names per purpose, in order: a reworded alternate is tried where Meta did not file the first as UTILITY. */
 export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
-    reminder: ["kavach_care_reminder"],
+    // v2 (Done, Later, Skip) when it is APPROVED UTILITY; the one-button reminder until then
+    reminder: ["kavach_care_reminder_v2", "kavach_care_reminder"],
     summary: ["kavach_daily_summary"],
     // a caregiver alert as a fixed sentence per kind, {{1}} = the person (kavach_alert_<kind>_<lang>)
     // the third wordings (care-record updates, 15 Oct) cover the languages where Meta filed the first two MARKETING
@@ -94,8 +95,13 @@ export function alertTemplateFor(kind?: string): TemplatePurpose | null {
     }
 }
 
-/** Languages Meta offers no templates in read the nearest one (Odia, Nepali and Konkani readers get Hindi). */
+/** Languages Meta offers no templates in read the nearest one (Odia, Nepali and Konkani readers get Hindi until their own is approved). */
 const NEAREST: Record<string, string> = { as: "bn", or: "hi", ne: "hi", kok: "hi" };
+
+/** How many quick-reply buttons the approved reminder template has. v2 has three; v1 has Done only. */
+export function reminderButtonCount(name: string): number {
+    return name.includes("_v2") ? 3 : 1;
+}
 
 const CATALOG_MS = 30 * 60_000;
 let catalog: { at: number; ok: Set<string> } | null = null;
@@ -147,9 +153,11 @@ export function setTemplateCatalogForTest(ok: string[] | null): void {
 const ENGLISH_BEFORE_HINDI = new Set(["ta", "te", "kn", "ml", "ur"]);
 
 export function languageChain(lang?: string | null): string[] {
-    const l = NEAREST[String(lang || "")] ?? (String(lang || "").toLowerCase() || "en");
-    if (l === "en") return ["en", "hi"];
-    return [...new Set(ENGLISH_BEFORE_HINDI.has(l) ? [l, "en", "hi"] : [l, "hi", "en"])];
+    const raw = String(lang || "").toLowerCase() === "english" ? "en" : String(lang || "").toLowerCase();
+    const l = NEAREST[raw] ?? (raw || "en");
+    const tail = l === "en" ? ["en", "hi"] : [...new Set(ENGLISH_BEFORE_HINDI.has(l) ? [l, "en", "hi"] : [l, "hi", "en"])];
+    // the reader's own language first, so an approved Odia or Assamese template is used; the nearest language is the fallback
+    return [...new Set(raw && raw !== l ? [raw, ...tail] : tail)];
 }
 
 /** Marwari has no WhatsApp locale. These Hindi-language names are the notice, then the earlier Marwari line if Meta filed that UTILITY. */

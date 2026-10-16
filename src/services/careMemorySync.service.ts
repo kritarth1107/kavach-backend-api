@@ -235,14 +235,18 @@ export function engineDeliveryKind(raw: unknown): (typeof ENGINE_KINDS)[number] 
 /** Saheli starts a message (a follow-up she promised, a check after a fall). Only to members of this family. */
 /** A template hint from the engine ({purpose, params, lang}), checked: anything else is dropped. */
 export function engineTemplate(raw: unknown): import("./channelOutbound.service").OutboundTemplate | undefined {
-    const t = raw as { purpose?: unknown; params?: unknown; lang?: unknown } | null | undefined;
+    const t = raw as { purpose?: unknown; params?: unknown; lang?: unknown; quickReplyPayloads?: unknown } | null | undefined;
     const purposes = ["reminder", "summary", "alert", "order", "alert_dose", "alert_noreply", "alert_health", "alert_approval", "message", "update"];
     if (!t || typeof t !== "object" || !purposes.includes(String(t.purpose))) return undefined;
     const params = Array.isArray(t.params) ? t.params.map((p) => String(p ?? "")).slice(0, 3) : [];
+    const quickReplyPayloads = Array.isArray(t.quickReplyPayloads)
+        ? t.quickReplyPayloads.map((p) => String(p ?? "")).filter((p) => /^(done|later|skip):[A-Za-z0-9_:.@|-]{1,160}$/.test(p)).slice(0, 3)
+        : [];
     return {
         purpose: String(t.purpose) as import("./whatsappTemplates.service").TemplatePurpose,
         params,
         ...(typeof t.lang === "string" && t.lang ? { lang: t.lang } : {}),
+        ...(quickReplyPayloads.length ? { quickReplyPayloads } : {}),
     };
 }
 

@@ -3,6 +3,7 @@ import config from "../config/app.config";
 import { assertSendableWhatsAppRecipient } from "../services/whatsappRecipientGuard.service";
 import type { MetaWhatsAppPayload } from "../types/whatsappMessage.types";
 import { currentDelivery, recordNotSent, recordSent } from "../services/deliveryLedger.service";
+import { parseReminderTap, tapSentence } from "../services/reminderTap";
 
 export function isMetaWhatsAppEnabled(): boolean {
     const meta = config.whatsapp.meta;
@@ -589,8 +590,8 @@ function normalizeInteractiveInboundId(id: string): string {
     if (lower === "need_help") return "I need help please";
     if (lower === "order_status") return "what is my order status";
 
-    const done = id.match(/^done:(.+)$/i);
-    if (done) return `I completed schedule ${done[1]}`;
+    const tap = parseReminderTap(id);
+    if (tap) return tapSentence(tap);
     if (lower === "guest_learn") return "what can you help me with";
     if (lower === "guest_signup") return "how do I sign up for kavach";
 

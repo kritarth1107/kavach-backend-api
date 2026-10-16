@@ -339,6 +339,7 @@ async function deliverOutsideWindow(
         keepWaiting({ phone, familyId: payload.familyId, toUserId: reader, purpose: purpose ?? (kind === "alert" ? "alert" : "message"), kind, text: payload.content })
             .catch((err) => console.warn("Keeping a message for a closed WhatsApp chat failed:", err instanceof Error ? err.message : err));
     if ((purpose === "update" || purpose === "message") && !quickReplyPayloads?.length) quickReplyPayloads = ["open:waiting"];
+    if (purpose === "reminder" && chosen) quickReplyPayloads = (quickReplyPayloads ?? []).slice(0, T.reminderButtonCount(chosen.name));
     if (chosen && purpose) {
         const sent = params.length || T.TEMPLATE_PARAMS[purpose] ? Array.from({ length: T.TEMPLATE_PARAMS[purpose] }, (_, i) => T.templateParam(params[i] ?? "")) : [];
         try {

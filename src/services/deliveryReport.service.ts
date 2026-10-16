@@ -119,7 +119,7 @@ async function sendDoseDigest(now: Date, subject: string, text: string, items: A
 
 // ── the daily report ──────────────────────────────────────────────────────────────────────────────────────────────
 
-const emptyCounts = (): DeliveryCounts => ({ due: 0, sent: 0, delivered: 0, read: 0, held: {}, failed: {}, missed: 0, onTime: 0, attemptable: 0, later: 0 });
+const emptyCounts = (): DeliveryCounts => ({ due: 0, sent: 0, delivered: 0, read: 0, held: {}, failed: {}, missed: 0, onTime: 0, attemptable: 0, later: 0, answered: 0 });
 
 /** A reason as a short bucket for counting ("gate: active_flow:pharmacy" → "gate"). */
 export function reasonBucket(reason?: string): string {
@@ -130,7 +130,7 @@ export function reasonBucket(reason?: string): string {
 }
 
 /** Pure: the counts for a set of slots, as of now. */
-export function countSlots(slots: Array<Pick<IDueSlot, "state" | "reason" | "dueAt" | "sentAt" | "kind">>, now: Date): DeliveryCounts {
+export function countSlots(slots: Array<Pick<IDueSlot, "state" | "reason" | "dueAt" | "sentAt" | "kind"> & { answeredAt?: Date }>, now: Date): DeliveryCounts {
     const c = emptyCounts();
     for (const s of slots) {
         if (s.state === "removed") continue;
@@ -156,8 +156,15 @@ export function countSlots(slots: Array<Pick<IDueSlot, "state" | "reason" | "due
             c.missed += 1; // scheduled past its time, or missed
         }
         if (s.state !== "held") c.attemptable += 1;
+        if (s.answeredAt) c.answered = (c.answered ?? 0) + 1;
     }
     return c;
+}
+
+/** Due, sent, delivered, read and answered, one row per kind (dose, reminder). */
+export function countsByKind(slots: Array<Pick<IDueSlot, "state" | "reason" | "dueAt" | "sentAt" | "kind"> & { answeredAt?: Date }>, now: Date): Array<{ kind: string; counts: DeliveryCounts }> {
+    const kinds = ["dose", "reminder"] as const;
+    return kinds.map((kind) => ({ kind, counts: countSlots(slots.filter((s) => s.kind === kind), now) }));
 }
 
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "-");
@@ -208,7 +215,7 @@ export async function buildDeliveryReport(dateKey: string, now = clockNow(), opt
         MessageDelivery.countDocuments({ ...range, status: "failed" }),
     ]);
     const untracked = slots.filter(beforeTracking).length;
-    return { dateKey, builtAt: now, totals: countSlots(slots, now), families, notDelivered, ledger: { sends, withWamid, withReceipt, failed }, ...(untracked ? { untracked } : {}) };
+    return { dateKey, builtAt: now, totals: countSlots(slots, now), byKind: countsByKind(slots, now), families, notDelivered, ledger: { sends, withWamid, withReceipt, failed }, ...(untracked ? { untracked } : {}) };
 }
 
 export function reportText(r: IDeliveryReport): { subject: string; text: string } {
@@ -219,6 +226,8 @@ export function reportText(r: IDeliveryReport): { subject: string; text: string 
         `Reminders due versus sent on ${r.dateKey} (IST, up to ${istClock(r.builtAt)}).`,
         "",
         `All families: ${countsLine(t)}`,
+        ...(r.byKind ?? []).map((row) => `${row.kind}: ${countsLine(row.counts)} · answered ${row.counts.answered ?? 0}`),
+        `Answered taps ${t.answered ?? 0} of ${t.read} read (goal: a tap recorded for at least 90%; delivered at their time at least 99%).`,
         "",
         ...r.families.map((f) => `Family ${f.family} (${f.people.join(", ")}): ${countsLine(f.counts)}`),
         "",

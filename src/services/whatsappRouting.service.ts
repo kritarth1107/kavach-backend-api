@@ -510,9 +510,11 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             mayMarkOthers: caregiver,
         }).catch(() => null);
         if (closed) {
+            const { takeWaiting, waitingTexts } = await import("./whatsappWindow.service");
+            const waited = waitingTexts(await takeWaiting(identity.userId).catch(() => []));
             const { pullNudgeDue } = await import("./nudgeDue.service");
             await pullNudgeDue(identity.familyId, identity.userId);
-            return outbound(phone, closed);
+            return outbound(phone, [closed, ...waited].filter(Boolean).join("\n\n"));
         }
     }
 

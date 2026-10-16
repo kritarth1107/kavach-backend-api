@@ -26,6 +26,8 @@ async function runTick() {
         if (result.sent > 0 || result.scanned > 0) {
             console.log(`Care nudge tick: sent=${result.sent} scanned=${result.scanned}`);
         }
+        const { sendSnoozedDoses } = await import("../services/saheliCareNudge.service");
+        await sendSnoozedDoses().catch((e) => console.warn("snoozed dose failed:", e instanceof Error ? e.message : e));
         const reminders = await runSaheliReminderTick();
         if (reminders.sent > 0 || reminders.scanned > 0) {
             console.log(
@@ -104,6 +106,8 @@ export function stopCareNudgeScheduler() {
 
 export async function runCareNudgeJob() {
     const nudge = await runCareNudgeTick();
+    const { sendSnoozedDoses } = await import("../services/saheliCareNudge.service");
+    await sendSnoozedDoses().catch((err) => console.warn("snoozed dose failed:", err instanceof Error ? err.message : err));
     const reminders = await runSaheliReminderTick();
     return { ...nudge, reminders };
 }

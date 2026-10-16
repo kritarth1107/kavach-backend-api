@@ -765,6 +765,8 @@ async function fireReminderMessage(input: {
     reminder: ISaheliReminder;
     slotKey: string;
     dateKey: string;
+    /** A Later tap's second send uses its own claim, so the first send's claim does not block it. */
+    claimExtra?: string;
 }): Promise<boolean> {
     const companion = await getCompanionProfile(input.familyId, input.recipientUserId);
     const slot = reminderSlotKey(input.reminder.reminderId, input.slotKey, input.dateKey);
@@ -777,7 +779,7 @@ async function fireReminderMessage(input: {
         {
             familyId: input.familyId,
             recipientUserId: input.recipientUserId,
-            scheduleId: `reminder:${input.reminder.reminderId}:${input.slotKey}`,
+            scheduleId: `reminder:${input.reminder.reminderId}:${input.slotKey}${input.claimExtra ? `:${input.claimExtra}` : ""}`,
             dateKey: input.dateKey,
             nudgeKind: "pre_reminder",
         },
@@ -829,7 +831,8 @@ async function fireReminderMessage(input: {
         content: text,
         channel: target.channel,
         channelIdentifier: target.channelIdentifier,
-        template: { purpose: "reminder", params: [input.reminder.text, clockTime(input.slotKey)] },
+        template: { purpose: "reminder", params: [input.reminder.text, clockTime(input.slotKey)],
+            quickReplyPayloads: (await import("./reminderTap")).reminderPayloads("reminder", `${input.reminder.reminderId}@${input.dateKey}@${input.slotKey}`) },
         delivery: {
             kind: "reminder",
             refId: reminderSlotKey(input.reminder.reminderId, input.slotKey, input.dateKey),
@@ -1025,7 +1028,8 @@ async function sendLateReminder(input: { rem: ISaheliReminder; slot: string; dat
     const { clockTime } = await import("./whatsappTemplates.service");
     const delivery = await deliverOutboundMessage({ purpose: "proactive", familyId: rem.familyId, recipientUserId: rem.recipientUserId, content: text,
         channel: target.channel, channelIdentifier: target.channelIdentifier,
-        template: { purpose: "reminder", params: [rem.text, clockTime(input.slot)] },
+        template: { purpose: "reminder", params: [rem.text, clockTime(input.slot)],
+            quickReplyPayloads: (await import("./reminderTap")).reminderPayloads("reminder", `${rem.reminderId}@${input.dateKey}@${input.slot}`) },
         delivery: { kind: "dose_followup", refId: reminderSlotKey(rem.reminderId, input.slot, input.dateKey), nudgeId: input.attemptId,
                     dueAt: new Date(`${input.dateKey}T${input.slot}:00+05:30`) } });
     return { delivered: delivery.delivered, wamid: delivery.messageIds?.[0], ...(delivery.reason ? { reason: delivery.reason } : {}) };
@@ -1083,6 +1087,18 @@ export async function runSaheliReminderTick(
     if (fire === fireReminderMessage) {
         await catchUpMedicineReminders(active as ISaheliReminder[], now).catch((err) =>
             console.warn("medicine reminder catch-up failed:", err instanceof Error ? err.message : err));
+        const snoozed = await SaheliReminder.find({
+            status: "active", snoozeUntil: { $lte: now, $gte: new Date(now.getTime() - 15 * 60_000) },
+        }).limit(200).lean<ISaheliReminder[]>();
+        for (const rem of snoozed) {
+            const [day, time] = String(rem.snoozeSlot || "").split("@");
+            if (!day || !time) continue;
+            const claimed = await SaheliReminder.updateOne({ reminderId: rem.reminderId, snoozeUntil: { $lte: now } }, { $unset: { snoozeUntil: 1 } });
+            if (claimed.modifiedCount !== 1) continue;
+            await fireReminderMessage({
+                familyId: rem.familyId, recipientUserId: rem.recipientUserId, reminder: rem, slotKey: time, dateKey: day, claimExtra: "later",
+            }).catch((err) => console.warn("snoozed reminder failed:", err instanceof Error ? err.message : err));
+        }
     }
 
     return { sent, scanned, finished, held };

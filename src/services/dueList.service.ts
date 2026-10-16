@@ -220,6 +220,12 @@ export async function noteDueHeld(slotKey: string, reason: string): Promise<void
         .catch((err) => console.warn("[due] noteDueHeld failed:", err instanceof Error ? err.message : err));
 }
 
+/** A Done, Later or Skip tap was recorded for this slot. */
+export async function noteDueAnswered(slotKey: string, at = clockNow()): Promise<void> {
+    await DueSlot.updateOne({ slotKey }, { $set: { answeredAt: at } })
+        .catch((err) => console.warn("[due] noteDueAnswered failed:", err instanceof Error ? err.message : err));
+}
+
 /** Never attempted (Kavach was down and it was too late to send). */
 export async function noteDueMissed(slotKey: string, reason: string): Promise<void> {
     await DueSlot.updateOne({ slotKey, state: { $in: ["scheduled", "held"] } }, { $set: { state: "missed", reason: reason.slice(0, 200) } })

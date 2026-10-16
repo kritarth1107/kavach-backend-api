@@ -95,6 +95,8 @@ export async function deliverCareNudge(input: {
     preferredLanguage?: string;
     /** A medicine dose: never held back for recent chat, only for an order in progress (then remembered for later). */
     medicine?: boolean;
+    /** A second send (a Later tap) claims its own slot, and the button still names the real schedule. */
+    claimSuffix?: string;
 }): Promise<boolean> {
     const { withoutAvoidedNames } = await import("../clients/enginePerson.client");
     const fallback = await careNudgeFallbackText(input);
@@ -119,7 +121,7 @@ export async function deliverCareNudge(input: {
     const slotKey = {
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
-        scheduleId: input.scheduleId,
+        scheduleId: input.claimSuffix ? `${input.scheduleId}:${input.claimSuffix}` : input.scheduleId,
         dateKey: input.dateKey,
         nudgeKind: input.nudgeKind,
     };
@@ -192,7 +194,7 @@ export async function deliverCareNudge(input: {
     const { clockTime } = await import("./whatsappTemplates.service");
     const template = input.nudgeKind === "daily_schedule"
         ? undefined
-        : { purpose: "reminder" as const, params: [input.title, clockTime(input.time)], quickReplyPayloads: [`done:${input.scheduleId}`] };
+        : { purpose: "reminder" as const, params: [input.title, clockTime(input.time)], quickReplyPayloads: (await import("./reminderTap")).dosePayloads(input.scheduleId) };
     const { attemptsOf } = await import("./saheliNudgeAttempt.service");
     // a medicine marked critical: an unanswered streak with it is escalated even in the caregivers' quiet hours (B2.2)
     const critical = input.medicine && input.scheduleId !== "daily_schedule"
@@ -457,6 +459,26 @@ async function catchUpMissedDoses(input: CatchUpInput): Promise<{ sent: number; 
         ).catch(() => undefined);
     }
     return { sent, handled };
+}
+
+/** A Later tap on a dose: one more reminder template, 15 minutes on, once. */
+export async function sendSnoozedDoses(now = clockNow()): Promise<number> {
+    const DueSlot = (await import("../models/dueSlot.model")).default;
+    const slots = await DueSlot.find({
+        kind: "dose", snoozeUntil: { $lte: now, $gte: new Date(now.getTime() - 15 * 60_000) },
+    }).limit(100).lean<Array<{ slotKey: string; familyId: string; recipientUserId: string; refId: string; title: string; time: string; dateKey: string }>>();
+    let sent = 0;
+    for (const s of slots) {
+        const claimed = await DueSlot.updateOne({ slotKey: s.slotKey, snoozeUntil: { $lte: now } }, { $unset: { snoozeUntil: 1 } });
+        if (claimed.modifiedCount !== 1) continue;
+        const ok = await deliverCareNudge({
+            familyId: s.familyId, recipientUserId: s.recipientUserId, displayName: "", scheduleId: s.refId,
+            title: s.title || "your medicine", time: s.time, nudgeKind: "dose_due", dateKey: s.dateKey,
+            preferredChannel: "whatsapp", medicine: true, claimSuffix: "later",
+        }).catch(() => false);
+        if (ok) sent += 1;
+    }
+    return sent;
 }
 
 export async function runCareNudgeTick(now = clockNow()): Promise<{ sent: number; scanned: number }> {

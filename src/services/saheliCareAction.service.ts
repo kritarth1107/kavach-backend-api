@@ -452,6 +452,76 @@ export async function logCheckIn(input: {
  * A reminded dose that was answered Done is taken.
  * Returns the WhatsApp line, or null when this message is not that answer.
  */
+/**
+ * Later, Skip, or Done on a habit, a custom reminder or an appointment. A dose Done stays on closeRemindedDose.
+ * Returns the one-line confirmation, or null when this message is not one of those buttons.
+ */
+export async function applyReminderButton(input: {
+    familyId: string;
+    recipientUserId: string;
+    actorUserId: string;
+    message: string;
+}): Promise<string | null> {
+    const { tapFromSentence } = await import("./reminderTap");
+    const tap = tapFromSentence(input.message);
+    if (!tap || (tap.action === "done" && tap.kind === "dose")) return null;
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.actorUserId)).catch(() => null);
+    const { recordedLine } = await import("./saheliNudgeCopy.service");
+    const line = recordedLine(speech);
+    const { doseSlotKey, noteDueAnswered, reminderSlotKey } = await import("./dueList.service");
+    const { toDateKeyIST } = await import("../utils/istTime.util");
+    const today = toDateKeyIST(new Date());
+
+    if (tap.kind === "dose") {
+        const schedule = await CareSchedule.findOne({ scheduleId: tap.ref, familyId: input.familyId }).lean<{ recipientUserId?: string }>();
+        if (!schedule?.recipientUserId) return line;
+        if (tap.action === "skip") {
+            await markScheduleItemCompletion(input.familyId, schedule.recipientUserId, tap.ref, input.actorUserId, { status: "missed", note: "They tapped Skip." });
+        } else {
+            const DueSlot = (await import("../models/dueSlot.model")).default;
+            const slot = await DueSlot.findOne({ slotKey: doseSlotKey(tap.ref, today) }).lean<{ snoozed?: boolean }>();
+            if (!slot?.snoozed) {
+                await DueSlot.updateOne(
+                    { slotKey: doseSlotKey(tap.ref, today) },
+                    { $set: { snoozeUntil: new Date(Date.now() + 15 * 60_000), snoozed: true } },
+                );
+            }
+        }
+        await noteDueAnswered(doseSlotKey(tap.ref, today));
+        return line;
+    }
+
+    if (tap.kind === "reminder") {
+        const [reminderId, day, time] = tap.ref.split("@");
+        if (!reminderId) return line;
+        const SaheliReminder = (await import("../models/saheliReminder.model")).default;
+        if (tap.action === "later") {
+            const doc = await SaheliReminder.findOne({ reminderId, familyId: input.familyId }).lean<{ snoozeSlot?: string }>();
+            const slot = day && time ? `${day}@${time}` : "";
+            if (doc && slot && doc.snoozeSlot !== slot) {
+                await SaheliReminder.updateOne({ reminderId, familyId: input.familyId }, { $set: { snoozeUntil: new Date(Date.now() + 15 * 60_000), snoozeSlot: slot } });
+            }
+        } else {
+            const { skipSaheliReminder } = await import("./saheliReminder.service");
+            await skipSaheliReminder({
+                familyId: input.familyId, recipientUserId: input.recipientUserId, actorUserId: input.actorUserId,
+                reminderId, ...(day ? { day } : {}), ...(time ? { time } : {}),
+            }).catch(() => undefined);
+        }
+        if (day && time) await noteDueAnswered(reminderSlotKey(reminderId, time, day));
+        return line;
+    }
+
+    if (tap.kind === "habit" || tap.kind === "appointment") {
+        const { aiEngineJson } = await import("../clients/aiEngine.client");
+        await aiEngineJson("POST", "/v2/jobs/button-tap", {
+            family_id: input.familyId, person_id: input.recipientUserId, action: tap.action, kind: tap.kind, ref: tap.ref,
+        }, 15_000).catch((err) => console.warn("reminder button record failed:", err instanceof Error ? err.message : err));
+        return line;
+    }
+    return null;
+}
+
 export async function closeRemindedDose(input: {
     familyId: string;
     /** The person whose dose a typed "done" closes: the speaker (an elder, or a caregiver's own self-care dose). */
@@ -461,6 +531,8 @@ export async function closeRemindedDose(input: {
     /** A caregiver may tap Done on any dose of the family's; everyone else only on their own. */
     mayMarkOthers?: boolean;
 }): Promise<string | null> {
+    const other = await applyReminderButton(input);
+    if (other) return other;
     const scheduleFromButton = doneScheduleId(input.message);
     let scheduleId = scheduleFromButton;
     let recipientUserId = input.recipientUserId;
@@ -498,6 +570,9 @@ export async function closeRemindedDose(input: {
         channel: ChannelType.WHATSAPP,
     });
     const title = typeof marked.title === "string" ? marked.title : "";
+    const { doseSlotKey, noteDueAnswered } = await import("./dueList.service");
+    const { toDateKeyIST } = await import("../utils/istTime.util");
+    await noteDueAnswered(doseSlotKey(scheduleId, toDateKeyIST(new Date())));
     const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.actorUserId)).catch(() => null);
     const { doseTakenLine, nudgeLanguage } = await import("./saheliNudgeCopy.service");
     if (!title) {

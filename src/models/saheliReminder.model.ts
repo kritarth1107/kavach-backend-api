@@ -45,6 +45,9 @@ export interface ISaheliReminder {
     aboutKey?: string;
     lastFiredAt?: Date;
     lastFiredSlotKey?: string;
+    /** A Later tap: send this slot once more at snoozeUntil. snoozeSlot stays so a second Later does not move it again. */
+    snoozeUntil?: Date;
+    snoozeSlot?: string;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -88,6 +91,8 @@ const saheliReminderSchema = new Schema<ISaheliReminderDocument>(
         aboutKey: { type: String, trim: true, maxlength: 200 },
         lastFiredAt: { type: Date },
         lastFiredSlotKey: { type: String },
+        snoozeUntil: { type: Date },
+        snoozeSlot: { type: String },
     },
     { timestamps: true },
 );

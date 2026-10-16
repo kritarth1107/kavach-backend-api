@@ -18,12 +18,16 @@ export type DeliveryCounts = {
     /** Slots whose time had come (the on-time rate's denominator: due minus held). */
     attemptable: number;
     later: number;
+    /** A Done, Later or Skip tap recorded on the slot. */
+    answered?: number;
 };
 
 export interface IDeliveryReport {
     dateKey: string;
     builtAt: Date;
     totals: DeliveryCounts;
+    /** Per kind: dose and reminder. Habits and appointments that are not on the due list are not in these rows. */
+    byKind?: Array<{ kind: string; counts: DeliveryCounts }>;
     families: Array<{ family: string; people: string[]; counts: DeliveryCounts }>;
     notDelivered: Array<{ family: string; person: string; medicine: string; time: string; state: string; reason?: string; attempts?: number }>;
     /** Sends with a wamid and with a receipt (the ledger's own health: B1 done-when). */
@@ -39,6 +43,7 @@ const schema = new Schema<IDeliveryReport>(
         dateKey: { type: String, required: true, unique: true },
         builtAt: { type: Date, required: true },
         totals: { type: Schema.Types.Mixed, required: true },
+        byKind: { type: Schema.Types.Mixed },
         families: { type: Schema.Types.Mixed, default: [] },
         notDelivered: { type: Schema.Types.Mixed, default: [] },
         ledger: { type: Schema.Types.Mixed },

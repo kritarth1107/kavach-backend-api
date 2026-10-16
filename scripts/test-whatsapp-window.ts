@@ -51,8 +51,27 @@ async function pure() {
         assert.deepEqual(T.languageChain("ur"), ["ur", "en", "hi"]);
         assert.deepEqual(T.languageChain("bn"), ["bn", "hi", "en"]);
         assert.deepEqual(T.languageChain("en"), ["en", "hi"]);
-        assert.deepEqual(T.languageChain("or"), ["hi", "en"]);
+        assert.deepEqual(T.languageChain("or"), ["or", "hi", "en"]);
+        assert.deepEqual(T.languageChain("as"), ["as", "bn", "hi", "en"]);
+        assert.deepEqual(T.languageChain("kok"), ["kok", "hi", "en"]);
+        assert.deepEqual(T.languageChain("english"), ["en", "hi"]);
         assert.deepEqual(T.languageChain(undefined), ["en", "hi"]);
+    });
+    await ok("the three-button reminder is used when it is approved, else the one-button one", async () => {
+        T.setTemplateCatalogForTest(["kavach_care_reminder|en", "kavach_care_reminder_v2|en"]);
+        assert.deepEqual(await T.pickTemplate("reminder", "en"), { name: "kavach_care_reminder_v2", language: "en" });
+        assert.equal(T.reminderButtonCount("kavach_care_reminder_v2"), 3);
+        assert.equal(T.reminderButtonCount("kavach_care_reminder"), 1);
+        T.setTemplateCatalogForTest(["kavach_care_reminder|hi"]);
+        assert.deepEqual(await T.pickTemplate("reminder", "or"), { name: "kavach_care_reminder", language: "hi" });
+    });
+    await ok("a reminder button names what was tapped", async () => {
+        const tap = await import("../src/services/reminderTap");
+        assert.deepEqual(tap.parseReminderTap("done:sched-1"), { action: "done", kind: "dose", ref: "sched-1" });
+        assert.equal(tap.tapSentence({ action: "done", kind: "dose", ref: "sched-1" }), "I completed schedule sched-1");
+        assert.deepEqual(tap.parseReminderTap("skip:reminder:rem-1@2026-10-16@08:30"), { action: "skip", kind: "reminder", ref: "rem-1@2026-10-16@08:30" });
+        assert.equal(tap.dosePayloads("sched-1")[0], "done:sched-1");
+        assert.equal(tap.reminderPayloads("habit", "activity:gym@2026-10-16")[1], "later:habit:activity:gym@2026-10-16");
     });
     await ok("a language with its own name (filed apart after Meta called the shared one marketing) is tried first", async () => {
         T.setTemplateCatalogForTest(["kavach_care_reminder|hi", "kavach_care_reminder_bn|bn", "kavach_alert_health_ta|ta", "kavach_alert_health_en|en"]);

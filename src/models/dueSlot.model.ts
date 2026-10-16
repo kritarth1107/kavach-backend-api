@@ -42,6 +42,11 @@ export interface IDueSlot {
     /** The team was alerted about this slot (once per slot). */
     alertedAt?: Date;
     alertReason?: string;
+    /** A Done, Later or Skip tap was recorded. */
+    answeredAt?: Date;
+    /** A Later tap: send the dose template once more at this time. snoozed stays so a second Later does not. */
+    snoozeUntil?: Date;
+    snoozed?: boolean;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -70,6 +75,9 @@ const schema = new Schema<IDueSlot>(
         test: { type: Boolean },
         alertedAt: { type: Date },
         alertReason: { type: String },
+        answeredAt: { type: Date },
+        snoozeUntil: { type: Date },
+        snoozed: { type: Boolean },
         // kept 120 days (the reports and the admin page read the recent part)
         createdAt: { type: Date, default: Date.now, expires: 120 * 24 * 60 * 60 },
     },
