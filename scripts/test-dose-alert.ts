@@ -95,22 +95,20 @@ async function withDb(uri: string) {
         time: "08:00", dueAt: T0, medicine: true, state: "scheduled", ...extra,
     });
 
-    await ok("a dose not sent at +5 min → one email with family short id, first name, medicine, time, reason, attempts", async () => {
+    await ok("a dose not sent at +5 min → one team note (admin console, not emailed: only a crisis emails) with family short id, first name, medicine, time, reason, attempts", async () => {
         resetOpsAlerts();
         emails.length = 0;
         await make("dose:a1:2026-10-14");
         assert.equal((await runDoseAlertCheck(min(4))).alerted, 0);
         const out = await runDoseAlertCheck(min(6));
         assert.equal(out.alerted, 1);
-        assert.equal(out.emailed, true);
-        assert.equal(emails.length, 1);
-        const e = emails[0]!;
-        assert.match(e.subject, /Asha, Metformin 500 mg at 08:00/);
-        assert.match(e.text, /family fam-dose · Asha · Metformin 500 mg at 08:00 · not sent within 5 minutes of its time · 0 attempts/);
-        assert.ok(!e.text.includes("Devi") && !e.text.includes("Test")); // first name only
-        assert.deepEqual(e.to, ["kritarth@kavach.care"]);
+        assert.equal(out.emailed, true); // handled: the note is kept for the team
+        assert.equal(emails.length, 0);
         const row = await OpsAlertLog.findOne({ kind: "dose" }).lean();
         assert.ok(row && row.emailed && row.items.length === 1);
+        assert.match(row!.subject, /Asha, Metformin 500 mg at 08:00/);
+        assert.match(row!.text, /family fam-dose · Asha · Metformin 500 mg at 08:00 · not sent within 5 minutes of its time · 0 attempts/);
+        assert.ok(!row!.text.includes("Devi") && !row!.text.includes("Test")); // first name only
     });
     await ok("each slot alerts once (the next tick sends nothing)", async () => {
         emails.length = 0;
@@ -123,19 +121,20 @@ async function withDb(uri: string) {
         assert.equal((await runDoseAlertCheck(min(30))).alerted, 0);
         assert.equal(emails.length, 0);
     });
-    await ok("several slots in the same tick → one email", async () => {
+    await ok("several slots in the same tick → one note", async () => {
         emails.length = 0;
         await make("dose:a3:2026-10-14");
         await make("dose:a4:2026-10-14", { state: "failed", reason: "send_failed: Meta 500" });
         await make("dose:a5:2026-10-14", { state: "sent", sentAt: T0, wamid: "wamid.slow" });
         const out = await runDoseAlertCheck(min(40));
         assert.equal(out.alerted, 3);
-        assert.equal(emails.length, 1);
-        assert.match(emails[0]!.subject, /3 dose reminders did not reach the phone/);
-        assert.match(emails[0]!.text, /failed: send_failed/);
-        assert.match(emails[0]!.text, /not delivered it to the phone after 30 minutes/);
+        assert.equal(emails.length, 0);
+        const note = (await OpsAlertLog.findOne({ kind: "dose" }).sort({ at: -1 }).lean())!;
+        assert.match(note.subject, /3 dose reminders did not reach the phone/);
+        assert.match(note.text, /failed: send_failed/);
+        assert.match(note.text, /not delivered it to the phone after 30 minutes/);
     });
-    await ok("a second dose problem inside 15 minutes is kept for the next note, not a second email", async () => {
+    await ok("a second dose problem inside 15 minutes is kept for the next note", async () => {
         emails.length = 0;
         await make("dose:a3b:2026-10-14", { time: "08:40" });
         const out = await runDoseAlertCheck(min(45));
@@ -145,7 +144,7 @@ async function withDb(uri: string) {
         const row = await OpsAlertLog.findOne({ kind: "dose", emailed: false }).lean();
         assert.ok(row);
     });
-    await ok("a failed WhatsApp receipt on a sent dose → the slot fails → an email at once", async () => {
+    await ok("a failed WhatsApp receipt on a sent dose → the slot fails → a team note at once", async () => {
         emails.length = 0;
         await make("dose:a6:2026-10-14", { state: "sent", sentAt: min(0), wamid: "wamid.R6" });
         await MessageDelivery.create({ wamid: "wamid.R6", phone: "919000000401", kind: "dose_reminder", refId: "dose:a6:2026-10-14", status: "sent", sentAt: min(0) });
@@ -156,7 +155,9 @@ async function withDb(uri: string) {
         assert.match(slot!.reason!, /WhatsApp 131026 Message undeliverable/);
         const out = await runDoseAlertCheck(min(2));
         assert.equal(out.alerted, 1);
-        assert.match(emails[0]!.text, /failed: WhatsApp 131026/);
+        assert.equal(emails.length, 0);
+        const notes = await OpsAlertLog.find({ kind: "dose" }).lean();
+        assert.ok(notes.some((n) => /failed: WhatsApp 131026/.test(n.text)), "the failed receipt is in a team note");
     });
     await ok("a delivered receipt moves the slot on, and it never alerts", async () => {
         emails.length = 0;

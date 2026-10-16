@@ -3,7 +3,8 @@
  * email kritarth@kavach.care; any user, alert us immediately"). Two kinds:
  *   crisis           talk of suicide, self-harm, wanting to die or harming someone, even if it may be a joke or a test
  *                    (a later "just kidding" never cancels it: the team decides);
- *   emergency_alone  a medical emergency or red flag with no one else in the family to tell (a self-care user).
+ *   emergency_alone  a medical emergency or red flag with no one else in the family to tell (a self-care user); since
+ *                    17 Oct 2026 (founder: only the crisis alert emails) it is kept in the activity log, not emailed.
  * The engine decides when to call (the first alert of an episode at once, later ones batched); this builds and sends the
  * email: who (name and number, so someone can call), what they said, what Saheli said and did, and a link to the family in
  * the admin console. Every send is in the family's activity log.
@@ -77,10 +78,10 @@ export async function alertCareTeam(input: {
             : "Please check on them yourself.",
     ].join("\n");
 
-    let out: { sent: boolean; to?: number; error?: string };
+    let out: { sent: boolean; to?: number; error?: string; muted?: boolean };
     try {
         const { sendCareTeamAlert } = await import("./email.service");
-        out = await sendCareTeamAlert(`[Kavach] ${subject}`, text);
+        out = await sendCareTeamAlert(`[Kavach] ${subject}`, text, input.kind);
     } catch (err) {
         out = { sent: false, error: err instanceof Error ? err.message.slice(0, 200) : "send failed" };
         console.error(`[care-team-alert] email failed family=${input.familyId.slice(0, 8)}: ${out.error}`);
@@ -92,7 +93,8 @@ export async function alertCareTeam(input: {
                 recipientUserId: input.subjectUserId,
                 kind: "caregiver_alert",
                 severity: "error",
-                title: out.sent ? `Kavach care team emailed: ${input.kind === "crisis" ? "crisis" : "emergency, no one else to tell"}` : "Kavach care team email FAILED",
+                title: out.sent ? `Kavach care team emailed: ${input.kind === "crisis" ? "crisis" : "emergency, no one else to tell"}`
+                    : out.muted ? "Kavach care team noted (not emailed): emergency, no one else to tell" : "Kavach care team email FAILED",
                 detail: lines.join("\n"),
                 data: { careTeam: true, kind: input.kind, update: Boolean(input.update), sent: out.sent, ...(input.traceId ? { traceId: input.traceId } : {}) },
             }),

@@ -10,6 +10,7 @@ export interface IOpsAlertLog {
     text: string;
     /** One line per case (family short id, first name, what, when, why). */
     items: Array<Record<string, unknown>>;
+    /** Handled: emailed, or (since 17 Oct 2026, founder: only a crisis emails the team) kept here without an email. */
     emailed: boolean;
     error?: string;
     at: Date;

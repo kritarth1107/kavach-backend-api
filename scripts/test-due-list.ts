@@ -256,7 +256,7 @@ async function withDb(uri: string) {
         r = await call();
         assert.equal(r.code, 503);
     });
-    await ok("the backend's own watchdog emails the team when the tick stopped (once per 30 min)", async () => {
+    await ok("the backend's own watchdog notes a stopped tick for the team (logged, not emailed: only a crisis emails)", async () => {
         const { default: HB } = await import("../src/models/schedulerHeartbeat.model");
         const { checkReminderHeartbeat } = await import("../src/workers/careNudgeScheduler");
         const { resetOpsAlerts } = await import("../src/services/opsAlert.service");
@@ -267,8 +267,7 @@ async function withDb(uri: string) {
         await HB.updateOne({ _id: "care-nudge" }, { $set: { lastTickAt: new Date(Date.now() - 10 * 60_000) } });
         assert.equal((await checkReminderHeartbeat(Date.now(), 0)).alerted, true);
         await checkReminderHeartbeat(Date.now() + 60_000, 0);
-        assert.equal(emails.length, 1);
-        assert.match(emails[0]!.subject, /Reminders are not running/);
+        assert.equal(emails.length, 0);
     });
     setClockForTest(null);
     await mongoose.disconnect();

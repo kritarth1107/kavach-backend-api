@@ -148,11 +148,12 @@ async function withDb(uri: string) {
         }
     });
 
-    await ok("an emergency with no one else to tell is an urgent email too; an update says so", async () => {
+    await ok("an emergency with no one else to tell is kept in the activity log, not emailed (founder 17 Oct: only a crisis emails)", async () => {
         emails.length = 0;
-        await executeSaheliTool({ tool: "alert_care_team", familyId: "famSelf", recipientUserId: "self1", actorUserId: "self1",
-                                  args: { kind: "emergency_alone", update: true, lines: [{ summary: "Severe chest pain and breathlessness." }] } });
-        assert.match(String(emails[0].subject), /^\[Kavach\] Update: Rahul reported an emergency and has no one else to alert/);
+        const out = await executeSaheliTool({ tool: "alert_care_team", familyId: "famSelf", recipientUserId: "self1", actorUserId: "self1",
+                                              args: { kind: "emergency_alone", update: true, lines: [{ summary: "Severe chest pain and breathlessness." }] } });
+        assert.equal(emails.length, 0);
+        assert.equal((out as { muted?: boolean }).muted, true);
     });
     await mongoose.disconnect();
 }

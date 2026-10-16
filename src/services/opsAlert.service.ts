@@ -31,7 +31,9 @@ async function claimWindow(key: string, every: number, now: number): Promise<boo
     }
 }
 
-export async function alertOps(key: string, subject: string, text: string, opts: { everyMs?: number; now?: number } = {}): Promise<{ sent: boolean; suppressed?: number; error?: string }> {
+/** sent: emailed. muted: not emailed by rule (founder 17 Oct 2026: only a crisis alert emails the team); the note is
+ *  in the logs and the admin console, and counts as handled. */
+export async function alertOps(key: string, subject: string, text: string, opts: { everyMs?: number; now?: number } = {}): Promise<{ sent: boolean; muted?: boolean; suppressed?: number; error?: string }> {
     const now = opts.now ?? Date.now();
     const every = opts.everyMs ?? 30 * 60_000;
     const shared = await claimWindow(key, every, now);
@@ -46,8 +48,8 @@ export async function alertOps(key: string, subject: string, text: string, opts:
     const body = suppressed ? `${text}\n\n(${suppressed} more of these since the last email.)` : text;
     try {
         const { sendCareTeamAlert } = await import("./email.service");
-        await sendCareTeamAlert(`[Kavach ops] ${subject}`, body);
-        return { sent: true };
+        const out = await sendCareTeamAlert(`[Kavach ops] ${subject}`, body, "ops");
+        return out.sent ? { sent: true } : { sent: false, muted: true };
     } catch (err) {
         const error = err instanceof Error ? err.message.slice(0, 200) : "send failed";
         console.error(`[ops-alert] email failed key=${key}: ${error}`);
@@ -68,7 +70,7 @@ export async function noteTeamDigest(
     const mongoose = (await import("mongoose")).default;
     if (mongoose.connection.readyState !== 1) {
         const out = await alertOps(`${kind}-digest:${now.getTime()}`, subject, text, { everyMs: 0, now: now.getTime() });
-        return out.sent;
+        return out.sent || Boolean(out.muted);
     }
     const OpsAlertLog = (await import("../models/opsAlertLog.model")).default;
     const won = await claimWindow(`${kind}-digest`, DIGEST_MS, now.getTime());
@@ -84,11 +86,11 @@ export async function noteTeamDigest(
         ? [`${count} notes since the last email.`, "", ...held.map((h) => h.text || ""), text].join("\n")
         : text;
     const out = await alertOps(`${kind}-digest:${now.getTime()}`, combinedSubject, combined, { everyMs: 0, now: now.getTime() });
-    await OpsAlertLog.create({ kind, subject: combinedSubject, text: combined, items, emailed: out.sent, ...(out.error ? { error: out.error } : {}), at: now }).catch(() => undefined);
-    if (out.sent && held.length) {
+    await OpsAlertLog.create({ kind, subject: combinedSubject, text: combined, items, emailed: out.sent || Boolean(out.muted), ...(out.error ? { error: out.error } : {}), at: now }).catch(() => undefined);
+    if ((out.sent || out.muted) && held.length) {
         await OpsAlertLog.updateMany({ _id: { $in: held.map((h) => h._id) } }, { $set: { emailed: true } }).catch(() => undefined);
     }
-    return out.sent;
+    return out.sent || Boolean(out.muted);
 }
 
 /** Held notes go out once the 15 minutes have passed, even when nothing new happened. */
@@ -106,7 +108,7 @@ export async function flushTeamDigests(now = new Date()): Promise<void> {
         const subject = kind === "dose" ? `${count} dose reminders did not reach the phone` : `${count} team notes since the last email`;
         const text = pending.map((h) => h.text || "").filter(Boolean).join("\n\n");
         const out = await alertOps(`${kind}-flush:${now.getTime()}`, subject, text, { everyMs: 0, now: now.getTime() });
-        if (out.sent) await OpsAlertLog.updateMany({ _id: { $in: pending.map((h) => h._id) } }, { $set: { emailed: true } }).catch(() => undefined);
+        if (out.sent || out.muted) await OpsAlertLog.updateMany({ _id: { $in: pending.map((h) => h._id) } }, { $set: { emailed: true } }).catch(() => undefined);
     }
 }
 

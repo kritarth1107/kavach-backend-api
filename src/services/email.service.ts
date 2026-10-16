@@ -99,37 +99,36 @@ export async function sendWaitlistApprovedEmail(params: { to: string; name: stri
   return { sent: true };
 }
 
-/** An operations alert to the founder (credits running out, a vendor down). OPS_ALERT_TO overrides the recipient. */
-export async function sendOpsAlert(subject: string, text: string) {
-  const to = (process.env.OPS_ALERT_TO || "kritarth@kavach.care").split(",").map((x) => x.trim()).filter(Boolean);
-  const { error } = await resend().emails.send({
-    from: process.env.OPS_ALERT_FROM || "Kavach monitor <alerts@emails.kavach.care>",
-    to,
-    subject: `[Kavach] ${subject}`.slice(0, 160),
-    text: text.slice(0, 4000),
-  });
-  if (error) throw new AppError(error.message || "Failed to send ops alert", 502);
-  return { sent: true, to: to.length };
+/** What may email the Kavach team. Founder, 17 Oct 2026: only the crisis alert (a user talking of suicide, self-harm,
+ *  wanting to die or harming someone). Ops alerts, monitors, delivery reports, daily and nightly scores and the
+ *  emergency-with-no-one-else note are kept in the admin console and the logs instead. */
+export type TeamMail = "crisis" | "emergency_alone" | "ops" | "report";
+
+export function teamEmailAllowed(kind: TeamMail): boolean {
+  return kind === "crisis";
 }
 
-/** The Kavach team's daily report (trust plan C1: the 08:00 IST daily score; a failing nightly world score). Text, with an
- *  optional HTML body. TEAM_REPORT_TO, else OPS_ALERT_TO, overrides the recipients (comma separated). */
-export async function sendTeamReport(subject: string, text: string, html?: string) {
-  const to = (process.env.TEAM_REPORT_TO || process.env.OPS_ALERT_TO || "kritarth@kavach.care").split(",").map((x) => x.trim()).filter(Boolean);
-  const { error } = await resend().emails.send({
-    from: process.env.TEAM_REPORT_FROM || "Kavach daily score <alerts@emails.kavach.care>",
-    to,
-    subject: subject.slice(0, 160),
-    text: text.slice(0, 30000),
-    ...(html ? { html: html.slice(0, 60000) } : {}),
-  });
-  if (error) throw new AppError(error.message || "Failed to send the team report", 502);
-  return { sent: true, to: to.length };
+/** A team note that is not emailed: one log line, so it still shows in the backend logs. */
+function muted(kind: TeamMail, subject: string) {
+  console.log(`[team-note] not emailed (${kind}): ${subject.replace(/\s+/g, " ").slice(0, 160)}`);
+  return { sent: false, muted: true, to: 0 } as const;
 }
 
-/** A care alert to the Kavach care team (founder 2026-10-13: a user talking of suicide, self-harm or harming someone, or an
- *  emergency with no one else to tell). CARE_TEAM_ALERT_TO overrides the recipients (comma separated). */
-export async function sendCareTeamAlert(subject: string, text: string) {
+/** An operations note (credits running out, a vendor down, a saved store step broke). Not emailed (teamEmailAllowed). */
+export async function sendOpsAlert(subject: string, _text: string) {
+  return muted("ops", `[Kavach] ${subject}`);
+}
+
+/** The team's daily score and nightly world score (trust plan C1, C2). Not emailed (teamEmailAllowed); the admin
+ *  console keeps them. */
+export async function sendTeamReport(subject: string, _text: string, _html?: string) {
+  return muted("report", subject);
+}
+
+/** A care alert to the Kavach care team. Only `crisis` is emailed (teamEmailAllowed); CARE_TEAM_ALERT_TO overrides the
+ *  recipients (comma separated). */
+export async function sendCareTeamAlert(subject: string, text: string, kind: TeamMail = "ops") {
+  if (!teamEmailAllowed(kind)) return muted(kind, subject);
   const to = (process.env.CARE_TEAM_ALERT_TO || process.env.OPS_ALERT_TO || "kritarth@kavach.care").split(",").map((x) => x.trim()).filter(Boolean);
   const { error } = await resend().emails.send({
     from: process.env.CARE_TEAM_ALERT_FROM || "Kavach care alert <alerts@emails.kavach.care>",

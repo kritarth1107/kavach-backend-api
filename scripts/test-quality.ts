@@ -73,18 +73,18 @@ async function main() {
         assert.ok(defs.every((d) => d.action.startsWith("quality.")));
     });
 
-    await t("team_report sends the email with its html; delivery_day refuses a bad day", async () => {
+    await t("team_report and ops_alert are not emailed (founder 17 Oct: only a crisis emails); delivery_day refuses a bad day", async () => {
         const { setEmailClientForTests } = await import("../src/services/email.service");
         const sent: Array<Record<string, unknown>> = [];
         setEmailClientForTests({ emails: { send: async (m) => { sent.push(m); return { error: null }; } } });
-        process.env.TEAM_REPORT_TO = "team@kavach.care,founder@kavach.care";
         const { executeSaheliTool } = await import("../src/services/saheliTools.service");
-        const out = await executeSaheliTool({ tool: "team_report", args: { subject: "Saheli daily score 2026-10-13: 87%", text: "Overall 87%", html: "<div>87%</div>" },
+        const report = await executeSaheliTool({ tool: "team_report", args: { subject: "Saheli daily score 2026-10-13: 87%", text: "Overall 87%", html: "<div>87%</div>" },
+                                                 familyId: "ops", recipientUserId: "ops", actorUserId: "ops" });
+        const ops = await executeSaheliTool({ tool: "ops_alert", args: { subject: "Saved cart step broke on a store", text: "fix the saved step" },
                                               familyId: "ops", recipientUserId: "ops", actorUserId: "ops" });
-        assert.deepEqual(out, { sent: true, to: 2 });
-        assert.equal(sent[0].subject, "Saheli daily score 2026-10-13: 87%");
-        assert.equal(sent[0].html, "<div>87%</div>");
-        assert.deepEqual(sent[0].to, ["team@kavach.care", "founder@kavach.care"]);
+        assert.deepEqual(report, { sent: false, muted: true, to: 0 });
+        assert.deepEqual(ops, { sent: false, muted: true, to: 0 });
+        assert.equal(sent.length, 0);
         setEmailClientForTests(null);
         await assert.rejects(() => deliveryDay("13-10-2026"));
     });

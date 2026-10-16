@@ -478,8 +478,8 @@ export async function runLiveCheck(opts: RunOpts): Promise<ILiveCheck> {
         const send = opts.send ?? (async (s: string, t: string) => (await import("../services/email.service")).sendOpsAlert(s, t));
         const { subject, text } = liveCheckEmail(row);
         try {
-            await send(subject, text);
-            row.emailed = true;
+            const out = (await send(subject, text)) as { sent?: boolean } | void;
+            row.emailed = !(out && out.sent === false); // not emailed by rule (sendOpsAlert): still recorded on the row
             row.emailedKeys = problems;
         } catch (e) {
             row.emailError = (e as Error).message.slice(0, 200);

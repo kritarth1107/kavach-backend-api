@@ -337,10 +337,12 @@ async function main(uri: string) {
         assert.equal(byPerson[f7.elder.id]?.outcome, "no escalation recorded");
         assert.equal(check.total, 2);
         assert.equal(check.onTime, 0);
-        assert.equal(emails.length, 1);
-        assert.match(emails[0]!.subject, /Escalations on time 0\/2 on 2026-10-26/);
-        assert.match(emails[0]!.text, /alert late/);
-        assert.match(emails[0]!.text, /no escalation recorded/);
+        assert.equal(emails.length, 0); // founder 17 Oct: only a crisis emails the team; the note is in the admin console
+        const { default: OpsAlertLog } = await import("../src/models/opsAlertLog.model");
+        const note = (await OpsAlertLog.findOne({ kind: "escalation" }).sort({ at: -1 }).lean())!;
+        assert.match(note.subject, /Escalations on time 0\/2 on 2026-10-26/);
+        assert.match(note.text, /alert late/);
+        assert.match(note.text, /no escalation recorded/);
         assert.ok(await EscalationCheck.exists({ dateKey: D6 }));
         assert.equal(await E.runEscalationCheck(at("2026-10-27", "09:30")), null); // once a day
         // the earlier days were all on time

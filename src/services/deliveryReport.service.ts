@@ -109,12 +109,12 @@ async function sendDoseDigest(now: Date, subject: string, text: string, items: A
     const combinedSubject = held.length ? `${held.reduce((n, h) => n + (h.items?.length ?? 0), 0) + items.length} dose reminders did not reach the phone` : subject;
     const { alertOps } = await import("./opsAlert.service");
     const out = await alertOps(`dose-digest:${now.getTime()}`, combinedSubject, combined, { everyMs: 0, now: now.getTime() });
-    await OpsAlertLog.create({ kind: "dose", subject: combinedSubject, text: combined, items, emailed: out.sent, ...(out.error ? { error: out.error } : {}), at: now })
+    await OpsAlertLog.create({ kind: "dose", subject: combinedSubject, text: combined, items, emailed: out.sent || Boolean(out.muted), ...(out.error ? { error: out.error } : {}), at: now })
         .catch((err) => console.warn("[dose-alert] admin row failed:", err instanceof Error ? err.message : err));
-    if (out.sent && held.length) {
+    if ((out.sent || out.muted) && held.length) {
         await OpsAlertLog.updateMany({ _id: { $in: held.map((h) => h._id) } }, { $set: { emailed: true } }).catch(() => undefined);
     }
-    return out.sent;
+    return out.sent || Boolean(out.muted);
 }
 
 // ── the daily report ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -264,7 +264,7 @@ export async function runDailyDeliveryReport(now = clockNow()): Promise<IDeliver
     } catch { /* the reminder report still goes out when CloudWatch does not answer */ }
     const { alertOps } = await import("./opsAlert.service");
     const out = await alertOps(`report:${dateKey}`, subject, body, { everyMs: 0, now: now.getTime() });
-    await DeliveryReport.updateOne({ dateKey }, { $set: out.sent ? { emailedAt: now } : { emailError: out.error || "not sent" } });
+    await DeliveryReport.updateOne({ dateKey }, { $set: out.sent ? { emailedAt: now } : out.muted ? {} : { emailError: out.error || "not sent" } });
     console.log(`[delivery-report] ${dateKey}: due ${report.totals.due}, sent ${report.totals.sent}, delivered ${report.totals.delivered} (emailed=${out.sent})`);
     return { ...report, ...(out.sent ? { emailedAt: now } : {}) };
 }

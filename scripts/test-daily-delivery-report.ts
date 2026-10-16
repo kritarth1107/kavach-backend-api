@@ -116,7 +116,7 @@ async function withDb(uri: string) {
         assert.equal(await R.runDailyDeliveryReport(at("23:29")), null);
         assert.equal(emails.length, 0);
     });
-    await ok("at 23:30: one report, saved and emailed to the team, per family and in total", async () => {
+    await ok("at 23:30: one report, saved for the admin console (not emailed: only a crisis emails), per family and in total", async () => {
         resetOpsAlerts();
         const r = await R.runDailyDeliveryReport(at("23:30"));
         assert.ok(r);
@@ -134,9 +134,8 @@ async function withDb(uri: string) {
         assert.deepEqual(r!.ledger, { sends: 2, withWamid: 2, withReceipt: 1, failed: 1 });
         // every dose that did not reach the phone: the one still only "sent", the failed one, the missed one
         assert.deepEqual(r!.notDelivered.map((d) => `${d.person}:${d.medicine}:${d.state}`).sort(), ["Asha:Metformin:sent", "Gopal:Thyronorm:failed", "Gopal:Vitamin D:missed"]);
-        assert.equal(emails.length, 1);
-        const e = emails[0]!;
-        assert.deepEqual(e.to, ["kritarth@kavach.care"]);
+        assert.equal(emails.length, 0);
+        const e = R.reportText(r!);
         assert.match(e.subject, /Kavach reminders 2026-10-14: 4\/7 sent, 2 delivered, 1 read, 3 doses not delivered/);
         assert.match(e.text, /All families: due 7, sent 4, delivered 2, read 1, missed 1/);
         assert.match(e.text, /on time 4\/6 \(67%\)/);
@@ -144,7 +143,7 @@ async function withDb(uri: string) {
         assert.match(e.text, /family famrepor · Gopal · Thyronorm at 07:00 · failed \(WhatsApp 131047 Re-engagement message\) · 3 attempts/);
         assert.ok(!e.text.includes("Devi")); // first names only
         const saved = await DeliveryReport.findOne({ dateKey: DAY }).lean();
-        assert.ok(saved?.emailedAt);
+        assert.ok(saved && !saved.emailedAt && !saved.emailError);
     });
     await ok("once a day: a later tick (or a second instance) sends nothing", async () => {
         emails.length = 0;

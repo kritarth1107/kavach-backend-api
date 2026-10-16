@@ -408,7 +408,7 @@ export async function runEscalationCheck(now = clockNow(), opts: { force?: boole
         const sent = await alertOps(`escalation-check:${dateKey}`, `Escalations on time ${onTime}/${cases.length} on ${dateKey}`, text, { everyMs: 0, now: now.getTime() });
         const { default: OpsAlertLog } = await import("../models/opsAlertLog.model");
         await OpsAlertLog.create({ kind: "escalation", subject: `Escalations on time ${onTime}/${cases.length} on ${dateKey}`, text,
-            items: misses.map((c) => ({ family: c.family, person: c.person, time: ist(c.thirdAt), reason: c.outcome })), emailed: sent.sent, at: now }).catch(() => undefined);
+            items: misses.map((c) => ({ family: c.family, person: c.person, time: ist(c.thirdAt), reason: c.outcome })), emailed: sent.sent || Boolean(sent.muted), at: now }).catch(() => undefined);
         if (sent.sent) await EscalationCheck.updateOne({ dateKey }, { $set: { emailedAt: now } }).catch(() => undefined);
     }
     return result;
