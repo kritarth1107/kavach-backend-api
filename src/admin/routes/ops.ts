@@ -22,6 +22,12 @@ function lastDays(n: number): string[] {
 }
 
 type Spend = { today: number; softCap: number; hardCap: number; rows: Array<{ day?: string; role?: string; model?: string; costInr?: number; calls?: number }> };
+type NudgeRates = {
+    sent: number; replied: number; rate: number | null; days: number;
+    byKind: Array<{ kind: string; sent: number; replied: number; rate: number | null }>;
+    byHour: Array<{ hour: number; sent: number; replied: number; rate: number | null }>;
+    people: Array<{ person: string; sent: number; replied: number; rate: number | null }>;
+};
 
 export function opsRoutes(): RouteDef[] {
     return [
@@ -30,7 +36,7 @@ export function opsRoutes(): RouteDef[] {
             handler: async ({ admin }) => {
                 const people = can(admin.role, "users.read"); // analysts get numbers only, never a named family
                 const d7 = daysAgo(7), d14 = daysAgo(14), d1 = daysAgo(1);
-                const [users, users7, families, families7, act, orders7, ordersPrev, failed7, sent7, completions, spend] = await Promise.all([
+                const [users, users7, families, families7, act, orders7, ordersPrev, failed7, sent7, completions, spend, nudgeRates] = await Promise.all([
                     User.countDocuments({ status: { $ne: "DELETED" } }),
                     User.countDocuments({ createdAt: { $gte: d7 } }),
                     Family.countDocuments({}),
@@ -43,6 +49,7 @@ export function opsRoutes(): RouteDef[] {
                     OutboundMessage.countDocuments({ createdAt: { $gte: d7 } }),
                     CareScheduleCompletion.find({ updatedAt: { $gte: d7 } }, { status: 1 }).sort({ updatedAt: -1 }).limit(10_000).lean<Array<{ status: string }>>(),
                     engineOrNull<Spend>("GET", "/spend?days=14"),
+                    engineOrNull<NudgeRates>("GET", "/nudge-rates?days=7"),
                 ]);
                 const days = lastDays(14);
                 const series = days.map((day) => ({ day, messagesIn: 0, messagesOut: 0, alerts: 0, reminders: 0, orders: 0 }));
@@ -78,6 +85,8 @@ export function opsRoutes(): RouteDef[] {
                         series,
                         spend: spend.data ? { today: spend.data.today, softCap: spend.data.softCap, hardCap: spend.data.hardCap, byDay: days.map((day) => ({ day, inr: Math.round((spend.data!.rows || []).filter((r) => r.day === day).reduce((s, r) => s + (r.costInr || 0), 0) * 100) / 100 })) } : null,
                         spendError: spend.error || null,
+                        nudges: nudgeRates.data ? { ...nudgeRates.data, people: people ? nudgeRates.data.people : [] } : null,
+                        nudgesError: nudgeRates.error || null,
                         recentAlerts: people ? recentAlerts.map((a) => ({ ...safeActivity(a), family: fams.find((f) => f.familyId === a.familyId)?.name || "Family" })) : [],
                     },
                 };
