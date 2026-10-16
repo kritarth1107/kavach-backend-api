@@ -119,8 +119,37 @@ ok("record link reads '3 Sep prescription' and names the doctor", JSON.stringify
 const undated = recordLinks({ kind: "lab", recordDate: null, title: "CBC", doctor: null }, "doc-2");
 ok("an undated record without a doctor: only the record link, named by its title", undated.length === 1 && undated[0].label === "lab report: CBC", undated);
 
-if (fail) {
-    console.error(`${fail} failed`);
-    process.exit(1);
+// With no language saved, the fixed lines follow the script they write in; never Hindi by default (live 16 Oct)
+async function languageChecks(uri: string) {
+    const mongoose = (await import("mongoose")).default;
+    await mongoose.connect(uri);
+    await mongoose.connection.db!.dropDatabase();
+    const { default: User } = await import("../src/models/users.model");
+    const { default: Inbound } = await import("../src/models/whatsappInboundDedupe.model");
+    const { langOf } = await import("../src/services/whatsappHealthRecord.service");
+    const people = [
+        { userId: "u-en", phone: "919000000301", texts: ["Upload these for my mother", "Give me context of her reports"] },
+        { userId: "u-hi", phone: "919000000302", texts: ["माँ की रिपोर्ट देख लो", "क्या हाल है"] },
+        { userId: "u-none", phone: "919000000303", texts: [] },
+    ];
+    for (const p of people) {
+        await User.collection.insertOne({ userId: p.userId, phoneKey: `+${p.phone}`, firstName: "Test" });
+        let i = 0;
+        for (const text of p.texts) await Inbound.create({ messageId: `${p.userId}-${i++}`, phone: p.phone, payload: { text } });
+        await Inbound.create({ messageId: `${p.userId}-doc`, phone: p.phone, payload: { text: "[document shared]", mediaType: "document" } });
+    }
+    ok("no language saved, writes English → English lines", (await langOf("u-en")).lang === "en");
+    ok("no language saved, writes Hindi → Hindi lines", (await langOf("u-hi")).lang === "hi");
+    ok("no language saved and nothing written yet → English, not Hindi", (await langOf("u-none")).lang === "en");
+    await mongoose.disconnect();
 }
-console.log("all passed");
+
+void (async () => {
+    if (process.env.TEST_MONGODB_URI) await languageChecks(process.env.TEST_MONGODB_URI);
+    else console.log("(DB checks skipped: set TEST_MONGODB_URI)");
+    if (fail) {
+        console.error(`${fail} failed`);
+        process.exit(1);
+    }
+    console.log("all passed");
+})();

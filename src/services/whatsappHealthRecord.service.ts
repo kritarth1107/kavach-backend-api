@@ -50,10 +50,39 @@ const T: Record<Lang, Record<string, string>> = {
 
 const fill = (s: string, v: Record<string, string>) => s.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? "");
 
-async function langOf(userId: string): Promise<{ lang: Lang; label: string; script: string }> {
+/** The script of their own latest WhatsApp texts (letters only; taps and media left out), when no language is saved. */
+export async function writtenScript(userId: string): Promise<"devanagari" | "latin" | "other" | null> {
+    try {
+        const { default: User } = await import("../models/users.model");
+        const u = await User.findOne({ userId }, { phoneKey: 1 }).lean<{ phoneKey?: string }>();
+        const phone = String(u?.phoneKey ?? "").replace(/\D/g, "");
+        if (phone.length < 8) return null;
+        const { default: Inbound } = await import("../models/whatsappInboundDedupe.model");
+        const rows = await Inbound.find({ phone, "payload.text": { $type: "string" } }, { payload: 1 }).sort({ createdAt: -1 }).limit(8)
+            .lean<Array<{ payload?: { text?: string; interactiveId?: string; mediaType?: string } }>>();
+        const text = rows.filter((r) => !r.payload?.interactiveId && !r.payload?.mediaType).map((r) => r.payload?.text ?? "").join(" ");
+        const letters = text.replace(/[^\p{L}]/gu, "");
+        if (!letters) return null;
+        const share = (re: RegExp) => (letters.match(re) ?? []).length / letters.length;
+        if (share(/\p{Script=Devanagari}/gu) > 0.5) return "devanagari";
+        if (share(/\p{Script=Latin}/gu) > 0.5) return "latin";
+        return "other";
+    } catch {
+        return null;
+    }
+}
+
+/** Their saved language; with none saved, the script they write in. Never Hindi by default (live 16 Oct: a caregiver who
+ *  writes English, with no language saved, got "मिल गया 🙏 पढ़ रही हूँ" for every report she forwarded). */
+export async function langOf(userId: string): Promise<{ lang: Lang; label: string; script: string }> {
     const { getSpeechProfile } = await import("./voicePreference.service");
     const { replyScript, speechLabel } = await import("./language.service");
     const p = await getSpeechProfile(userId).catch(() => ({}));
+    if (!(p as { language?: string }).language) {
+        return (await writtenScript(userId)) === "devanagari"
+            ? { lang: "hi", label: "Hindi (हिन्दी)", script: "devanagari" }
+            : { lang: "en", label: "English", script: "latin" };
+    }
     const script = replyScript(p);
     return { lang: script === "devanagari" ? "hi" : "en", label: speechLabel(p), script };
 }

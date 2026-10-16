@@ -351,6 +351,9 @@ async function main() {
 
     server.close();
     engine.close();
+    // Writes a handler started without waiting (open counts, care events) finish before the client closes; closing under
+    // them threw MongoClientClosedError as an unhandled rejection and failed the run about half the time.
+    await new Promise((r) => setTimeout(r, 750));
     await mongoose.disconnect();
 }
 
