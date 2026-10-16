@@ -133,7 +133,8 @@ async function languageChecks(uri: string) {
         { userId: "u-none", phone: "919000000303", texts: [] },
     ];
     for (const p of people) {
-        await User.collection.insertOne({ userId: p.userId, phoneKey: `+${p.phone}`, firstName: "Test" });
+        // email is a unique field: every test person needs their own (CI builds the index before the inserts)
+        await User.collection.insertOne({ userId: p.userId, phoneKey: `+${p.phone}`, email: `${p.userId}@test.kavach.care`, firstName: "Test" });
         let i = 0;
         for (const text of p.texts) await Inbound.create({ messageId: `${p.userId}-${i++}`, phone: p.phone, payload: { text } });
         await Inbound.create({ messageId: `${p.userId}-doc`, phone: p.phone, payload: { text: "[document shared]", mediaType: "document" } });
