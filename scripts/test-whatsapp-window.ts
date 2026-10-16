@@ -75,6 +75,12 @@ async function pure() {
         T.setTemplateCatalogForTest(["kavach_saheli_update_hi|hi", "kavach_saheli_update_en|en", "kavach_saheli_update_mr|mr"]);
         assert.deepEqual(await T.pickTemplate("update", "hi"), { name: "kavach_saheli_update_hi", language: "hi" });
         assert.deepEqual(await T.pickTemplate("update", "bn"), { name: "kavach_saheli_update_hi", language: "hi" });
+        // A Hindi notice, once APPROVED UTILITY, comes before the account-update line. Marwari (dialect mwr) gets its own.
+        T.setTemplateCatalogForTest(["kavach_saheli_wait1_hi|hi", "kavach_saheli_update_hi|hi", "kavach_saheli_wait1_mwr|hi"]);
+        assert.deepEqual(await T.pickTemplate("update", "hi"), { name: "kavach_saheli_wait1_hi", language: "hi" });
+        assert.deepEqual(await T.pickTemplate("message", "hi", "mwr"), { name: "kavach_saheli_wait1_mwr", language: "hi" });
+        T.setTemplateCatalogForTest(["kavach_saheli_hello_mtr|hi", "kavach_saheli_update_hi|hi"]);
+        assert.deepEqual(await T.pickTemplate("update", "hi", "mwr"), { name: "kavach_saheli_hello_mtr", language: "hi" });
     });
     await ok("every caregiver alert kind that may go on WhatsApp has its own template (15 Oct)", () => {
         assert.equal(T.alertTemplateFor("health_red_flag"), "alert_health");

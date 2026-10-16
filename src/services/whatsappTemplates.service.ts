@@ -53,11 +53,11 @@ export const TEMPLATE_BASES: Record<TemplatePurpose, string[]> = {
     // is approved and these go as before; kept for the engine's hints
     alert: ["kavach_alert"],
     order: ["kavach_order_update"],
-    // the general opener; the account-update rewording where Meta filed the first MARKETING (2026-10-14: all 11 were)
-    message: ["kavach_saheli_message", "kavach_saheli_update", "kavach_saheli_care"],
-    // the daily nudge when the chat is closed: this name only. bn/ta/gu/pa/ml are MARKETING, so the language chain
-    // (the reader, then Hindi, then English) picks an APPROVED UTILITY copy.
-    update: ["kavach_saheli_update"],
+    // the general opener. The notice wordings (16 Oct, Hindi) come first; the account-update line stays until one is
+    // APPROVED UTILITY. A language with no notice copy falls through.
+    message: ["kavach_saheli_wait1", "kavach_saheli_wait2", "kavach_saheli_wait3", "kavach_saheli_message", "kavach_saheli_update", "kavach_saheli_care"],
+    // the daily nudge when the chat is closed. Same notice copies, then kavach_saheli_update.
+    update: ["kavach_saheli_wait1", "kavach_saheli_wait2", "kavach_saheli_wait3", "kavach_saheli_update"],
 };
 
 /** Params each template takes (Meta refuses a send with the wrong count). */
@@ -152,9 +152,19 @@ export function languageChain(lang?: string | null): string[] {
     return [...new Set(ENGLISH_BEFORE_HINDI.has(l) ? [l, "en", "hi"] : [l, "hi", "en"])];
 }
 
-/** The template to send for this purpose to someone who reads `lang`, or null when none is approved yet. */
-export async function pickTemplate(purpose: TemplatePurpose, lang?: string | null): Promise<{ name: string; language: string } | null> {
+/** Marwari has no WhatsApp locale. These Hindi-language names are the notice, then the earlier Marwari line if Meta filed that UTILITY. */
+const MARWARI = new Set(["mwr", "marwari", "marwadi"]);
+const MARWARI_OPENERS = ["kavach_saheli_wait1_mwr", "kavach_saheli_wait2_mwr", "kavach_saheli_wait3_mwr", "kavach_saheli_hello_mtr"];
+
+/** The template to send for this purpose to someone who reads `lang`, or null when none is approved yet.
+ * `dialect` (mwr) picks a Marwari notice before the Hindi one. */
+export async function pickTemplate(purpose: TemplatePurpose, lang?: string | null, dialect?: string | null): Promise<{ name: string; language: string } | null> {
     const ok = await approvedTemplates();
+    if ((purpose === "message" || purpose === "update") && MARWARI.has(String(dialect || "").trim().toLowerCase())) {
+        for (const name of MARWARI_OPENERS) {
+            if (ok.has(`${name}|hi`)) return { name, language: "hi" };
+        }
+    }
     for (const l of languageChain(lang)) {
         for (const base of TEMPLATE_BASES[purpose]) {
             for (const name of [`${base}_${l}`, base]) {

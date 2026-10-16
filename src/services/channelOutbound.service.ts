@@ -266,8 +266,9 @@ export async function sendTemplateNotice(input: {
     template: OutboundTemplate;
 }): Promise<{ sent: boolean; reason?: string; template?: string; wamid?: string }> {
     const T = await import("./whatsappTemplates.service");
-    const lang = input.template.lang || (await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.toUserId)).catch(() => null))?.language;
-    const chosen = await T.pickTemplate(input.template.purpose, lang);
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(input.toUserId)).catch(() => null);
+    const lang = input.template.lang || speech?.language;
+    const chosen = await T.pickTemplate(input.template.purpose, lang, speech?.dialect);
     if (!chosen) {
         const { recordNotSent } = await import("./deliveryLedger.service");
         await recordNotSent({ phone: input.phone, reason: "no_template" });
@@ -305,14 +306,15 @@ async function deliverOutsideWindow(
     const phone = payload.channelIdentifier;
     const reader = payload.toUserId || payload.recipientUserId;
     const T = await import("./whatsappTemplates.service");
-    const lang = t?.lang || (await import("./voicePreference.service").then((V) => V.getSpeechProfile(reader)).catch(() => null))?.language;
-    let chosen = t ? await T.pickTemplate(t.purpose, lang) : null;
+    const speech = await import("./voicePreference.service").then((V) => V.getSpeechProfile(reader)).catch(() => null);
+    const lang = t?.lang || speech?.language;
+    let chosen = t ? await T.pickTemplate(t.purpose, lang, speech?.dialect) : null;
     let purpose = t?.purpose;
     let params = t?.params ?? [];
     let quickReplyPayloads = t?.quickReplyPayloads;
     let waiting = t ? (t.keepWaiting ?? t.purpose !== "reminder") : true;
     let skipped = "";
-    // A daily nudge asks only for kavach_saheli_update. It does not fall through to another template, and only one a day.
+    // A daily nudge stays on purpose "update" (the notice, then kavach_saheli_update). It does not fall through, and only one a day.
     const pinned = t?.purpose === "update";
     if (chosen && pinned && (kind === "nudge" || kind === "checkin")) {
         const why = await openerHeldBack(phone, kind);
@@ -325,7 +327,7 @@ async function deliverOutsideWindow(
         const why = await openerHeldBack(phone, kind);
         if (why) skipped = why;
         else {
-            chosen = await T.pickTemplate("message", lang);
+            chosen = await T.pickTemplate("message", lang, speech?.dialect);
             purpose = "message";
             params = [await readerName(reader)];
             quickReplyPayloads = ["open:waiting"];
