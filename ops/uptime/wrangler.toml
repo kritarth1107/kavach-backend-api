@@ -9,7 +9,7 @@ preview_urls = false
 crons = ["* * * * *", "30 3 * * 1"]   # every minute (reminders; the rest on the 5-minute marks); Monday 09:00 IST weekly check-in
 
 [vars]
-ALERT_TO = "kritarth@kavach.care"
+ALERT_TO = ""
 ALERT_FROM = "Kavach monitor <alerts@emails.kavach.care>"
 DASHBOARD_URL = "https://app.kavach.care"
 # Live path is AWS (14 Oct 2026). The engine has no public address; with HEALTH_SECRET the

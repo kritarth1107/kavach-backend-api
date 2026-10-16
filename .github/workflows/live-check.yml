@@ -3,7 +3,7 @@ name: Live check (hourly, and after each deploy)
 # Quality plan F8 (hourly) and F7 (after a backend deploy). Production is AWS.
 # This checks https://api.brainbehindkavach.me and the ECS services. It does not call Cloud Run
 # and it does not send traffic to the test project. Hourly: red only when the check itself
-# could not run. After a deploy: red on any problem. The Cloudflare uptime worker emails.
+# could not run. After a deploy: red on any problem. It does not email. A problem is reported on OpenBot.
 on:
   schedule:
     - cron: "17 * * * *" # every hour at :47 IST

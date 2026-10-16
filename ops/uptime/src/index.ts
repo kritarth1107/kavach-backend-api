@@ -2,9 +2,8 @@
  * Kavach uptime alarm: a Cloudflare Worker (outside AWS, so an AWS outage can't silence it).
  * Every minute it checks that reminders are running (the backend's /api/health/reminders: 503 when the reminder tick has
  * not run for 3 minutes; trust plan B1.7); every 5 minutes it also checks the dashboard, the backend (and its database)
- * and Saheli's engine. Two failures in a row email the founder
- * through Resend when one goes down, every 6 h while it stays down, and when it recovers. Monday 09:00 IST it sends a
- * weekly check-in, so a silent alarm is noticed too. GET /status runs a round now and shows it (no secrets, saves nothing).
+ * and Saheli's engine. Two failures in a row are recorded. Founder 17 Oct 2026: this worker does not email.
+ * The only team email is a crisis alert. GET /status runs a round now and shows it (no secrets, saves nothing).
  * KV is written only when the state changes (a few times a day), never every round: the free tier allows 1,000 writes a day.
  *
  * Secrets (wrangler secret put): RESEND_API_KEY, HEALTH_SECRET (backend detailed health; optional).
@@ -89,6 +88,11 @@ export async function probe(t: Target, fetchFn: typeof fetch = fetch, timeoutMs 
 }
 
 export async function sendEmail(env: Env, subject: string, text: string, fetchFn: typeof fetch = fetch, html?: string): Promise<boolean> {
+    const to = (env.ALERT_TO || "").split(",").map((s) => s.trim()).filter(Boolean);
+    if (!to.length) {
+        console.log(`[team-note] not emailed: ${subject}`);
+        return false;
+    }
     if (!env.RESEND_API_KEY) {
         console.error("RESEND_API_KEY not set: cannot send", subject);
         return false;
@@ -96,7 +100,7 @@ export async function sendEmail(env: Env, subject: string, text: string, fetchFn
     const res = await fetchFn("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ from: env.ALERT_FROM, to: env.ALERT_TO.split(",").map((s) => s.trim()).filter(Boolean), subject, text, ...(html ? { html } : {}) }),
+        body: JSON.stringify({ from: env.ALERT_FROM, to, subject, text, ...(html ? { html } : {}) }),
     });
     if (!res.ok) console.error("Resend failed", res.status, (await res.text()).slice(0, 200));
     return res.ok;

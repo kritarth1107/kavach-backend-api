@@ -9,8 +9,8 @@ A Cloudflare Worker that checks from outside Google, every minute for reminders 
 | Saheli's brain | `<engine>/health` | 200 and `"ok"` |
 | Reminders (every minute) | `<backend>/api/health/reminders` | 200 and `"status": "ok"` (the reminder tick ran in the last 3 minutes) |
 
-Two failed checks in a row = down → one email (Resend), a reminder once a day while down, and a "recovered" email with
-how long it lasted. Monday 09:00 IST: a weekly check-in with each service's uptime, so a broken alarm is noticed too.
+Two failed checks in a row = down. The state is saved. Founder 17 Oct 2026: this worker does not email.
+ALERT_TO is empty. The only team email is a crisis alert.
 No public URL (cron only). Last round: `npx wrangler kv key get last --binding STATE --remote`. Free plan is enough
 (≈ 8,700 runs/month). Deployed 2026-10-05 on account kritarth@kavach.care (workers.dev name `kavach-care`, KV `STATE`).
 
@@ -23,10 +23,7 @@ npx wrangler secret put RESEND_API_KEY              # the backend's Resend key (
 npx wrangler secret put HEALTH_SECRET               # the backend's HEALTH_SECRET (optional; checks the database too)
 npx wrangler deploy
 ```
-Change who gets alerts in `wrangler.toml` (`ALERT_TO`, comma-separated) and deploy again.
-
-While the Google project is suspended the backend and engine checks fail, so the first deploy sends a "down" email at
-once — that is the alarm working.
+ALERT_TO stays empty. A deploy does not email.
 
 ## Test
 `npm run test:uptime` (from kavach-backend) — the decisions, emails and checks with a fake network; runs in CI.

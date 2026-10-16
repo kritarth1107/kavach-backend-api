@@ -138,6 +138,8 @@ void (async () => {
     const quiet = await runChecks(env, t(70), fakeFetch);
     ok("all fine again: nothing written", quiet.wrote === false);
     ok("no Resend key: nothing sent, no crash", (await sendEmail({ ...env, RESEND_API_KEY: undefined }, "s", "t", fakeFetch)) === false);
+    sent.length = 0;
+    ok("no recipient: nothing sent", (await sendEmail({ ...env, ALERT_TO: "" }, "s", "t", fakeFetch)) === false && sent.length === 0);
 
     if (fail) {
         console.error(`${fail} failed`);
