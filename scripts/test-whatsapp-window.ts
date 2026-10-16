@@ -285,6 +285,22 @@ async function withDb(uri: string) {
         for (let i = 1; i <= 10; i++) assert.ok(body.includes(`message ${i}`), `message ${i} included`);
         assert.deepEqual(W.waitingTexts([{ text: "a", at: new Date().toISOString() }]), ["a"]); // fresh: no time stamp
     });
+    await ok("a nudge that waited past its moment is dropped, an alert is still given (live 16 Oct: breakfast at 13:35)", async () => {
+        const OLD = "+919000000299";
+        const { default: WhatsAppWaiting } = await import("../src/models/whatsappWaiting.model");
+        await W.keepWaiting({ phone: OLD, familyId: "fam-w", toUserId: "elder-x", purpose: "update", kind: "nudge", text: "8:30 ho gaye, nashta kiya?" });
+        await W.keepWaiting({ phone: OLD, familyId: "fam-w", toUserId: "elder-x", purpose: "alert", kind: "alert", text: "Asha called, please call back" });
+        await W.keepWaiting({ phone: OLD, familyId: "fam-w", toUserId: "elder-x", purpose: "update", kind: "nudge", text: "Dopahar ka khana ho gaya?" });
+        const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60_000);
+        await WhatsAppWaiting.updateMany({ phone: "919000000299", text: { $in: ["8:30 ho gaye, nashta kiya?", "Asha called, please call back"] } },
+            { $set: { createdAt: threeHoursAgo } });
+        const given = await W.takeWaitingByPhone(OLD);
+        assert.deepEqual(given.map((g) => g.text), ["Asha called, please call back", "Dopahar ka khana ho gaya?"]);
+        const dropped = await WhatsAppWaiting.findOne({ phone: "919000000299", text: "8:30 ho gaye, nashta kiya?" }).lean<{ expired?: boolean; deliveredAt?: Date }>();
+        assert.equal(dropped?.expired, true);
+        assert.ok(dropped?.deliveredAt);
+        assert.deepEqual(await W.takeWaitingByPhone(OLD), []);
+    });
     await ok("never free text to a closed chat, whichever code path tries it (the Meta client refuses and records it)", async () => {
         const { sendViaMetaWhatsApp } = await import("../src/clients/metaWhatsApp.client");
         const { default: MessageDelivery } = await import("../src/models/messageDelivery.model");

@@ -9,9 +9,13 @@ export interface IWhatsAppWaiting {
     familyId: string;
     toUserId?: string;
     purpose: string;
+    /** The delivery kind it was sent as (nudge, checkin, alert, reminder…): a nudge or check-in is about its moment. */
+    kind?: string;
     text: string;
     createdAt: Date;
     deliveredAt?: Date;
+    /** It waited past its moment and was dropped instead of given (a breakfast nudge in the afternoon). */
+    expired?: boolean;
 }
 
 const schema = new Schema<IWhatsAppWaiting>(
@@ -20,9 +24,11 @@ const schema = new Schema<IWhatsAppWaiting>(
         familyId: { type: String, required: true },
         toUserId: { type: String, index: true },
         purpose: { type: String, required: true },
+        kind: { type: String },
         text: { type: String, required: true },
         createdAt: { type: Date, default: Date.now, expires: 60 * 60 * 24 * 7 },
         deliveredAt: { type: Date },
+        expired: { type: Boolean },
     },
     { versionKey: false, collection: "whatsapp_waiting" },
 );

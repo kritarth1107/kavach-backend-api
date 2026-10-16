@@ -623,7 +623,9 @@ async function processOneMetaInbound(
             console.warn("Delivering waiting messages failed:", err instanceof Error ? err.message : err);
             return [];
         });
-        if (given.length && String(inbound.interactiveId ?? "") === "open:waiting") {
+        // A tap on a template's quick reply comes as type "button" (no interactiveId): its payload is the text.
+        const tapped = String(inbound.interactiveId ?? (inbound.inboundType === "button" ? inbound.text : "") ?? "");
+        if (given.length && tapped === "open:waiting") {
             // the opener's "Show message": what waited was the answer; no turn needed
             const session = await import("../models/whatsappSession.model").then((m) => m.default);
             const { normalizeChannelIdentifier } = await import("../services/identityResolver.service");

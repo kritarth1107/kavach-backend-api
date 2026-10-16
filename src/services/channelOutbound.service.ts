@@ -334,7 +334,7 @@ async function deliverOutsideWindow(
     }
     const { keepWaiting } = await import("./whatsappWindow.service");
     const queue = () =>
-        keepWaiting({ phone, familyId: payload.familyId, toUserId: reader, purpose: purpose ?? (kind === "alert" ? "alert" : "message"), text: payload.content })
+        keepWaiting({ phone, familyId: payload.familyId, toUserId: reader, purpose: purpose ?? (kind === "alert" ? "alert" : "message"), kind, text: payload.content })
             .catch((err) => console.warn("Keeping a message for a closed WhatsApp chat failed:", err instanceof Error ? err.message : err));
     if ((purpose === "update" || purpose === "message") && !quickReplyPayloads?.length) quickReplyPayloads = ["open:waiting"];
     if (chosen && purpose) {

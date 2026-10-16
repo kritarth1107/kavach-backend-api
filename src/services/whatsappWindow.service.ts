@@ -62,10 +62,22 @@ export async function noteStatusFailures(body: unknown): Promise<number> {
     return closed;
 }
 
-export async function keepWaiting(input: { phone: string; familyId: string; toUserId?: string; purpose: string; text: string }): Promise<void> {
+export async function keepWaiting(input: { phone: string; familyId: string; toUserId?: string; purpose: string; kind?: string; text: string }): Promise<void> {
     const text = input.text.trim();
     if (!text) return;
-    await WhatsAppWaiting.create({ phone: phoneKey(input.phone), familyId: input.familyId, toUserId: input.toUserId, purpose: input.purpose, text: text.slice(0, 4000) });
+    await WhatsAppWaiting.create({
+        phone: phoneKey(input.phone), familyId: input.familyId, toUserId: input.toUserId, purpose: input.purpose,
+        ...(input.kind ? { kind: input.kind } : {}), text: text.slice(0, 4000),
+    });
+}
+
+/** A nudge or a check-in is written for its moment ("it is 8:30, had breakfast?"). Waited longer than this, it is dropped
+ *  instead of given word for word (live 16 Oct: a breakfast nudge given at 13:35). Saheli writes a fresh one for now. */
+export const MOMENT_KINDS = new Set(["nudge", "checkin"]);
+export const MOMENT_MS = 2 * 60 * 60_000;
+
+function pastItsMoment(r: { kind?: string; createdAt: Date }, now: Date): boolean {
+    return MOMENT_KINDS.has(String(r.kind ?? "")) && now.getTime() - new Date(r.createdAt).getTime() > MOMENT_MS;
 }
 
 /**
@@ -75,10 +87,18 @@ export async function keepWaiting(input: { phone: string; familyId: string; toUs
 export async function takeWaitingByPhone(phone: string): Promise<Array<{ purpose: string; text: string; at: string; toUserId?: string }>> {
     const key = phoneKey(phone);
     if (key.length < 8) return [];
-    const rows = await WhatsAppWaiting.find({ phone: key, deliveredAt: { $exists: false } }).sort({ createdAt: 1 }).limit(200)
-        .lean<Array<{ _id: unknown; purpose: string; text: string; createdAt: Date; toUserId?: string }>>();
+    const all = await WhatsAppWaiting.find({ phone: key, deliveredAt: { $exists: false } }).sort({ createdAt: 1 }).limit(200)
+        .lean<Array<{ _id: unknown; purpose: string; kind?: string; text: string; createdAt: Date; toUserId?: string }>>();
+    if (!all.length) return [];
+    const now = clockNow();
+    const stale = all.filter((r) => pastItsMoment(r, now));
+    const rows = all.filter((r) => !pastItsMoment(r, now));
+    if (stale.length) {
+        await WhatsAppWaiting.updateMany({ _id: { $in: stale.map((r) => r._id) } }, { $set: { deliveredAt: now, expired: true } });
+        console.log(`WhatsApp: ${stale.length} waiting nudge(s) past their moment dropped, not given`);
+    }
     if (!rows.length) return [];
-    await WhatsAppWaiting.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { deliveredAt: clockNow() } });
+    await WhatsAppWaiting.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { deliveredAt: now } });
     return rows.map((r) => ({ purpose: r.purpose, text: r.text, at: new Date(r.createdAt).toISOString(), ...(r.toUserId ? { toUserId: r.toUserId } : {}) }));
 }
 
@@ -98,8 +118,13 @@ export function waitingTexts(items: Array<{ text: string; at: string }>, now: Da
 export async function takeWaiting(toUserId: string): Promise<Array<{ purpose: string; text: string; at: string }>> {
     if (!toUserId) return [];
     const q = { toUserId, deliveredAt: { $exists: false } };
-    const rows = await WhatsAppWaiting.find(q).sort({ createdAt: 1 }).limit(8).lean<Array<{ _id: unknown; purpose: string; text: string; createdAt: Date }>>();
+    const found = await WhatsAppWaiting.find(q).sort({ createdAt: 1 }).limit(8).lean<Array<{ _id: unknown; purpose: string; kind?: string; text: string; createdAt: Date }>>();
+    if (!found.length) return [];
+    const now = clockNow();
+    const stale = found.filter((r) => pastItsMoment(r, now));
+    if (stale.length) await WhatsAppWaiting.updateMany({ _id: { $in: stale.map((r) => r._id) } }, { $set: { deliveredAt: now, expired: true } });
+    const rows = found.filter((r) => !pastItsMoment(r, now));
     if (!rows.length) return [];
-    await WhatsAppWaiting.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { deliveredAt: new Date() } });
+    await WhatsAppWaiting.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { deliveredAt: now } });
     return rows.map((r) => ({ purpose: r.purpose, text: r.text, at: new Date(r.createdAt).toISOString() }));
 }
