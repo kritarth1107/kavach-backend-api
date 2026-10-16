@@ -271,10 +271,14 @@ async function withDb(uri: string) {
     await ok("a caregiver alert is never held behind an old opener: a new one goes after 30 minutes (15 Oct)", async () => {
         T.setTemplateCatalogForTest(["kavach_saheli_update_en|en"]);
         const { default: MessageDelivery } = await import("../src/models/messageDelivery.model");
+        const { setClockForTest } = await import("../src/utils/clock.util");
+        // Midday IST, so "2 hours ago" is the same IST day whenever CI runs (it failed between 00:00 and 02:00 IST)
+        const NOW = new Date("2026-10-15T12:00:00+05:30").getTime();
+        setClockForTest(NOW);
         const PHONE = "+919000000206";
-        await W.noteInbound(PHONE, new Date(Date.now() - 40 * 3_600_000));
+        await W.noteInbound(PHONE, new Date(NOW - 40 * 3_600_000));
         await MessageDelivery.create({ phone: W.phoneKey(PHONE), familyId: "fam-w", kind: "checkin", template: "kavach_saheli_update_en",
-            status: "delivered", sentAt: new Date(Date.now() - 2 * 3_600_000), attempt: 1 });
+            status: "delivered", sentAt: new Date(NOW - 2 * 3_600_000), attempt: 1 });
         const ob = { familyId: "fam-w", recipientUserId: "elder-o", channel: "whatsapp" as const, channelIdentifier: PHONE };
         sent.length = 0;
         // a nudge is still held (the opener went and they have not written)
@@ -291,6 +295,7 @@ async function withDb(uri: string) {
         const again = await deliverOutboundMessage({ ...ob, toUserId: "elder-o", purpose: "alert", content: "Another note" });
         assert.equal(again.delivered, false);
         assert.equal(sent.length, 0);
+        setClockForTest(null);
     });
     await ok("more than 8 waiting: all of them, as one summary, newest first", async () => {
         const MANY = "+919000000204";
