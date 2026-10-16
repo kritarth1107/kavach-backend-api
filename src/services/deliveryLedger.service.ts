@@ -60,7 +60,7 @@ function pruneEarly(now = Date.now()) {
 }
 
 /** Meta accepted a message: one ledger row, from the send's context. Never throws (a ledger problem never stops a send). */
-export async function recordSent(input: { wamid?: string; phone: string; template?: string; part?: number; at?: Date }): Promise<void> {
+export async function recordSent(input: { wamid?: string; phone: string; template?: string; part?: number; at?: Date; preview?: string }): Promise<void> {
     const ctx = currentDelivery();
     const at = input.at ?? clockNow();
     const part = input.part ?? (ctx ? (ctx._parts = (ctx._parts ?? 0) + 1) - 1 : 0);
@@ -74,6 +74,7 @@ export async function recordSent(input: { wamid?: string; phone: string; templat
             sentAt: at,
             ...(input.template ? { viaTemplate: true, template: input.template } : {}),
             ...(part ? { part } : {}),
+            ...(input.preview ? { preview: input.preview.slice(0, 400) } : {}),
             ...ctxFields(ctx),
         };
         await MessageDelivery.create(row);

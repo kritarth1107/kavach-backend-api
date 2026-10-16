@@ -115,11 +115,20 @@ export async function takeExpiredInbounds(now = new Date()): Promise<Array<Recor
     return out;
 }
 
-/** An earlier inbound message (for a reply that quotes it): whether it was theirs, and the media it carried if known. */
-export async function quotedMedia(messageId: string | undefined): Promise<{ theirs: boolean; mediaId?: string; mediaType?: string } | null> {
+/** An earlier message this one quotes: theirs (inbound) or hers (a send we kept), plus its text when we have it. */
+export async function quotedMedia(messageId: string | undefined): Promise<{ theirs: boolean; mediaId?: string; mediaType?: string; text?: string } | null> {
     const id = (messageId ?? "").trim();
     if (!id) return null;
-    const row = await WhatsappInboundDedupe.findOne({ messageId: id }, { mediaId: 1, mediaType: 1 }).lean<{ mediaId?: string; mediaType?: string }>().catch(() => null);
-    if (!row) return { theirs: false };
-    return row.mediaId ? { theirs: true, mediaId: row.mediaId, mediaType: row.mediaType || "image" } : { theirs: true };
+    const row = await WhatsappInboundDedupe.findOne({ messageId: id }, { mediaId: 1, mediaType: 1, payload: 1 }).lean<{
+        mediaId?: string; mediaType?: string; payload?: { text?: unknown };
+    }>().catch(() => null);
+    if (row) {
+        const text = typeof row.payload?.text === "string" ? row.payload.text : undefined;
+        return row.mediaId
+            ? { theirs: true, mediaId: row.mediaId, mediaType: row.mediaType || "image", ...(text ? { text } : {}) }
+            : { theirs: true, ...(text ? { text } : {}) };
+    }
+    const { default: MessageDelivery } = await import("../models/messageDelivery.model");
+    const sent = await MessageDelivery.findOne({ wamid: id }, { preview: 1 }).lean<{ preview?: string }>().catch(() => null);
+    return sent?.preview ? { theirs: false, text: sent.preview } : { theirs: false };
 }

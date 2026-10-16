@@ -175,10 +175,11 @@ function briefly(p: Promise<void>, ms = 1500): Promise<void> {
 }
 
 /** Meta accepted it: the wamid goes to the delivery ledger (trust plan B1.1), whichever code path sent it. */
-async function accepted(to: string, res: Response, template?: string): Promise<string | undefined> {
+async function accepted(to: string, res: Response, template?: string, preview?: string): Promise<string | undefined> {
     noteChatSend(to);
     const wamid = await readWamid(res);
-    await briefly(recordSent({ wamid, phone: to, ...(template ? { template } : {}) }));
+    const text = (preview || "").replace(/\s+/g, " ").trim().slice(0, 400);
+    await briefly(recordSent({ wamid, phone: to, ...(template ? { template } : {}), ...(text ? { preview: text } : {}) }));
     return wamid;
 }
 
@@ -242,7 +243,7 @@ async function sendSingleMetaWhatsAppText(
     });
 
     if (!res.ok) throw await refused(to, res);
-    return accepted(to, res);
+    return accepted(to, res, undefined, text);
 }
 
 async function sendSingleMetaWhatsAppPayload(
@@ -273,7 +274,12 @@ async function sendSingleMetaWhatsAppPayload(
     });
 
     if (!res.ok) throw await refused(to, res);
-    return accepted(to, res);
+    return accepted(to, res, undefined, payloadPreview(payload));
+}
+
+function payloadPreview(payload: MetaWhatsAppPayload): string {
+    const q = payload as { text?: { body?: string }; interactive?: { body?: { text?: string } }; image?: { caption?: string }; document?: { caption?: string } };
+    return q.text?.body || q.interactive?.body?.text || q.image?.caption || q.document?.caption || "";
 }
 
 function scrubPayload(p: MetaWhatsAppPayload): MetaWhatsAppPayload {

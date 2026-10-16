@@ -60,6 +60,8 @@ export interface IMessageDelivery {
     critical?: boolean;
     /** Which part of a message WhatsApp split (0 = the first). */
     part?: number;
+    /** The text that was sent, short, so a later quote of this wamid can be shown to the brain. */
+    preview?: string;
     createdAt?: Date;
     updatedAt?: Date;
 }
@@ -88,6 +90,7 @@ const schema = new Schema<IMessageDelivery>(
         attempt: { type: Number },
         critical: { type: Boolean },
         part: { type: Number },
+        preview: { type: String },
         // kept 180 days: the daily report, the 09:00 escalation check and the dashboard read the recent part
         createdAt: { type: Date, default: Date.now, expires: 180 * 24 * 60 * 60 },
     },
