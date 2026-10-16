@@ -163,9 +163,9 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
     const body = JSON.stringify({
         StartTime: end - 86_400, EndTime: end,
         MetricDataQueries: [
-            stat("p50", "Kavach/Reply", "LatencyMs", 3600, "p50", "turn"),
-            stat("p90", "Kavach/Reply", "LatencyMs", 3600, "p90", "turn"),
-            stat("turns", "Kavach/Reply", "Calls", 3600, "Sum", "turn"),
+            stat("p50", "Kavach/Live", "reply-ms", 3600, "p50"),
+            stat("p90", "Kavach/Live", "reply-ms", 3600, "p90"),
+            stat("turns", "Kavach/Live", "reply-ms", 3600, "SampleCount"),
             stat("sent", "Kavach/Delivery", "Sent", 3600, "Sum"),
             stat("failed", "Kavach/Delivery", "Failed", 3600, "Sum"),
             stat("ticks", "Kavach/Live", "reminder-ticks", 900, "Sum"),

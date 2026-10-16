@@ -1,10 +1,14 @@
-/** One CloudWatch Embedded Metric Format line. The log group extracts it. */
+/** One CloudWatch line. CLOUDWATCH_EMF defaults off, so the line stays in the logs and does not become metrics. */
 
 type Count = { calls?: number; errors?: number; throttles?: number; latencyMs?: number; sent?: number; failed?: number };
 
+function metricsOn(): boolean {
+    return ["1", "on", "true"].includes((process.env.CLOUDWATCH_EMF ?? "off").trim().toLowerCase());
+}
+
 export function note(namespace: string, role: string, counts: Count = {}): void {
     const metrics: Array<{ Name: string; Unit: string }> = [];
-    const body: Record<string, string | number> = { Role: role };
+    const body: Record<string, string | number> = { namespace, Role: role };
     const add = (name: string, unit: string, value: number | undefined) => {
         if (value == null) return;
         metrics.push({ Name: name, Unit: unit });
@@ -17,13 +21,16 @@ export function note(namespace: string, role: string, counts: Count = {}): void 
     add("Sent", "Count", counts.sent);
     add("Failed", "Count", counts.failed);
     if (!metrics.length) return;
-    console.log(JSON.stringify({
-        _aws: {
-            Timestamp: Date.now(),
-            CloudWatchMetrics: [{ Namespace: namespace, Dimensions: [["Role"], []], Metrics: metrics }],
-        },
-        ...body,
-    }));
+    const line = metricsOn()
+        ? {
+            _aws: {
+                Timestamp: Date.now(),
+                CloudWatchMetrics: [{ Namespace: namespace, Dimensions: [["Role"], []], Metrics: metrics }],
+            },
+            ...body,
+        }
+        : body;
+    console.log(JSON.stringify(line));
 }
 
 export function noteCall(namespace: string, role: string, started: number, status: number | null, failed: boolean): void {
