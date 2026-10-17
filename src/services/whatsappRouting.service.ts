@@ -644,7 +644,11 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
         const q = await quotedMedia(body.replyToId);
         if (q?.mediaId && q.mediaType !== "voice" && q.mediaType !== "audio") {
             const { downloadMedia } = await import("../clients/metaWhatsApp.client");
-            const media = await downloadMedia(q.mediaId).catch(() => null);
+            const media = await downloadMedia(q.mediaId).catch((err) => {
+                // live 17 Oct: a reply quoting a photo reached Saheli without it, and nothing was logged
+                console.warn("[media] quoted media download failed:", err instanceof Error ? err.message : err);
+                return null;
+            });
             const mime = media ? brainMime(media.mimeType, q.mediaType || "image") : null;
             if (media && mime?.startsWith("video/") && media.buffer.length <= BRAIN_MEDIA_MAX_BYTES) {
                 const { videoFrames } = await import("./videoFrames");
@@ -657,7 +661,8 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 brainMedia = [{ mime, data: media.buffer.toString("base64") }];
                 brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier; it is attached again. Look at it fresh.`;
             } else {
-                brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier, which can no longer be opened; ask them to send it again.`;
+                // The engine adds what that photo showed when it was read (PHOTOS IN THIS CHAT); only without that is a resend asked.
+                brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier, which cannot be opened again now. Use what it showed when you looked at it; only if you never saw it, ask them to send it again.`;
             }
         } else if (q) {
             // A text quote, hers or theirs. A photo with no file kept still uses the do-not-guess line.
@@ -679,11 +684,11 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
             return answerWithBrain({
                 phone, identity, text: v2Button ? String(body.interactiveId) : text, messageRef: body.messageId, button: v2Button,
                 voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined, wasVoice: isVoiceMedia,
-                media: brainMedia, mediaNote: brainMediaNote, location: body.location,
+                media: brainMedia, mediaNote: brainMediaNote, location: body.location, replyTo: body.replyToId,
             });
         } else if (mode === "shadow") {
             void V2.runBrainV2({ identity, text, messageRef: body.messageId, mode, voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined,
-                media: brainMedia, mediaNote: brainMediaNote, location: body.location }).catch((err) =>
+                media: brainMedia, mediaNote: brainMediaNote, location: body.location, replyTo: body.replyToId }).catch((err) =>
                 console.warn("[brain-v2] shadow turn failed:", err instanceof Error ? err.message : err),
             );
         }
@@ -1349,7 +1354,7 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
     return answerWithBrain({
         phone, identity, text, messageRef: body.messageId, button: false,
         voice: isVoiceMedia && voiceTranscript ? voiceMeta ?? {} : undefined, wasVoice: isVoiceMedia,
-        mediaNote: brainMediaNote, location: body.location,
+        mediaNote: brainMediaNote, location: body.location, replyTo: body.replyToId,
     });
 }
 
@@ -1369,6 +1374,8 @@ async function answerWithBrain(a: {
     media?: Array<{ mime: string; data: string }>;
     mediaNote?: string;
     location?: { lat: number; lng: number; name?: string; address?: string };
+    /** The message this one quotes (WhatsApp context.id). */
+    replyTo?: string;
 }): Promise<OutboundMessage> {
     const V2 = await import("./brainV2.service");
     const H = await import("./brainHold.service");
@@ -1376,7 +1383,7 @@ async function answerWithBrain(a: {
     let failure = "";
     const v2 = await V2.runBrainV2({
         identity: a.identity, text: carried.text, messageRef: a.messageRef, mode: "live",
-        voice: a.voice, media: a.media, mediaNote: a.mediaNote, location: a.location,
+        voice: a.voice, media: a.media, mediaNote: a.mediaNote, location: a.location, replyTo: a.replyTo,
     }).catch((err) => {
         failure = err instanceof Error ? err.message : String(err);
         return null;

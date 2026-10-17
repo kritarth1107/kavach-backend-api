@@ -63,6 +63,8 @@ export async function runBrainV2(input: {
     mediaNote?: string;
     /** A shared location pin (a ride's pickup): passed as data. */
     location?: { lat: number; lng: number; name?: string; address?: string };
+    /** The WhatsApp message id this message quotes: Saheli gets back what an earlier photo showed (live 17 Oct). */
+    replyTo?: string;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; buttons?: Array<{ id: string; title: string }>;
     location_request?: boolean; duplicate?: boolean } | null> {
     const { getFamilyMembersList } = await import("./familyMember.service");
@@ -113,6 +115,7 @@ export async function runBrainV2(input: {
         ...(input.media?.length ? { images: input.media } : {}),
         ...(input.mediaNote ? { media_note: input.mediaNote } : {}),
         ...(input.location ? { location: { name: "", address: "", ...input.location } } : {}),
+        ...(input.replyTo ? { reply_to: input.replyTo.slice(0, 160) } : {}),
         ...(waiting.length ? { waiting } : {}),
         ...(soon.length
             ? {

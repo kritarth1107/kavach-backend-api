@@ -167,6 +167,8 @@ export async function aiPostBrainTurn(payload: {
     /** Messages that waited while their WhatsApp chat was closed (they got a template instead). */
     /** delivered: the backend already gave it word for word on this message (trust plan B3.4); Saheli must not repeat it. */
     waiting?: Array<{ purpose: string; text: string; at: string; delivered?: boolean }>;
+    /** The WhatsApp message id this one quotes (a reply to an earlier photo): the engine adds what that photo showed. */
+    reply_to?: string;
 }): Promise<{ reply: string; actions: unknown[]; alerts: unknown[]; model: string; shadow_writes?: Array<{ tool: string }>;
     buttons?: Array<{ id: string; title: string }>; location_request?: boolean; duplicate?: boolean }> {
     const res = await aiFetch(
