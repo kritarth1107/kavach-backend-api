@@ -37,6 +37,22 @@ export function brainRole(role: string): string {
     return "family member";
 }
 
+export function brainV2LogFields(input: {
+    familyId: string; role: string; ms: number; model: string; text: string; reply: string;
+    actions: Array<{ tool: string; ok: boolean }>; wouldHave?: Array<{ tool: string }>;
+}): Record<string, unknown> {
+    return {
+        family: input.familyId.slice(0, 8),
+        speaker: brainRole(input.role),
+        ms: input.ms,
+        model: input.model,
+        textLength: input.text.length,
+        replyLength: input.reply.length,
+        actions: input.actions.map((a) => `${a.tool}${a.ok ? "" : "!"}`),
+        wouldHave: input.wouldHave?.map((w) => w.tool),
+    };
+}
+
 type BrainMember = { userId: string; name?: string; role: string; status?: string; relationship?: string; invitedBy?: string };
 
 /** A member as the brain sees them. The relationship the family gave when adding someone is to the member who added
@@ -134,14 +150,16 @@ export async function runBrainV2(input: {
     console.log(
         `[brain-v2] ${JSON.stringify({
             mode: input.mode,
-            family: input.identity.familyId,
-            speaker: brainRole(String(input.identity.role)),
-            ms,
-            model: out.model,
-            text: input.text.slice(0, 300),
-            reply: out.reply.slice(0, 500),
-            actions: (out.actions as Array<{ tool: string; ok: boolean }>).map((a) => `${a.tool}${a.ok ? "" : "!"}`),
-            wouldHave: out.shadow_writes?.map((w: { tool: string }) => w.tool),
+            ...brainV2LogFields({
+                familyId: input.identity.familyId,
+                role: String(input.identity.role),
+                ms,
+                model: out.model,
+                text: input.text,
+                reply: out.reply,
+                actions: out.actions as Array<{ tool: string; ok: boolean }>,
+                wouldHave: out.shadow_writes,
+            }),
         })}`,
     );
     return out;

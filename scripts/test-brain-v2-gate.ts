@@ -1,5 +1,5 @@
 /** Brain v2 rollout switch: off by default, shadow for everyone, live only for named families. */
-import { brainPerson, brainV2Mode, brainRole, replyMessages } from "../src/services/brainV2.service";
+import { brainPerson, brainV2Mode, brainRole, brainV2LogFields, replyMessages } from "../src/services/brainV2.service";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { legacyBlockReply, v1MustNotOrder } from "../src/services/legacyGuard.service";
@@ -15,6 +15,10 @@ ok("shadow for all", brainV2Mode("f1", { BRAIN_V2: "shadow" }) === "shadow");
 ok("live family wins over shadow", brainV2Mode("f2", { BRAIN_V2: "shadow", BRAIN_V2_LIVE_FAMILIES: "f1, f2" }) === "live");
 ok("unknown value is off", brainV2Mode("f1", { BRAIN_V2: "yes" }) === "off");
 ok("roles named for the brain", brainRole("CARE_RECIPIENT") === "elder" && brainRole("PRIMARY_CAREGIVER") === "primary caregiver");
+const privateLog = JSON.stringify(brainV2LogFields({ familyId: "12345678-raw-family", role: "CARE_RECIPIENT", ms: 12,
+    model: "model-a", text: "PRIVATE_INCOMING_SENTINEL", reply: "PRIVATE_REPLY_SENTINEL", actions: [{ tool: "note", ok: true }] }));
+ok("brain logs retain diagnostics without raw text or full family id", !privateLog.includes("PRIVATE_") && !privateLog.includes("raw-family")
+    && privateLog.includes('"textLength":25') && privateLog.includes('"replyLength":22') && privateLog.includes('"family":"12345678"'), privateLog);
 
 // The brain gets who each member is, and to whom (the member who added them), so it never guesses a relation.
 const maa = brainPerson({ userId: "e1", name: " Kamla ", role: "CARE_RECIPIENT", relationship: "Mother", invitedBy: "c1" });
