@@ -41,8 +41,8 @@ jobs:
           npm ci --no-audit --no-fund
           npm run test:coverage
 
-  deploy:
-    needs: test
+  # The image is built (with a layer cache) and pushed while the tests run; deploy rolls it out only after they pass.
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,13 +53,14 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kavach-backend-api
           aws-region: ap-south-1
+      - uses: docker/setup-buildx-action@v3
       - name: Build and push
         env:
           IMAGE: ${{ env.ECR }}:${{ github.sha }}
           ADMIN_API: 743887469650.dkr.ecr.ap-south-1.amazonaws.com/kavach-admin-api:${{ github.sha }}
         run: |
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
-          docker build \
+          docker buildx build --load --cache-from type=gha --cache-to type=gha,mode=max \
             --build-arg GIT_COMMIT_SHA="${{ github.sha }}" \
             --build-arg GIT_BRANCH="${{ github.ref_name }}" \
             --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -74,6 +75,19 @@ jobs:
           docker build -t "$IMAGE" -t "$ADMIN_API" /tmp/ca-wrap
           docker push "$IMAGE"
           docker push "$ADMIN_API"
+
+  deploy:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kavach-backend-api
+          aws-region: ap-south-1
       - name: Roll the live services (image only)
         env:
           IMAGE: ${{ env.ECR }}:${{ github.sha }}
@@ -85,8 +99,8 @@ jobs:
               | jq --arg IMG "$image" --arg NAME "$repo" '
                   .containerDefinitions |= map(if ((.image | split("/") | last | split(":")[0]) == $NAME) then .image = $IMG else . end)
                   | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
-              > /tmp/td.json
-            rev=$(aws ecs register-task-definition --cli-input-json file:///tmp/td.json --query taskDefinition.revision --output text)
+              > "/tmp/td-$service.json"
+            rev=$(aws ecs register-task-definition --cli-input-json "file:///tmp/td-$service.json" --query taskDefinition.revision --output text)
             # Backend keeps one healthy task up (minimum 100, maximum 200). The image swap
             # copies the live task definition, so Chirp env vars stay. admin-api is unchanged.
             if [ "$service" = "backend" ]; then
@@ -97,8 +111,13 @@ jobs:
             fi
             aws ecs wait services-stable --cluster kavach --service "$service"
           }
-          roll kavach-backend backend "$IMAGE" kavach-backend
-          roll kavach-admin-api admin-api "$ADMIN_API" kavach-admin-api
+          # Both services roll at once (each keeps its own health rules); the step fails if either fails.
+          roll kavach-backend backend "$IMAGE" kavach-backend & b=$!
+          roll kavach-admin-api admin-api "$ADMIN_API" kavach-admin-api & a=$!
+          ok=0
+          wait $b || ok=1
+          wait $a || ok=1
+          exit $ok
       - name: Smoke test
         run: |
           BODY="$(curl -fsS https://api.brainbehindkavach.me/api/health)"
