@@ -1,5 +1,7 @@
 /** Brain v2 rollout switch: off by default, shadow for everyone, live only for named families. */
 import { brainPerson, brainV2Mode, brainRole, replyMessages } from "../src/services/brainV2.service";
+import { readFileSync } from "fs";
+import { join } from "path";
 import { legacyBlockReply, v1MustNotOrder } from "../src/services/legacyGuard.service";
 
 let fail = 0;
@@ -44,6 +46,22 @@ const bubbles = replyMessages({ reply: "Four.", messages: ["Four.", "Saved.", "N
 ok("separate topics stay separate messages, answer first", bubbles.length === 3 && bubbles[0] === "Four." && bubbles[2].includes("check-in"), bubbles);
 ok("an older engine with only a reply still sends that one message", replyMessages({ reply: "Hello." }).join() === "Hello.");
 ok("an empty turn sends nothing", replyMessages({ reply: "none", messages: [] }).length === 0);
+
+// Live 17 Oct: "Here", quoting a photo of four medicine strips, reached Saheli without the photo, and she said "Okay, noted".
+// Every brain call from WhatsApp carries the quoted message id (the engine adds what that photo showed), a failed re-download
+// of the quoted photo is logged, and the note still asks for the photo again by default (the engine uses its kept reading instead). (Source checks: the
+// routing needs a live family to run end to end.)
+{
+    const routing = readFileSync(join(__dirname, "../src/services/whatsappRouting.service.ts"), "utf8");
+    const v2 = readFileSync(join(__dirname, "../src/services/brainV2.service.ts"), "utf8");
+    const calls = routing.match(/runBrainV2\(\{[\s\S]*?\}\)/g) ?? [];
+    ok("every WhatsApp brain call passes the quoted message id", calls.length >= 2 && calls.every((c) => /replyTo: (body\.replyToId|a\.replyTo)/.test(c)), calls.length);
+    const answers = routing.match(/return answerWithBrain\(\{[\s\S]*?\}\);/g) ?? [];
+    ok("answerWithBrain gets it on every path", answers.length >= 2 && answers.every((c) => c.includes("replyTo: body.replyToId")), answers.length);
+    ok("the engine payload carries reply_to", v2.includes("reply_to: input.replyTo"));
+    ok("a failed quoted download is logged", routing.includes("quoted media download failed"));
+    ok("a quoted photo that cannot be opened again keeps the honest ask-again note (the engine overrides it when it read the photo)", routing.includes("which can no longer be opened; ask them to send it again"));
+}
 
 if (fail) {
     console.error(`${fail} failed`);
