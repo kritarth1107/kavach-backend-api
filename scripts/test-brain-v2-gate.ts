@@ -49,7 +49,7 @@ ok("an empty turn sends nothing", replyMessages({ reply: "none", messages: [] })
 
 // Live 17 Oct: "Here", quoting a photo of four medicine strips, reached Saheli without the photo, and she said "Okay, noted".
 // Every brain call from WhatsApp carries the quoted message id (the engine adds what that photo showed), a failed re-download
-// of the quoted photo is logged, and the note no longer makes her ask for a photo she already read. (Source checks: the
+// of the quoted photo is logged, and the note still asks for the photo again by default (the engine uses its kept reading instead). (Source checks: the
 // routing needs a live family to run end to end.)
 {
     const routing = readFileSync(join(__dirname, "../src/services/whatsappRouting.service.ts"), "utf8");
@@ -60,7 +60,7 @@ ok("an empty turn sends nothing", replyMessages({ reply: "none", messages: [] })
     ok("answerWithBrain gets it on every path", answers.length >= 2 && answers.every((c) => c.includes("replyTo: body.replyToId")), answers.length);
     ok("the engine payload carries reply_to", v2.includes("reply_to: input.replyTo"));
     ok("a failed quoted download is logged", routing.includes("quoted media download failed"));
-    ok("a quoted photo that cannot be opened again is not asked for again when it was read", !routing.includes("which can no longer be opened; ask them to send it again"));
+    ok("a quoted photo that cannot be opened again keeps the honest ask-again note (the engine overrides it when it read the photo)", routing.includes("which can no longer be opened; ask them to send it again"));
 }
 
 if (fail) {

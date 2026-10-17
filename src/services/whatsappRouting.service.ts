@@ -661,8 +661,9 @@ async function handleWhatsAppInboundCore(body: WhatsAppInboundBody): Promise<Out
                 brainMedia = [{ mime, data: media.buffer.toString("base64") }];
                 brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier; it is attached again. Look at it fresh.`;
             } else {
-                // The engine adds what that photo showed when it was read (PHOTOS IN THIS CHAT); only without that is a resend asked.
-                brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier, which cannot be opened again now. Use what it showed when you looked at it; only if you never saw it, ask them to send it again.`;
+                // The honest default: it cannot be opened, so ask for it again. When the engine kept what that photo showed
+                // (the quoted message id matches a read photo), it uses that reading instead of this note.
+                brainMediaNote = `They are replying to a ${q.mediaType} they sent earlier, which can no longer be opened; ask them to send it again.`;
             }
         } else if (q) {
             // A text quote, hers or theirs. A photo with no file kept still uses the do-not-guess line.
