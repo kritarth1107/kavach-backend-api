@@ -268,18 +268,19 @@ export async function slo(now = Date.now()): Promise<Slo | null> {
 }
 
 /** Timed work on the AWS copy. The backend tick also sends the daily snapshot after 21:00 IST. */
-export const AWS_SCHEDULES: Array<{ name: string; schedule: string; owner: "backend" | "cron" }> = [
-    { name: "Care reminders", schedule: "* * * * *", owner: "backend" },
-    { name: "Task runner", schedule: "* * * * *", owner: "cron" },
-    { name: "Saheli wake", schedule: "*/5 * * * *", owner: "cron" },
-    { name: "Browser sweep", schedule: "*/10 * * * *", owner: "cron" },
-    { name: "Fact extract", schedule: "*/30 * * * *", owner: "cron" },
-    { name: "Saheli's night", schedule: "0 2 * * *", owner: "cron" },
-    { name: "Memory consolidate", schedule: "15 2 * * *", owner: "cron" },
-    { name: "Elder reflection", schedule: "30 2 * * *", owner: "cron" },
-    { name: "Morning report", schedule: "0 8 * * *", owner: "cron" },
-    { name: "Daily jobs", schedule: "0 10 * * *", owner: "cron" },
-    { name: "Weekly learning", schedule: "0 8 * * 0", owner: "cron" },
+export const AWS_SCHEDULES: Array<{ name: string; schedule: string; owner: "backend" | "cron"; job: string | null }> = [
+    { name: "Care reminders", schedule: "* * * * *", owner: "backend", job: null },
+    { name: "Task runner", schedule: "* * * * *", owner: "cron", job: "tasks" },
+    { name: "Saheli wake", schedule: "*/5 * * * *", owner: "cron", job: "wake" },
+    { name: "Browser sweep", schedule: "*/10 * * * *", owner: "cron", job: "browser-sweep" },
+    { name: "Fact extract", schedule: "*/30 * * * *", owner: "cron", job: "extract" },
+    { name: "Saheli's night", schedule: "0 2 * * *", owner: "cron", job: "dream" },
+    { name: "Memory consolidate", schedule: "15 2 * * *", owner: "cron", job: "consolidate" },
+    { name: "Elder reflection", schedule: "30 2 * * *", owner: "cron", job: null },
+    { name: "Replay gate", schedule: "30 3 * * *", owner: "cron", job: null },
+    { name: "Morning report", schedule: "0 8 * * *", owner: "cron", job: "morning-report" },
+    { name: "Daily jobs", schedule: "0 10 * * *", owner: "cron", job: "daily" },
+    { name: "Weekly learning", schedule: "0 8 * * 0", owner: "cron", job: "weekly" },
 ];
 
 /** Cost per AWS service per day (UTC days from Cost Explorer, close enough to IST for a daily view). */

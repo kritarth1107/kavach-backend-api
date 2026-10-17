@@ -1,8 +1,11 @@
 /** Infrastructure: every service we run on (GCP, AWS, others), its state, spend per day and month, and AI models. */
+import { engineOrNull } from "../engine";
 import { github } from "../infra/github";
 import { models } from "../infra/models";
 import { snapshot } from "../infra/summary";
 import type { RouteDef } from "../router";
+
+type JobRuns = Array<{ job: string; lastAt: string; lastMs: number; lastOk: boolean; lastCode: number; runs24h: number; failed24h: number; p90Ms: number | null }>;
 
 export function infraRoutes(): RouteDef[] {
     return [
@@ -17,13 +20,28 @@ export function infraRoutes(): RouteDef[] {
         {
             method: "get", path: "/infra/services", perm: "infra.read", action: "infra.services",
             handler: async ({ query }) => {
-                const s = await snapshot(query.fresh === "1");
-                return { data: { at: s.at, totals: s.totals, services: s.services.map(({ daily: _d, ...x }) => x), schedules: s.schedules, jobs: s.jobs, errors: s.errors } };
+                const [s, runs] = await Promise.all([snapshot(query.fresh === "1"), engineOrNull<{ jobs: JobRuns }>("GET", "/job-runs?days=3")]);
+                // Job runs are read live (the snapshot is cached for minutes): the engine keeps every /v2/jobs call and the night run.
+                const byJob = new Map((runs.data?.jobs || []).map((j) => [j.job, j]));
+                const schedules = s.schedules.map((x) => {
+                    const r = (x as { job?: string | null }).job ? byJob.get((x as { job?: string | null }).job!) : undefined;
+                    return r ? { ...x, lastAttemptAt: r.lastAt, failed: !r.lastOk, lastMs: r.lastMs, runs24h: r.runs24h, failed24h: r.failed24h, p90Ms: r.p90Ms, tracked: true }
+                        : { ...x, tracked: x.name === "Care reminders" };
+                });
+                return { data: { at: s.at, totals: s.totals, services: s.services.map(({ daily: _d, ...x }) => x), schedules, jobs: s.jobs, errors: [...s.errors, ...(runs.error ? [`job runs: ${runs.error}`] : [])] } };
             },
         },
         {
             method: "get", path: "/infra/github", perm: "infra.read", action: "infra.github",
             handler: async ({ query }) => ({ data: await github(query.fresh === "1") }),
+        },
+        {
+            method: "get", path: "/infra/telemetry", perm: "infra.read", action: "infra.telemetry",
+            handler: async ({ query }) => {
+                const hours = Math.max(1, Math.min(168, Number(query.hours) || 24));
+                const t = await engineOrNull<unknown>("GET", `/telemetry?hours=${hours}`);
+                return { data: { hours, at: new Date().toISOString(), telemetry: t.data, error: t.error ?? null } };
+            },
         },
         {
             method: "get", path: "/infra/models", perm: "infra.read", action: "infra.models",

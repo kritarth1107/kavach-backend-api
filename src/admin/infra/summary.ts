@@ -235,7 +235,7 @@ function awsScheduleRows(ecs: EcsService[] | null, reminderAt: string | null): g
         return s && s.running > 0 ? "enabled" : "paused";
     };
     return AWS_SCHEDULES.map((j) => ({
-        name: j.name, schedule: j.schedule, timeZone: "Asia/Kolkata", state: on(j.owner),
+        name: j.name, schedule: j.schedule, timeZone: "Asia/Kolkata", state: on(j.owner), job: j.job,
         lastAttemptAt: j.name === "Care reminders" ? reminderAt : null, failed: false,
     }));
 }
