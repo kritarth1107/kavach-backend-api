@@ -56,25 +56,55 @@ async function ecsJson<T>(target: string, body: unknown, creds: Creds): Promise<
     return (await res.json()) as T;
 }
 
-export type EcsService = { name: string; desired: number; running: number; pending: number; rollout: string | null; taskDef: string };
+export type EcsService = {
+    name: string; desired: number; running: number; pending: number; rollout: string | null; taskDef: string;
+    deployedAt: string | null; deploying: boolean; lastEvent: { at: string; text: string } | null;
+};
 
-/** Live services in cluster kavach. Null when this process cannot read ECS. */
-export async function ecsServices(): Promise<EcsService[] | null> {
+const iso = (v: unknown): string | null => {
+    if (typeof v === "number") return new Date(v < 1e12 ? v * 1000 : v).toISOString();
+    if (typeof v === "string" && v) return new Date(v).toISOString();
+    return null;
+};
+
+/**
+ * Live services in cluster kavach. Null when this process cannot read ECS. ListServices takes no cluster-scoped
+ * permission in IAM, so when it is refused the known service names are described directly (DescribeServices is allowed
+ * on service/kavach/*).
+ */
+export async function ecsServices(known: string[] = []): Promise<EcsService[] | null> {
     const creds = await taskCreds();
     if (!creds) return null;
-    const listed = await ecsJson<{ serviceArns?: string[] }>("AmazonEC2ContainerServiceV20141113.ListServices", { cluster: "kavach" }, creds);
-    const arns = listed.serviceArns || [];
-    if (!arns.length) return [];
-    const described = await ecsJson<{ services?: Array<{ serviceName?: string; desiredCount?: number; runningCount?: number; pendingCount?: number; taskDefinition?: string; deployments?: Array<{ status?: string; rolloutState?: string }> }> }>(
-        "AmazonEC2ContainerServiceV20141113.DescribeServices", { cluster: "kavach", services: arns }, creds);
-    return (described.services || []).map((s) => ({
-        name: s.serviceName || "",
-        desired: s.desiredCount ?? 0,
-        running: s.runningCount ?? 0,
-        pending: s.pendingCount ?? 0,
-        rollout: s.deployments?.find((d) => d.status === "PRIMARY")?.rolloutState || null,
-        taskDef: (s.taskDefinition || "").split("/").pop() || "",
-    }));
+    let names: string[] = [];
+    try {
+        const listed = await ecsJson<{ serviceArns?: string[] }>("AmazonEC2ContainerServiceV20141113.ListServices", { cluster: "kavach" }, creds);
+        names = listed.serviceArns || [];
+    } catch {
+        names = known;
+    }
+    if (!names.length) return [];
+    type Described = {
+        serviceName?: string; desiredCount?: number; runningCount?: number; pendingCount?: number; taskDefinition?: string;
+        deployments?: Array<{ status?: string; rolloutState?: string; updatedAt?: number | string; createdAt?: number | string }>;
+        events?: Array<{ createdAt?: number | string; message?: string }>;
+    };
+    const described = await ecsJson<{ services?: Described[] }>(
+        "AmazonEC2ContainerServiceV20141113.DescribeServices", { cluster: "kavach", services: names.slice(0, 10) }, creds);
+    return (described.services || []).map((s) => {
+        const primary = s.deployments?.find((d) => d.status === "PRIMARY");
+        const ev = s.events?.[0];
+        return {
+            name: s.serviceName || "",
+            desired: s.desiredCount ?? 0,
+            running: s.runningCount ?? 0,
+            pending: s.pendingCount ?? 0,
+            rollout: primary?.rolloutState || null,
+            taskDef: (s.taskDefinition || "").split("/").pop() || "",
+            deployedAt: iso(primary?.createdAt),
+            deploying: (s.deployments?.length ?? 0) > 1,
+            lastEvent: ev?.message ? { at: iso(ev.createdAt) || "", text: ev.message.replace(/^\(service [^)]+\)\s*/, "").slice(0, 200) } : null,
+        };
+    });
 }
 
 export type ReplyHour = { at: string; p50Ms: number | null; p90Ms: number | null; turns: number };

@@ -1,4 +1,5 @@
 /** Infrastructure: every service we run on (GCP, AWS, others), its state, spend per day and month, and AI models. */
+import { github } from "../infra/github";
 import { models } from "../infra/models";
 import { snapshot } from "../infra/summary";
 import type { RouteDef } from "../router";
@@ -19,6 +20,10 @@ export function infraRoutes(): RouteDef[] {
                 const s = await snapshot(query.fresh === "1");
                 return { data: { at: s.at, totals: s.totals, services: s.services.map(({ daily: _d, ...x }) => x), schedules: s.schedules, jobs: s.jobs, errors: s.errors } };
             },
+        },
+        {
+            method: "get", path: "/infra/github", perm: "infra.read", action: "infra.github",
+            handler: async ({ query }) => ({ data: await github(query.fresh === "1") }),
         },
         {
             method: "get", path: "/infra/models", perm: "infra.read", action: "infra.models",

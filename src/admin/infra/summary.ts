@@ -26,6 +26,8 @@ export type InfraService = {
     id: string; name: string; provider: Provider; category: string; purpose: string; usedBy: string;
     status: Status; facts: Array<{ label: string; value: string }>; source: CostSource; note?: string; console?: string;
     totals: Totals; daily: Record<string, number>;
+    /** ECS only: the GitHub repo whose push deploys it, the running task count and the last rollout. */
+    ecs?: { service: string; repo: string | null; why: string; running: number; desired: number; taskDef: string; deployedAt: string | null; deploying: boolean; lastEvent: { at: string; text: string } | null };
 };
 export type Connection = { id: string; name: string; provider: Provider; connected: boolean; detail: string; howTo?: string[] };
 export type Alert = { level: "warn" | "info"; text: string; action?: string };
@@ -80,14 +82,21 @@ async function balanceSpend(provider: string, balanceUsd: number | null, days: s
 type EngineSpend = { today: number; softCap: number; hardCap: number; rows: Array<{ day: string; role: string; model: string; calls: number; tokensIn: number; tokensOut: number; costInr: number }> };
 
 const AWS_CONSOLE = "https://ap-south-1.console.aws.amazon.com";
-const AWS_APPS: Record<string, { name: string; purpose: string; usedBy: string; host: string }> = {
-    backend: { name: "Family backend API", purpose: "WhatsApp, reminders, orders, dashboard API", usedBy: "Families, Saheli", host: "api.brainbehindkavach.me" },
-    engine: { name: "Saheli AI engine", purpose: "Saheli's brain, memory and task agents", usedBy: "Backend", host: "private, inside the network" },
-    dashboard: { name: "Family dashboard", purpose: "app.kavach.care for caregivers", usedBy: "Caregivers", host: "app.kavach.care" },
-    admin: { name: "Admin console", purpose: "This console", usedBy: "Kavach team", host: "admin.brainbehindkavach.me" },
-    "admin-api": { name: "Admin API", purpose: "The console's locked API", usedBy: "Admin console", host: "private, inside the network" },
-    cron: { name: "Scheduler", purpose: "Wakes the engine and backend on a timetable", usedBy: "Engine, backend", host: "private, inside the network" },
+const AWS_APPS: Record<string, { name: string; purpose: string; usedBy: string; host: string; repo: string | null; why: string }> = {
+    backend: { name: "Family backend API", purpose: "WhatsApp, reminders, orders, dashboard API", usedBy: "Families, Saheli", host: "api.brainbehindkavach.me", repo: "kritarth1107/kavach-backend-api",
+        why: "Takes every WhatsApp message in and out, sends reminders on time, runs store orders and serves the family dashboard's data." },
+    engine: { name: "Saheli AI engine", purpose: "Saheli's brain, memory and task agents", usedBy: "Backend", host: "private, inside the network", repo: "kritarth1107/kawach-ai-engine",
+        why: "Saheli herself: reads each message, remembers, decides what to say and do, and runs the browser agents for orders." },
+    dashboard: { name: "Family dashboard", purpose: "app.kavach.care for caregivers", usedBy: "Caregivers", host: "app.kavach.care", repo: "kritarth1107/kavach-dashbaord",
+        why: "The caregivers' website: onboarding, care records, reminders, food and what Saheli learned." },
+    admin: { name: "Admin console", purpose: "This console", usedBy: "Kavach team", host: "admin.brainbehindkavach.me", repo: "kritarth1107/kavach-admin",
+        why: "This console: costs, health, families and switches for the Kavach team." },
+    "admin-api": { name: "Admin API", purpose: "The console's locked API", usedBy: "Admin console", host: "private, inside the network", repo: "kritarth1107/kavach-backend-api",
+        why: "The only door from this console to data: every call is signed, permission-checked and logged. Ships with the backend image." },
+    cron: { name: "Scheduler", purpose: "Wakes the engine and backend on a timetable", usedBy: "Engine, backend", host: "private, inside the network", repo: "kritarth1107/kavach-infra-aws",
+        why: "The clock: wakes Saheli, runs tasks, extracts facts and runs the night jobs on their schedules." },
 };
+export const ECS_NAMES = Object.keys(AWS_APPS);
 
 async function reminderTick(): Promise<string | null> {
     const base = (process.env.BACKEND_URL || "").replace(/\/$/, "");
@@ -128,6 +137,7 @@ function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<strin
                 ...(s?.rollout ? [{ label: "Rollout", value: s.rollout.toLowerCase() }] : []),
             ],
             source: "none", console: `${cluster}/${key}?region=${region}`, daily: {},
+            ecs: { service: key, repo: info.repo, why: info.why, running: s?.running ?? 0, desired: s?.desired ?? 0, taskDef: s?.taskDef || "", deployedAt: s?.deployedAt ?? null, deploying: !!s?.deploying, lastEvent: s?.lastEvent ?? null },
         });
     }
     const taken = new Set<string>();
@@ -264,7 +274,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         browserUseAccount(),
         elevenLabsUsage(),
         awsBill(35, now),
-        gcpOn ? Promise.resolve(null) : ecsServices().catch(() => null),
+        gcpOn ? Promise.resolve(null) : ecsServices(Object.keys(AWS_APPS)).catch((e: unknown) => { errors.push(`ECS: ${e instanceof Error ? e.message : "not read"}`); return null; }),
         gcpOn ? Promise.resolve(null) : reminderTick(),
         gcpOn ? Promise.resolve(null) : fetchVoiceHealth(),
         engineOrNull<LiveEngineModels>("GET", "/models"),
