@@ -646,7 +646,8 @@ async function nudgeOneCompanion(
                 await noteDueHeld(doseSlotKey(item.scheduleId, dateKey), "already marked taken");
             }
 
-            if (due === "dose_due" && item.type === "MEDICINE") {
+            // A dose they already answered (taken early, or "I'll skip tonight's") gets no "time for it" message either.
+            if (due === "dose_due" && item.type === "MEDICINE" && !item.markedBy) {
                 const ok = await deliverCareNudge({
                     familyId: companion.familyId,
                     recipientUserId: companion.recipientUserId,
@@ -682,6 +683,9 @@ async function nudgeOneCompanion(
             if (
                 intensity !== "gentle" &&
                 (item.status === "missed" || item.status === "due") &&
+                // Only a dose nobody has answered. One they marked themselves (taken, skipped, the Skip button) is
+                // never chased (live 19 Oct: "I'm skipping the med today", then "did it happen?" 14 minutes later).
+                !item.markedBy &&
                 inWindow(minutesSince, 15, 60)
             ) {
                 const ok = await deliverCareNudge({
@@ -703,6 +707,9 @@ async function nudgeOneCompanion(
             if (
                 intensity === "persistent" &&
                 (item.status === "missed" || item.status === "due") &&
+                // Only a dose nobody has answered. One they marked themselves (taken, skipped, the Skip button) is
+                // never chased (live 19 Oct: "I'm skipping the med today", then "did it happen?" 14 minutes later).
+                !item.markedBy &&
                 inWindow(minutesSince, 55, 95) &&
                 (await firstFollowupWentAWhileAgo(companion, item.scheduleId, dateKey, _now))
             ) {
