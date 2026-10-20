@@ -1425,10 +1425,13 @@ case "notify_caregivers": {
         case "trigger_emergency_escalation": {
             const { triggerEmergencyEscalation, messageLooksLikeEmergency } = await import("./saheliEmergency.service");
             const emsg = String(input.args.message ?? "");
+            // notify false: the engine sends the caregivers' WhatsApp itself right after (one message, not two).
+            const notify = input.args.notify !== false;
             // The model sometimes escalates everyday aches ("knee still hurts") as emergencies.
             // Clearly minor + no emergency words → a dashboard health note, not a red alert.
             const MINOR = /\b(knee|ghutn\w*|joint|jodon|back ?pain|kamar|headache|sar ?dard|cold|cough|khansi|zukam|tired|thakan|body ?ache)\b/i;
             if (MINOR.test(emsg) && !messageLooksLikeEmergency(emsg)) {
+                if (!notify) return { escalated: false, noted: true, note: "A health note, not an emergency." };
                 const { notifyCaregivers } = await import("./saheliCaregiverAlert.service");
                 const r = await notifyCaregivers({ familyId: input.familyId, recipientUserId: input.recipientUserId, actorUserId: input.actorUserId, message: emsg, urgency: "medium" });
                 return { escalated: false, noted: true, note: "Logged for the family as a health note (not an emergency).", result: r };
@@ -1439,6 +1442,7 @@ case "notify_caregivers": {
                 actorUserId: input.actorUserId,
                 message: String(input.args.message ?? "Emergency"),
                 channel: "whatsapp",
+                notify,
             });
         }
 

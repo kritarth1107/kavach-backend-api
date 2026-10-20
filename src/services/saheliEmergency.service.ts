@@ -56,6 +56,8 @@ export async function triggerEmergencyEscalation(input: {
     actorUserId: string;
     message: string;
     channel?: string;
+    /** false: the caller messages the caregivers itself (the brain's alert_caregiver). */
+    notify?: boolean;
 }): Promise<Record<string, unknown>> {
     const recent = await EmergencyEscalationLog.findOne({
         familyId: input.familyId,
@@ -67,7 +69,7 @@ export async function triggerEmergencyEscalation(input: {
         return { escalated: false, reason: "recent_escalation", escalationId: recent.escalationId };
     }
 
-    const notify = await notifyCaregivers({
+    const notify = input.notify === false ? { notifiedCount: 0 } : await notifyCaregivers({
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
