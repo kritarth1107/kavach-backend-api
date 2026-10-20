@@ -509,11 +509,14 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         id: "elevenlabs", name: "ElevenLabs", provider: "ElevenLabs", category: "AI", purpose: voice?.ttsModel ? `Saheli's spoken replies (${voice.ttsModel})${voice.stt.includes("scribe") ? ` and voice notes (${voice.sttModel || "scribe_v2"})` : ""}` : "Saheli's voice replies and voice reminders", usedBy: "Backend",
         status: el.connected ? (el.used != null && el.limit ? (el.used / el.limit > 0.9 ? "warn" : "ok") : "ok") : "unknown",
         facts: [
-            ...(el.connected ? [{ label: "Plan", value: el.tier || "—" }, { label: "Characters", value: `${(el.used ?? 0).toLocaleString("en-IN")} of ${(el.limit ?? 0).toLocaleString("en-IN")}` }, { label: "Resets", value: el.resetsAt?.slice(0, 10) || "—" }] : [{ label: "Usage", value: el.note || "not connected" }]),
+            ...(el.connected && el.tier ? [{ label: "Plan", value: el.tier }, { label: "Characters", value: `${(el.used ?? 0).toLocaleString("en-IN")} of ${(el.limit ?? 0).toLocaleString("en-IN")}` }, { label: "Resets", value: el.resetsAt?.slice(0, 10) || "—" }] : []),
+            // Credits by product (the usage log): Kavach uses speech-to-text and text-to-speech; the rest of the account is other use.
+            ...(el.products || []).map((p) => ({ label: `${p.kavach ? "Kavach · " : "Not Kavach · "}${p.product}`, value: `${p.last30.toLocaleString("en-IN")} credits in 30 d · ${p.last7.toLocaleString("en-IN")} in 7 d · ${p.today.toLocaleString("en-IN")} today` })),
+            ...(!el.connected ? [{ label: "Usage", value: el.note || "not connected" }] : []),
             ...(voice?.ttsModel ? [{ label: "Voice model", value: voice.ttsModel }] : []),
             ...(voice?.stt.includes("scribe") ? [{ label: "Speech-to-text", value: voice.sttModel || "scribe_v2" }] : []),
         ],
-        source: "none", note: "Monthly plan; usage shown when a read-only key is added", console: "https://elevenlabs.io/app/subscription", daily: {},
+        source: "none", note: el.products ? "Usage from ElevenLabs' usage log (credits). The plan is a monthly fee; its amount needs a key with user_read." : "Monthly plan; usage shown when a read-only key is added", console: "https://elevenlabs.io/app/usage", daily: {},
     });
 
     add({ id: "resend", name: "Resend", provider: "Resend", category: "Email", purpose: "Uptime alerts, admin sign-in codes, caregiver emails", usedBy: "Backend, admin API, uptime monitor", status: "ok", facts: [{ label: "Domain", value: "emails.kavach.care" }, { label: "Key", value: "send-only (usage not readable)" }], source: "none", console: "https://resend.com/emails", daily: {} });
@@ -557,8 +560,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
             ],
         },
         {
-            id: "elevenlabs", name: "ElevenLabs usage", provider: "ElevenLabs", connected: el.connected, detail: el.connected ? "Characters this period" : el.note || "not connected",
-            howTo: el.connected ? undefined : ["ElevenLabs → Developers → API keys → new key with only User: Read.", "Store it in Secret Manager as admin-elevenlabs-usage-key."],
+            id: "elevenlabs", name: "ElevenLabs usage", provider: "ElevenLabs", connected: el.connected, detail: el.connected ? (el.tier ? "Plan, characters and daily credits per product" : "Daily credits per product (usage log); plan needs user_read") : el.note || "not connected",
+            howTo: el.connected ? undefined : ["The admin API reads usage with the backend's ElevenLabs key (secret kavach/backend-elevenlabs-api-key)."],
         },
     ];
 

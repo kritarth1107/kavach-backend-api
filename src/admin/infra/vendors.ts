@@ -61,17 +61,47 @@ export async function browserUseAccount(): Promise<BrowserUseAccount> {
 
 /* ── ElevenLabs: characters used this billing period ── */
 
-export type ElevenLabsUsage = { connected: boolean; tier: string | null; used: number | null; limit: number | null; resetsAt: string | null; note?: string };
+export type ElevenLabsUsage = {
+    connected: boolean; tier: string | null; used: number | null; limit: number | null; resetsAt: string | null; note?: string;
+    /** Credits per product over the last 30 days (the usage log; readable with the voice key, no user_read needed). */
+    products?: Array<{ product: string; last30: number; last7: number; today: number; kavach: boolean }>;
+    daily?: Record<string, Record<string, number>>; // IST day -> product -> credits
+};
 
-export async function elevenLabsUsage(): Promise<ElevenLabsUsage> {
+// The products Kavach itself uses: Scribe for voice notes, text-to-speech for spoken replies (TTS_ORDER=elevenlabs).
+// Music, video, images, sound effects and agents on the same account are not Kavach.
+const KAVACH_PRODUCTS = new Set(["STT", "TTS"]);
+
+export async function elevenLabsUsage(now = Date.now()): Promise<ElevenLabsUsage> {
     const key = process.env.ELEVENLABS_USAGE_API_KEY || process.env.ELEVENLABS_API_KEY;
     const none = { connected: false, tier: null, used: null, limit: null, resetsAt: null };
-    if (!key) return { ...none, note: "Needs an ElevenLabs key with the user_read permission (the voice key can't read usage)" };
-    type S = { tier?: string; character_count?: number; character_limit?: number; next_character_count_reset_unix?: number; detail?: { message?: string } };
-    const r = await get<S>("https://api.elevenlabs.io/v1/user/subscription", { "xi-api-key": key });
-    if (!r.ok || !r.data) return { ...none, note: r.data?.detail?.message?.slice(0, 200) || `ElevenLabs answered ${r.status}` };
-    return {
-        connected: true, tier: r.data.tier ?? null, used: r.data.character_count ?? null, limit: r.data.character_limit ?? null,
-        resetsAt: r.data.next_character_count_reset_unix ? new Date(r.data.next_character_count_reset_unix * 1000).toISOString() : null,
-    };
+    if (!key) return { ...none, note: "The admin API has no ElevenLabs key" };
+    type S = { tier?: string; character_count?: number; character_limit?: number; next_character_count_reset_unix?: number };
+    type U = { time?: number[]; usage?: Record<string, number[]> };
+    const [sub, use] = await Promise.all([
+        get<S>("https://api.elevenlabs.io/v1/user/subscription", { "xi-api-key": key }),
+        get<U>(`https://api.elevenlabs.io/v1/usage/character-stats?start_unix=${now - 30 * 86_400_000}&end_unix=${now}&breakdown_type=product_type`, { "xi-api-key": key }),
+    ]);
+    const plan = sub.ok && sub.data ? {
+        tier: sub.data.tier ?? null, used: sub.data.character_count ?? null, limit: sub.data.character_limit ?? null,
+        resetsAt: sub.data.next_character_count_reset_unix ? new Date(sub.data.next_character_count_reset_unix * 1000).toISOString() : null,
+    } : { tier: null, used: null, limit: null, resetsAt: null };
+    if (!use.ok || !use.data?.time) {
+        return sub.ok ? { connected: true, ...plan } : { ...none, note: `ElevenLabs answered ${use.status} (the key needs usage or user_read)` };
+    }
+    const days = use.data.time.map((t) => istDay(new Date(t)));
+    const daily: Record<string, Record<string, number>> = {};
+    const today = istDay(new Date(now));
+    const products = Object.entries(use.data.usage || {}).map(([product, vals]) => {
+        let last30 = 0, last7 = 0, todayN = 0;
+        vals.forEach((v, i) => {
+            if (!v) return;
+            (daily[days[i]] ??= {})[product] = v;
+            last30 += v;
+            if (now - (use.data!.time![i] ?? 0) <= 7 * 86_400_000) last7 += v;
+            if (days[i] === today) todayN += v;
+        });
+        return { product, last30, last7, today: todayN, kavach: KAVACH_PRODUCTS.has(product) };
+    }).filter((p) => p.last30 > 0).sort((a, b) => Number(b.kavach) - Number(a.kavach) || b.last30 - a.last30);
+    return { connected: true, ...plan, products, daily, note: sub.ok ? undefined : "Plan and limit need a key with user_read; usage is read from the usage log" };
 }
