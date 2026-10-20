@@ -11,8 +11,8 @@ import { alertSettings, attention, growth, saveAlertSettings } from "../src/admi
     if (!uri) { console.log("admin insights: skipped (no TEST_MONGODB_URI)"); return; }
     await mongoose.connect(uri);
     await Promise.all([Family.deleteMany({}), User.deleteMany({}), WaitlistEntry.deleteMany({})]);
-    await User.collection.insertMany([{ userId: "u1", email: "insights-u1@example.test", firstName: "Asha", lastName: "Rao", phone: "+919000000001", createdAt: new Date(), onboarding: { status: "done", at: new Date() } },
-        { userId: "u2", email: "insights-u2@example.test", firstName: "Maa", phone: "+919000000002", createdAt: new Date() }]);
+    await User.collection.insertMany([{ userId: "u1", email: "insights-u1@example.test", phoneKey: "919000000001", firstName: "Asha", lastName: "Rao", phone: "+919000000001", createdAt: new Date(), onboarding: { status: "done", at: new Date() } },
+        { userId: "u2", email: "insights-u2@example.test", phoneKey: "919000000002", firstName: "Maa", phone: "+919000000002", createdAt: new Date() }]);
     await Family.collection.insertOne({ familyId: "fam-t1", name: "Test family", createdAt: new Date(), members: [
         { userId: "u1", role: "PRIMARY_CAREGIVER", status: "JOINED" }, { userId: "u2", role: "CARE_RECIPIENT", status: "JOINED" }] });
     await WaitlistEntry.collection.insertMany([{ waitlistId: "w1", source: "dashboard", status: "approved", createdAt: new Date(Date.now() - 86_400_000), approvedAt: new Date() },
