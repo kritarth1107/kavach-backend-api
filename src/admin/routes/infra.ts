@@ -2,6 +2,8 @@
 import { engineOrNull } from "../engine";
 import { github } from "../infra/github";
 import { models } from "../infra/models";
+import { AdminError } from "../auth";
+import { costAnalysis, deleteGrant, saveGrant } from "../infra/costs";
 import { cronView, dataView, ecsDetail, trainerView } from "../infra/ops";
 import { ECS_NAMES, snapshot } from "../infra/summary";
 import type { RouteDef } from "../router";
@@ -38,6 +40,30 @@ export function infraRoutes(): RouteDef[] {
                 if (!ECS_NAMES.includes(params.service)) return { data: { service: params.service, errors: ["not a Kavach service"] } };
                 return { data: await ecsDetail(params.service, Math.max(1, Math.min(168, Number(query.hours) || 24))) };
             },
+        },
+        {
+            method: "get", path: "/infra/costs", perm: "infra.read", action: "infra.costs",
+            handler: async () => ({ data: await costAnalysis() }),
+        },
+        {
+            // A credit grant (no provider API tells how much was given or when it ends): remaining = amount − used on the bill.
+            method: "post", path: "/infra/costs/credits", perm: "spend.manage", action: "infra.credit_grant",
+            handler: async ({ admin, body }) => {
+                const b = (body || {}) as Record<string, unknown>;
+                const str = (v: unknown, n: number) => (typeof v === "string" ? v.trim().slice(0, n) : "");
+                const amount = Number(b.amount);
+                const startsAt = new Date(String(b.startsAt || ""));
+                const expiresAt = b.expiresAt ? new Date(String(b.expiresAt)) : null;
+                const provider = str(b.provider, 40), label = str(b.label, 120);
+                if (!provider || !label || !Number.isFinite(amount) || amount <= 0 || isNaN(startsAt.getTime()) || (expiresAt && isNaN(expiresAt.getTime()))) throw new AdminError(400, "bad_input");
+                const g = await saveGrant({ grantId: str(b.grantId, 40) || undefined, provider, project: str(b.project, 80) || null, label, amount,
+                    currency: b.currency === "INR" ? "INR" : "USD", startsAt, expiresAt, note: str(b.note, 300) || null }, admin.email);
+                return { target: `credit:${g.grantId}`, data: { grantId: g.grantId } };
+            },
+        },
+        {
+            method: "post", path: "/infra/costs/credits/:grantId/delete", perm: "spend.manage", action: "infra.credit_grant_delete",
+            handler: async ({ params }) => ({ target: `credit:${params.grantId}`, data: { deleted: await deleteGrant(params.grantId) } }),
         },
         {
             method: "get", path: "/infra/cron", perm: "infra.read", action: "infra.cron",
