@@ -262,23 +262,23 @@ export async function billingTable(): Promise<string | null> {
     }
 }
 
-export type BillRow = { service: string; day: string; cost: number; credits: number; currency: string };
+export type BillRow = { service: string; project: string; day: string; cost: number; credits: number; currency: string };
 
-/** Cost and credits per Google service per IST day, for this project, from the billing export. */
+/** Cost and credits per Google service, project and IST day, for every project on the billing account, from the export. */
 export async function billingRows(table: string, days: number): Promise<BillRow[]> {
     const sql = `
 SELECT service.description AS service, FORMAT_DATE('%Y-%m-%d', DATE(usage_start_time, 'Asia/Kolkata')) AS day, currency,
-  SUM(cost) AS cost, SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS credits
+  SUM(cost) AS cost, SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS credits, IFNULL(project.id, 'account') AS project
 FROM \`${table}\`
-WHERE usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${Math.min(Math.max(days, 1), 120)} DAY) AND project.id = @project
-GROUP BY service, day, currency`;
+WHERE usage_start_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL ${Math.min(Math.max(days, 1), 120)} DAY)
+GROUP BY service, day, currency, project`;
     type Q = { rows?: Array<{ f: Array<{ v: string | null }> }>; jobComplete?: boolean };
     const r = await gapi<Q>(`https://bigquery.googleapis.com/bigquery/v2/projects/${PROJECT}/queries`, {
         method: "POST", timeoutMs: 30_000,
-        body: { query: sql, useLegacySql: false, timeoutMs: 25_000, parameterMode: "NAMED", queryParameters: [{ name: "project", parameterType: { type: "STRING" }, parameterValue: { value: PROJECT } }] },
+        body: { query: sql, useLegacySql: false, timeoutMs: 25_000 },
     });
     if (r.jobComplete === false) throw new Error("billing query still running");
-    return (r.rows || []).map((row) => ({ service: row.f[0].v || "Other", day: row.f[1].v || "", currency: row.f[2].v || "INR", cost: Number(row.f[3].v || 0), credits: Number(row.f[4].v || 0) }));
+    return (r.rows || []).map((row) => ({ service: row.f[0].v || "Other", day: row.f[1].v || "", currency: row.f[2].v || "INR", cost: Number(row.f[3].v || 0), credits: Number(row.f[4].v || 0), project: row.f[5]?.v || PROJECT }));
 }
 
 export { lastDays };

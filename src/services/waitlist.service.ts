@@ -145,15 +145,69 @@ export async function waitlistCounts(): Promise<Record<WaitlistStatus, number>> 
     return { pending, approved, rejected };
 }
 
-/** Pending people (not yet registered) first, newest first within each group. */
-export async function listWaitlist(opts: { status?: string; page?: number; pageSize?: number } = {}) {
-    const status = (["pending", "approved", "rejected"] as const).find((s) => s === opts.status);
-    const rows = await WaitlistEntry.find(status ? { status } : {}).lean<IWaitlistEntry[]>();
+export type WaitlistView = "pending" | "approved" | "rejected" | "waiting" | "joined";
+export type WaitlistSort = "priority" | "newest" | "oldest" | "asks";
+
+const escapeRe = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The list with filters (founder 21 Oct: better waitlist management). View: a status, "waiting" (approved, not signed up
+ * yet) or "joined". q: part of a name, email or number. source: dashboard or whatsapp. Sort: pending first (default),
+ * newest, oldest, or most asks.
+ */
+export async function listWaitlist(opts: { status?: string; q?: string; source?: string; sort?: string; page?: number; pageSize?: number } = {}) {
+    const filter: Record<string, unknown> = {};
+    const view = (["pending", "approved", "rejected", "waiting", "joined"] as const).find((s) => s === opts.status);
+    if (view === "waiting") Object.assign(filter, { status: "approved", registeredUserId: null });
+    else if (view === "joined") filter.registeredUserId = { $ne: null };
+    else if (view) filter.status = view;
+    if (opts.source === "dashboard" || opts.source === "whatsapp") filter.source = opts.source;
+    const q = (opts.q || "").trim().slice(0, 80);
+    if (q) {
+        const digits = q.replace(/\D/g, "");
+        const re = new RegExp(escapeRe(q), "i");
+        filter.$or = [{ name: re }, { email: re }, { note: re }, ...(digits.length >= 4 ? [{ phoneDigits: new RegExp(escapeRe(digits)) }] : [])];
+    }
+    const rows = await WaitlistEntry.find(filter).lean<IWaitlistEntry[]>();
     const rank = (e: IWaitlistEntry) => (e.status === "pending" && !e.registeredUserId ? 0 : e.status === "approved" && !e.registeredUserId ? 1 : 2);
-    rows.sort((a, b) => rank(a) - rank(b) || new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime());
+    const at = (e: IWaitlistEntry) => new Date(e.createdAt ?? 0).getTime();
+    const sort = (["priority", "newest", "oldest", "asks"] as const).find((s) => s === opts.sort) || "priority";
+    rows.sort((a, b) => sort === "newest" ? at(b) - at(a) : sort === "oldest" ? at(a) - at(b)
+        : sort === "asks" ? (b.attempts ?? 1) - (a.attempts ?? 1) || at(b) - at(a) : rank(a) - rank(b) || at(b) - at(a));
     const size = Math.max(1, Math.min(opts.pageSize ?? 25, 100));
     const page = Math.max(1, opts.page ?? 1);
     return { total: rows.length, entries: rows.slice((page - 1) * size, page * size) };
+}
+
+/** The numbers above the list: how many wait, how fast they are let in, how many of those sign up, where they come from. */
+export async function waitlistStats(now = Date.now()) {
+    const rows = await WaitlistEntry.find({}, { status: 1, source: 1, createdAt: 1, approvedAt: 1, registeredAt: 1, registeredUserId: 1, attempts: 1 })
+        .lean<Array<Pick<IWaitlistEntry, "status" | "source" | "createdAt" | "approvedAt" | "registeredAt" | "registeredUserId" | "attempts">>>();
+    const week = now - 7 * 86_400_000;
+    const approved = rows.filter((r) => r.approvedAt);
+    const joined = rows.filter((r) => r.registeredUserId);
+    const waits = approved.map((r) => new Date(r.approvedAt!).getTime() - new Date(r.createdAt ?? 0).getTime()).filter((x) => x >= 0).sort((a, b) => a - b);
+    const pendingAges = rows.filter((r) => r.status === "pending" && !r.registeredUserId).map((r) => now - new Date(r.createdAt ?? 0).getTime());
+    const daily: Record<string, number> = {};
+    for (let i = 13; i >= 0; i--) daily[new Date(now - i * 86_400_000 + 5.5 * 3_600_000).toISOString().slice(0, 10)] = 0;
+    for (const r of rows) {
+        const d = new Date(new Date(r.createdAt ?? 0).getTime() + 5.5 * 3_600_000).toISOString().slice(0, 10);
+        if (d in daily) daily[d]++;
+    }
+    return {
+        total: rows.length,
+        pending: rows.filter((r) => r.status === "pending" && !r.registeredUserId).length,
+        waitingToJoin: rows.filter((r) => r.status === "approved" && !r.registeredUserId).length,
+        joined: joined.length,
+        rejected: rows.filter((r) => r.status === "rejected").length,
+        newThisWeek: rows.filter((r) => new Date(r.createdAt ?? 0).getTime() >= week).length,
+        bySource: { dashboard: rows.filter((r) => r.source === "dashboard").length, whatsapp: rows.filter((r) => r.source === "whatsapp").length },
+        medianWaitHours: waits.length ? Math.round(waits[Math.floor(waits.length / 2)] / 3_600_000) : null,
+        oldestPendingHours: pendingAges.length ? Math.round(Math.max(...pendingAges) / 3_600_000) : null,
+        signUpRate: approved.length ? Math.round((joined.filter((r) => r.approvedAt).length / approved.length) * 100) : null,
+        askedMoreThanOnce: rows.filter((r) => (r.attempts ?? 1) > 1 && r.status === "pending").length,
+        daily: Object.entries(daily).map(([day, n]) => ({ day, n })),
+    };
 }
 
 export async function getWaitlistEntry(waitlistId: string): Promise<IWaitlistEntry | null> {

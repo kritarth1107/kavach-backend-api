@@ -289,7 +289,10 @@ export const AWS_SCHEDULES: Array<{ name: string; schedule: string; owner: "back
 
 /** Cost per AWS service per day (UTC days from Cost Explorer, close enough to IST for a daily view). */
 export async function awsBill(days: number, now = Date.now()): Promise<AwsBill> {
-    if (!awsConfigured()) return { connected: false, daily: {}, byService: {}, credits: {}, note: "No AWS billing key yet" };
+    // A billing key when one is set; otherwise the ECS task role (ce:GetCostAndUsage), so no key is needed on AWS.
+    const role = awsConfigured() ? null : await taskCreds();
+    if (!awsConfigured() && !role) return { connected: false, daily: {}, byService: {}, credits: {}, note: "Not on AWS and no billing key" };
+    const keys = role || { accessKey: process.env.AWS_BILLING_ACCESS_KEY_ID!, secretKey: process.env.AWS_BILLING_SECRET_ACCESS_KEY!, token: undefined };
     const host = "ce.us-east-1.amazonaws.com";
     const start = new Date(now - days * 86_400_000).toISOString().slice(0, 10);
     const end = new Date(now + 86_400_000).toISOString().slice(0, 10);
@@ -298,8 +301,9 @@ export async function awsBill(days: number, now = Date.now()): Promise<AwsBill> 
         GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }, { Type: "DIMENSION", Key: "RECORD_TYPE" }],
     });
     const amzDate = new Date(now).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-    const headers = { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSInsightsIndexService.GetCostAndUsage" };
-    const auth = sigv4({ method: "POST", host, path: "/", headers, body, region: "us-east-1", service: "ce", accessKey: process.env.AWS_BILLING_ACCESS_KEY_ID!, secretKey: process.env.AWS_BILLING_SECRET_ACCESS_KEY!, amzDate });
+    const headers: Record<string, string> = { "content-type": "application/x-amz-json-1.1", "x-amz-target": "AWSInsightsIndexService.GetCostAndUsage" };
+    if (keys.token) headers["x-amz-security-token"] = keys.token;
+    const auth = sigv4({ method: "POST", host, path: "/", headers, body, region: "us-east-1", service: "ce", accessKey: keys.accessKey, secretKey: keys.secretKey, amzDate });
     try {
         const res = await fetch(`https://${host}/`, { method: "POST", headers: { ...headers, "x-amz-date": amzDate, Authorization: auth }, body, signal: AbortSignal.timeout(15_000) });
         type R = { ResultsByTime?: Array<{ TimePeriod: { Start: string }; Groups?: Array<{ Keys: string[]; Metrics: { UnblendedCost: { Amount: string; Unit: string } } }> }>; message?: string; Message?: string };

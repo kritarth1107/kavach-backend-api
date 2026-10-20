@@ -10,7 +10,7 @@ import type { RouteDef } from "../router";
 import type { IWaitlistEntry } from "../../models/waitlist.model";
 import { AppError } from "../../middleware/error.middleware";
 import {
-    approveWaitlist, getWaitlistEntry, listWaitlist, rejectWaitlist, waitlistCounts,
+    approveWaitlist, getWaitlistEntry, listWaitlist, rejectWaitlist, waitlistCounts, waitlistStats,
 } from "../../services/waitlist.service";
 import { iso, PAGE, pageOf } from "./shared";
 
@@ -55,11 +55,12 @@ export function waitlistRoutes(): RouteDef[] {
             method: "get", path: "/waitlist", perm: "users.read", action: "waitlist.list",
             handler: async ({ query }) => {
                 const page = pageOf(query);
-                const [{ total, entries }, counts] = await Promise.all([
-                    listWaitlist({ status: query.status, page, pageSize: PAGE }),
+                const [{ total, entries }, counts, stats] = await Promise.all([
+                    listWaitlist({ status: query.status, q: query.q, source: query.source, sort: query.sort, page, pageSize: PAGE }),
                     waitlistCounts(),
+                    waitlistStats(),
                 ]);
-                return { data: { total, page, pageSize: PAGE, counts, entries: entries.map(entryOut) } };
+                return { data: { total, page, pageSize: PAGE, counts, stats, entries: entries.map(entryOut) } };
             },
         },
         {
@@ -86,6 +87,30 @@ export function waitlistRoutes(): RouteDef[] {
                         link: can(admin.role, "pii.reveal") ? r.link : null,
                     },
                 };
+            },
+        },
+        {
+            // Several at once (one reason for all, each audited in the result). Approve sends each its email; at most 50.
+            method: "post", path: "/waitlist/bulk", perm: "users.manage", action: "waitlist.bulk",
+            handler: async ({ admin, body }) => {
+                const b = (body || {}) as { ids?: unknown; action?: unknown };
+                const ids = Array.isArray(b.ids) ? [...new Set(b.ids.filter((x): x is string => typeof x === "string" && idOk(x)))].slice(0, 50) : [];
+                if (!ids.length || (b.action !== "approve" && b.action !== "reject")) throw new AdminError(400, "bad_input");
+                const done: Array<{ waitlistId: string; ok: boolean; emailSent?: boolean; error?: string }> = [];
+                for (const id of ids) {
+                    try {
+                        if (b.action === "approve") {
+                            const r = await approveWaitlist(id, admin.email);
+                            done.push({ waitlistId: id, ok: true, emailSent: r.emailSent, error: r.emailError || undefined });
+                        } else {
+                            await rejectWaitlist(id, admin.email);
+                            done.push({ waitlistId: id, ok: true });
+                        }
+                    } catch (err) {
+                        done.push({ waitlistId: id, ok: false, error: err instanceof AppError ? err.message : "failed" });
+                    }
+                }
+                return { target: `waitlist:bulk:${b.action}`, detail: { n: ids.length, ok: done.filter((x) => x.ok).length }, data: { action: b.action, results: done } };
             },
         },
         {

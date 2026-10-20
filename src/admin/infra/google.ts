@@ -2,10 +2,46 @@
  * Read-only calls to Google Cloud APIs as the admin API's own identity (kavach-admin-api, viewer roles only).
  * On Cloud Run the identity comes from the metadata server; locally from application-default credentials.
  */
-import { GoogleAuth } from "google-auth-library";
+import { AwsClient, GoogleAuth } from "google-auth-library";
+import { taskCreds } from "./aws";
 import { googleEnabled, NOT_ON_GCP } from "../../config/cloudProvider";
 
 let auth: GoogleAuth | null = null;
+let wif: AwsClient | null = null;
+
+/**
+ * On AWS: the ECS task role signs in to Google through workload identity (pool kavach-aws, provider kavach-ecs) and acts
+ * as kavach-admin-reader (project viewer, BigQuery jobs, billing viewer). No Google key is stored anywhere.
+ * GOOGLE_WIF_AUDIENCE: the provider's full name; GOOGLE_ADMIN_SA: the account to act as.
+ */
+export function wifConfigured(): boolean {
+    return !!process.env.GOOGLE_WIF_AUDIENCE && !!process.env.GOOGLE_ADMIN_SA;
+}
+
+function wifClient(): AwsClient {
+    wif ??= new AwsClient({
+        type: "external_account",
+        audience: process.env.GOOGLE_WIF_AUDIENCE as string,
+        subject_token_type: "urn:ietf:params:aws:token-type:aws4_request",
+        token_url: "https://sts.googleapis.com/v1/token",
+        service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${process.env.GOOGLE_ADMIN_SA}:generateAccessToken`,
+        scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        aws_security_credentials_supplier: {
+            getAwsRegion: async () => process.env.AWS_REGION || "ap-south-1",
+            getAwsSecurityCredentials: async () => {
+                const c = await taskCreds();
+                if (!c) throw new Error("no AWS task role");
+                return { accessKeyId: c.accessKey, secretAccessKey: c.secretKey, token: c.token };
+            },
+        },
+    });
+    return wif;
+}
+
+/** The Google bill and Google reads work here: on Google Cloud, or on AWS through workload identity. */
+export function gcpReadable(): boolean {
+    return googleEnabled() || wifConfigured();
+}
 
 export class CloudError extends Error {
     constructor(public status: number, message: string) {
@@ -19,10 +55,14 @@ export function onGcp(): boolean {
 }
 
 export async function gapi<T>(url: string, opts: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
-    if (!onGcp()) throw new CloudError(0, NOT_ON_GCP);
-    auth ??= new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
-    const client = await auth.getClient();
-    const token = (await client.getAccessToken()).token;
+    if (!gcpReadable()) throw new CloudError(0, NOT_ON_GCP);
+    let token: string | null | undefined;
+    if (!onGcp() && wifConfigured()) {
+        token = (await wifClient().getAccessToken()).token;
+    } else {
+        auth ??= new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
+        token = (await (await auth.getClient()).getAccessToken()).token;
+    }
     if (!token) throw new CloudError(401, "no Google credentials");
     const res = await fetch(url, {
         method: opts.method || "GET",

@@ -10,7 +10,7 @@ import mongoose, { Schema } from "mongoose";
 import { engineOrNull } from "../engine";
 import { AWS_SCHEDULES, awsBill, ecsServices, type EcsService } from "./aws";
 import * as gcp from "./gcp";
-import { onGcp, settle } from "./google";
+import { gcpReadable, onGcp, settle } from "./google";
 import {
     ARTIFACT_USD_GB_MONTH, FIRESTORE, LB_RULE_USD_HOUR, PD_BALANCED_USD_GB_MONTH, PD_STANDARD_USD_GB_MONTH, SCHEDULER_USD_JOB_MONTH,
     SQL_SSD_USD_GB_MONTH, SQL_TIER_USD_HOUR, USD_INR, inr, lastDays, perDay, round2, runCostUsd, sumDaily, totals, type Totals,
@@ -121,7 +121,7 @@ function ecsState(s: EcsService | undefined): Status {
 type Add = (s: Omit<InfraService, "totals">) => void;
 
 /** The live AWS stack. Cost Explorer totals attach to the matching row; app tasks themselves are not double-counted. */
-function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<string, Record<string, number>>; ledger: Record<string, number>; spend: { data: EngineSpend | null; error?: string }; ai: AiStack }) {
+function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<string, Record<string, number>>; ledger: Record<string, number>; spend: { data: EngineSpend | null; error?: string }; ai: AiStack; googleBilled?: boolean }) {
     const byName = new Map((o.ecs || []).map((s) => [s.name, s]));
     const region = "ap-south-1";
     const cluster = `${AWS_CONSOLE}/ecs/v2/clusters/kavach/services`;
@@ -167,9 +167,10 @@ function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<strin
                 { label: "Region", value: o.ai.location === "asia-south1" ? "Mumbai (asia-south1)" : (o.ai.location || "Mumbai") },
                 ...caps,
             ],
-            source: "metered",
-            note: "The engine's model ledger. Google is reached through the AWS link.",
-            daily: o.ledger,
+            // With Google's bill connected the cost is that bill's Vertex AI row; this row keeps the caps without counting twice.
+            source: o.googleBilled ? "none" : "metered",
+            note: o.googleBilled ? "Cost shown under Google Cloud → Vertex AI (Google's bill). Caps from the engine's ledger." : "The engine's model ledger. Google is reached through the AWS link.",
+            daily: o.googleBilled ? {} : o.ledger,
         });
     } else if (!o.ai.bedrockRoutes && Object.keys(o.ledger).length) {
         add({
@@ -250,6 +251,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
 
     // Off Google Cloud (the AWS copy) the Google collectors are skipped, not failed: one "not on GCP" note instead of errors.
     const gcpOn = onGcp();
+    // The Google bill is read on AWS too (workload identity): Gemini, the eval project and anything left on Google still cost money.
+    const gcpBill = gcpReadable();
     const gSettle: typeof settle = (name, fn, errs) => (gcpOn ? settle(name, fn, errs) : Promise.resolve(null));
     const [run, jobs, scheds, sql, fsdbs, repos, compute, lb, bucketList, secrets, runSeconds, jobSeconds, traffic, fsReads, fsWrites, fsBytes, billTable, spend, wa, bu, el, aws, ecs, reminderAt, voice, engineModels] = await Promise.all([
         gSettle("Cloud Run", gcp.runServices, errors),
@@ -268,7 +271,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         gSettle("Firestore reads", () => gcp.dailyByLabel("firestore.googleapis.com/api/billable_read_units", "firestore.googleapis.com/Database", "resource.label.database_id", DAYS, now), errors),
         gSettle("Firestore writes", () => gcp.dailyByLabel("firestore.googleapis.com/api/billable_write_units", "firestore.googleapis.com/Database", "resource.label.database_id", DAYS, now), errors),
         gSettle("Firestore storage", () => gcp.latestGauge("firestore.googleapis.com/storage/data_and_index_storage_bytes", "firestore.googleapis.com/Database", "resource.label.database_id", now), errors),
-        gcpOn ? gcp.billingTable() : Promise.resolve(null),
+        gcpBill ? gcp.billingTable() : Promise.resolve(null),
         engineOrNull<EngineSpend>("GET", "/spend?days=35"),
         whatsappBill(35, now),
         browserUseAccount(),
@@ -282,14 +285,22 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
 
     // The Google bill, when the export is on: net cost (after credits) per row id per day, in INR.
     let bill: Record<string, Record<string, number>> | null = null;
+    const billProjects: Record<string, Record<string, number>> = {}; // id -> project -> this month (INR)
+    const billGross: Record<string, number> = {}; // id -> this month before credits
     if (billTable) {
         const rows = await settle("Billing export", () => gcp.billingRows(billTable, 40), errors);
         if (rows) {
             bill = {};
+            const month = days[days.length - 1].slice(0, 7);
             for (const r of rows) {
                 const id = BILL_MAP.find(([re]) => re.test(r.service))?.[1] || "other";
-                const v = (r.cost + r.credits) * (r.currency === "USD" ? USD_INR : 1);
+                const rate = r.currency === "USD" ? USD_INR : 1;
+                const v = (r.cost + r.credits) * rate;
                 (bill[id] ??= {})[r.day] = (bill[id][r.day] ?? 0) + v;
+                if (r.day.startsWith(month)) {
+                    (billProjects[id] ??= {})[r.project] = (billProjects[id][r.project] ?? 0) + v;
+                    billGross[id] = (billGross[id] ?? 0) + r.cost * rate;
+                }
             }
         }
     }
@@ -443,6 +454,32 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     if (bill?.bigquery) add({ id: "bigquery", name: "BigQuery", provider: "GCP", category: "Data", purpose: "The billing export behind these numbers", usedBy: "Admin API", status: "ok", facts: [], source: "billed", daily: billed("bigquery") || {} });
     if (bill?.other) add({ id: "other-gcp", name: "Other Google services", provider: "GCP", category: "Other", purpose: "Anything else on the Google bill", usedBy: "—", status: "ok", facts: [], source: "billed", daily: billed("other") || {} });
 
+    // On AWS: what Google still bills, per Google service, across every project on the billing account.
+    if (!gcpOn && bill) {
+        const NAMES: Record<string, [string, string, string]> = {
+            vertex: ["Vertex AI (Gemini)", "AI", "Saheli's models: live chats (kavach-care), tests and the trainer (kavach-eval-1015)"],
+            run: ["Cloud Run", "Compute", "The retired Google copy (scaled to zero)"], sql: ["Cloud SQL", "Data", "The retired Google memory database"],
+            firestore: ["Firestore", "Data", "The retired Google main database"], storage: ["Cloud Storage", "Storage", "Memory exports and old backups"],
+            artifacts: ["Artifact Registry", "Compute", "Old container images"], scheduler: ["Cloud Scheduler", "Operations", "Old schedules"],
+            compute: ["Compute Engine", "Compute", "Virtual machines and disks"], lb: ["Networking", "Network", "Load balancing and traffic"],
+            secrets: ["Secret Manager", "Security", "Old secrets"], observability: ["Logging & monitoring", "Operations", "Logs and metrics"],
+            speech: ["Speech-to-Text", "AI", "Voice notes (fallback)"], bigquery: ["BigQuery", "Data", "The billing export behind these numbers"],
+            other: ["Other Google services", "Other", "Anything else on the Google bill"],
+        };
+        for (const [id, daily] of Object.entries(bill)) {
+            const [name, category, purpose] = NAMES[id] || [id, "Other", "Google service"];
+            const projects = Object.entries(billProjects[id] || {}).sort((a, b) => b[1] - a[1]);
+            add({
+                id: `gcp:${id}`, name, provider: "GCP", category, purpose, usedBy: projects.map(([p]) => p).join(", ") || "—", status: "ok", source: "billed",
+                facts: [
+                    ...projects.map(([p, v]) => ({ label: p, value: `₹${Math.round(v).toLocaleString("en-IN")} this month` })),
+                    ...(billGross[id] != null ? [{ label: "Before credits", value: `₹${Math.round(billGross[id]).toLocaleString("en-IN")}` }] : []),
+                ],
+                console: "https://console.cloud.google.com/billing/0176BB-5B9B74-B28651/reports", daily: keep(daily),
+            });
+        }
+    }
+
     // WhatsApp (Meta): the real bill.
     const waToday = wa.volume[today] ?? 0;
     add({
@@ -480,7 +517,12 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
 
     if (gcpOn) {
         for (const [name, daily] of Object.entries(aws.byService)) add({ id: `aws:${name}`, name, provider: "AWS", category: /bedrock/i.test(name) ? "AI" : "Other", purpose: /bedrock/i.test(name) ? bedrockPurpose(aiStack(engineModels.data)) : "AWS service", usedBy: "—", status: "ok", facts: [], source: "billed", daily });
-    } else addAwsStack(add, { ecs, bill: aws.byService, ledger, spend, ai: aiStack(engineModels.data) });
+    } else addAwsStack(add, { ecs, bill: aws.byService, ledger, spend, ai: aiStack(engineModels.data), googleBilled: !!bill?.vertex });
+    // AWS credits (promotional): a negative line, so every total and forecast is what is actually paid.
+    if (Object.keys(aws.credits).length) add({
+        id: "aws:credits", name: "AWS credits", provider: "AWS", category: "Credits", purpose: "Promotional credits applied by AWS (taken off the costs above)",
+        usedBy: "—", status: "ok", facts: [], source: "billed", console: "https://us-east-1.console.aws.amazon.com/billing/home#/credits", daily: aws.credits,
+    });
 
     /* ── roll-ups ── */
 
@@ -492,7 +534,7 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     });
 
     const connections: Connection[] = [
-        ...(gcpOn ? [{
+        ...(gcpBill ? [{
             id: "gcp-billing", name: "Google Cloud bill (BigQuery export)", provider: "GCP" as const, connected: !!bill,
             detail: bill ? `Exact Google costs from ${billTable}` : "Google costs are estimates until the billing export is on",
             howTo: bill ? undefined : [
@@ -506,8 +548,8 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         {
             id: "aws", name: "AWS bill (Cost Explorer)", provider: "AWS", connected: aws.connected, detail: aws.connected ? "Daily AWS cost per service" : aws.note || "not connected",
             howTo: aws.connected ? undefined : [
-                "AWS console → IAM → create user kavach-billing-reader with only ce:GetCostAndUsage (and enable Cost Explorer once).",
-                "Create an access key and set AWS_BILLING_ACCESS_KEY_ID and AWS_BILLING_SECRET_ACCESS_KEY on the admin API.",
+                "The admin API reads Cost Explorer with its own ECS task role (kavach-ecs-task: ce:GetCostAndUsage, ce:GetCostForecast); no access key.",
+                "If this stays off: AWS console → Billing → Cost Explorer → Launch Cost Explorer (once per account; data appears within 24 hours).",
             ],
         },
         {

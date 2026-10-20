@@ -2,7 +2,7 @@
 import { createHmac } from "crypto";
 import { z } from "zod";
 import { AdminError } from "../auth";
-import { engine } from "../engine";
+import { engine, engineOrNull } from "../engine";
 import { AdminNote, SupportIssue, type IAdminNote, type ISupportIssue } from "../models";
 import type { RouteDef } from "../router";
 import ActivityLog from "../../models/activityLog.model";
@@ -18,6 +18,8 @@ import Session from "../../models/session.model";
 import User from "../../models/users.model";
 import VoicePreference from "../../models/voicePreference.model";
 import ZeptoConnection from "../../models/zeptoConnection.model";
+import WhatsAppWindow from "../../models/whatsappWindow.model";
+import { WINDOW_MS, phoneKey } from "../../services/whatsappWindow.service";
 import FeatureFlag from "../../models/featureFlag.model";
 import { brainV2Mode } from "../../services/brainV2.service";
 import { flaggedEnv, isSaheliPaused, refreshFlags } from "../../services/featureFlags.service";
@@ -199,7 +201,11 @@ export function peopleRoutes(): RouteDef[] {
                 const env = flaggedEnv();
                 const people = await usersById(rows.flatMap((f) => f.members.filter(joined).map((m) => m.userId)));
                 const last = await Promise.all(rows.map((f) => ActivityLog.findOne({ familyId: f.familyId }, { createdAt: 1 }).sort({ createdAt: -1 }).lean<{ createdAt?: Date }>()));
-                const week = await Promise.all(rows.map((f) => ActivityLog.countDocuments({ familyId: f.familyId, kind: "message_in", createdAt: { $gte: daysAgo(7) } })));
+                // Messages in from the conversation itself (the engine's turns); the activity log only when the engine does not answer.
+                const week = await Promise.all(rows.map(async (f) => {
+                    const e = await engineOrNull<{ total: { messagesIn: number } }>("GET", `/families/${encodeURIComponent(f.familyId)}/week?days=7`);
+                    return e.data ? e.data.total.messagesIn : ActivityLog.countDocuments({ familyId: f.familyId, kind: "message_in", createdAt: { $gte: daysAgo(7) } });
+                }));
                 return {
                     detail: { page, n: rows.length },
                     data: {
@@ -240,6 +246,16 @@ export function peopleRoutes(): RouteDef[] {
                     OutboundMessage.countDocuments({ familyId: fid, createdAt: { $gte: since }, deliveredAt: null }),
                 ]);
                 const perm = perms || {};
+                // The numbers come from the conversation itself (the engine's turns); the activity log missed most messages.
+                type Counts = { messagesIn: number; replies: number; proactive: number; voiceNotes: number; photos: number; lastInAt?: string };
+                const phones = new Map(f.members.map((m) => [m.userId, phoneKey(phoneOf(people.get(m.userId)) || "")]));
+                const [eng, windows] = await Promise.all([
+                    engineOrNull<{ total: Counts; people: Record<string, Counts>; daily: Array<Counts & { day: string }> }>("GET", `/families/${encodeURIComponent(fid)}/week?days=7`),
+                    WhatsAppWindow.find({ phone: { $in: [...phones.values()].filter((x) => x.length >= 8) } }).lean<Array<{ phone: string; lastInboundAt?: Date; closedAt?: Date }>>(),
+                ]);
+                const winBy = new Map(windows.map((w) => [w.phone, w]));
+                const latest = (...xs: Array<Date | string | null | undefined>) => xs.filter(Boolean).map((x) => new Date(x as string | Date)).filter((d) => d.getTime() > 0)
+                    .sort((a, b) => b.getTime() - a.getTime())[0] || null;
                 return {
                     target: `family:${fid}`,
                     data: {
@@ -249,15 +265,27 @@ export function peopleRoutes(): RouteDef[] {
                             ...maskedUser(people.get(m.userId)), userId: m.userId, role: m.role, memberStatus: m.status, joinedAt: iso(m.joinedAt),
                             voice: voice.find((v) => v.userId === m.userId)?.mode || "auto",
                         })),
-                        companions: companions.map((c) => ({
-                            userId: c.recipientUserId, enabled: c.enabled !== false, language: c.preferredLanguage || null,
-                            lastInboundAt: iso(c.lastWhatsAppInboundAt),
-                            windowOpen: !!c.lastWhatsAppInboundAt && Date.now() - new Date(c.lastWhatsAppInboundAt).getTime() < 24 * 3_600_000,
-                            quietHours: c.quietHoursStart && c.quietHoursEnd ? `${c.quietHoursStart}–${c.quietHoursEnd}` : null, nudges: c.nudgeIntensity || null,
-                        })),
+                        // Every member, not only the person cared for: the window is kept per phone number (whatsappWindow.service).
+                        companions: f.members.map((m) => {
+                            const c = companions.find((x) => x.recipientUserId === m.userId);
+                            const w = winBy.get(phones.get(m.userId) || "");
+                            const last = latest(w?.lastInboundAt, eng.data?.people[m.userId]?.lastInAt, c?.lastWhatsAppInboundAt);
+                            const closed = w?.closedAt && (!w.lastInboundAt || new Date(w.closedAt).getTime() >= new Date(w.lastInboundAt).getTime());
+                            return {
+                                userId: m.userId, enabled: c ? c.enabled !== false : true, language: c?.preferredLanguage || null, lastInboundAt: iso(last),
+                                windowOpen: !!last && !closed && Date.now() - last.getTime() < WINDOW_MS, windowClosesAt: last ? new Date(last.getTime() + WINDOW_MS).toISOString() : null,
+                                quietHours: c?.quietHoursStart && c?.quietHoursEnd ? `${c.quietHoursStart}–${c.quietHoursEnd}` : null, nudges: c?.nudgeIntensity || null,
+                                week: eng.data?.people[m.userId] || null,
+                            };
+                        }),
                         permissions: Object.fromEntries(["medicines", "groceries", "food", "rides", "deliveryFollowUps", "medicineStartCheck", "resumeNudges", "spendSoftLimitInr"].map((k) => [k, perm[k] ?? null])),
                         connections: [...mcp.map((c) => ({ partner: c.partner, connectedAt: iso(c.connectedAt) })), ...zepto.map((c) => ({ partner: "zepto", connectedAt: iso(c.connectedAt) }))],
-                        week: { messagesIn: counts[0], messagesOut: counts[1], reminders: counts[2], alerts: counts[3], voiceNotes: counts[4], orders: orders7, failedSends: failed7 },
+                        week: {
+                            messagesIn: eng.data?.total.messagesIn ?? counts[0], messagesOut: eng.data?.total.replies ?? counts[1], started: eng.data?.total.proactive ?? null,
+                            voiceNotes: eng.data?.total.voiceNotes ?? counts[4], photos: eng.data?.total.photos ?? null,
+                            reminders: counts[2], alerts: counts[3], orders: orders7, failedSends: failed7,
+                            source: eng.data ? "conversation" : "activity log (the engine did not answer)", daily: eng.data?.daily || [],
+                        },
                         activity: recent.map(safeActivity),
                         notes: notes.map((n) => ({ text: n.text, by: n.by, at: iso(n.at) })),
                         issues: issues.map((i) => ({ issueId: i.issueId, title: i.title, status: i.status, priority: i.priority, createdAt: iso(i.createdAt) })),
