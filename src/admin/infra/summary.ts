@@ -284,9 +284,11 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
     ]);
 
     // The Google bill, when the export is on: net cost (after credits) per row id per day, in INR.
+    // `bill` is the main project only (it also prices the Google rows when this copy runs on Google); other projects on the
+    // same billing account (the eval project, old ones) are kept apart and shown as their own tagged rows.
     let bill: Record<string, Record<string, number>> | null = null;
-    const billProjects: Record<string, Record<string, number>> = {}; // id -> project -> this month (INR)
-    const billGross: Record<string, number> = {}; // id -> this month before credits
+    const otherBills: Record<string, Record<string, Record<string, number>>> = {}; // project -> id -> day -> INR
+    const billGross: Record<string, number> = {}; // "project|id" -> this month before credits
     if (billTable) {
         const rows = await settle("Billing export", () => gcp.billingRows(billTable, 40), errors);
         if (rows) {
@@ -296,11 +298,9 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
                 const id = BILL_MAP.find(([re]) => re.test(r.service))?.[1] || "other";
                 const rate = r.currency === "USD" ? USD_INR : 1;
                 const v = (r.cost + r.credits) * rate;
-                (bill[id] ??= {})[r.day] = (bill[id][r.day] ?? 0) + v;
-                if (r.day.startsWith(month)) {
-                    (billProjects[id] ??= {})[r.project] = (billProjects[id][r.project] ?? 0) + v;
-                    billGross[id] = (billGross[id] ?? 0) + r.cost * rate;
-                }
+                const into = r.project === gcp.PROJECT ? bill : ((otherBills[r.project] ??= {}));
+                (into[id] ??= {})[r.day] = (into[id][r.day] ?? 0) + v;
+                if (r.day.startsWith(month)) billGross[`${r.project}|${id}`] = (billGross[`${r.project}|${id}`] ?? 0) + r.cost * rate;
             }
         }
     }
@@ -466,17 +466,21 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
             speech: ["Speech-to-Text", "AI", "Voice notes (fallback)"], bigquery: ["BigQuery", "Data", "The billing export behind these numbers"],
             other: ["Other Google services", "Other", "Anything else on the Google bill"],
         };
-        for (const [id, daily] of Object.entries(bill)) {
-            const [name, category, purpose] = NAMES[id] || [id, "Other", "Google service"];
-            const projects = Object.entries(billProjects[id] || {}).sort((a, b) => b[1] - a[1]);
-            add({
-                id: `gcp:${id}`, name, provider: "GCP", category, purpose, usedBy: projects.map(([p]) => p).join(", ") || "—", status: "ok", source: "billed",
-                facts: [
-                    ...projects.map(([p, v]) => ({ label: p, value: `₹${Math.round(v).toLocaleString("en-IN")} this month` })),
-                    ...(billGross[id] != null ? [{ label: "Before credits", value: `₹${Math.round(billGross[id]).toLocaleString("en-IN")}` }] : []),
-                ],
-                console: "https://console.cloud.google.com/billing/0176BB-5B9B74-B28651/reports", daily: keep(daily),
-            });
+        const TAG: Record<string, string> = { "kavach-eval-1015": "eval", "sunny-ship-508214-q1": "old project" };
+        const projects: Array<[string, Record<string, Record<string, number>>]> = [[gcp.PROJECT, bill], ...Object.entries(otherBills)];
+        for (const [project, byId] of projects) {
+            const tag = project === gcp.PROJECT ? null : TAG[project] || "other project";
+            for (const [id, daily] of Object.entries(byId)) {
+                const [name, category, purpose] = NAMES[id] || [id, "Other", "Google service"];
+                const gross = billGross[`${project}|${id}`];
+                add({
+                    id: `gcp:${project}:${id}`, name: tag ? `${name} · ${tag}` : name, provider: "GCP", category: tag === "eval" ? "Eval" : category,
+                    purpose: tag === "eval" ? `${purpose.split(":")[0]} for tests, replays and the nightly trainer (kavach-eval-1015)` : purpose,
+                    usedBy: project, status: "ok", source: "billed",
+                    facts: [{ label: "Project", value: tag ? `${project} (${tag})` : project }, ...(gross != null ? [{ label: "Before credits", value: `₹${Math.round(gross).toLocaleString("en-IN")} this month` }] : [])],
+                    console: `https://console.cloud.google.com/billing/0176BB-5B9B74-B28651/reports;projects=${project}`, daily: keep(daily),
+                });
+            }
         }
     }
 
