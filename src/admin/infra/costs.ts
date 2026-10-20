@@ -20,6 +20,7 @@ import * as gcp from "./gcp";
 import { gapi, gcpReadable } from "./google";
 import { istDay, USD_INR } from "./pricing";
 import { snapshot } from "./summary";
+import { browserUseAccount, elevenLabsUsage, whatsappBill } from "./vendors";
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -207,10 +208,10 @@ FROM \`${table}\`, UNNEST(credits) x WHERE DATE(usage_start_time, 'Asia/Kolkata'
     }
     // this month's top SKUs per project
     const skus = (await bq(`
-SELECT IFNULL(project.id, '(account)') p, service.description s, sku.description k, currency c, SUM(cost) cost,
+SELECT IFNULL(project.id, '(account)') p, service.description s, sku.description k, currency c, SUM(cost) gross,
   SUM(IFNULL((SELECT SUM(x.amount) FROM UNNEST(credits) x), 0)) cr, SUM(usage.amount_in_pricing_units) q, ANY_VALUE(usage.pricing_unit) u
 FROM \`${table}\` WHERE DATE(usage_start_time, 'Asia/Kolkata') >= '${d.month}-01'
-GROUP BY p, s, k, c HAVING ABS(SUM(cost)) > 0.001 ORDER BY cost DESC LIMIT 200`)).map((r) => {
+GROUP BY p, s, k, c HAVING ABS(gross) > 0.001 ORDER BY gross DESC LIMIT 200`)).map((r) => {
         const [p, s, k, cur, cost, cr, q, u] = r.f.map((x) => x.v);
         return { project: p || "(account)", service: s || "", sku: k || "", gross: r2(Number(cost) * rate(cur)), credits: r2(Number(cr) * rate(cur)), quantity: Number(q || 0), unit: u || "" };
     });
@@ -269,7 +270,10 @@ export async function costAnalysis(now = Date.now()) {
     } else platforms.push({ id: "aws", name: "AWS", source: "Cost Explorer", connected: false, note: "Cost Explorer did not answer", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
 
     // Google Cloud
-    if (g) {
+    if (g && !g.exportStarted) {
+        platforms.push({ id: "gcp", name: "Google Cloud", source: "BigQuery billing export", connected: false, note: "Export is on; Google has not delivered the first rows yet (usually within a day)",
+            period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
+    } else if (g) {
         const groups = Object.entries(g.projects).map(([project, p]) => {
             const lines: Line[] = Object.entries(p.services).map(([name, s]) => {
                 const net = sumDaily([s.gross, s.credits]);
@@ -291,14 +295,42 @@ export async function costAnalysis(now = Date.now()) {
     } else platforms.push({ id: "gcp", name: "Google Cloud", source: "BigQuery billing export", connected: false,
         note: table ? "The billing export did not answer" : "No billing export rows yet (Google fills it within a few hours of switching it on)", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
 
-    // Vendors from the snapshot (their own bills or meters)
+    // WhatsApp: Meta's pricing analytics, read directly (every conversation type, paid and free)
+    const wa = await whatsappBill(62, now).catch(() => null);
+    if (wa?.connected) {
+        const rate = wa.currency === "USD" ? USD_INR : 1;
+        const daily = Object.fromEntries(Object.entries(wa.daily).map(([k, v]) => [k, v * rate]));
+        const cats = Object.entries(wa.byCategory).sort((a, b) => b[1].cost - a[1].cost);
+        platforms.push({ id: "meta", name: "WhatsApp (Meta)", source: "Meta pricing analytics (the bill), last 62 days", connected: true, period: period(daily, now), netDaily: daily, grossDaily: daily,
+            groups: [{ name: "WhatsApp Business account", period: period(daily, now), lines: [{ name: "Conversations and messages", period: period(daily, now), daily,
+                detail: cats.map(([c, v]) => ({ label: c, value: `${v.volume.toLocaleString("en-IN")} messages · ₹${r2(v.cost * rate).toLocaleString("en-IN")} (62 days)` })) }] }] });
+    } else platforms.push({ id: "meta", name: "WhatsApp (Meta)", source: "Meta pricing analytics", connected: false, note: wa?.note || "Meta did not answer", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
+
+    // Browser Use: the balance drop per day (kept by the snapshot) and today's balance, read directly
     const svc = (id: string) => snap?.services.find((s) => s.id === id);
-    for (const [id, name, rowId, source] of [["meta", "WhatsApp (Meta)", "whatsapp", "Meta pricing analytics"], ["browser-use", "Browser Use", "browser-use", "Daily drop in the credit balance"],
-        ["elevenlabs", "ElevenLabs", "elevenlabs", "Kavach's usage (credits); plan fee not readable"], ["resend", "Resend", "resend", "Email; usage not readable"], ["cloudflare", "Cloudflare", "cloudflare", "R2 and Worker; billing not connected"]] as const) {
-        const s = svc(rowId);
+    const bu = await browserUseAccount().catch(() => null);
+    {
+        const s = svc("browser-use");
         const daily = (s?.daily || {}) as Record<string, number>;
-        platforms.push({ id, name, source, connected: !!s && s.source !== "none", note: s?.note, period: period(daily, now), netDaily: daily, grossDaily: daily,
-            groups: [{ name, period: period(daily, now), lines: [{ name: s?.name || name, period: period(daily, now), daily, detail: (s?.facts || []).map((f) => ({ label: f.label, value: f.value })) }] }] });
+        platforms.push({ id: "browser-use", name: "Browser Use", source: "Daily drop in the credit balance (a top-up counts as ₹0)", connected: !!bu?.connected, note: bu?.connected ? undefined : bu?.note,
+            period: period(daily, now), netDaily: daily, grossDaily: daily,
+            groups: [{ name: "Browser Use account", period: period(daily, now), lines: [{ name: "Browser agents (orders and rides)", period: period(daily, now), daily,
+                detail: bu?.connected ? [{ label: "Balance now", value: `$${bu.balanceUsd?.toFixed(2)} (₹${Math.round((bu.balanceUsd ?? 0) * USD_INR).toLocaleString("en-IN")})` },
+                    { label: "Plan", value: bu.freeTier ? "free tier" : "paid" }, { label: "Sessions", value: `${bu.activeSessions ?? 0} running of ${bu.concurrentLimit ?? "—"}` }] : [] }] }] });
+    }
+
+    // ElevenLabs: Kavach's own use in credits (the plan fee is not readable with the voice key), so ₹ stays 0
+    const el = await elevenLabsUsage(now).catch(() => null);
+    platforms.push({ id: "elevenlabs", name: "ElevenLabs", source: "Usage log, Kavach's use only (credits; the plan fee is not readable)", connected: !!el?.connected, note: el?.connected ? undefined : el?.note,
+        period: period({}, now), netDaily: {}, grossDaily: {},
+        groups: [{ name: "Kavach's use", period: period({}, now), lines: (el?.products || []).filter((p) => p.kavach).map((p) => ({
+            name: p.product === "STT" ? "Voice notes (speech-to-text)" : p.product === "TTS" ? "Spoken replies (text-to-speech)" : p.product, period: period({}, now), daily: {},
+            detail: [{ label: "Credits", value: `${p.today.toLocaleString("en-IN")} today · ${p.last7.toLocaleString("en-IN")} in 7 days · ${p.last30.toLocaleString("en-IN")} in 30 days` }] })) }] });
+
+    for (const [id, name, rowId, source] of [["resend", "Resend", "resend", "Email; usage not readable with a send-only key"], ["cloudflare", "Cloudflare", "cloudflare", "R2 and the uptime Worker; billing not connected (free limits so far)"]] as const) {
+        const s = svc(rowId);
+        platforms.push({ id, name, source, connected: false, note: "no bill to read", period: period({}, now), netDaily: {}, grossDaily: {},
+            groups: [{ name, period: period({}, now), lines: [{ name: s?.name || name, period: period({}, now), daily: {}, detail: (s?.facts || []).map((f) => ({ label: f.label, value: f.value })) }] }] });
     }
 
     // Engine model ledger (metered; Gemini is on the Google bill, so it is shown for detail and not added again)
