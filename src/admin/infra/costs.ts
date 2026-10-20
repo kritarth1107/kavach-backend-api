@@ -278,11 +278,18 @@ async function analyse(now = Date.now()) {
         });
     } else platforms.push({ id: "aws", name: "AWS", source: "Cost Explorer", connected: false, note: "Cost Explorer did not answer", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
 
-    // Google Cloud
-    if (g && !g.exportStarted) {
-        platforms.push({ id: "gcp", name: "Google Cloud", source: "BigQuery billing export", connected: false, note: "Export is on; Google has not delivered the first rows yet (usually within a day)",
-            period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
-    } else if (g) {
+    // Google Cloud. Until the bill has rows, Gemini comes from the engine's own meter (an estimate, marked so), so the
+    // biggest cost is never missing from the totals.
+    const meter: Record<string, number> = {};
+    for (const x of spend.data?.rows || []) add(meter, x.day, x.costInr);
+    if (!g || !g.exportStarted) {
+        platforms.push({ id: "gcp", name: "Google Cloud (Gemini, estimate)", connected: true,
+            source: "The engine's model meter, until Google's bill arrives (the bill has been ~1.45× the meter)",
+            note: g ? "Billing export is on; Google has not delivered the first rows yet" : table ? "The billing export did not answer" : "Google's billing export is not readable here",
+            period: period(meter, now), netDaily: meter, grossDaily: meter,
+            groups: [{ name: "Gemini model calls (all projects, metered)", period: period(meter, now), lines: [{ name: "Gemini (engine meter)", period: period(meter, now), daily: meter,
+                detail: [{ label: "Note", value: "Estimate: tokens × list price. Google's own bill replaces this as soon as the export has rows." }] }] }] });
+    } else {
         const groups = Object.entries(g.projects).map(([project, p]) => {
             const lines: Line[] = Object.entries(p.services).map(([name, s]) => {
                 const net = sumDaily([s.gross, s.credits]);
@@ -301,8 +308,7 @@ async function analyse(now = Date.now()) {
             period: period(sumDaily([all("gross"), all("credits")]), now), gross: period(all("gross"), now), credits: period(all("credits"), now), groups,
             extra: { creditNames: g.creditNames, exportStarted: g.exportStarted, skus: g.skus },
         });
-    } else platforms.push({ id: "gcp", name: "Google Cloud", source: "BigQuery billing export", connected: false,
-        note: table ? "The billing export did not answer" : "No billing export rows yet (Google fills it within a few hours of switching it on)", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
+    }
 
     // WhatsApp: Meta's pricing analytics, read directly (every conversation type, paid and free)
     const wa = await whatsappBill(62, now).catch(() => null);
@@ -417,7 +423,7 @@ async function analyse(now = Date.now()) {
     const totalDaily = sumDaily(platforms.map((p) => p.netDaily));
     const grossDaily = sumDaily(platforms.map((p) => p.grossDaily));
     const awsF = platforms.find((p) => p.id === "aws");
-    const forecastTotal = r2(platforms.reduce((t, p) => t + p.period.forecast, 0));
+    const forecastTotal = r2(platforms.filter((p) => !p.unit).reduce((t, p) => t + p.period.forecast, 0));
     return {
         at: new Date(now).toISOString(), usdInr: USD_INR, errors,
         total: { ...period(totalDaily, now), forecast: forecastTotal }, gross: period(grossDaily, now),

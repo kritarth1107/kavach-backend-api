@@ -16,8 +16,18 @@ export function infraRoutes(): RouteDef[] {
         {
             method: "get", path: "/infra", perm: "infra.read", action: "infra.overview",
             handler: async ({ query }) => {
-                const s = await snapshot(query.fresh === "1");
-                return { data: { at: s.at, usdInr: s.usdInr, totals: s.totals, daily: s.daily, providers: s.providers, alerts: s.alerts, connections: s.connections, balances: s.balances, errors: s.errors,
+                const [s, c] = await Promise.all([snapshot(query.fresh === "1"), costAnalysis(Date.now(), query.fresh === "1").catch(() => null)]);
+                // The money on the overview is the cost analyser's (founder 21 Oct: the two pages disagreed): spent with credits
+                // included as the main number, paid beside it, per platform.
+                const PROV: Record<string, string> = { aws: "AWS", gcp: "GCP", meta: "Meta", "browser-use": "Browser Use", elevenlabs: "ElevenLabs", resend: "Resend", cloudflare: "Cloudflare" };
+                const t = (p: { today: number; yesterday: number; mtd: number; forecast: number; avgDay7: number }) => ({ today: p.today, yesterday: p.yesterday, mtd: p.mtd, forecast: p.forecast, avg7: p.avgDay7 });
+                const money = c ? {
+                    totals: t(c.gross), paid: t(c.total),
+                    daily: c.daily.map((x) => ({ day: x.day, inr: x.gross, paid: x.net })),
+                    providers: c.platforms.filter((p) => !p.unit).map((p) => ({ provider: PROV[p.id] || p.name, services: p.groups.reduce((n, g) => n + g.lines.length, 0),
+                        source: p.id === "gcp" && p.name.includes("estimate") ? "metered" : p.connected ? "billed" : "none", totals: t(p.gross ?? p.period), paid: t(p.period), name: p.name })),
+                } : { totals: s.totals, paid: null, daily: s.daily, providers: s.providers };
+                return { data: { at: s.at, usdInr: s.usdInr, ...money, alerts: s.alerts, connections: s.connections, balances: s.balances, errors: s.errors,
                     top: [...s.services].filter((x) => (x.totals.mtd ?? 0) > 0).sort((a, b) => (b.totals.mtd ?? 0) - (a.totals.mtd ?? 0)).slice(0, 8).map(({ daily: _d, facts: _f, ...x }) => x) } };
             },
         },
