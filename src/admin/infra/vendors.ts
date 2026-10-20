@@ -59,6 +59,52 @@ export async function browserUseAccount(): Promise<BrowserUseAccount> {
     };
 }
 
+/**
+ * Browser Use spend since the account began, from its own run records: every agent task carries its cost and every
+ * browser session its proxy cost (USD). Per IST day, with run counts and success. No task text leaves this function.
+ */
+export type BrowserUseHistory = { connected: boolean; note?: string; tasks: number; sessions: number; firstAt: string | null;
+    daily: Record<string, { taskUsd: number; proxyUsd: number; tasks: number; failed: number; sessions: number; proxyMb: number }> };
+
+export async function browserUseHistory(maxPages = 40): Promise<BrowserUseHistory> {
+    const key = process.env.BROWSER_USE_API_KEY;
+    if (!key) return { connected: false, note: "Browser Use key not given to the admin API", tasks: 0, sessions: 0, firstAt: null, daily: {} };
+    const h = { "X-Browser-Use-API-Key": key };
+    const daily: BrowserUseHistory["daily"] = {};
+    const day = (iso?: string | null) => (iso ? istDay(new Date(iso)) : "");
+    const slot = (d: string) => (daily[d] ??= { taskUsd: 0, proxyUsd: 0, tasks: 0, failed: 0, sessions: 0, proxyMb: 0 });
+    let tasks = 0, sessions = 0, first: string | null = null;
+    type T = { items?: Array<{ cost?: string | number | null; createdAt?: string; startedAt?: string; status?: string; isSuccess?: boolean | null }>; totalItems?: number };
+    type S = { items?: Array<{ proxyCost?: string | number | null; proxyUsedMb?: string | number | null; startedAt?: string }>; totalItems?: number };
+    for (let page = 1; page <= maxPages; page++) {
+        const r = await get<T>(`https://api.browser-use.com/api/v2/tasks?pageSize=100&pageNumber=${page}`, h);
+        if (!r.ok || !r.data) { if (page === 1) return { connected: false, note: `Browser Use answered ${r.status}`, tasks: 0, sessions: 0, firstAt: null, daily: {} }; break; }
+        for (const t of r.data.items || []) {
+            const at = t.createdAt || t.startedAt || null;
+            const d = day(at);
+            if (!d) continue;
+            if (!first || at! < first) first = at;
+            const x = slot(d);
+            x.taskUsd += Number(t.cost || 0); x.tasks++; tasks++;
+            if (t.isSuccess === false || t.status === "failed") x.failed++;
+        }
+        if ((r.data.items || []).length < 100) break;
+    }
+    for (let page = 1; page <= maxPages; page++) {
+        const r = await get<S>(`https://api.browser-use.com/api/v2/sessions?pageSize=100&pageNumber=${page}`, h);
+        if (!r.ok || !r.data) break;
+        for (const s of r.data.items || []) {
+            const d = day(s.startedAt);
+            if (!d) continue;
+            if (!first || s.startedAt! < first) first = s.startedAt!;
+            const x = slot(d);
+            x.proxyUsd += Number(s.proxyCost || 0); x.proxyMb += Number(s.proxyUsedMb || 0); x.sessions++; sessions++;
+        }
+        if ((r.data.items || []).length < 100) break;
+    }
+    return { connected: true, tasks, sessions, firstAt: first, daily };
+}
+
 /* ── ElevenLabs: characters used this billing period ── */
 
 export type ElevenLabsUsage = {
@@ -66,6 +112,9 @@ export type ElevenLabsUsage = {
     /** Credits per product over the last 30 days (the usage log; readable with the voice key, no user_read needed). */
     products?: Array<{ product: string; last30: number; last7: number; today: number; kavach: boolean }>;
     daily?: Record<string, Record<string, number>>; // IST day -> product -> credits
+    /** Credits per IST day by where the request came from: "API" (Kavach's backend uses the API) or "Website". */
+    bySource?: Record<string, Record<string, number>>;
+    models?: Array<{ model: string; last30: number }>;
 };
 
 // The products Kavach itself uses: Scribe for voice notes, text-to-speech for spoken replies (TTS_ORDER=elevenlabs).
@@ -103,5 +152,18 @@ export async function elevenLabsUsage(now = Date.now()): Promise<ElevenLabsUsage
         });
         return { product, last30, last7, today: todayN, kavach: KAVACH_PRODUCTS.has(product) };
     }).filter((p) => p.last30 > 0).sort((a, b) => Number(b.kavach) - Number(a.kavach) || b.last30 - a.last30);
-    return { connected: true, ...plan, products, daily, note: sub.ok ? undefined : "Plan and limit need a key with user_read; usage is read from the usage log" };
+    // where the credits were spent from (API vs the website) and on which models: 60 days
+    const range = `start_unix=${now - 60 * 86_400_000}&end_unix=${now}`;
+    const [src, mdl] = await Promise.all([
+        get<U>(`https://api.elevenlabs.io/v1/usage/character-stats?${range}&breakdown_type=request_source`, { "xi-api-key": key }),
+        get<U>(`https://api.elevenlabs.io/v1/usage/character-stats?start_unix=${now - 30 * 86_400_000}&end_unix=${now}&breakdown_type=model`, { "xi-api-key": key }),
+    ]);
+    const bySource: Record<string, Record<string, number>> = {};
+    if (src.ok && src.data?.time) {
+        const sd = src.data.time.map((t) => istDay(new Date(t)));
+        for (const [source, vals] of Object.entries(src.data.usage || {})) vals.forEach((v, i) => { if (v) (bySource[source] ??= {})[sd[i]] = ((bySource[source] ?? {})[sd[i]] ?? 0) + v; });
+    }
+    const models = mdl.ok && mdl.data?.usage ? Object.entries(mdl.data.usage).map(([model, vals]) => ({ model, last30: vals.reduce((a, b) => a + (b || 0), 0) }))
+        .filter((m) => m.last30 > 0).sort((a, b) => b.last30 - a.last30) : [];
+    return { connected: true, ...plan, products, daily, bySource, models, note: sub.ok ? undefined : "Plan and limit need a key with user_read; usage is read from the usage log" };
 }

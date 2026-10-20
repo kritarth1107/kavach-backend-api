@@ -20,7 +20,7 @@ import * as gcp from "./gcp";
 import { gapi, gcpReadable } from "./google";
 import { istDay, USD_INR } from "./pricing";
 import { snapshot } from "./summary";
-import { browserUseAccount, elevenLabsUsage, whatsappBill } from "./vendors";
+import { browserUseAccount, browserUseHistory, elevenLabsUsage, whatsappBill } from "./vendors";
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -58,7 +58,7 @@ export async function deleteGrant(grantId: string): Promise<boolean> {
 // ── shared shapes ───────────────────────────────────────────────────────────────
 
 export type Period = { today: number; yesterday: number; last7: number; mtd: number; lastMonth: number | null; forecast: number; avgDay7: number };
-export type Line = { name: string; group?: string; period: Period; gross?: Period; credits?: Period; daily: Record<string, number>; detail?: Array<{ label: string; value: string }> };
+export type Line = { name: string; group?: string; unit?: "credits"; period: Period; gross?: Period; credits?: Period; daily: Record<string, number>; detail?: Array<{ label: string; value: string }> };
 
 function days(now: number) {
     const today = istDay(new Date(now));
@@ -247,7 +247,7 @@ export async function costAnalysis(now = Date.now()) {
         engineOrNull<{ today: number; softCap: number; hardCap: number; rows: Array<{ day: string; role: string; model: string; calls: number; tokensIn: number; tokensOut: number; costInr: number }> }>("GET", "/spend?days=62"),
     ]);
     const platforms: Array<{ id: string; name: string; source: string; connected: boolean; note?: string; period: Period; gross?: Period; credits?: Period;
-        netDaily: Record<string, number>; grossDaily: Record<string, number>;
+        netDaily: Record<string, number>; grossDaily: Record<string, number>; unit?: "credits"; allTime?: { amount: number; since: string | null; note: string };
         groups: Array<{ name: string; tag?: string; period: Period; gross?: Period; credits?: Period; lines: Line[]; creditTypes?: Line[] }>; extra?: unknown }> = [];
 
     // AWS
@@ -306,26 +306,44 @@ export async function costAnalysis(now = Date.now()) {
                 detail: cats.map(([c, v]) => ({ label: c, value: `${v.volume.toLocaleString("en-IN")} messages · ₹${r2(v.cost * rate).toLocaleString("en-IN")} (62 days)` })) }] }] });
     } else platforms.push({ id: "meta", name: "WhatsApp (Meta)", source: "Meta pricing analytics", connected: false, note: wa?.note || "Meta did not answer", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
 
-    // Browser Use: the balance drop per day (kept by the snapshot) and today's balance, read directly
+    // Browser Use: every run's own cost since the account began (agent task cost + browser proxy cost, USD)
     const svc = (id: string) => snap?.services.find((s) => s.id === id);
-    const bu = await browserUseAccount().catch(() => null);
-    {
-        const s = svc("browser-use");
-        const daily = (s?.daily || {}) as Record<string, number>;
-        platforms.push({ id: "browser-use", name: "Browser Use", source: "Daily drop in the credit balance (a top-up counts as ₹0)", connected: !!bu?.connected, note: bu?.connected ? undefined : bu?.note,
+    const [bu, buh] = await Promise.all([browserUseAccount().catch(() => null), browserUseHistory().catch(() => null)]);
+    if (buh?.connected) {
+        const task: Record<string, number> = {}, proxy: Record<string, number> = {}, runs: Record<string, number> = {};
+        let usd = 0, failed = 0;
+        for (const [d, x] of Object.entries(buh.daily)) {
+            task[d] = x.taskUsd * USD_INR; proxy[d] = x.proxyUsd * USD_INR; runs[d] = x.tasks; usd += x.taskUsd + x.proxyUsd; failed += x.failed;
+        }
+        const daily = sumDaily([task, proxy]);
+        platforms.push({ id: "browser-use", name: "Browser Use", source: "Every run's own cost (agent tasks + browser proxy), since the account began", connected: true,
             period: period(daily, now), netDaily: daily, grossDaily: daily,
-            groups: [{ name: "Browser Use account", period: period(daily, now), lines: [{ name: "Browser agents (orders and rides)", period: period(daily, now), daily,
-                detail: bu?.connected ? [{ label: "Balance now", value: `$${bu.balanceUsd?.toFixed(2)} (₹${Math.round((bu.balanceUsd ?? 0) * USD_INR).toLocaleString("en-IN")})` },
-                    { label: "Plan", value: bu.freeTier ? "free tier" : "paid" }, { label: "Sessions", value: `${bu.activeSessions ?? 0} running of ${bu.concurrentLimit ?? "—"}` }] : [] }] }] });
-    }
+            allTime: { amount: r2(usd * USD_INR), since: buh.firstAt, note: `$${r2(usd)} over ${buh.tasks} agent runs (${failed} failed) and ${buh.sessions} browser sessions` },
+            groups: [{ name: "Browser Use account", period: period(daily, now), lines: [
+                { name: "Agent runs (orders, rides, checks)", period: period(task, now), daily: task, detail: [
+                    { label: "All time", value: `$${r2(Object.values(buh.daily).reduce((t, x) => t + x.taskUsd, 0))} · ${buh.tasks} runs · ${failed} failed` },
+                    { label: "Runs this month", value: String(Object.entries(runs).filter(([d]) => d.startsWith(days(now).month)).reduce((t, [, v]) => t + v, 0)) }] },
+                { name: "Browser proxy (Indian IPs)", period: period(proxy, now), daily: proxy, detail: [
+                    { label: "All time", value: `$${r2(Object.values(buh.daily).reduce((t, x) => t + x.proxyUsd, 0))} · ${Math.round(Object.values(buh.daily).reduce((t, x) => t + x.proxyMb, 0))} MB · ${buh.sessions} sessions` }] },
+                ...(bu?.connected ? [{ name: "Balance", period: period({}, now), daily: {}, detail: [{ label: "Credit left now", value: `$${bu.balanceUsd?.toFixed(2)} (₹${Math.round((bu.balanceUsd ?? 0) * USD_INR).toLocaleString("en-IN")})` }] }] : []),
+            ] }] });
+    } else platforms.push({ id: "browser-use", name: "Browser Use", source: "Browser Use run records", connected: false, note: buh?.note || "Browser Use did not answer", period: period({}, now), groups: [], netDaily: {}, grossDaily: {} });
 
-    // ElevenLabs: Kavach's own use in credits (the plan fee is not readable with the voice key), so ₹ stays 0
+    // ElevenLabs: credits, not ₹ (the plan fee is not readable with the voice key). API = Kavach's backend.
     const el = await elevenLabsUsage(now).catch(() => null);
-    platforms.push({ id: "elevenlabs", name: "ElevenLabs", source: "Usage log, Kavach's use only (credits; the plan fee is not readable)", connected: !!el?.connected, note: el?.connected ? undefined : el?.note,
-        period: period({}, now), netDaily: {}, grossDaily: {},
-        groups: [{ name: "Kavach's use", period: period({}, now), lines: (el?.products || []).filter((p) => p.kavach).map((p) => ({
-            name: p.product === "STT" ? "Voice notes (speech-to-text)" : p.product === "TTS" ? "Spoken replies (text-to-speech)" : p.product, period: period({}, now), daily: {},
-            detail: [{ label: "Credits", value: `${p.today.toLocaleString("en-IN")} today · ${p.last7.toLocaleString("en-IN")} in 7 days · ${p.last30.toLocaleString("en-IN")} in 30 days` }] })) }] });
+    const api = el?.bySource?.API || {};
+    const web = el?.bySource?.Website || {};
+    const prod = (k: string) => Object.fromEntries(Object.entries(el?.daily || {}).map(([d, v]) => [d, v[k] || 0]));
+    platforms.push({ id: "elevenlabs", name: "ElevenLabs", source: "Usage log in credits (the plan's ₹ fee is not readable with the voice key)", connected: !!el?.connected, unit: "credits",
+        note: el?.connected ? "Credits, not ₹; not added to the ₹ totals" : el?.note, period: period(sumDaily([api, web]), now), netDaily: {}, grossDaily: {},
+        allTime: { amount: Object.values(api).reduce((a, b) => a + b, 0), since: Object.keys(api).sort()[0] || null, note: "credits through the API (Kavach) in the last 60 days" },
+        groups: [{ name: "Where the credits went", period: period(sumDaily([api, web]), now), lines: [
+            { name: "Kavach (through the API)", unit: "credits", period: period(api, now), daily: api },
+            { name: "ElevenLabs website (people, not Kavach)", unit: "credits", period: period(web, now), daily: web },
+            { name: "Spoken replies (text-to-speech, all sources)", unit: "credits", period: period(prod("TTS"), now), daily: prod("TTS") },
+            { name: "Voice notes (speech-to-text, all sources)", unit: "credits", period: period(prod("STT"), now), daily: prod("STT") },
+            { name: "Models used (30 days, all sources)", unit: "credits", period: period({}, now), daily: {}, detail: (el?.models || []).slice(0, 20).map((m) => ({ label: m.model, value: `${m.last30.toLocaleString("en-IN")} credits` })) },
+        ] }] });
 
     for (const [id, name, rowId, source] of [["resend", "Resend", "resend", "Email; usage not readable with a send-only key"], ["cloudflare", "Cloudflare", "cloudflare", "R2 and the uptime Worker; billing not connected (free limits so far)"]] as const) {
         const s = svc(rowId);
@@ -369,11 +387,15 @@ export async function costAnalysis(now = Date.now()) {
             }
             return r2(t);
         }
+        if (provider === "Browser Use") return null; // worked out from the balance below
         return null;
     };
+    const buBalance = (platforms.find((p) => p.id === "browser-use")?.groups[0]?.lines.find((l) => l.name === "Balance")?.detail?.[0]?.value || "").match(/\$([\d.]+)/);
     const credits = grants.map((gr) => {
         const amount = gr.amount * (gr.currency === "USD" ? USD_INR : 1);
-        const u = used(gr.provider, gr.project, new Date(gr.startsAt), gr.expiresAt ? new Date(gr.expiresAt) : null);
+        // Browser Use: what was topped up minus the balance left is what was spent
+        const u = gr.provider === "Browser Use" && buBalance ? r2(amount - Number(buBalance[1]) * USD_INR)
+            : used(gr.provider, gr.project, new Date(gr.startsAt), gr.expiresAt ? new Date(gr.expiresAt) : null);
         const platform = platforms.find((p) => p.name.startsWith(gr.provider) || p.id === gr.provider.toLowerCase());
         const burn = platform?.credits ? -platform.credits.avgDay7 : null;
         const left = u != null ? r2(amount - u) : null;
