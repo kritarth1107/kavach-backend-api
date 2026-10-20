@@ -687,7 +687,8 @@ export async function tryCompleteRemindersFromMessage(input: {
 }
 
 /** The last lines sent for this reminder, newest first ("Reminder: " labels of older sends dropped). */
-export async function recentReminderLines(reminderId: string, limit = 24): Promise<string[]> {
+// The engine reads the newest 12 (it refused more with 422 until 20 Oct, which stopped every hourly reminder).
+export async function recentReminderLines(reminderId: string, limit = 12): Promise<string[]> {
     const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const rows = await SaheliNudgeLog.find({
         scheduleId: { $regex: `^reminder:${reminderId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:` },
@@ -720,7 +721,7 @@ export function sameReminderLine(a: string, b: string): boolean {
  */
 export function outboundReminderLine(
     fresh: string | null | undefined,
-    reminder: { text: string; aboutKey?: string | null },
+    reminder: { text: string; aboutKey?: string | null; times?: string[] | null; kind?: string | null },
     recent: string[] = [],
     writerDown = false,
 ): string | null {
@@ -729,6 +730,11 @@ export function outboundReminderLine(
     const echoed = !line || sameReminderLine(line, reminder.text) || recent.some((r) => sameReminderLine(line, r));
     if (!echoed) return line;
     if (medicine) return `Reminder: ${reminder.text}`;
+    // Once a day (a wake-up, leaving for the gym) is something they asked for at that time: it always goes, in its own
+    // words when there is nothing new (live 19 Oct: "Wake up… 08:30" was skipped as "no fresh line"). Only a reminder
+    // that repeats through the day (hourly water) is skipped rather than sent with the same sentence again.
+    const onceADay = reminder.kind === "multi_time" && (reminder.times?.length ?? 0) === 1;
+    if (onceADay) return line || reminder.text.trim() || null;
     if (!writerDown) return null;
     const stored = reminder.text.trim();
     return stored && !recent.some((r) => sameReminderLine(r, stored)) ? stored : null;

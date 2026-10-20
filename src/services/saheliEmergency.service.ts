@@ -71,7 +71,7 @@ export async function triggerEmergencyEscalation(input: {
         familyId: input.familyId,
         recipientUserId: input.recipientUserId,
         actorUserId: input.actorUserId,
-        message: `Emergency alert from care recipient: "${input.message.slice(0, 280)}"`,
+        message: `Emergency alert from Saheli: "${input.message.slice(0, 280)}"`,
         urgency: "high",
         kind: "emergency",
     });

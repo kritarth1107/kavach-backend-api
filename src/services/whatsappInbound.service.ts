@@ -13,6 +13,20 @@ function replySlaMs(): number {
     return Math.min(Math.max(n, 8_000), 90_000);
 }
 
+/**
+ * One "still on it" line per person per burst: messages sent close together wait behind each other, and each used to
+ * get its own line (live 20 Oct: four in a row). Within this window a second one is not sent; the real reply follows.
+ */
+const HOLDING_WINDOW_MS = 120_000;
+const holdingSent = new Map<string, number>();
+
+export function holdingLineDue(phone: string, now = Date.now()): boolean {
+    for (const [k, t] of holdingSent) if (now - t > HOLDING_WINDOW_MS) holdingSent.delete(k);
+    if (holdingSent.has(phone)) return false;
+    holdingSent.set(phone, now);
+    return true;
+}
+
 async function slaFallback(from: string | undefined): Promise<OutboundMessage> {
     const phone = normalizeChannelIdentifier(ChannelType.WHATSAPP, String(from ?? ""));
     let content = "One moment, still on it 🙏";
@@ -115,6 +129,10 @@ export async function handleWhatsAppInbound(body: {
                             );
                             // Do not resolve — let the real route finish (or hang without spam).
                             return;
+                        }
+                        if (!holdingLineDue(normalizeChannelIdentifier(ChannelType.WHATSAPP, String(body.from ?? "")))) {
+                            console.warn(`WhatsApp reply SLA hit after ${slaMs}ms — a still-working line went lately; waiting for the reply`);
+                            return; // the real reply is sent when it is ready
                         }
                         console.warn(
                             `WhatsApp reply SLA hit after ${slaMs}ms — sending progress fallback`,

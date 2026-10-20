@@ -95,6 +95,11 @@ async function withDb(uri: string) {
         assert.equal(outboundReminderLine(null, { text: stored, aboutKey: null }, [], true), stored);
         assert.equal(outboundReminderLine(null, { text: stored, aboutKey: null }, [stored], true), null);
         assert.equal(outboundReminderLine(null, { text: "Ecosprin 75", aboutKey: "medicine:eco" }, [], true), "Reminder: Ecosprin 75");
+        // a once-a-day reminder always goes (live 19 Oct: the 08:30 wake-up was skipped as "no fresh line")
+        const wake = { text: "Wake up and eat something before the gym", aboutKey: null, times: ["08:30"], kind: "multi_time" };
+        assert.equal(outboundReminderLine(null, wake, [wake.text]), wake.text);
+        assert.equal(outboundReminderLine(null, wake, [wake.text], true), wake.text);
+        assert.equal(outboundReminderLine(null, { ...wake, times: ["09:00", "11:00", "13:00"] }, [wake.text]), null);
     });
     const uri = testDbUri("remcompose");
     if (uri) await withDb(uri);
