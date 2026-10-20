@@ -157,7 +157,7 @@ function addAwsStack(add: Add, o: { ecs: EcsService[] | null; bill: Record<strin
         : [{ label: "Engine", value: o.spend?.error || "not reachable" }];
     if (o.ai.gemini) {
         add({
-            id: "aws:gemini", name: "Gemini (Mumbai)", provider: "AWS", category: "AI",
+            id: "aws:gemini", name: "Gemini (engine meter, estimate)", provider: "GCP", category: "AI",
             purpose: o.ai.geminiModel ? `${o.ai.geminiModel} via the AWS→Google link` : "Gemini via the AWS→Google link",
             usedBy: "AI engine",
             status: o.spend?.data ? (o.spend.data.today >= o.spend.data.softCap ? "warn" : "ok") : "unknown",
@@ -494,13 +494,18 @@ export async function buildSnapshot(now = Date.now()): Promise<Snapshot> {
         daily: wa.daily,
     });
 
-    // Browser Use: balance and its daily drop.
-    const buDaily = bu.connected ? await settle("Browser Use history", () => balanceSpend("browser-use", bu.balanceUsd, days), errors) : null;
+    // Browser Use: every run's own cost (the same source as the cost analyser); the balance drop only when that is unreadable.
+    const buRuns = bu.connected ? await settle("Browser Use runs", async () => {
+        const { browserUseHistory } = await import("./vendors");
+        const h = await browserUseHistory();
+        return h.connected ? Object.fromEntries(Object.entries(h.daily).map(([d, x]) => [d, inr(x.taskUsd + x.proxyUsd)])) : null;
+    }, errors) : null;
+    const buDaily = buRuns || (bu.connected ? await settle("Browser Use history", () => balanceSpend("browser-use", bu.balanceUsd, days), errors) : null);
     add({
         id: "browser-use", name: "Browser Use", provider: "Browser Use", category: "AI agents", purpose: "The ordering agent's cloud browsers (Swiggy, 1mg, Uber…)", usedBy: "Backend, engine",
         status: !bu.connected ? "unknown" : (bu.balanceUsd ?? 0) < 5 ? "warn" : "ok",
         facts: bu.connected ? [{ label: "Balance", value: `$${round2(bu.balanceUsd ?? 0)}` }, { label: "Plan", value: bu.freeTier ? "free tier" : "paid" }, { label: "Browsers now", value: `${bu.activeSessions ?? 0} of ${bu.concurrentLimit ?? "?"}` }] : [{ label: "Account", value: bu.note || "not connected" }],
-        source: bu.connected ? "metered" : "none", note: "Daily drop in the credit balance (a top-up shows as 0)", console: "https://cloud.browser-use.com/billing",
+        source: bu.connected ? "metered" : "none", note: buRuns ? "Each run's own cost (agent task + browser proxy)" : "Daily drop in the credit balance (a top-up shows as 0)", console: "https://cloud.browser-use.com/billing",
         daily: buDaily || {},
     });
 
