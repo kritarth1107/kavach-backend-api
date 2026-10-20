@@ -2,7 +2,8 @@
 import { engineOrNull } from "../engine";
 import { github } from "../infra/github";
 import { models } from "../infra/models";
-import { snapshot } from "../infra/summary";
+import { cronView, dataView, ecsDetail, trainerView } from "../infra/ops";
+import { ECS_NAMES, snapshot } from "../infra/summary";
 import type { RouteDef } from "../router";
 
 type JobRuns = Array<{ job: string; lastAt: string; lastMs: number; lastOk: boolean; lastCode: number; runs24h: number; failed24h: number; p90Ms: number | null }>;
@@ -30,6 +31,25 @@ export function infraRoutes(): RouteDef[] {
                 });
                 return { data: { at: s.at, totals: s.totals, services: s.services.map(({ daily: _d, ...x }) => x), schedules, jobs: s.jobs, errors: [...s.errors, ...(runs.error ? [`job runs: ${runs.error}`] : [])] } };
             },
+        },
+        {
+            method: "get", path: "/infra/ecs/:service", perm: "infra.read", action: "infra.ecs",
+            handler: async ({ params, query }) => {
+                if (!ECS_NAMES.includes(params.service)) return { data: { service: params.service, errors: ["not a Kavach service"] } };
+                return { data: await ecsDetail(params.service, Math.max(1, Math.min(168, Number(query.hours) || 24))) };
+            },
+        },
+        {
+            method: "get", path: "/infra/cron", perm: "infra.read", action: "infra.cron",
+            handler: async () => ({ data: await cronView() }),
+        },
+        {
+            method: "get", path: "/infra/data", perm: "infra.read", action: "infra.data",
+            handler: async ({ query }) => ({ data: await dataView(Math.max(1, Math.min(168, Number(query.hours) || 24))) }),
+        },
+        {
+            method: "get", path: "/infra/trainer", perm: "infra.read", action: "infra.trainer",
+            handler: async () => ({ data: await trainerView() }),
         },
         {
             method: "get", path: "/infra/github", perm: "infra.read", action: "infra.github",

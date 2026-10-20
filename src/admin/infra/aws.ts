@@ -31,10 +31,10 @@ export function awsConfigured(): boolean {
     return !!process.env.AWS_BILLING_ACCESS_KEY_ID && !!process.env.AWS_BILLING_SECRET_ACCESS_KEY;
 }
 
-type Creds = { accessKey: string; secretKey: string; token?: string };
+export type Creds = { accessKey: string; secretKey: string; token?: string };
 
 /** The ECS task role. Absent when this process is not on Fargate. */
-async function taskCreds(): Promise<Creds | null> {
+export async function taskCreds(): Promise<Creds | null> {
     const rel = process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
     if (!rel) return null;
     const res = await fetch(`http://169.254.170.2${rel}`, { signal: AbortSignal.timeout(2_000) });
