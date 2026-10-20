@@ -52,4 +52,6 @@ async function seedWithRetry(): Promise<void> {
 void connectDB().then(async () => {
     await Promise.race([seedWithRetry(), new Promise((r) => setTimeout(r, 5000))]);
     app.listen(PORT, () => console.log(`Kavach admin API on :${PORT}`));
+    // spend alerts every 3 hours (one admin-api task; alerts are kept once each, so a second task would not repeat them)
+    void import("./infra/insights").then((m) => m.startSpendAlerts()).catch((e) => console.error("spend alerts not started", (e as Error).message));
 });

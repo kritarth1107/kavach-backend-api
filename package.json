@@ -26,7 +26,7 @@
     "test:login-gate": "tsx scripts/test-dashboard-login-gate.ts",
     "test:self-care": "tsx scripts/test-self-care.ts",
     "test:delegate": "tsx scripts/test-delegate.ts",
-    "test:admin": "tsx scripts/test-admin.ts && tsx scripts/test-admin-ops.ts && tsx scripts/test-waitlist-admin.ts",
+    "test:admin": "tsx scripts/test-admin.ts && tsx scripts/test-admin-ops.ts && tsx scripts/test-waitlist-admin.ts && tsx scripts/test-admin-insights.ts",
     "test:quality": "tsx scripts/test-quality.ts",
     "test:stack": "tsx scripts/test-stack-scrub.ts",
     "test:rides": "tsx scripts/test-ride-chain.ts && tsx scripts/test-ride-availability.ts",

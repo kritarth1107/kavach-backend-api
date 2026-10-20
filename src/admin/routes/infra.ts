@@ -4,6 +4,7 @@ import { github } from "../infra/github";
 import { models } from "../infra/models";
 import { AdminError } from "../auth";
 import { costAnalysis, deleteGrant, saveGrant } from "../infra/costs";
+import { alertSettings, attention, checkSpend, dismissAlert, familyCosts, growth, listAlerts, orders, outreach, quality, saveAlertSettings } from "../infra/insights";
 import { cronView, dataView, ecsDetail, trainerView } from "../infra/ops";
 import { ECS_NAMES, snapshot } from "../infra/summary";
 import type { RouteDef } from "../router";
@@ -43,7 +44,7 @@ export function infraRoutes(): RouteDef[] {
         },
         {
             method: "get", path: "/infra/costs", perm: "infra.read", action: "infra.costs",
-            handler: async () => ({ data: await costAnalysis() }),
+            handler: async ({ query }) => ({ data: await costAnalysis(Date.now(), query.fresh === "1") }),
         },
         {
             // A credit grant (no provider API tells how much was given or when it ends): remaining = amount − used on the bill.
@@ -64,6 +65,45 @@ export function infraRoutes(): RouteDef[] {
         {
             method: "post", path: "/infra/costs/credits/:grantId/delete", perm: "spend.manage", action: "infra.credit_grant_delete",
             handler: async ({ params }) => ({ target: `credit:${params.grantId}`, data: { deleted: await deleteGrant(params.grantId) } }),
+        },
+        // ── insights (founder 21 Oct) ──
+        {
+            method: "get", path: "/insights/family-costs", perm: "infra.read", action: "insights.family_costs",
+            handler: async ({ query }) => ({ data: await familyCosts(Math.max(1, Math.min(120, Number(query.days) || 30))) }),
+        },
+        { method: "get", path: "/insights/growth", perm: "overview.read", action: "insights.growth", handler: async () => ({ data: await growth() }) },
+        { method: "get", path: "/insights/attention", perm: "users.read", action: "insights.attention", handler: async () => ({ data: await attention() }) },
+        {
+            method: "get", path: "/insights/quality", perm: "overview.read", action: "insights.quality",
+            handler: async ({ query }) => ({ data: await quality(Math.max(1, Math.min(120, Number(query.days) || 30))) }),
+        },
+        {
+            method: "get", path: "/insights/outreach", perm: "overview.read", action: "insights.outreach",
+            handler: async ({ query }) => ({ data: await outreach(Math.max(1, Math.min(60, Number(query.days) || 14))) }),
+        },
+        {
+            method: "get", path: "/insights/orders", perm: "overview.read", action: "insights.orders",
+            handler: async ({ query }) => ({ data: await orders(Math.max(1, Math.min(180, Number(query.days) || 60))) }),
+        },
+        {
+            method: "get", path: "/infra/costs/alerts", perm: "infra.read", action: "infra.spend_alerts",
+            handler: async () => ({ data: { settings: await alertSettings(), alerts: await listAlerts(60) } }),
+        },
+        {
+            method: "post", path: "/infra/costs/alerts/settings", perm: "spend.manage", action: "infra.spend_alert_settings",
+            handler: async ({ admin, body }) => ({ target: "spend-alerts", data: await saveAlertSettings((body || {}) as Record<string, never>, admin.email) }),
+        },
+        {
+            method: "post", path: "/infra/costs/alerts/check", perm: "spend.manage", action: "infra.spend_alert_check",
+            handler: async () => ({ target: "spend-alerts", data: await checkSpend() }),
+        },
+        {
+            method: "post", path: "/infra/costs/alerts/dismiss", perm: "spend.manage", action: "infra.spend_alert_dismiss",
+            handler: async ({ admin, body }) => {
+                const key = String(((body || {}) as { key?: unknown }).key || "").slice(0, 200);
+                if (!key) throw new AdminError(400, "bad_input");
+                return { target: `spend-alert:${key}`, data: { dismissed: await dismissAlert(key, admin.email) } };
+            },
         },
         {
             method: "get", path: "/infra/cron", perm: "infra.read", action: "infra.cron",

@@ -235,7 +235,16 @@ const CREDIT_TYPE: Record<string, string> = {
     SUBSCRIPTION_BENEFIT: "Subscription benefit", RESELLER_MARGIN: "Reseller margin", FEE_UTILIZATION_OFFSET: "Fee offset",
 };
 
-export async function costAnalysis(now = Date.now()) {
+// Cost Explorer charges per request, so one analysis serves every caller for 10 minutes (refresh forces a new one).
+let cache: { at: number; value: Awaited<ReturnType<typeof analyse>> } | null = null;
+export async function costAnalysis(now = Date.now(), fresh = false) {
+    if (!fresh && cache && now - cache.at < 10 * 60_000) return cache.value;
+    const value = await analyse(now);
+    cache = { at: now, value };
+    return value;
+}
+
+async function analyse(now = Date.now()) {
     const errors: string[] = [];
     const settle = async <T>(what: string, p: Promise<T>): Promise<T | null> => { try { return await p; } catch (e) { errors.push(`${what}: ${(e as Error).message}`); return null; } };
     const table = gcpReadable() ? await settle("Google billing export", gcp.billingTable()) : null;
