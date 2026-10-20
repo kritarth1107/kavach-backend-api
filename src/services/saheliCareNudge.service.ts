@@ -151,6 +151,18 @@ export async function deliverCareNudge(input: {
     if (!attemptId) {
         return false;
     }
+    {
+        // The same check as every scheduled message, once per message (after the claim): something said or logged today
+        // may have cancelled or covered it ("skipping gym", "doctor stopped it", "already took it").
+        const { stillRight } = await import("./presendCheck.service");
+        const check = await stillRight(input.familyId, input.recipientUserId, `${input.title} at ${input.time} (${input.nudgeKind.replace(/_/g, " ")})`);
+        if (!check.send) {
+            await finalizeNudgeAttempt(attemptId, { delivered: false, channel: "whatsapp", terminal: true, reason: `changed: ${check.why}`.slice(0, 120), messagePreview: "" });
+            if (input.medicine) await noteDueHeld(doseSlotKey(input.scheduleId, input.dateKey), `not sent: ${check.why || "changed today"}`);
+            console.log(`Care nudge not sent (changed today: ${check.why}) for ${input.recipientUserId} (${input.nudgeKind})`);
+            return false;
+        }
+    }
 
     const target = await resolveRecipientChannel(
         input.familyId,

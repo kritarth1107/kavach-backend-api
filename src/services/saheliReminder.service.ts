@@ -814,6 +814,17 @@ async function fireReminderMessage(input: {
         return false;
     }
 
+    // The same check as every scheduled message: something said or logged today may have cancelled or covered it.
+    {
+        const { stillRight } = await import("./presendCheck.service");
+        const check = await stillRight(input.familyId, input.recipientUserId, `${input.reminder.text} at ${input.slotKey}`);
+        if (!check.send) {
+            await finalizeNudgeAttempt(attemptId, { delivered: false, channel: target.channel, terminal: true, reason: `changed: ${check.why}`.slice(0, 120), messagePreview: "" });
+            await noteDueHeld(slot, `not sent: ${check.why || "changed today"}`);
+            return false;
+        }
+    }
+
     // A fresh line, or the stored one when the writer is down and that line has not gone out in 3 days. "Nothing new"
     // from a live writer skips a habit (founder 2026-10-14: the same "Reminder:" sentence every hour).
     const recent = await recentReminderLines(input.reminder.reminderId);
@@ -1006,6 +1017,13 @@ export async function catchUpMedicineReminders(
                                 `could lead to a double dose). Please check whether it was taken.`,
                     }),
                 ).catch(() => undefined);
+                continue;
+            }
+            const { stillRight } = await import("./presendCheck.service");
+            const check = await stillRight(rem.familyId, rem.recipientUserId, `${rem.text} at ${t} (sent late)`);
+            if (!check.send) {
+                await finalizeNudgeAttempt(attemptId, { delivered: false, channel: "whatsapp", terminal: true, reason: `changed: ${check.why}`.slice(0, 120) });
+                await noteDueHeld(slot, `not sent: ${check.why || "changed today"}`);
                 continue;
             }
             const out = await send({ rem, slot: t, dateKey, attemptId });
