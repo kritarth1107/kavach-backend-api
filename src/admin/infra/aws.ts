@@ -36,6 +36,10 @@ export type Creds = { accessKey: string; secretKey: string; token?: string };
 /** The ECS task role. Absent when this process is not on Fargate. */
 export async function taskCreds(): Promise<Creds | null> {
     const rel = process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI;
+    // Off Fargate (a laptop checking the console's AWS reads): the usual AWS_* keys, when the caller exported them.
+    if (!rel && process.env.ADMIN_AWS_FROM_ENV === "1" && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+        return { accessKey: process.env.AWS_ACCESS_KEY_ID, secretKey: process.env.AWS_SECRET_ACCESS_KEY, token: process.env.AWS_SESSION_TOKEN };
+    }
     if (!rel) return null;
     const res = await fetch(`http://169.254.170.2${rel}`, { signal: AbortSignal.timeout(2_000) });
     if (!res.ok) return null;

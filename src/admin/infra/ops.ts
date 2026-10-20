@@ -123,9 +123,18 @@ const taskView = (t: EcsTask) => ({
 export const mask = (s: string) => s.replace(/\+?\d[\d\s-]{8,}\d/g, "[number]").replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, "[email]").slice(0, 400);
 
 async function recentLines(c: Creds, group: string, prefix: string | null, minutes: number, pattern: string, limit: number) {
-    const out = await logs<{ events?: Array<{ timestamp?: number; message?: string; logStreamName?: string }> }>(c, "FilterLogEvents", {
-        logGroupName: group, ...(prefix ? { logStreamNamePrefix: prefix } : {}), startTime: Date.now() - minutes * 60_000, filterPattern: pattern, limit });
-    return (out.events || []).map((e) => ({ at: iso(e.timestamp) || "", text: mask(e.message || ""), stream: (e.logStreamName || "").split("/").pop()?.slice(0, 12) || "" }));
+    // CloudWatch answers a filtered search a page at a time, and a page may be empty while later ones are not.
+    const out: Array<{ at: string; text: string; stream: string }> = [];
+    let token: string | undefined;
+    for (let page = 0; page < 25 && out.length < limit; page++) {
+        const r = await logs<{ events?: Array<{ timestamp?: number; message?: string; logStreamName?: string }>; nextToken?: string }>(c, "FilterLogEvents", {
+            logGroupName: group, ...(prefix ? { logStreamNamePrefix: prefix } : {}), startTime: Date.now() - minutes * 60_000, filterPattern: pattern,
+            limit: limit - out.length, ...(token ? { nextToken: token } : {}) });
+        out.push(...(r.events || []).map((e) => ({ at: iso(e.timestamp) || "", text: mask(e.message || ""), stream: (e.logStreamName || "").split("/").pop()?.slice(0, 12) || "" })));
+        token = r.nextToken;
+        if (!token) break;
+    }
+    return out.sort((a, b) => a.at.localeCompare(b.at));
 }
 
 export async function ecsDetail(service: string, hours = 24) {
@@ -243,7 +252,7 @@ export async function cronView() {
             } catch (e) { errors.push(`${j.name} logs: ${(e as Error).message}`); }
         }));
         try {
-            cronLines = await recentLines(c, "/kavach/restore", "cron/", 26 * 60, "?\"runtask.sh\" ?\"arn:aws:ecs\" ?\"backend/internal\" ?\"-> 5\" ?\"-> 4\" ?\"-> 000\"", 200);
+            cronLines = await recentLines(c, "/kavach/restore", "cron/", 26 * 60, "?runtask ?\"arn:aws:ecs\" ?internal ?\"-> 4\" ?\"-> 5\" ?\"-> 000\"", 300);
         } catch (e) { errors.push(`scheduler logs: ${(e as Error).message}`); }
         try {
             const ids = new Set<string>();
