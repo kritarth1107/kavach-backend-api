@@ -126,7 +126,7 @@ async function recentLines(c: Creds, group: string, prefix: string | null, minut
     // CloudWatch answers a filtered search a page at a time, and a page may be empty while later ones are not.
     const out: Array<{ at: string; text: string; stream: string }> = [];
     let token: string | undefined;
-    for (let page = 0; page < 25 && out.length < limit; page++) {
+    for (let page = 0; page < 60 && out.length < limit; page++) {
         const r = await logs<{ events?: Array<{ timestamp?: number; message?: string; logStreamName?: string }>; nextToken?: string }>(c, "FilterLogEvents", {
             logGroupName: group, ...(prefix ? { logStreamNamePrefix: prefix } : {}), startTime: Date.now() - minutes * 60_000, filterPattern: pattern,
             limit: limit - out.length, ...(token ? { nextToken: token } : {}) });
