@@ -68,6 +68,19 @@ export function qualityRoutes(): RouteDef[] {
             handler: async ({ query }) => ({ data: await engine("GET", `/eval-scores?days=${Math.min(Math.max(Number(query.days) || 30, 1), 120)}`, undefined, 30_000) }),
         },
         {
+            // A bad reply the team saw becomes an open replay case at once (anonymised in the engine). Searching the reply
+            // text reads conversation content, so it needs break-glass and a reason.
+            method: "post", path: "/quality/report-reply", perm: "care.breakglass", action: "quality.report_reply",
+            handler: async ({ body }) => {
+                const b = z.object({ familyId: z.string().min(4).max(80), contains: z.string().max(200).default(""), replyId: z.number().int().optional(),
+                    note: z.string().min(8).max(600), kind: z.string().max(40).default("") }).safeParse(body);
+                if (!b.success) throw new AdminError(400, "bad_input");
+                const r = await engine<{ created: boolean; replyId: number; at: string; kind: string; matches: number; note: string | null }>("POST", "/replay-cases/from-reply",
+                    { family_id: b.data.familyId, contains: b.data.contains, reply_id: b.data.replyId, note: b.data.note, kind: b.data.kind });
+                return { target: `family:${b.data.familyId}`, detail: { created: r.created, kind: r.kind }, data: r };
+            },
+        },
+        {
             // the replies to label carry what was said: break-glass roles only, every read audited
             method: "get", path: "/quality/calibration", perm: "care.breakglass", action: "quality.calibration",
             handler: async ({ query }) => {
